@@ -1,4 +1,4 @@
-<p align="center"><img src="readme_banner.png" width=1000></p>
+<p align="center"><img src="https://raw.githubusercontent.com/Burla-Cloud/.github/main/media/readme_banner.png" width=1000></p>
 
 # Burla
 

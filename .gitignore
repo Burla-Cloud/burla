@@ -177,3 +177,4 @@ cython_debug/
 /dist/
 /docs/\_build/
 /src/\*.egg-info/
+.DS_Store

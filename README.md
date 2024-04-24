@@ -1,8 +1,8 @@
 <p align="center"><img src="https://raw.githubusercontent.com/Burla-Cloud/.github/main/media/readme_banner.png" width=1000></p>
 
-# Burla
+### Overview:
 
-Burla is a python package that makes it easy to run code on (lots of) other computers.
+#### Burla is a python package that makes it easy to run code on (lots of) other computers.
 
 Burla only has one function: `remote_parallel_map`.  
 This function requires just two arguments, here's how it works:
@@ -43,7 +43,23 @@ remote_parallel_map(my_function, my_inputs)
   By default, all remote machines are attached to the same persistent network disk.  
   Upload & download files to this disk through a simple CLI: `> burla nas upload / download / ls / rm ...`
 
-#### Burla is currently under devlopment and is not ready to be used.
+### Components / How it works:
+
+Unlike many open-source projects Burla does not to use a monorepo.  
+Instead major components are split across 4 separate GitHub repositories:
+
+1. [Burla](https://github.com/burla-cloud/burla)  
+   The python package (the client) (this repository).
+2. [main_service](https://github.com/burla-cloud/main_service)  
+   Service representing a single cluster, manages nodes, routes requests to node_services.
+3. [node_service](https://github.com/burla-cloud/node_service)  
+   Service running on each node, manages containers, routes requests to container_services.
+4. [container_service](https://github.com/burla-cloud/container_service)  
+   Service running inside each container, executes user submitted functions.
+
+Read about how Burla works: [How-Burla-works.md]("https://docs.burla.dev")
+
+### Burla is currently under devlopment and is not ready to be used.
 
 To join our mailing list go to [burla.dev](https://burla.dev/).  
-If you have any questions, email me at: [jake@burla.dev](mailto:jake@burla.dev), or [join us on Discord](https://discord.gg/xSuJukdS9b).
+If you have any questions, email me at: jake@burla.dev, or [join us on Discord](https://discord.gg/TsbCUwBUdy).

@@ -10,7 +10,7 @@ If you have any questions, email me at: jake@burla.dev, or [join us on Discord](
 (not in any particular order)
 
 - Switch communication between containers and clients from:  
-`container -> firebase -> master-service -> client` to `container -> pub/sub -> client`  
+`container -> firebase -> main-service -> client` to `container -> pub/sub -> client`  
 Both for:
   - Sending function inputs from client to containers and
   - Sending stdout/err from containers to client
@@ -19,7 +19,7 @@ Node service should interact only with container stdin/out/err, we shouldn't be 
 - Ability to start some containers on-demand while leaving others running at all times  
 (currently all containers are left running at all times)
 - Ability to cache python environments instead of building every time.
-- Sew
+- Investigate faster container runtimes
 
 ### Overview:
 

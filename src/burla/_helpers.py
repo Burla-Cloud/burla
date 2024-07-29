@@ -1,9 +1,12 @@
+import os
 import asyncio
 from urllib.parse import quote
 
 import cloudpickle
 import nest_asyncio
 from aiohttp import ClientSession
+from google.oauth2 import service_account
+from google.auth.transport.requests import Request
 
 
 nest_asyncio.apply()

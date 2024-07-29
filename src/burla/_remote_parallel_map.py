@@ -32,7 +32,7 @@ from burla._helpers import (
 
 warnings.formatwarning = nopath_warning
 
-BURLA_JOBS_BUCKET = "burla-jobs"
+BURLA_JOBS_BUCKET = "burla-jobs" if os.getenv("IN_DEV") == "True" else "burla-jobs-prod"
 GCR_MAX_BYTES_PER_REQUEST = 32 * 1024 * 1024
 
 MAX_CPUS = 2000  # please ask before you increase this <3
@@ -149,9 +149,13 @@ def _start_job(
 
     if send_inputs_through_gcs:
         # getting crecentials takes anywhere from .5-1s
-        credentials, _ = google.auth.default()
-        credentials.refresh(Request())
-        gcs_auth_headers = {"Authorization": f"Bearer {credentials.token}", **BYTES_HEADER}
+        # credentials, _ = google.auth.default()
+        # credentials.refresh(Request())
+        # gcs_auth_headers = {"Authorization": f"Bearer {credentials.token}", **BYTES_HEADER}
+
+        # bucket is temporarily public:
+        gcs_auth_headers = BYTES_HEADER
+
         # uploading function and inputs from `test_base` consistently takes ~0.8s
         spinner.text = StatusMessage.uploading_function
         function_blob_name = f"{job_id}/function.pkl"
@@ -273,10 +277,13 @@ def remote_parallel_map(
         spinner.text = StatusMessage.downloading
 
         # temporary, TODO: only download through gcs if outputs do not fit in a request
-        credentials, _ = google.auth.default()
-        credentials.refresh(Request())
-        gcs_auth_headers = {"Authorization": f"Bearer {credentials.token}", **BYTES_HEADER}
+        # credentials, _ = google.auth.default()
+        # credentials.refresh(Request())
+        # gcs_auth_headers = {"Authorization": f"Bearer {credentials.token}", **BYTES_HEADER}
         # consistently takes 0.4-0.5s
+
+        # bucket is temporarily publicly accessible:
+        gcs_auth_headers = BYTES_HEADER
         return_values = download_outputs(job_id, len(inputs), gcs_auth_headers, BURLA_JOBS_BUCKET)
 
     except Exception as e:

@@ -1,8 +1,9 @@
-import cloudpickle
 import asyncio
+from urllib.parse import quote
+
+import cloudpickle
 import nest_asyncio
 from aiohttp import ClientSession
-from aiolimiter import AsyncLimiter
 
 
 nest_asyncio.apply()
@@ -23,10 +24,8 @@ class StatusMessage:
         msg = f"Preparing to run {cls.n_inputs} inputs through `{cls.function_name}` with "
         if cls.total_gpus > 0:
             msg += f"{cls.total_cpus} CPUs, and {cls.total_gpus} GPUs."
-            msg += " This may take several minutes."
         else:
             msg += f"{cls.total_cpus} CPUs."
-            msg += " This may take a few minutes."
         return msg
 
     @classmethod
@@ -62,39 +61,42 @@ def nopath_warning(message, category, filename, lineno, line=None):
     return f"{category.__name__}: {message}\n"
 
 
-def upload_inputs(urls: list[str], inputs: list):
+def upload_inputs(job_id: str, pickled_inputs: list, gcs_auth_headers: dict, jobs_bucket: str):
     async def _upload_input(session, url, input_):
-        async with session.request(
-            method="put", url=url, data=cloudpickle.dumps(input_)
-        ) as response:
+        async with session.request(method="post", url=url, data=input_) as response:
             response.raise_for_status()
 
-    async def _make_requests(urls, inputs):
-        async with ClientSession(headers={"Content-Type": "application/octet-stream"}) as session:
+    async def _make_requests(urls, inputs, headers):
+        async with ClientSession(headers=headers) as session:
             tasks = [_upload_input(session, url, input_) for url, input_ in zip(urls, inputs)]
             await asyncio.gather(*tasks)
 
+    base_url = "https://www.googleapis.com/upload/storage"
+    name_to_url = lambda name: f"{base_url}/v1/b/{jobs_bucket}/o?uploadType=media&name={name}"
+    urls = [name_to_url(f"{job_id}/inputs/{i}.pkl") for i in range(len(pickled_inputs))]
+
     loop = asyncio.get_event_loop()
-    loop.run_until_complete(_make_requests(urls, inputs))
+    loop.run_until_complete(_make_requests(urls, pickled_inputs, gcs_auth_headers))
 
 
-def download_outputs(urls: list[str]):
-    limiter = AsyncLimiter(1, 0.1)
-    semaphore = asyncio.Semaphore(value=500)
+def download_outputs(job_id: str, num_outputs: int, gcs_auth_headers: dict, jobs_bucket: str):
 
-    async def _download_output(session, url, semaphore):
-        await semaphore.acquire()
-        async with limiter:
-            async with session.get(url=url) as response:
-                response.raise_for_status()
-                output_pkl = await response.read()
-                semaphore.release()
-                return output_pkl
+    async def _download_output(session, url, remaining_attempts=100):
+        async with session.request(method="get", url=url) as response:
+            if response.status == 404 and remaining_attempts > 0:
+                return await _download_output(session, url, remaining_attempts - 1)
+            response.raise_for_status()
+            return await response.read()
 
-    async def _make_requests(urls):
-        async with ClientSession(headers={"Content-Type": "application/octet-stream"}) as session:
-            tasks = [_download_output(session, url, semaphore) for url in urls]
+    async def _make_requests(urls, headers):
+        async with ClientSession(headers=headers) as session:
+            tasks = [_download_output(session, url) for url in urls]
             return await asyncio.gather(*tasks)
 
+    base_url = "https://www.googleapis.com/storage/v1"
+    name_to_url = lambda name: f"{base_url}/b/{jobs_bucket}/o/{quote(name, safe='')}?alt=media"
+    urls = [name_to_url(f"{job_id}/outputs/{i}.pkl") for i in range(num_outputs)]
+
     loop = asyncio.get_event_loop()
-    return loop.run_until_complete(_make_requests(urls))
+    results = loop.run_until_complete(_make_requests(urls, gcs_auth_headers))
+    return [cloudpickle.loads(result) for result in results]

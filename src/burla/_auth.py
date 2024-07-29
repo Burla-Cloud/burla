@@ -11,7 +11,7 @@ from appdirs import user_config_dir
 from IPython.core.display import Javascript
 from IPython.display import display, clear_output
 
-from burla import _BURLA_SERVICE_URL
+from burla import _BURLA_BACKEND_URL
 
 AUTH_TIMEOUT_SECONDS = 180
 CONFIG_PATH = Path(user_config_dir(appname="burla", appauthor="burla")) / Path(
@@ -49,7 +49,7 @@ def _get_auth_creds(client_id, attempt=0):
         raise AuthTimeoutException()
 
     sleep(2)
-    response = requests.get(f"{_BURLA_SERVICE_URL}/v1/login/{client_id}/token")
+    response = requests.get(f"{_BURLA_BACKEND_URL}/v1/login/{client_id}/token")
 
     if response.status_code == 404:
         return _get_auth_creds(client_id, attempt=attempt + 1)
@@ -76,7 +76,7 @@ def login_cmd():
 
 def login():
     client_id = uuid4().hex
-    login_url = f"{_BURLA_SERVICE_URL}/v1/login/{client_id}"
+    login_url = f"{_BURLA_BACKEND_URL}/v1/login/{client_id}"
 
     print(f"Your browser has been opened to visit:\n\n    {login_url}\n")
 

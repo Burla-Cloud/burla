@@ -1,11 +1,8 @@
 from pathlib import Path
-from time import sleep
 import subprocess
-import sys
 
-from burla import remote_parallel_map
 
-from utils import with_packages, rpm_timed
+from utils import with_packages, remote_parallel_map as remote_parallel_map
 
 
 @with_packages(["spacy", "datasets"])
@@ -23,7 +20,7 @@ def test_spacy():
 
     # packages is explicitly defined here because the import statements are not detected above
     # since they are in a function
-    docs = rpm_timed(my_spacy_function, inputs[:100], packages=["spacy", "datasets"])
+    docs = remote_parallel_map(my_spacy_function, inputs[:100], packages=["spacy", "datasets"])
 
     n_tokens = sum(len(d) for d in docs)
     n_stop_tokens = sum(token.is_stop for d in docs for token in d)
@@ -39,7 +36,7 @@ def test_gpu():
 
     my_inputs = list(range(1))
 
-    rpm_timed(my_function, my_inputs, func_gpu=1)
+    remote_parallel_map(my_function, my_inputs, func_gpu=1)
 
 
 @with_packages(["pandas"])
@@ -56,7 +53,7 @@ def test_pandas():
 
     my_inputs = list(range(100))
 
-    outputs = rpm_timed(my_function, my_inputs, packages=["pandas"])
+    outputs = remote_parallel_map(my_function, my_inputs, packages=["pandas"])
 
     print(outputs[0])
 
@@ -86,7 +83,7 @@ def test_nas():
     my_inputs = list(range(1))
 
     # not sure why pytest is needed but it failed without it
-    rpm_timed(my_function, my_inputs, packages=["pytest"])
+    remote_parallel_map(my_function, my_inputs, packages=["pytest"])
 
     try:
         subprocess.run(
@@ -106,11 +103,12 @@ def test_nas():
 
 
 def test_base():
+
     def my_function(my_input):
         print(my_input)
         return my_input
 
-    something = rpm_timed(my_function, list(range(2)))
+    something = remote_parallel_map(my_function, list(range(2)))
     print(something)
 
 
@@ -137,7 +135,7 @@ def test_trinity():
         except subprocess.CalledProcessError as e:
             raise Exception(e.stderr)
 
-    rpm_timed(
+    remote_parallel_map(
         thing,
         [1, 2, 3],
         func_cpu=96,

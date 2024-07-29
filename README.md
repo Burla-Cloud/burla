@@ -6,21 +6,6 @@
 To join our mailing list go to [burla.dev](https://burla.dev/).  
 If you have any questions, email me at: jake@burla.dev, or [join us on Discord](https://discord.gg/TsbCUwBUdy).
 
-#### Current todo:
-(not in any particular order)
-
-- Switch communication between containers and clients from:  
-`container -> firebase -> main-service -> client` to `container -> pub/sub -> client`  
-Both for:
-  - Sending function inputs from client to containers and
-  - Sending stdout/err from containers to client
-- Eliminate the container service.
-Node service should interact only with container stdin/out/err, we shouldn't be running a custom webservice inside each container.
-- Ability to start some containers on-demand while leaving others running at all times  
-(currently all containers are left running at all times)
-- Ability to cache python environments instead of building every time.
-- Investigate faster container runtimes
-
 ### Overview:
 
 #### Burla is a python package that makes it easy to run code on (lots of) other computers.

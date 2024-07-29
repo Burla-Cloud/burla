@@ -1,13 +1,14 @@
 from fire import Fire
 
 # Imported here to avoid cyclic imports
-# _BURLA_SERVICE_URL = "https://cluster.burla.dev"
-# _BURLA_SERVICE_URL = "https://cluster.test.burla.dev"
+_BURLA_SERVICE_URL = "http://127.0.0.1:5001"  # <- make sure you're on the TEST backend!
+# _BURLA_SERVICE_URL = "https://cluster.test.burla.dev"  # <- make sure you're on the TEST backend!
+# _BURLA_SERVICE_URL = "https://cluster.burla.dev" # <- make sure you're on the PROD backend!
 
-# _BURLA_BACKEND_URL = "https://backend.burla.dev"
+# _BURLA_BACKEND_URL = "http://127.0.0.1:5002"
 _BURLA_BACKEND_URL = "https://backend.test.burla.dev"
+# _BURLA_BACKEND_URL = "https://backend.burla.dev"
 
-_BURLA_SERVICE_URL = "http://127.0.0.1:5000"
 
 __version__ = "0.8.0"
 

@@ -1,10 +1,10 @@
 <p align="center"><img src="https://raw.githubusercontent.com/Burla-Cloud/.github/main/media/readme_banner.png" width=1000></p>
 
+### An early, free, hosted version of Burla is now available exclusively in our [Discord](https://discord.gg/TsbCUwBUdy) server!
 
-### Burla is currently under devlopment and is not ready to be used.
-
+[Join our discord to try it out.](https://discord.gg/TsbCUwBUdy)  
 To join our mailing list go to [burla.dev](https://burla.dev/).  
-If you have any questions, email me at: jake@burla.dev, or [join us on Discord](https://discord.gg/TsbCUwBUdy).
+If you have any questions, email me at: jake@burla.dev
 
 ### Overview:
 

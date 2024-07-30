@@ -127,7 +127,7 @@ def _start_job(
         "gpu": gpu,
         "parallelism": parallelism,
         "python_version": f"3.8" if sys.version_info.minor < 8 else f"3.{sys.version_info.minor}",
-        "packages": None if image else required_packages,
+        "packages": None,  # if image else required_packages,
         "burla_version": __version__,
     }
     request_size = len(function_pkl) + len(inputs_pkl) + len(cloudpickle.dumps(payload))

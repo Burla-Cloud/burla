@@ -127,7 +127,7 @@ def _start_job(
         "func_ram": func_ram,
         "gpu": gpu,
         "parallelism": parallelism,
-        "python_version": f"3.8" if sys.version_info.minor < 8 else f"3.{sys.version_info.minor}",
+        "python_version": f"3.10" if sys.version_info.minor < 10 else f"3.{sys.version_info.minor}",
         "packages": None,  # if image else required_packages,
         "burla_version": __version__,
     }

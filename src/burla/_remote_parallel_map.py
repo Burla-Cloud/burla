@@ -32,7 +32,8 @@ from burla._helpers import (
 
 warnings.formatwarning = nopath_warning
 
-BURLA_JOBS_BUCKET = "burla-jobs" if os.getenv("IN_DEV") == "True" else "burla-jobs-prod"
+# BURLA_JOBS_BUCKET = "burla-jobs"
+BURLA_JOBS_BUCKET = "burla-jobs-prod"
 GCR_MAX_BYTES_PER_REQUEST = 32 * 1024 * 1024
 
 MAX_CPUS = 2000  # please ask before you increase this <3

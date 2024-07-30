@@ -11,7 +11,7 @@ from fire import Fire
 _BURLA_SERVICE_URL = "https://cluster.burla.dev"
 _BURLA_BACKEND_URL = "https://backend.burla.dev"
 
-__version__ = "0.1.1-alpha.1"
+__version__ = "0.1.1-alpha.2"
 
 from burla._auth import login, login_cmd as _login_cmd
 from burla._nas import cd, ls, upload, download

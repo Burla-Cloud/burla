@@ -2,12 +2,13 @@ from burla import remote_parallel_map
 
 
 def my_function(my_input):
-    print(my_input)
-    return my_input
+    print(f"hi #{my_input}")
+    return my_input * 2
 
 
-inputs = [1, 2, 3, 4]
+inputs = list(range(16))
 
 results = remote_parallel_map(my_function, inputs)
 
+print(f"num results: {len(results)}")
 print(results)

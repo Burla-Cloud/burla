@@ -1,15 +1,23 @@
 import os
-import asyncio
-from urllib.parse import quote
+import logging
+from queue import Queue
+from threading import Event
+from concurrent.futures import TimeoutError
 
 import cloudpickle
-import nest_asyncio
-from aiohttp import ClientSession
-from google.oauth2 import service_account
-from google.auth.transport.requests import Request
+from yaspin import Spinner
+from google.cloud import pubsub
+from google.cloud.pubsub_v1.types import BatchSettings
+
+from burla import INPUTS_TOPIC_PATH, OUTPUTS_SUBSCRIPTION_PATH, LOGS_SUBSCRIPTION_PATH
 
 
-nest_asyncio.apply()
+# was getting the exact same uncatchable, unimportant, error:
+# https://stackoverflow.com/questions/77138981/how-to-handle-acknowledging-a-pubsub-streampull-subscription-message
+logging.getLogger("google.cloud.pubsub_v1").setLevel(logging.ERROR)
+
+# gRPC streams from pubsub will throw some unblockable annoying warnings
+os.environ["GRPC_VERBOSITY"] = "ERROR"
 
 
 class StatusMessage:
@@ -64,42 +72,56 @@ def nopath_warning(message, category, filename, lineno, line=None):
     return f"{category.__name__}: {message}\n"
 
 
-def upload_inputs(job_id: str, pickled_inputs: list, gcs_auth_headers: dict, jobs_bucket: str):
-    async def _upload_input(session, url, input_):
-        async with session.request(method="post", url=url, data=input_) as response:
-            response.raise_for_status()
+def print_logs_from_stream(
+    subscriber: pubsub.SubscriberClient, stop_event: Event, spinner: Spinner
+):
 
-    async def _make_requests(urls, inputs, headers):
-        async with ClientSession(headers=headers) as session:
-            tasks = [_upload_input(session, url, input_) for url, input_ in zip(urls, inputs)]
-            await asyncio.gather(*tasks)
+    def callback(message):
+        message.ack()
+        try:
+            spinner.write(message.data.decode())
+        except:
+            # ignore messages that cannot be unpickled (are not pickled)
+            # ack these messages anyway so they don't loop through this subsctiption
+            print(f"ERROR: data instance: {type(message.data)}, data: {message.data}")
+            pass
 
-    base_url = "https://www.googleapis.com/upload/storage"
-    name_to_url = lambda name: f"{base_url}/v1/b/{jobs_bucket}/o?uploadType=media&name={name}"
-    urls = [name_to_url(f"{job_id}/inputs/{i}.pkl") for i in range(len(pickled_inputs))]
+    future = subscriber.subscribe(LOGS_SUBSCRIPTION_PATH, callback=callback)
+    while not stop_event.is_set():
+        try:
+            future.result(timeout=0.1)
+        except TimeoutError:
+            continue
 
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(_make_requests(urls, pickled_inputs, gcs_auth_headers))
+
+def enqueue_outputs_from_stream(
+    subscriber: pubsub.SubscriberClient, stop_event: Event, output_queue: Queue
+):
+
+    def callback(message):
+        message.ack()
+        try:
+            output_queue.put(cloudpickle.loads(message.data))
+        except:
+            # ignore messages that cannot be unpickled (are not pickled)
+            # ack these messages anyway so they don't loop through this subsctiption
+            pass
+
+    future = subscriber.subscribe(OUTPUTS_SUBSCRIPTION_PATH, callback=callback)
+    while not stop_event.is_set():
+        try:
+            future.result(timeout=0.1)
+        except TimeoutError:
+            continue
 
 
-def download_outputs(job_id: str, num_outputs: int, gcs_auth_headers: dict, jobs_bucket: str):
+def upload_inputs(inputs: list):
+    batch_settings = BatchSettings(max_bytes=10000000, max_latency=0.01, max_messages=1000)
+    publisher = pubsub.PublisherClient(batch_settings=batch_settings)
 
-    async def _download_output(session, url, remaining_attempts=100):
-        async with session.request(method="get", url=url) as response:
-            if response.status == 404 and remaining_attempts > 0:
-                return await _download_output(session, url, remaining_attempts - 1)
-            response.raise_for_status()
-            return await response.read()
+    if not (0 <= len(inputs) <= 4294967295):
+        raise ValueError("too many inputs: ID does not fit in 4 bytes.")
 
-    async def _make_requests(urls, headers):
-        async with ClientSession(headers=headers) as session:
-            tasks = [_download_output(session, url) for url in urls]
-            return await asyncio.gather(*tasks)
-
-    base_url = "https://www.googleapis.com/storage/v1"
-    name_to_url = lambda name: f"{base_url}/b/{jobs_bucket}/o/{quote(name, safe='')}?alt=media"
-    urls = [name_to_url(f"{job_id}/outputs/{i}.pkl") for i in range(num_outputs)]
-
-    loop = asyncio.get_event_loop()
-    results = loop.run_until_complete(_make_requests(urls, gcs_auth_headers))
-    return [cloudpickle.loads(result) for result in results]
+    for input_index, input_ in enumerate(inputs):
+        packed_data = input_index.to_bytes(length=4, byteorder="big") + cloudpickle.dumps(input_)
+        publisher.publish(topic=INPUTS_TOPIC_PATH, data=packed_data)

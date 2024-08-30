@@ -3,13 +3,14 @@ import logging
 from queue import Queue
 from threading import Event
 from concurrent.futures import TimeoutError
+from concurrent.futures import ThreadPoolExecutor
 
 import cloudpickle
 from yaspin import Spinner
 from google.cloud import pubsub
-from google.cloud.pubsub_v1.types import BatchSettings
+from google.cloud import firestore
 
-from burla import INPUTS_TOPIC_PATH, OUTPUTS_SUBSCRIPTION_PATH, LOGS_SUBSCRIPTION_PATH
+from burla import OUTPUTS_SUBSCRIPTION_PATH, LOGS_SUBSCRIPTION_PATH
 
 
 # was getting the exact same uncatchable, unimportant, error:
@@ -115,13 +116,31 @@ def enqueue_outputs_from_stream(
             continue
 
 
-def upload_inputs(inputs: list):
-    batch_settings = BatchSettings(max_bytes=10000000, max_latency=0.01, max_messages=1000)
-    publisher = pubsub.PublisherClient(batch_settings=batch_settings)
+def _upload_input(inputs_collection, input_index, input_):
+    input_pkl = cloudpickle.dumps(input_)
+    input_too_big = len(input_pkl) > 1_048_576
 
-    if not (0 <= len(inputs) <= 4294967295):
-        raise ValueError("too many inputs: ID does not fit in 4 bytes.")
+    if input_too_big:
+        msg = f"Input at index {input_index} is greater than 1MB in size.\n"
+        msg += "Inputs greater than 1MB are unfortunately not yet supported."
+        raise Exception(msg)
+    else:
+        doc = {"input": input_pkl, "claimed": False}
+        inputs_collection.document(str(input_index)).set(doc)
 
-    for input_index, input_ in enumerate(inputs):
-        packed_data = input_index.to_bytes(length=4, byteorder="big") + cloudpickle.dumps(input_)
-        publisher.publish(topic=INPUTS_TOPIC_PATH, data=packed_data)
+
+def upload_inputs(DB: firestore.Client, inputs_id: str, inputs: list):
+    """
+    Uploads inputs into a separate collection not connected to the job
+    so that uploading can start before the job document is created.
+    """
+    inputs_collection = DB.collection("inputs").document(inputs_id).collection("inputs")
+
+    futures = []
+    with ThreadPoolExecutor() as executor:
+        for input_index, input_ in enumerate(inputs):
+            future = executor.submit(_upload_input, inputs_collection, input_index, input_)
+            futures.append(future)
+
+        for future in futures:
+            future.result()  # This will raise exceptions if any occurred in the threads

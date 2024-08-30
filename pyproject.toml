@@ -14,6 +14,7 @@ yaspin = "^2.5.0"
 cloudpickle = "^2.2.1"
 tblib = "^3.0.0"
 google-cloud-pubsub = "^2.21.1"
+google-cloud-firestore = "^2.18.0"
 
 [tool.poetry.scripts]
 burla = "burla.__init__:init_cli"

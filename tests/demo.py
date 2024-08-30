@@ -6,7 +6,7 @@ def my_function(my_input):
     return my_input * 2
 
 
-inputs = list(range(16))
+inputs = list(range(8))
 
 results = remote_parallel_map(my_function, inputs)
 

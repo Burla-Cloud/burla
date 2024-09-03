@@ -8,8 +8,6 @@ from pathlib import Path
 from typing import Tuple
 
 from appdirs import user_config_dir
-from IPython.core.display import Javascript
-from IPython.display import display, clear_output
 
 from burla import _BURLA_BACKEND_URL
 
@@ -80,13 +78,13 @@ def login():
 
     print(f"Your browser has been opened to visit:\n\n    {login_url}\n")
 
-    if IN_COLAB:
-        display(Javascript(f'window.open("{login_url}");'))
-        sleep(1)  # give js a second to run before removing it
-        clear_output()  # prevents js from re-running automatically when notebook opened
-    else:
-        webbrowser.open(login_url)
-
+    # if IN_COLAB:
+    #     display(Javascript(f'window.open("{login_url}");'))
+    #     sleep(1)  # give js a second to run before removing it
+    #     clear_output()  # prevents js from re-running automatically when notebook opened
+    # else:
+    #     webbrowser.open(login_url)
+    webbrowser.open(login_url)
     auth_token, email = _get_auth_creds(client_id)
 
     message = f"Thank you for registering with Burla! You are now logged in as [{email}].\n"

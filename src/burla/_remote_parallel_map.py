@@ -8,16 +8,16 @@ from six import reraise
 from threading import Thread, Event
 from typing import Callable, Optional
 from time import sleep, time
-from queue import PriorityQueue
+from queue import Queue
+from uuid import uuid4
 
 import cloudpickle
-import google.auth
-from google.auth.transport.requests import Request
 from yaspin import yaspin, Spinner
 from tblib import Traceback
+from google.cloud import pubsub
+from google.cloud import firestore
 
-from burla import _BURLA_SERVICE_URL, __version__
-from burla._logstream import print_logs_from_queue
+from burla import _BURLA_SERVICE_URL, __version__, BURLA_JOBS_BUCKET, BURLA_GCP_PROJECT
 from burla._env_inspection import get_pip_packages, get_function_dependencies
 from burla._auth import auth_headers_from_local_config, AuthException, login_required
 from burla._helpers import (
@@ -27,24 +27,24 @@ from burla._helpers import (
     ServerError,
     StatusMessage,
     upload_inputs,
-    download_outputs,
+    print_logs_from_stream,
+    enqueue_outputs_from_stream,
 )
 
 warnings.formatwarning = nopath_warning
 
-# BURLA_JOBS_BUCKET = "burla-jobs"
-BURLA_JOBS_BUCKET = "burla-jobs-prod"
-GCR_MAX_BYTES_PER_REQUEST = 32 * 1024 * 1024
 
-MAX_CPUS = 2000  # please ask before you increase this <3
-MAX_GPUS = 300  # please ask before you increase this <3
-MAX_PARALLELISM = 5000  # remote_parallel_map might break if this is raised.
-MAX_CONCURRENCY = 2000
+FUNCTION_SIZE_GCS_THRESHOLD = 25 * 1024 * 1024
+
+MAX_CPUS = 2000
+MAX_GPUS = 300
+MAX_PARALLELISM = 5000
 
 TIMEOUT_MIN = 60 * 12  # max time a Burla job can run for
 IN_COLAB = os.getenv("COLAB_RELEASE_TAG") is not None
 
 BYTES_HEADER = {"Content-Type": "application/octet-stream"}
+DB = firestore.Client(project=BURLA_GCP_PROJECT)
 
 
 def job_status_poll_rate(seconds_since_job_started: int):
@@ -62,10 +62,10 @@ def job_status_poll_rate(seconds_since_job_started: int):
         return 3
 
 
-def _get_job_info_since(epoch: int, job_id: str, headers: dict):
+def raise_any_errors_from_job(job_id: str, headers: dict):
     """Raises: ServerError, InstallError, HTTPError, or re-raised error from UDF"""
 
-    response = requests.get(f"{_BURLA_SERVICE_URL}/v1/jobs/{job_id}/{epoch}", headers=headers)
+    response = requests.get(f"{_BURLA_SERVICE_URL}/v1/jobs/{job_id}", headers=headers)
     if response.status_code == 401:
         AuthException()
     elif response.status_code >= 500:
@@ -73,7 +73,7 @@ def _get_job_info_since(epoch: int, job_id: str, headers: dict):
     elif response.status_code >= 300:
         response.raise_for_status()
 
-    job = response.json()
+    job = response.json() or {}
     if job.get("udf_error"):
         exception_info = pickle.loads(bytes.fromhex(job.get("udf_error")))
         reraise(
@@ -84,19 +84,16 @@ def _get_job_info_since(epoch: int, job_id: str, headers: dict):
     elif job.get("install_error"):
         raise InstallError(job["install_error"])
 
-    return job["udf_started"], job["logs"], job.get("done")
-
 
 def _start_job(
-    rpm_call_time: float,
     function_: Callable,
     inputs: list,
-    burla_auth_headers: dict,
+    auth_headers: dict,
     verbose: bool,
     spinner: Spinner,
     func_cpu: int,
     func_ram: int,
-    gpu: int,
+    func_gpu: int,
     parallelism: int,
     image: Optional[str] = None,
     packages: Optional[list[str]] = None,
@@ -112,35 +109,39 @@ def _start_job(
         imported_modules = list(get_function_dependencies(function_))
         required_packages = [pkg for pkg in installed_packages if pkg["name"] in imported_modules]
 
-    # print(f"installed_packages: {installed_packages}\n\n")
-    # print(f"imported_modules: {imported_modules}\n\n")
-    # print(f"required_packages: {required_packages}")
-    # print(1 / 0)
+    # in separate thread start uploading inputs:
+    inputs_id = str(uuid4())
+    input_uploader_thread = Thread(
+        target=upload_inputs,
+        args=(DB, inputs_id, inputs),
+        daemon=True,
+    )
+    input_uploader_thread.start()
 
     function_pkl = cloudpickle.dumps(function_)
-    inputs_pkl = cloudpickle.dumps([cloudpickle.dumps(_input) for _input in inputs])
     payload = {
-        "rpm_call_time": rpm_call_time,
         "n_inputs": len(inputs),
+        "inputs_id": inputs_id,
         "image": image,
         "func_cpu": func_cpu,
         "func_ram": func_ram,
-        "gpu": gpu,
+        "func_gpu": func_gpu,
         "parallelism": parallelism,
         "python_version": f"3.10" if sys.version_info.minor < 10 else f"3.{sys.version_info.minor}",
-        "packages": None,  # if image else required_packages,
+        "packages": None if image else required_packages,
         "burla_version": __version__,
     }
-    request_size = len(function_pkl) + len(inputs_pkl) + len(cloudpickle.dumps(payload))
-    send_inputs_through_gcs = request_size > GCR_MAX_BYTES_PER_REQUEST
+    request_size = len(function_pkl) + len(cloudpickle.dumps(payload))
+    send_function_through_gcs = request_size > FUNCTION_SIZE_GCS_THRESHOLD
 
+    # tell service to start job
     url = f"{_BURLA_SERVICE_URL}/v1/jobs/"
-    if send_inputs_through_gcs:
-        response = requests.post(url, json=payload, headers=burla_auth_headers)
+    if send_function_through_gcs:
+        response = requests.post(url, json=payload, headers=auth_headers)
     else:
-        files = {"function_pkl": function_pkl, "inputs_pkl": inputs_pkl}
+        files = {"function_pkl": function_pkl}
         data = dict(request_json=json.dumps(payload))
-        response = requests.post(url, files=files, data=data, headers=burla_auth_headers)
+        response = requests.post(url, files=files, data=data, headers=auth_headers)
 
     if response.status_code == 401:
         raise AuthException()
@@ -148,61 +149,60 @@ def _start_job(
         response.raise_for_status()
         job_id = response.json()["job_id"]
 
-    if send_inputs_through_gcs:
-        # getting crecentials takes anywhere from .5-1s
-        # credentials, _ = google.auth.default()
-        # credentials.refresh(Request())
-        # gcs_auth_headers = {"Authorization": f"Bearer {credentials.token}", **BYTES_HEADER}
-
-        # bucket is temporarily public:
-        gcs_auth_headers = BYTES_HEADER
-
-        # uploading function and inputs from `test_base` consistently takes ~0.8s
+    if send_function_through_gcs:
         spinner.text = StatusMessage.uploading_function
         function_blob_name = f"{job_id}/function.pkl"
         gcs_base_url = "https://www.googleapis.com/upload/storage"
         function_blob_url_args = f"uploadType=media&name={function_blob_name}"
         function_blob_url = f"{gcs_base_url}/v1/b/{BURLA_JOBS_BUCKET}/o?{function_blob_url_args}"
-        requests.post(function_blob_url, headers=gcs_auth_headers, data=function_pkl)
+        requests.post(function_blob_url, headers=BYTES_HEADER, data=function_pkl)
 
-        spinner.text = StatusMessage.uploading_inputs
-        upload_inputs(job_id, inputs_pkl, gcs_auth_headers, BURLA_JOBS_BUCKET)
-
-    spinner.text = StatusMessage.preparing()
-    return job_id
+    spinner.text = StatusMessage.running()
+    return job_id, input_uploader_thread
 
 
-def _watch_job(job_id: str, job_started_time: int, headers: dict, verbose: bool, spinner: Spinner):
-    last_epoch = job_started_time
-    epoch = last_epoch
-    job_timed_out = False
-
-    # Start printing logs generated by this job using a separate thread.
-    print_queue = PriorityQueue()
+def _watch_job(
+    job_id: str,
+    n_inputs: int,
+    headers: dict,
+    verbose: bool,
+    spinner: Spinner,
+):
     stop_event = Event()
-    args = (print_queue, stop_event, spinner)
-    log_thread = Thread(target=print_logs_from_queue, args=args, daemon=True)
+    subscriber = pubsub.SubscriberClient()
+
+    # Start collecting logs generated by this job using a separate thread.
+    args = (subscriber, stop_event, spinner)
+    log_thread = Thread(target=print_logs_from_stream, args=args, daemon=True)
     log_thread.start()
-    done = False
-    while not (done or job_timed_out):
-        sleep(job_status_poll_rate(seconds_since_job_started=time() - job_started_time))
 
-        udf_started, logs, done = _get_job_info_since(last_epoch, job_id, headers)
+    # Start collecting outputs generated by this job using a separate thread.
+    output_queue = Queue()
+    args = (subscriber, stop_event, output_queue)
+    output_thread = Thread(target=enqueue_outputs_from_stream, args=args, daemon=True)
+    output_thread.start()
 
-        for epoch, log_message in logs:
-            print_queue.put((epoch, log_message))
+    if verbose:
+        spinner.text = StatusMessage.running()
 
-        if verbose and udf_started:
-            spinner.text = StatusMessage.running()
+    start = time()
+    n_outputs_received = 0
+    while n_outputs_received < n_inputs:
+        timed_out = (time() - start) > (TIMEOUT_MIN * 60)
+        sleep(job_status_poll_rate(seconds_since_job_started=time() - start))
 
-        last_epoch = epoch
-        job_timed_out = (time() - job_started_time) > (TIMEOUT_MIN * 60)
+        raise_any_errors_from_job(job_id, headers)
+
+        while not output_queue.empty():
+            n_outputs_received += 1
+            yield output_queue.get()
+
+        if timed_out:
+            raise JobTimeoutError(job_id=job_id, timeout=TIMEOUT_MIN)
 
     stop_event.set()
     log_thread.join()
-
-    if job_timed_out:
-        raise JobTimeoutError(job_id=job_id, timeout=TIMEOUT_MIN)
+    output_thread.join()
 
 
 @login_required
@@ -213,93 +213,76 @@ def remote_parallel_map(
     image: Optional[str] = None,
     func_cpu: int = 1,
     func_ram: int = 1,
-    gpu: int = 0,
-    max_parallelism: Optional[int] = None,
+    func_gpu: int = 0,
+    parallelism: Optional[int] = None,
     api_key: Optional[str] = None,
     packages: Optional[list[str]] = None,
 ):
     rpm_call_time = time()
     n_inputs = len(inputs)
     if (func_cpu > 96) or (func_cpu < 1):
-        raise ValueError("CPU per function call must be one of [1.. 96]")
+        raise ValueError("CPU per function call must be one of [1.. 80]")
     if (func_ram > 624) or (func_ram < 1):
-        raise ValueError("RAM per function call must be one of [1.. 624]")
-    # if (func_gpu > 4) or (func_gpu < 0):
-    #     raise ValueError("GPU per function call must be one of [0.. 4]")
+        raise ValueError("RAM per function call must be one of [1.. 320]")
+    if (func_gpu > 4) or (func_gpu < 0):
+        raise ValueError("GPU per function call must be one of [0.. 4]")
 
-    n_inputs = len(inputs)
-    if max_parallelism is None:
-        parallelism = min(n_inputs, MAX_PARALLELISM)
-    else:
-        parallelism = min(max_parallelism, MAX_PARALLELISM)
-
+    parallelism = parallelism if parallelism else n_inputs
+    parallelism = parallelism if parallelism < MAX_PARALLELISM else MAX_PARALLELISM
     requested_cpu = parallelism * func_cpu
-    # requested_gpu = parallelism * func_gpu
+    requested_gpu = parallelism * func_gpu
 
-    if requested_cpu > MAX_CPUS:  # and not (requested_gpu > MAX_GPUS):
+    if requested_cpu > MAX_CPUS and not (requested_gpu > MAX_GPUS):
         parallelism = MAX_CPUS // func_cpu
-        warnings.warn(
-            f"Limiting parallelism to {parallelism} to stay under limit of {MAX_CPUS} CPUs."
-        )
-    # if requested_gpu > MAX_GPUS:
-    #     parallelism = MAX_GPUS // func_gpu
-    #     warnings.warn(
-    #         f"Limiting parallelism to {parallelism} to stay under limit of {MAX_GPUS} GPUs."
-    #     )
+        msg = f"Limiting parallelism to {parallelism} to stay under limit of {MAX_CPUS} CPUs."
+        warnings.warn(msg)
+    if requested_gpu > MAX_GPUS:
+        parallelism = MAX_GPUS // func_gpu
+        msg = f"Limiting parallelism to {parallelism} to stay under limit of {MAX_GPUS} GPUs."
+        warnings.warn(msg)
 
     spinner = yaspin()
     StatusMessage.function_name = function_.__name__
-    StatusMessage.n_inputs = len(inputs) if len(inputs) < MAX_CONCURRENCY else MAX_CONCURRENCY
+    StatusMessage.n_inputs = len(inputs)
     StatusMessage.total_cpus = parallelism * func_cpu
-    StatusMessage.total_gpus = parallelism if gpu else 0
+    StatusMessage.total_gpus = parallelism if func_gpu else 0
 
     if api_key:
-        burla_auth_headers = {"Authorization": f"Bearer {api_key}"}
+        auth_headers = {"Authorization": f"Bearer {api_key}"}
     else:
-        burla_auth_headers = auth_headers_from_local_config()
+        auth_headers = auth_headers_from_local_config()
 
     try:
-        polling_start_time = int(time())
-        job_id = _start_job(
-            rpm_call_time=rpm_call_time,
+        job_id, input_uploader_thread = _start_job(
             function_=function_,
             inputs=inputs,
-            burla_auth_headers=burla_auth_headers,
+            auth_headers=auth_headers,
             verbose=verbose,
             spinner=spinner,
             func_cpu=func_cpu,
             func_ram=func_ram,
-            gpu=gpu,
+            func_gpu=func_gpu,
             parallelism=parallelism,
             image=image,
             packages=packages,
         )
-        _watch_job(job_id, polling_start_time, burla_auth_headers, verbose, spinner)
-        spinner.text = StatusMessage.downloading
-
-        # temporary, TODO: only download through gcs if outputs do not fit in a request
-        # credentials, _ = google.auth.default()
-        # credentials.refresh(Request())
-        # gcs_auth_headers = {"Authorization": f"Bearer {credentials.token}", **BYTES_HEADER}
-        # consistently takes 0.4-0.5s
-
-        # bucket is temporarily publicly accessible:
-        gcs_auth_headers = BYTES_HEADER
-        return_values = download_outputs(job_id, len(inputs), gcs_auth_headers, BURLA_JOBS_BUCKET)
-
+        output_generator = _watch_job(job_id, len(inputs), auth_headers, verbose, spinner)
+        return_values = list(output_generator)
+        input_uploader_thread.join()
     except Exception as e:
-        spinner.stop()
-        raise e
+        if isinstance(e, requests.exceptions.HTTPError) and ("500" in str(e)):
+            spinner.text = "Internal Server Error, see `main_service` logs..."
+            spinner.fail("✖")
+        else:
+            spinner.stop()
+            raise e
+    finally:
+        payload = {"rpm_call_time": rpm_call_time, "job_ended_ts": time()}
+        url = f"{_BURLA_SERVICE_URL}/v1/jobs/{job_id}/ended"
+        requests.post(url, json=payload, headers=auth_headers)
 
     if verbose:
         spinner.text = "Done!"
         spinner.ok("✔")
 
-    # report job is done for metrics / benchmarking reasons
-    payload = {"job_done_ts": time()}
-    url = f"{_BURLA_SERVICE_URL}/v1/jobs/{job_id}/done"
-    requests.post(url, json=payload, headers=burla_auth_headers)
-
-    all_return_values_are_none = all(value is None for value in return_values)
-    if not all_return_values_are_none:
-        return return_values
+    return return_values

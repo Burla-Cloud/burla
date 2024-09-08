@@ -17,7 +17,7 @@ from tblib import Traceback
 from google.cloud import pubsub
 from google.cloud import firestore
 
-from burla import _BURLA_SERVICE_URL, __version__, BURLA_JOBS_BUCKET, BURLA_GCP_PROJECT
+from burla import _BURLA_SERVICE_URL, __version__, _BURLA_JOBS_BUCKET, _BURLA_GCP_PROJECT
 from burla._env_inspection import get_pip_packages, get_function_dependencies
 from burla._auth import auth_headers_from_local_config, AuthException, login_required
 from burla._helpers import (
@@ -44,7 +44,7 @@ TIMEOUT_MIN = 60 * 12  # max time a Burla job can run for
 IN_COLAB = os.getenv("COLAB_RELEASE_TAG") is not None
 
 BYTES_HEADER = {"Content-Type": "application/octet-stream"}
-DB = firestore.Client(project=BURLA_GCP_PROJECT)
+DB = firestore.Client(project=_BURLA_GCP_PROJECT)
 
 
 def job_status_poll_rate(seconds_since_job_started: int):
@@ -154,7 +154,7 @@ def _start_job(
         function_blob_name = f"{job_id}/function.pkl"
         gcs_base_url = "https://www.googleapis.com/upload/storage"
         function_blob_url_args = f"uploadType=media&name={function_blob_name}"
-        function_blob_url = f"{gcs_base_url}/v1/b/{BURLA_JOBS_BUCKET}/o?{function_blob_url_args}"
+        function_blob_url = f"{gcs_base_url}/v1/b/{_BURLA_JOBS_BUCKET}/o?{function_blob_url_args}"
         requests.post(function_blob_url, headers=BYTES_HEADER, data=function_pkl)
 
     spinner.text = StatusMessage.running()

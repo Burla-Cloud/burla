@@ -17,7 +17,6 @@ else:
     _BURLA_GCP_PROJECT = "burla-prod"
 
 _BURLA_BACKEND_URL = "https://backend.burla.dev"
-INPUTS_TOPIC_PATH = f"projects/{_BURLA_GCP_PROJECT}/topics/burla_job_inputs"
 OUTPUTS_SUBSCRIPTION_PATH = f"projects/{_BURLA_GCP_PROJECT}/subscriptions/burla_job_outputs"
 LOGS_SUBSCRIPTION_PATH = f"projects/{_BURLA_GCP_PROJECT}/subscriptions/burla_job_logs"
 

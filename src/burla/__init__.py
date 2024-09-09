@@ -1,3 +1,4 @@
+import os
 import tomli
 import pathlib
 from fire import Fire
@@ -8,19 +9,14 @@ IN_DEV = pyproject_config.get("tool", {}).get("burla", {}).get("config", {}).get
 
 if IN_DEV:
     _BURLA_SERVICE_URL = "http://127.0.0.1:5001"
-    # _BURLA_BACKEND_URL = "http://127.0.0.1:5002"
-
-    # _BURLA_SERVICE_URL = "https://cluster.test.burla.dev"
-    _BURLA_BACKEND_URL = "https://backend.test.burla.dev"
-
-    _BURLA_JOBS_BUCKET = "burla-jobs"
-    _BURLA_GCP_PROJECT = "burla-test"
+    _BURLA_JOBS_BUCKET = os.environ.get("BURLA_TEST_JOBS_BUCKET")
+    _BURLA_GCP_PROJECT = os.environ.get("BURLA_TEST_PROJECT")
 else:
     _BURLA_SERVICE_URL = "https://cluster.burla.dev"
-    _BURLA_BACKEND_URL = "https://backend.burla.dev"
     _BURLA_JOBS_BUCKET = "burla-jobs-prod"
     _BURLA_GCP_PROJECT = "burla-prod"
 
+_BURLA_BACKEND_URL = "https://backend.burla.dev"
 INPUTS_TOPIC_PATH = f"projects/{_BURLA_GCP_PROJECT}/topics/burla_job_inputs"
 OUTPUTS_SUBSCRIPTION_PATH = f"projects/{_BURLA_GCP_PROJECT}/subscriptions/burla_job_outputs"
 LOGS_SUBSCRIPTION_PATH = f"projects/{_BURLA_GCP_PROJECT}/subscriptions/burla_job_logs"

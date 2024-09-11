@@ -1,6 +1,6 @@
-import os
 import tomli
 import pathlib
+import subprocess
 from fire import Fire
 
 pyproject_path = pathlib.Path(__file__).resolve().parent.parent.parent / "pyproject.toml"
@@ -8,15 +8,15 @@ pyproject_config = tomli.loads(pyproject_path.read_text()) if pyproject_path.exi
 IN_DEV = pyproject_config.get("tool", {}).get("burla", {}).get("config", {}).get("in_dev", False)
 
 if IN_DEV:
+    cmd = ["gcloud", "config", "get-value", "project"]
+    _BURLA_GCP_PROJECT = subprocess.run(cmd, capture_output=True, text=True).stdout.strip()
     _BURLA_SERVICE_URL = "http://127.0.0.1:5001"
-    _BURLA_JOBS_BUCKET = os.environ.get("BURLA_TEST_JOBS_BUCKET")
-    _BURLA_GCP_PROJECT = os.environ.get("BURLA_TEST_PROJECT")
 else:
-    _BURLA_SERVICE_URL = "https://cluster.burla.dev"
-    _BURLA_JOBS_BUCKET = "burla-jobs-prod"
     _BURLA_GCP_PROJECT = "burla-prod"
+    _BURLA_SERVICE_URL = "https://cluster.burla.dev"
 
 _BURLA_BACKEND_URL = "https://backend.burla.dev"
+_BURLA_JOBS_BUCKET = f"burla-jobs--{_BURLA_GCP_PROJECT}"
 OUTPUTS_SUBSCRIPTION_PATH = f"projects/{_BURLA_GCP_PROJECT}/subscriptions/burla_job_outputs"
 LOGS_SUBSCRIPTION_PATH = f"projects/{_BURLA_GCP_PROJECT}/subscriptions/burla_job_logs"
 

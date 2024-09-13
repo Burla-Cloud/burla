@@ -145,6 +145,8 @@ def _start_job(
 
     if response.status_code == 401:
         raise AuthException()
+    elif response.status_code == 500 and response.text:
+        raise requests.exceptions.HTTPError(response.text)
     else:
         response.raise_for_status()
         job_id = response.json()["job_id"]
@@ -253,6 +255,7 @@ def remote_parallel_map(
         auth_headers = auth_headers_from_local_config()
 
     try:
+        job_id = None
         job_id, input_uploader_thread = _start_job(
             function_=function_,
             inputs=inputs,
@@ -270,16 +273,13 @@ def remote_parallel_map(
         return_values = list(output_generator)
         input_uploader_thread.join()
     except Exception as e:
-        if isinstance(e, requests.exceptions.HTTPError) and ("500" in str(e)):
-            spinner.text = "Internal Server Error, see `main_service` logs..."
-            spinner.fail("✖")
-        else:
-            spinner.stop()
-            raise e
+        spinner.stop()
+        raise e
     finally:
-        payload = {"rpm_call_time": rpm_call_time, "job_ended_ts": time()}
-        url = f"{_BURLA_SERVICE_URL}/v1/jobs/{job_id}/ended"
-        requests.post(url, json=payload, headers=auth_headers)
+        if job_id:
+            payload = {"rpm_call_time": rpm_call_time, "job_ended_ts": time()}
+            url = f"{_BURLA_SERVICE_URL}/v1/jobs/{job_id}/ended"
+            requests.post(url, json=payload, headers=auth_headers)
 
     if verbose:
         spinner.text = "Done!"

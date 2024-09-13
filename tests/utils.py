@@ -22,15 +22,3 @@ def with_packages(packages):
         return wrapper
 
     return decorator
-
-
-def rpm_timed(*a, **kw):
-    now = (datetime.utcnow() + timedelta(hours=-4)).strftime("%I:%M %p")
-    print(f"STARTED at: {now}")
-
-    results = remote_parallel_map(*a, **kw)
-
-    now = (datetime.utcnow() + timedelta(hours=-4)).strftime("%I:%M %p")
-    print(f"DONE PROCESSING ALL JOBS at: {now}")
-
-    return results

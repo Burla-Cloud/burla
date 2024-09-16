@@ -16,11 +16,20 @@ from yaspin import yaspin, Spinner
 from tblib import Traceback
 from google.cloud import pubsub
 from google.cloud import firestore
-from google.oauth2 import service_account
 
-from burla import _BURLA_SERVICE_URL, __version__, _BURLA_JOBS_BUCKET, _BURLA_GCP_PROJECT
+from burla import (
+    _BURLA_SERVICE_URL,
+    __version__,
+    _BURLA_JOBS_BUCKET,
+    _BURLA_GCP_PROJECT,
+    _BURLA_BACKEND_URL,
+)
 from burla._env_inspection import get_pip_packages, get_function_dependencies
-from burla._auth import auth_headers_from_local_config, AuthException, login_required
+from burla._auth import (
+    get_auth_headers,
+    get_gcs_credentials,
+    AuthException,
+)
 from burla._helpers import (
     nopath_warning,
     JobTimeoutError,
@@ -37,31 +46,25 @@ warnings.formatwarning = nopath_warning
 
 FUNCTION_SIZE_GCS_THRESHOLD = 25 * 1024 * 1024
 
-MAX_CPUS = 2000
-MAX_GPUS = 300
-MAX_PARALLELISM = 5000
+MAX_CPUS = 1000
+MAX_GPUS = 200
+MAX_PARALLELISM = 1000
 
 TIMEOUT_MIN = 60 * 12  # max time a Burla job can run for
 IN_COLAB = os.getenv("COLAB_RELEASE_TAG") is not None
 
-BYTES_HEADER = {"Content-Type": "application/octet-stream"}
-
-service_account_info = {
-    "type": "service_account",
-    "project_id": "burla-prod",
-    "private_key_id": "5760535512502e67d3b7184667262d65394f57e3",
-    "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQCQToCg9XVqBqkT\npyzinS4tleT0bp6mZsgtrFNDTR89LGpTJAeIRnlA2HaUTm5jBHUkFYWwfLopJXjs\nqnNed2nVwV3IQhNSh2kJ4I/ML7h5nAtuPVgKeL5YpTehqvAYdr5LGlqwFfOZoj9T\ndl+QkI705cDl/XTa7KzYVvzFp0dTg5S0RQ4KAuHHz3zTEKWSM6kRHQeBnNLmW5a9\nG2RCz4G587/O8A1FkrEmq6BXMReQkYqjT92yTMHxglraC8LdX5oUwu3quFqu5mwM\nzxZEd2jufr75V4n4nTJpanZebrCDyg78z8jy1jzWiJCqlUjE+XrpfiWoQM7kb/PT\n0ETKbESBAgMBAAECggEACSK/J/GCNm0nhRP/VnVm+AHWVdcu+g/lumZ/evJF+QR3\n0r2kMG9tu7o4f5kbie89T0SBizPKQVKa/jioRyG+NIciXcw5Fu91qedqkx2uSxyi\n6J6/lSIhwtDq3bRJsPLLh0uq1Bz/qAlKgwkqcaeFNWHaPXU3UajMJIIVTJoTfOju\nRi44qpKfitgULBq5EJgkICCGLlP76ZiJdXg/PhpxI0AnW9ZANaxMpGyBBv0B/JtZ\n+95HI7HsV1skXq8d9FHoENbEq15OwXy1IRQ2/BKMXHYdgC8eqhlpoR/RhAPqOODX\nnFVxVOAEbylT050NXMNzqPrwRHkErkWxzgyYskiawQKBgQDHDZA/0+JjJYaIOpap\nIt6OsvM6hthMPvduoAjmLN6nSEDf/PYz7GnkemiKroLA0tLJ72tXkPUGEgSTDuc2\nydmKpRihdlUOkepNqH+NPZDo46Q8DRIhqa03WZtYakQpsQnbv9LWi2yotQGDLji4\ntGkC4BiN5hD5tDJ7/mJFTVE9mQKBgQC5l1+qrxsemO4BmnUZ6KAGqyB2+gRfUG0J\n0VIf6E0VFGNNplC41hLgP9fhjWgfuiVDroIrzP4kEd8pme/AvhNVTFIIsqVvDIsq\nrwKW5GBVh4XrvEpqJViFHek9L1+DgQ3KZXYGryZd0pBum5cOsBMQqOuX6xPPjkAO\nCAAPuT7/KQKBgCujrZxQt7FE6Nm0/pLWMjTWxrxuE72jkFuQemL8M1Q5Yv+4VcHM\ncurEa2b8G25qygu7ka0A+rb5/EbBXa+FUUw0JdJAPyWSl+uupUgx1zM3tSn1M6Rt\nrqwT2RrpMUhyp9all3Ox3YCfLlW0LHtSEjOvLbLuXYphFzBX9PN8n/MBAoGAG40W\nPZ9rFjq7sm88jREUmIjU8/Sfq4qj9T4mw+fXcZaqOz/CYf4dpT61DJ3SZEtc9tQ0\nLM5st+wTRfi9N86/zfzbfMEQgBDLpBWA++eBSZEp11oHbgSHRJOxKU0cD8ibxH0V\nbV6ZAnqcyF6+qQaIfgOlndLfCQPkDHExmSP17ykCgYAqhbkTUSJ7fiScgTHPjy7D\nnYwRSQ1ZDRCXK6HLLr4YK+TAEfxFrrsPds+dguclnL50inxT6cG9ANlH/DVU0dPg\nhSbPs7mvMncAEcVn0xvGH2MD3N6IQcHjDpfiVZrAl05SpLCDborGwbShZHrvQ4AZ\n2Ir7JyTzWVG63F6tAr5yxg==\n-----END PRIVATE KEY-----\n",
-    "client_email": "temp-baked-into-pip-pkg@burla-prod.iam.gserviceaccount.com",
-    "client_id": "116785145310676148654",
-    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-    "token_uri": "https://oauth2.googleapis.com/token",
-    "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
-    "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/temp-baked-into-pip-pkg%40burla-prod.iam.gserviceaccount.com",
-    "universe_domain": "googleapis.com",
-}
-credentials = service_account.Credentials.from_service_account_info(service_account_info)
-DB = firestore.Client(credentials=credentials, project=_BURLA_GCP_PROJECT)
-SUBSCRIBER = pubsub.SubscriberClient(credentials=credentials)
+# Try to instantiate clients now to minimize latency when calling `remote_parallel_map`.
+# This will not work for a variety of reasons, (user not logged in yet / planning to use api_key).
+# When it does, this step can be skipped inside `remote_parallel_map`, lowering e2e latency.
+try:
+    BURLA_AUTH_HEADERS = get_auth_headers()
+    credentials = get_gcs_credentials(BURLA_AUTH_HEADERS)
+    DB = firestore.Client(credentials=credentials, project=_BURLA_GCP_PROJECT)
+    SUBSCRIBER = pubsub.SubscriberClient(credentials=credentials)
+except:
+    DB = None
+    SUBSCRIBER = None
+    BURLA_AUTH_HEADERS = None
 
 
 def job_status_poll_rate(seconds_since_job_started: int):
@@ -105,7 +108,6 @@ def raise_any_errors_from_job(job_id: str, headers: dict):
 def _start_job(
     function_: Callable,
     inputs: list,
-    auth_headers: dict,
     verbose: bool,
     spinner: Spinner,
     func_cpu: int,
@@ -154,11 +156,11 @@ def _start_job(
     # tell service to start job
     url = f"{_BURLA_SERVICE_URL}/v1/jobs/"
     if send_function_through_gcs:
-        response = requests.post(url, json=payload, headers=auth_headers)
+        response = requests.post(url, json=payload, headers=BURLA_AUTH_HEADERS)
     else:
         files = {"function_pkl": function_pkl}
         data = dict(request_json=json.dumps(payload))
-        response = requests.post(url, files=files, data=data, headers=auth_headers)
+        response = requests.post(url, files=files, data=data, headers=BURLA_AUTH_HEADERS)
 
     if response.status_code == 401:
         raise AuthException()
@@ -174,7 +176,8 @@ def _start_job(
         gcs_base_url = "https://www.googleapis.com/upload/storage"
         function_blob_url_args = f"uploadType=media&name={function_blob_name}"
         function_blob_url = f"{gcs_base_url}/v1/b/{_BURLA_JOBS_BUCKET}/o?{function_blob_url_args}"
-        requests.post(function_blob_url, headers=BYTES_HEADER, data=function_pkl)
+        bytes_header = {"Content-Type": "application/octet-stream"}
+        requests.post(function_blob_url, headers=bytes_header, data=function_pkl)
 
     spinner.text = StatusMessage.running()
     return job_id, input_uploader_thread
@@ -183,7 +186,6 @@ def _start_job(
 def _watch_job(
     job_id: str,
     n_inputs: int,
-    headers: dict,
     verbose: bool,
     spinner: Spinner,
 ):
@@ -209,7 +211,7 @@ def _watch_job(
         timed_out = (time() - start) > (TIMEOUT_MIN * 60)
         sleep(job_status_poll_rate(seconds_since_job_started=time() - start))
 
-        raise_any_errors_from_job(job_id, headers)
+        raise_any_errors_from_job(job_id, BURLA_AUTH_HEADERS)
 
         while not output_queue.empty():
             n_outputs_received += 1
@@ -223,7 +225,6 @@ def _watch_job(
     output_thread.join()
 
 
-@login_required
 def remote_parallel_map(
     function_: Callable,
     inputs: list,
@@ -237,6 +238,14 @@ def remote_parallel_map(
     packages: Optional[list[str]] = None,
 ):
     rpm_call_time = time()
+
+    global DB, SUBSCRIBER, BURLA_AUTH_HEADERS
+    if (DB is None) or (SUBSCRIBER is None) or (BURLA_AUTH_HEADERS is None):
+        BURLA_AUTH_HEADERS = get_auth_headers(api_key)
+        credentials = get_gcs_credentials(BURLA_AUTH_HEADERS)
+        DB = firestore.Client(credentials=credentials, project=_BURLA_GCP_PROJECT)
+        SUBSCRIBER = pubsub.SubscriberClient(credentials=credentials)
+
     n_inputs = len(inputs)
     if (func_cpu > 96) or (func_cpu < 1):
         raise ValueError("CPU per function call must be one of [1.. 80]")
@@ -265,17 +274,11 @@ def remote_parallel_map(
     StatusMessage.total_cpus = parallelism * func_cpu
     StatusMessage.total_gpus = parallelism if func_gpu else 0
 
-    if api_key:
-        auth_headers = {"Authorization": f"Bearer {api_key}"}
-    else:
-        auth_headers = auth_headers_from_local_config()
-
     try:
         job_id = None
         job_id, input_uploader_thread = _start_job(
             function_=function_,
             inputs=inputs,
-            auth_headers=auth_headers,
             verbose=verbose,
             spinner=spinner,
             func_cpu=func_cpu,
@@ -285,7 +288,7 @@ def remote_parallel_map(
             image=image,
             packages=packages,
         )
-        output_generator = _watch_job(job_id, len(inputs), auth_headers, verbose, spinner)
+        output_generator = _watch_job(job_id, len(inputs), verbose, spinner)
         return_values = list(output_generator)
         input_uploader_thread.join()
     except Exception as e:
@@ -295,7 +298,7 @@ def remote_parallel_map(
         if job_id:
             payload = {"rpm_call_time": rpm_call_time, "job_ended_ts": time()}
             url = f"{_BURLA_SERVICE_URL}/v1/jobs/{job_id}/ended"
-            requests.post(url, json=payload, headers=auth_headers)
+            requests.post(url, json=payload, headers=BURLA_AUTH_HEADERS)
 
     if verbose:
         spinner.text = "Done!"

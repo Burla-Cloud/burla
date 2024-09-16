@@ -10,8 +10,6 @@ from typing import Tuple, Optional
 import google.auth
 from google.oauth2 import service_account
 from appdirs import user_config_dir
-from IPython.core.display import Javascript
-from IPython.display import display, clear_output
 
 from burla import _BURLA_BACKEND_URL, IN_DEV
 
@@ -57,7 +55,7 @@ def get_auth_headers(api_key: Optional[str] = None) -> Tuple[str, str]:
         return {"email": auth_info["email"], "Authorization": f"Bearer {auth_info['auth_token']}"}
 
 
-def _get_auth_creds(client_id, attempt=0):
+def _get_login_response(client_id, attempt=0):
     if attempt == AUTH_TIMEOUT_SECONDS / 2:
         raise AuthTimeoutException()
 
@@ -65,41 +63,23 @@ def _get_auth_creds(client_id, attempt=0):
     response = requests.get(f"{_BURLA_BACKEND_URL}/v1/login/{client_id}/token")
 
     if response.status_code == 404:
-        return _get_auth_creds(client_id, attempt=attempt + 1)
+        return _get_login_response(client_id, attempt=attempt + 1)
     else:
         response.raise_for_status()
         return response.json()["token"], response.json()["email"]
-
-
-def login_cmd():
-    if IN_COLAB:
-        raise SystemExit(
-            (
-                "\nUnable to login using this command from inside a Google Colab notebook!\n"
-                "To login simply call `burla.remote_parallel_map`, or `burla.login`, eg:\n"
-                "```\n"
-                "from burla import login\n"
-                "login()\n"
-                "```"
-            )
-        )
-    else:
-        login()
 
 
 def login():
     client_id = uuid4().hex
     login_url = f"{_BURLA_BACKEND_URL}/v1/login/{client_id}"
 
-    print(f"Your browser has been opened to visit:\n\n    {login_url}\n")
-
     if IN_COLAB:
-        display(Javascript(f'window.open("{login_url}");'))
-        sleep(1)  # give js a second to run before removing it
-        clear_output()  # prevents js from re-running automatically when notebook opened
+        print(f"Please navigate to the following URL to login:\n\n    {login_url}\n")
+        print(f"(We are unable to automatically open this from a Google Colab notebook)")
     else:
+        print(f"Your browser has been opened to visit:\n\n    {login_url}\n")
         webbrowser.open(login_url)
-    auth_token, email = _get_auth_creds(client_id)
+    auth_token, email = _get_login_response(client_id)
 
     message = f"Thank you for registering with Burla! You are now logged in as [{email}].\n"
     message += "Please email jake@burla.dev with any questions!\n"

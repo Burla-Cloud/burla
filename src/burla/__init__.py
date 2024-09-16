@@ -20,11 +20,11 @@ _BURLA_JOBS_BUCKET = f"burla-jobs--{_BURLA_GCP_PROJECT}"
 OUTPUTS_SUBSCRIPTION_PATH = f"projects/{_BURLA_GCP_PROJECT}/subscriptions/burla_job_outputs"
 LOGS_SUBSCRIPTION_PATH = f"projects/{_BURLA_GCP_PROJECT}/subscriptions/burla_job_logs"
 
-__version__ = "0.8.1"
+__version__ = "0.8.2"
 
-from burla._auth import login, login_cmd as _login_cmd
+from burla._auth import login
 from burla._remote_parallel_map import remote_parallel_map
 
 
 def init_cli():
-    Fire({"login": _login_cmd})
+    Fire({"login": login})

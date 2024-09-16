@@ -20,7 +20,7 @@ _BURLA_JOBS_BUCKET = f"burla-jobs--{_BURLA_GCP_PROJECT}"
 OUTPUTS_SUBSCRIPTION_PATH = f"projects/{_BURLA_GCP_PROJECT}/subscriptions/burla_job_outputs"
 LOGS_SUBSCRIPTION_PATH = f"projects/{_BURLA_GCP_PROJECT}/subscriptions/burla_job_logs"
 
-__version__ = "0.1.3-alpha.2"
+__version__ = "0.8.0"
 
 from burla._auth import login, login_cmd as _login_cmd
 from burla._remote_parallel_map import remote_parallel_map

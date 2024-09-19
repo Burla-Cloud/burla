@@ -17,8 +17,6 @@ else:
 
 _BURLA_BACKEND_URL = "https://backend.burla.dev"
 _BURLA_JOBS_BUCKET = f"burla-jobs--{_BURLA_GCP_PROJECT}"
-OUTPUTS_SUBSCRIPTION_PATH = f"projects/{_BURLA_GCP_PROJECT}/subscriptions/burla_job_outputs"
-LOGS_SUBSCRIPTION_PATH = f"projects/{_BURLA_GCP_PROJECT}/subscriptions/burla_job_logs"
 
 __version__ = "0.8.2"
 

@@ -1,24 +1,16 @@
-import os
-import logging
 from queue import Queue
 from threading import Event
-from concurrent.futures import TimeoutError
 from concurrent.futures import ThreadPoolExecutor
 
 import cloudpickle
 from yaspin import Spinner
-from google.cloud import pubsub
 from google.cloud import firestore
+from google.cloud.firestore import DocumentReference
 
-from burla import OUTPUTS_SUBSCRIPTION_PATH, LOGS_SUBSCRIPTION_PATH
+import logging
 
-
-# was getting the exact same uncatchable, unimportant, error:
-# https://stackoverflow.com/questions/77138981/how-to-handle-acknowledging-a-pubsub-streampull-subscription-message
-logging.getLogger("google.cloud.pubsub_v1").setLevel(logging.ERROR)
-
-# gRPC streams from pubsub will throw some unblockable annoying warnings
-os.environ["GRPC_VERBOSITY"] = "ERROR"
+# throws some uncatchable, unimportant, warnings
+logging.getLogger("google.api_core.bidi").setLevel(logging.ERROR)
 
 
 class StatusMessage:
@@ -73,52 +65,42 @@ def nopath_warning(message, category, filename, lineno, line=None):
     return f"{category.__name__}: {message}\n"
 
 
-def print_logs_from_stream(
-    subscriber: pubsub.SubscriberClient, stop_event: Event, spinner: Spinner
-):
+def print_logs_from_db(job_doc_ref: DocumentReference, stop_event: Event, spinner: Spinner):
 
-    def callback(message):
-        message.ack()
-        try:
-            spinner.write(message.data.decode())
-        except:
-            # ignore messages that cannot be unpickled (are not pickled)
-            # ack these messages anyway so they don't loop through this subsctiption
-            print(f"ERROR: data instance: {type(message.data)}, data: {message.data}")
-            pass
+    def on_snapshot(collection_snapshot, changes, read_time):
+        for change in changes:
+            if change.type.name == "ADDED":
+                spinner.write(change.document.to_dict()["msg"])
 
-    future = subscriber.subscribe(LOGS_SUBSCRIPTION_PATH, callback=callback)
+    collection_ref = job_doc_ref.collection("logs")
+    query_watch = collection_ref.on_snapshot(on_snapshot)
+
+    try:
+        while not stop_event.is_set():
+            stop_event.wait(0.5)  # this does not block the processing of new documents
+    finally:
+        query_watch.unsubscribe()
+
+
+def enqueue_outputs_from_db(job_doc_ref: DocumentReference, stop_event: Event, output_queue: Queue):
+
+    def on_snapshot(collection_snapshot, changes, read_time):
+        for change in changes:
+            if change.type.name == "ADDED":
+                output_pkl = change.document.to_dict()["output"]
+                output_queue.put(cloudpickle.loads(output_pkl))
+
+    collection_ref = job_doc_ref.collection("outputs")
+    query_watch = collection_ref.on_snapshot(on_snapshot)
+
     while not stop_event.is_set():
-        try:
-            future.result(timeout=0.1)
-        except TimeoutError:
-            continue
-
-
-def enqueue_outputs_from_stream(
-    subscriber: pubsub.SubscriberClient, stop_event: Event, output_queue: Queue
-):
-
-    def callback(message):
-        message.ack()
-        try:
-            output_queue.put(cloudpickle.loads(message.data))
-        except:
-            # ignore messages that cannot be unpickled (are not pickled)
-            # ack these messages anyway so they don't loop through this subsctiption
-            pass
-
-    future = subscriber.subscribe(OUTPUTS_SUBSCRIPTION_PATH, callback=callback)
-    while not stop_event.is_set():
-        try:
-            future.result(timeout=0.1)
-        except TimeoutError:
-            continue
+        stop_event.wait(0.5)  # this does not block the processing of new documents
+    query_watch.unsubscribe()
 
 
 def _upload_input(inputs_collection, input_index, input_):
     input_pkl = cloudpickle.dumps(input_)
-    input_too_big = len(input_pkl) > 1_048_576
+    input_too_big = len(input_pkl) > 1_048_376
 
     if input_too_big:
         msg = f"Input at index {input_index} is greater than 1MB in size.\n"

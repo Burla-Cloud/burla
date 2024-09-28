@@ -33,7 +33,7 @@ remote_parallel_map(my_function, my_inputs)
 - Running code remotely with Burla **feels like local development**. This means that:
   - Errors thrown on remote computers are raised on your local machine.
   - Anything you print appears in the terminal on your local machine.
-  - Your python environment is automaticaly cloned on all remote computers.  
+  - Your python environment is automatically cloned on all remote computers.  
     This allows you to call any local python package in a function sent to `remote_parallel_map`.  
     After installing once, environments are cached to keep latency below 1 second.
 - Burla is **easy to install**.  

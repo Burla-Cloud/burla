@@ -1,6 +1,5 @@
 import sys
 import subprocess
-from datetime import datetime, timedelta
 
 from burla import remote_parallel_map
 

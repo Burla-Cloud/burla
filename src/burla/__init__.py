@@ -6,7 +6,7 @@ from fire import Fire
 pyproject_path = pathlib.Path(__file__).resolve().parent.parent.parent / "pyproject.toml"
 pyproject_config = tomli.loads(pyproject_path.read_text()) if pyproject_path.exists() else {}
 IN_DEV = pyproject_config.get("tool", {}).get("burla", {}).get("config", {}).get("in_dev", False)
-IN_DEV = False
+
 if IN_DEV:
     cmd = ["gcloud", "config", "get-value", "project"]
     _BURLA_GCP_PROJECT = subprocess.run(cmd, capture_output=True, text=True).stdout.strip()
@@ -16,9 +16,9 @@ else:
     _BURLA_SERVICE_URL = "https://cluster.burla.dev"
 
 _BURLA_BACKEND_URL = "https://backend.burla.dev"
-_BURLA_JOBS_BUCKET = f"burla-jobs--{_BURLA_GCP_PROJECT}"
 
-__version__ = "0.8.3"
+# needed for service to record client version
+__version__ = "0.8.4"
 
 from burla._auth import login
 from burla._remote_parallel_map import remote_parallel_map

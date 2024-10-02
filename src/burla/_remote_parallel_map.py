@@ -57,13 +57,6 @@ class MainServiceError(Exception):
         super().__init__(response.json().get("message"))
 
 
-class UserFunctionError(Exception):
-    def __init__(self, input_index):
-        msg = f"Exception in user defined function when called with input at index {input_index}.\n"
-        msg += "This exception has been reraised below."
-        super().__init__(msg)
-
-
 def _start_job(
     function_: Callable,
     inputs: list,
@@ -100,12 +93,10 @@ def _start_job(
         raise MainServiceError(response)
     else:
         response.raise_for_status()
-        return response.json()["job_id"], input_uploader_thread
+        return response.json()["job_id"]
 
 
-def _watch_job(
-    job_id: str, n_inputs: int, log_msg_stdout: io.TextIOWrapper, input_uploader_thread: Thread
-):
+def _watch_job(job_id: str, n_inputs: int, log_msg_stdout: io.TextIOWrapper):
     stop_event = Event()
     job_doc_ref = DB.collection("jobs").document(job_id)
 
@@ -122,10 +113,10 @@ def _watch_job(
     result_thread.start()
 
     # Run periodic healthchecks on the job/cluster from a separate thread.
-    cluster_error_occurred = Event()
-    auth_error_occurred = Event()
+    cluster_error_event = Event()
+    auth_error_event = Event()
     args = (job_id, JOB_HEALTHCHECK_FREQUENCY_SEC, BURLA_AUTH_HEADERS, stop_event)
-    args += (cluster_error_occurred, auth_error_occurred)
+    args += (cluster_error_event, auth_error_event)
     healthchecker_thread = Thread(target=periodiocally_healthcheck_job, args=args, daemon=True)
     healthchecker_thread.start()
 
@@ -133,27 +124,23 @@ def _watch_job(
     while n_results_received < n_inputs:
         sleep(0.05)
 
-        if cluster_error_occurred:
-            raise UnknownClusterError()
-        if auth_error_occurred:
-            raise AuthException()
+        # if cluster_error_event.is_set():
+        #     raise UnknownClusterError()
+        # if auth_error_event.is_set():
+        #     raise AuthException()
 
         while not result_queue.empty():
             n_results_received += 1
             input_index, is_error, result_pkl = result_queue.get()
 
             if is_error:
-                traceback = Traceback.from_dict(pickle.loads(result_pkl)["tb_dict"]).as_traceback()
-                user_function_error = UserFunctionError(input_index)
-                reraise(tp=UserFunctionError, value=user_function_error, tb=traceback)
+                exc_info = pickle.loads(result_pkl)
+                traceback = Traceback.from_dict(exc_info["traceback_dict"]).as_traceback()
+                reraise(tp=exc_info["type"], value=exc_info["exception"], tb=traceback)
             else:
                 yield cloudpickle.loads(result_pkl)
 
     stop_event.set()
-    healthchecker_thread.join()
-    log_thread.join()
-    result_thread.join()
-    input_uploader_thread.join()
 
 
 def remote_parallel_map(
@@ -171,17 +158,18 @@ def remote_parallel_map(
     max_parallelism = max_parallelism if max_parallelism else len(inputs)
     max_parallelism = max_parallelism if max_parallelism < MAX_PARALLELISM else MAX_PARALLELISM
     if spinner:
-        spinner = yaspin(f"Preparing to run {len(inputs)} inputs through `{function_.__name__}`")
+        spinner = yaspin()
+        spinner.text = f"Preparing to run {len(inputs)} inputs through `{function_.__name__}`"
         spinner.start()
 
     global DB, BURLA_AUTH_HEADERS
     if (DB is None) or (BURLA_AUTH_HEADERS is None):
-        BURLA_AUTH_HEADERS = get_BURLA_AUTH_HEADERS(api_key)
+        BURLA_AUTH_HEADERS = get_auth_headers(api_key)
         credentials = get_gcs_credentials(BURLA_AUTH_HEADERS)
         DB = firestore.Client(credentials=credentials, project=_BURLA_GCP_PROJECT)
 
     try:
-        job_id, input_uploader_thread = _start_job(
+        job_id = _start_job(
             function_=function_,
             inputs=inputs,
             func_cpu=func_cpu,
@@ -190,7 +178,7 @@ def remote_parallel_map(
         )
         spinner.text = f"Running {len(inputs)} inputs through `{function_.__name__}`"
         log_msg_stdout = spinner if spinner else sys.stdout
-        yield from _watch_job(job_id, len(inputs), log_msg_stdout, input_uploader_thread)
+        yield from _watch_job(job_id, len(inputs), log_msg_stdout)
 
     except Exception as e:
         if spinner:

@@ -3,14 +3,15 @@ from time import time
 
 
 def my_function(my_input):
-    print(f"hi #{my_input}")
-    return my_input * 2
+
+    called_at = time()
+    return called_at
 
 
-inputs = list(range(200))
+inputs = list(range(512))
 
 start = time()
-
+print(f"STARTED AT: {start}")
 results = remote_parallel_map(my_function, inputs)
 results = list(results)
 

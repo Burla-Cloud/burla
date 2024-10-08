@@ -124,10 +124,10 @@ def _watch_job(job_id: str, n_inputs: int, log_msg_stdout: io.TextIOWrapper):
     while n_results_received < n_inputs:
         sleep(0.05)
 
-        # if cluster_error_event.is_set():
-        #     raise UnknownClusterError()
-        # if auth_error_event.is_set():
-        #     raise AuthException()
+        if cluster_error_event.is_set():
+            raise UnknownClusterError()
+        if auth_error_event.is_set():
+            raise AuthException()
 
         while not result_queue.empty():
             n_results_received += 1
@@ -176,7 +176,8 @@ def remote_parallel_map(
             func_ram=func_ram,
             max_parallelism=max_parallelism,
         )
-        spinner.text = f"Running {len(inputs)} inputs through `{function_.__name__}`"
+        if spinner:
+            spinner.text = f"Running {len(inputs)} inputs through `{function_.__name__}`"
         log_msg_stdout = spinner if spinner else sys.stdout
         yield from _watch_job(job_id, len(inputs), log_msg_stdout)
 

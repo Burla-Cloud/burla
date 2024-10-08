@@ -3,11 +3,11 @@ import logging
 import requests
 from queue import Queue
 from threading import Event
-from concurrent.futures import ThreadPoolExecutor
 
 import cloudpickle
 from google.cloud import firestore
 from google.cloud.firestore import DocumentReference
+from google.cloud.firestore import FieldFilter
 
 from burla import _BURLA_SERVICE_URL
 
@@ -28,15 +28,19 @@ def periodiocally_healthcheck_job(
     while not stop_event.is_set():
         response = requests.get(f"{_BURLA_SERVICE_URL}/v1/jobs/{job_id}", headers=auth_headers)
         stop_event.wait(healthcheck_frequency_sec)
-        # if response.status_code == 200:
-        #     stop_event.wait(healthcheck_frequency_sec)
-        #     continue
+        if response.status_code == 200:
+            stop_event.wait(healthcheck_frequency_sec)
+            continue
 
-        # if response.status_code == 401:
-        #     auth_error_event.set()
-        # else:
-        #     cluster_error_event.set()
-        # return
+        if response.status_code == 401:
+            auth_error_event.set()
+        elif response.status_code == 404:
+            # this thread often runs for a bit after the job has ended, causing 404s
+            # for now, just ignore these.
+            pass
+        else:
+            cluster_error_event.set()
+        return
 
 
 def print_logs_from_db(
@@ -57,12 +61,11 @@ def print_logs_from_db(
 
 
 def enqueue_results_from_db(job_doc_ref: DocumentReference, stop_event: Event, queue: Queue):
-
     def on_snapshot(collection_snapshot, changes, read_time):
         for change in changes:
             if change.type.name == "ADDED":
                 result = change.document.to_dict()
-                result_tuple = (result["index"], result["is_error"], result["result_pkl"])
+                result_tuple = (change.document.id, result["is_error"], result["result_pkl"])
                 queue.put(result_tuple)
 
     collection_ref = job_doc_ref.collection("results")
@@ -73,20 +76,6 @@ def enqueue_results_from_db(job_doc_ref: DocumentReference, stop_event: Event, q
     query_watch.unsubscribe()
 
 
-def _upload_input(inputs_collection, input_index, input_):
-    input_pkl = cloudpickle.dumps(input_)
-    input_too_big = len(input_pkl) > 1_048_376
-
-    if input_too_big:
-        msg = f"Input at index {input_index} is greater than 1MB in size.\n"
-        msg += "Inputs greater than 1MB are unfortunately not yet supported."
-        raise Exception(msg)
-    else:
-        doc = {"index": input_index, "input": input_pkl, "claimed": False}
-        inputs_collection.document().set(doc)
-        return time()
-
-
 def upload_inputs(DB: firestore.Client, inputs_id: str, inputs: list):
     """
     Uploads inputs into a separate collection not connected to the job
@@ -95,27 +84,32 @@ def upload_inputs(DB: firestore.Client, inputs_id: str, inputs: list):
     batch_size = 100
     inputs_parent_doc = DB.collection("inputs").document(inputs_id)
 
-    upload_times = []
+    n_docs_in_firestore_batch = 0
+    firestore_batch = DB.batch()
 
-    futures = []
-    with ThreadPoolExecutor(max_workers=32) as executor:
+    for batch_min_index in range(0, len(inputs), batch_size):
+        batch_max_index = batch_min_index + batch_size
+        input_batch = inputs[batch_min_index:batch_max_index]
+        subcollection = inputs_parent_doc.collection(f"{batch_min_index}-{batch_max_index}")
 
-        # upload into separate subcollections each containing <batch_size> inputs.
-        # placing in separtate collections spreads out load when attempting to read inputs quickly.
-        for batch_min_index in range(0, len(inputs), batch_size):
-            batch_max_index = batch_min_index + batch_size
-            input_batch = inputs[batch_min_index:batch_max_index]
-            subcollection = inputs_parent_doc.collection(f"{batch_min_index}-{batch_max_index}")
+        for local_input_index, input_ in enumerate(input_batch):
+            input_index = local_input_index + batch_min_index
+            input_pkl = cloudpickle.dumps(input_)
+            input_too_big = len(input_pkl) > 1_048_376  # 1MB size limit
 
-            # schedule upload of current batch
-            for local_input_index, input_ in enumerate(input_batch):
-                input_index = local_input_index + batch_min_index
-                future = executor.submit(_upload_input, subcollection, input_index, input_)
-                futures.append(future)
+            if input_too_big:
+                msg = f"Input at index {input_index} is greater than 1MB in size.\n"
+                msg += "Inputs greater than 1MB are unfortunately not yet supported."
+                raise Exception(msg)
+            else:
+                doc_ref = subcollection.document(str(input_index))
+                firestore_batch.set(doc_ref, {"input": input_pkl, "claimed": False})
+                n_docs_in_firestore_batch += 1
 
-        for future in futures:
-            # This will raise exceptions if any occurred in the threads
-            upload_time = future.result()
-            upload_times.append(upload_time)
+            # max num documents per firestore batch is 500, push batch when this is reached.
+            if n_docs_in_firestore_batch >= 500:
+                firestore_batch.commit()
+                firestore_batch = DB.batch()
+                n_docs_in_firestore_batch = 0
 
-    print(upload_times)
+    firestore_batch.commit()

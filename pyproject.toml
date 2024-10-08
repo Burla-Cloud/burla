@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "burla"
-version = "0.8.3"
+version = "0.8.4"
 description = "Scale your program across 1000s of computers with one line of code."
 authors = ["Jake Zuliani <jake@burla.dev>"]
 
@@ -11,9 +11,9 @@ fire = "^0.5.0"
 appdirs = "^1.4.4"
 requests = "^2.32.3"
 yaspin = "^2.5.0"
-cloudpickle = "^2.2.1"
+cloudpickle = "^3.0.0"
 tblib = "^3.0.0"
-google-cloud-firestore = "^2.18.0"
+google-cloud-firestore = "^2.19.0"
 tomli = "^2.0.1"
 ipython = "^7.0.0"
 

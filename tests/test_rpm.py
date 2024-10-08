@@ -1,3 +1,5 @@
+from time import time
+
 from burla import remote_parallel_map
 from utils import with_packages
 
@@ -39,5 +41,11 @@ def test_base():
         print(my_input)
         return my_input
 
-    something = remote_parallel_map(my_function, list(range(2)))
-    print(something)
+    my_inputs = list(range(4))
+    start = time()
+
+    generator = remote_parallel_map(my_function, my_inputs)
+    results = list(generator)
+
+    print(f"Done after {time()-start}s")
+    print(results)

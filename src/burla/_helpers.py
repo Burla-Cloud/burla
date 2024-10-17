@@ -2,18 +2,11 @@ from queue import Queue
 from threading import Event
 from concurrent.futures import ThreadPoolExecutor
 
-<<<<<<< Updated upstream
-import cloudpickle
-from yaspin import Spinner
-from google.cloud import firestore
-from google.cloud.firestore import DocumentReference
-=======
 from google.cloud import firestore
 from google.cloud.firestore import DocumentReference
 from google.api_core.retry import Retry, if_exception_type
 from google.api_core.exceptions import Unknown
 from absl import logging as absl_logging
->>>>>>> Stashed changes
 
 import logging
 
@@ -21,12 +14,10 @@ import logging
 logging.getLogger("google.api_core.bidi").setLevel(logging.ERROR)
 absl_logging.set_verbosity(absl_logging.ERROR)
 
-<<<<<<< Updated upstream
-=======
 
 class InputTooBig(Exception):
     pass
->>>>>>> Stashed changes
+
 
 class StatusMessage:
     function_name = None
@@ -113,40 +104,11 @@ def enqueue_outputs_from_db(job_doc_ref: DocumentReference, stop_event: Event, o
     query_watch.unsubscribe()
 
 
-<<<<<<< Updated upstream
-def _upload_input(inputs_collection, input_index, input_):
-    input_pkl = cloudpickle.dumps(input_)
-    input_too_big = len(input_pkl) > 1_048_376
-
-    if input_too_big:
-        msg = f"Input at index {input_index} is greater than 1MB in size.\n"
-        msg += "Inputs greater than 1MB are unfortunately not yet supported."
-        raise Exception(msg)
-    else:
-        doc = {"input": input_pkl, "claimed": False}
-        inputs_collection.document(str(input_index)).set(doc)
-
-
-def upload_inputs(DB: firestore.Client, inputs_id: str, inputs: list):
-=======
 def upload_inputs(DB: firestore.Client, inputs_id: str, inputs_pkl: list[bytes]):
->>>>>>> Stashed changes
     """
     Uploads inputs into a separate collection not connected to the job
     so that uploading can start before the job document is created.
     """
-<<<<<<< Updated upstream
-    inputs_collection = DB.collection("inputs").document(inputs_id).collection("inputs")
-
-    futures = []
-    with ThreadPoolExecutor() as executor:
-        for input_index, input_ in enumerate(inputs):
-            future = executor.submit(_upload_input, inputs_collection, input_index, input_)
-            futures.append(future)
-
-        for future in futures:
-            future.result()  # This will raise exceptions if any occurred in the threads
-=======
     absl_logging.use_absl_handler()  # <- claude says this might stop the uncatchable asbl warnings
     batch_size = 100
     inputs_parent_doc = DB.collection("inputs").document(inputs_id)
@@ -188,4 +150,3 @@ def upload_inputs(DB: firestore.Client, inputs_id: str, inputs_pkl: list[bytes])
                 total_n_bytes_firestore_batch += len(input_pkl)
 
     firestore_batch.commit(retry=firestore_commit_retry_policy)
->>>>>>> Stashed changes

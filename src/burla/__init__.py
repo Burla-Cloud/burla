@@ -18,7 +18,12 @@ else:
 _BURLA_BACKEND_URL = "https://backend.burla.dev"
 _BURLA_JOBS_BUCKET = f"burla-jobs--{_BURLA_GCP_PROJECT}"
 
+<<<<<<< Updated upstream
 __version__ = "0.8.3"
+=======
+# needed for service to record client version
+__version__ = "0.8.5"
+>>>>>>> Stashed changes
 
 from burla._auth import login
 from burla._remote_parallel_map import remote_parallel_map

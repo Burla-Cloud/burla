@@ -101,6 +101,10 @@ def raise_any_errors_from_job(job_id: str, headers: dict):
         raise InstallError(job["install_error"])
 
 
+class InputsTooBig(Exception):
+    pass
+
+
 def _start_job(
     function_: Callable,
     inputs: list,
@@ -124,13 +128,23 @@ def _start_job(
         imported_modules = list(get_function_dependencies(function_))
         required_packages = [pkg for pkg in installed_packages if pkg["name"] in imported_modules]
 
+    inputs_pkl = [cloudpickle.dumps(input_) for input_ in inputs]
+    inputs_size = sum([len(input_pkl) for input_pkl in inputs_pkl])
+    if inputs_size > 84_866_368:
+        raise Exception("Total size of all inputs exceeds current maximum limit of 84.8MB")
+
     # in separate thread start uploading inputs:
     inputs_id = str(uuid4())
+<<<<<<< Updated upstream
     input_uploader_thread = Thread(
         target=upload_inputs,
         args=(DB, inputs_id, inputs),
         daemon=True,
     )
+=======
+    args = (DB, inputs_id, inputs_pkl)
+    input_uploader_thread = Thread(target=upload_inputs, args=args, daemon=True)
+>>>>>>> Stashed changes
     input_uploader_thread.start()
 
     function_pkl = cloudpickle.dumps(function_)
@@ -229,9 +243,15 @@ def remote_parallel_map(
     verbose: bool = True,
     image: Optional[str] = None,
     func_cpu: int = 1,
+<<<<<<< Updated upstream
     func_ram: int = 1,
     func_gpu: int = 0,
     parallelism: Optional[int] = None,
+=======
+    func_ram: int = 4,
+    spinner: bool = True,
+    max_parallelism: Optional[int] = None,
+>>>>>>> Stashed changes
     api_key: Optional[str] = None,
     packages: Optional[list[str]] = None,
 ):
@@ -243,6 +263,7 @@ def remote_parallel_map(
         credentials = get_gcs_credentials(BURLA_AUTH_HEADERS)
         DB = firestore.Client(credentials=credentials, project=_BURLA_GCP_PROJECT)
 
+<<<<<<< Updated upstream
     n_inputs = len(inputs)
     if (func_cpu > 96) or (func_cpu < 1):
         raise ValueError("CPU per function call must be one of [1.. 80]")
@@ -278,6 +299,30 @@ def remote_parallel_map(
             inputs=inputs,
             verbose=verbose,
             spinner=spinner,
+=======
+    # wrap user function with a for loop because sending too many inputs causes firestore issues
+    # this is a temporary fix:
+    max_inputs = 256
+    batch_size = len(inputs) // max_inputs
+    remainder = len(inputs) % max_inputs
+    start = 0
+    input_batches = []
+    for i in range(max_inputs):
+        end = start + batch_size + (1 if i < remainder else 0)
+        input_batches.append(inputs[start:end])
+        start = end
+
+    def function_wrapped(input_batch):
+        return [function_(input_) for input_ in input_batch]
+
+    #
+    #
+
+    try:
+        job_id = _start_job(
+            function_=function_wrapped,
+            inputs=input_batches,
+>>>>>>> Stashed changes
             func_cpu=func_cpu,
             func_ram=func_ram,
             func_gpu=func_gpu,
@@ -285,9 +330,19 @@ def remote_parallel_map(
             image=image,
             packages=packages,
         )
+<<<<<<< Updated upstream
         output_generator = _watch_job(job_id, len(inputs), verbose, spinner)
         return_values = list(output_generator)
         input_uploader_thread.join()
+=======
+        if spinner:
+            spinner.text = f"Running {len(inputs)} inputs through `{function_.__name__}`"
+        log_msg_stdout = spinner if spinner else sys.stdout
+        # yield from _watch_job(job_id, len(inputs), log_msg_stdout)
+        for output_batch in _watch_job(job_id, len(input_batches), log_msg_stdout):
+            yield from output_batch
+
+>>>>>>> Stashed changes
     except Exception as e:
         spinner.stop()
         raise e

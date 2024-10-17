@@ -2,16 +2,31 @@ from queue import Queue
 from threading import Event
 from concurrent.futures import ThreadPoolExecutor
 
+<<<<<<< Updated upstream
 import cloudpickle
 from yaspin import Spinner
 from google.cloud import firestore
 from google.cloud.firestore import DocumentReference
+=======
+from google.cloud import firestore
+from google.cloud.firestore import DocumentReference
+from google.api_core.retry import Retry, if_exception_type
+from google.api_core.exceptions import Unknown
+from absl import logging as absl_logging
+>>>>>>> Stashed changes
 
 import logging
 
 # throws some uncatchable, unimportant, warnings
 logging.getLogger("google.api_core.bidi").setLevel(logging.ERROR)
+absl_logging.set_verbosity(absl_logging.ERROR)
 
+<<<<<<< Updated upstream
+=======
+
+class InputTooBig(Exception):
+    pass
+>>>>>>> Stashed changes
 
 class StatusMessage:
     function_name = None
@@ -98,6 +113,7 @@ def enqueue_outputs_from_db(job_doc_ref: DocumentReference, stop_event: Event, o
     query_watch.unsubscribe()
 
 
+<<<<<<< Updated upstream
 def _upload_input(inputs_collection, input_index, input_):
     input_pkl = cloudpickle.dumps(input_)
     input_too_big = len(input_pkl) > 1_048_376
@@ -112,10 +128,14 @@ def _upload_input(inputs_collection, input_index, input_):
 
 
 def upload_inputs(DB: firestore.Client, inputs_id: str, inputs: list):
+=======
+def upload_inputs(DB: firestore.Client, inputs_id: str, inputs_pkl: list[bytes]):
+>>>>>>> Stashed changes
     """
     Uploads inputs into a separate collection not connected to the job
     so that uploading can start before the job document is created.
     """
+<<<<<<< Updated upstream
     inputs_collection = DB.collection("inputs").document(inputs_id).collection("inputs")
 
     futures = []
@@ -126,3 +146,46 @@ def upload_inputs(DB: firestore.Client, inputs_id: str, inputs: list):
 
         for future in futures:
             future.result()  # This will raise exceptions if any occurred in the threads
+=======
+    absl_logging.use_absl_handler()  # <- claude says this might stop the uncatchable asbl warnings
+    batch_size = 100
+    inputs_parent_doc = DB.collection("inputs").document(inputs_id)
+
+    firestore_commit_retry_policy = Retry(
+        initial=5.0,
+        maximum=120.0,
+        multiplier=2.0,
+        deadline=900.0,
+        predicate=if_exception_type(Unknown),
+        reraise=True,
+    )
+
+    total_n_bytes_firestore_batch = 0
+    firestore_batch = DB.batch()
+
+    for batch_min_index in range(0, len(inputs_pkl), batch_size):
+        batch_max_index = batch_min_index + batch_size
+        input_batch = inputs_pkl[batch_min_index:batch_max_index]
+        subcollection = inputs_parent_doc.collection(f"{batch_min_index}-{batch_max_index}")
+
+        for local_input_index, input_pkl in enumerate(input_batch):
+            input_index = local_input_index + batch_min_index
+            input_too_big = len(input_pkl) > 1_000_000  # 1MB size limit per firestore doc
+
+            # if batch will contain too much data (10MB), push it before adding input to next batch.
+            if total_n_bytes_firestore_batch + len(input_pkl) > 10_000_000:
+                firestore_batch.commit(retry=firestore_commit_retry_policy)
+                firestore_batch = DB.batch()
+                total_n_bytes_firestore_batch = 0
+
+            if input_too_big:
+                msg = f"Input at index {input_index} is greater than 1MB in size.\n"
+                msg += "Individual inputs greater than 1MB in size are currently not supported."
+                raise InputTooBig(msg)
+            else:
+                doc_ref = subcollection.document(str(input_index))
+                firestore_batch.set(doc_ref, {"input": input_pkl, "claimed": False})
+                total_n_bytes_firestore_batch += len(input_pkl)
+
+    firestore_batch.commit(retry=firestore_commit_retry_policy)
+>>>>>>> Stashed changes

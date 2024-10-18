@@ -4,10 +4,10 @@ import requests
 from queue import Queue
 from threading import Event
 
-import cloudpickle
 from google.cloud import firestore
 from google.cloud.firestore import DocumentReference
-from google.cloud.firestore import FieldFilter
+from google.api_core.retry import Retry, if_exception_type
+from google.api_core.exceptions import Unknown
 
 from burla import _BURLA_SERVICE_URL
 
@@ -15,6 +15,10 @@ from burla import _BURLA_SERVICE_URL
 logging.getLogger("google.api_core.bidi").setLevel(logging.ERROR)
 
 from time import time
+
+
+class InputTooBig(Exception):
+    pass
 
 
 def periodiocally_healthcheck_job(
@@ -76,7 +80,7 @@ def enqueue_results_from_db(job_doc_ref: DocumentReference, stop_event: Event, q
     query_watch.unsubscribe()
 
 
-def upload_inputs(DB: firestore.Client, inputs_id: str, inputs: list):
+def upload_inputs(DB: firestore.Client, inputs_id: str, inputs_pkl: list[bytes]):
     """
     Uploads inputs into a separate collection not connected to the job
     so that uploading can start before the job document is created.
@@ -84,32 +88,40 @@ def upload_inputs(DB: firestore.Client, inputs_id: str, inputs: list):
     batch_size = 100
     inputs_parent_doc = DB.collection("inputs").document(inputs_id)
 
-    n_docs_in_firestore_batch = 0
+    firestore_commit_retry_policy = Retry(
+        initial=5.0,
+        maximum=120.0,
+        multiplier=2.0,
+        deadline=900.0,
+        predicate=if_exception_type(Unknown),
+        reraise=True,
+    )
+
+    total_n_bytes_firestore_batch = 0
     firestore_batch = DB.batch()
 
-    for batch_min_index in range(0, len(inputs), batch_size):
+    for batch_min_index in range(0, len(inputs_pkl), batch_size):
         batch_max_index = batch_min_index + batch_size
-        input_batch = inputs[batch_min_index:batch_max_index]
+        input_batch = inputs_pkl[batch_min_index:batch_max_index]
         subcollection = inputs_parent_doc.collection(f"{batch_min_index}-{batch_max_index}")
 
-        for local_input_index, input_ in enumerate(input_batch):
+        for local_input_index, input_pkl in enumerate(input_batch):
             input_index = local_input_index + batch_min_index
-            input_pkl = cloudpickle.dumps(input_)
-            input_too_big = len(input_pkl) > 1_048_376  # 1MB size limit
+            input_too_big = len(input_pkl) > 1_000_000  # 1MB size limit per firestore doc
+
+            # if batch will contain too much data (10MB), push it before adding input to next batch.
+            if total_n_bytes_firestore_batch + len(input_pkl) > 10_000_000:
+                firestore_batch.commit(retry=firestore_commit_retry_policy)
+                firestore_batch = DB.batch()
+                total_n_bytes_firestore_batch = 0
 
             if input_too_big:
                 msg = f"Input at index {input_index} is greater than 1MB in size.\n"
-                msg += "Inputs greater than 1MB are unfortunately not yet supported."
-                raise Exception(msg)
+                msg += "Individual inputs greater than 1MB in size are currently not supported."
+                raise InputTooBig(msg)
             else:
                 doc_ref = subcollection.document(str(input_index))
                 firestore_batch.set(doc_ref, {"input": input_pkl, "claimed": False})
-                n_docs_in_firestore_batch += 1
+                total_n_bytes_firestore_batch += len(input_pkl)
 
-            # max num documents per firestore batch is 500, push batch when this is reached.
-            if n_docs_in_firestore_batch >= 500:
-                firestore_batch.commit()
-                firestore_batch = DB.batch()
-                n_docs_in_firestore_batch = 0
-
-    firestore_batch.commit()
+    firestore_batch.commit(retry=firestore_commit_retry_policy)

@@ -8,7 +8,7 @@ def my_function(my_input):
     return my_input
 
 
-inputs = list(range(1000))
+inputs = list(range(5_000_000))
 
 start = time()
 # print(f"STARTED AT: {start}")
@@ -32,5 +32,5 @@ print(f"num results: {len(results)}")
 # print("results: (document claimed at times)")
 print(results)
 
-unprocessed_inputs = [i for i in inputs if i not in results]
-print(f"{len(unprocessed_inputs)} unprocessed inputs: {unprocessed_inputs}")
+# unprocessed_inputs = [i for i in inputs if i not in results]
+# print(f"{len(unprocessed_inputs)} unprocessed inputs: {unprocessed_inputs}")

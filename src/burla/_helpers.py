@@ -14,6 +14,8 @@ from burla import _BURLA_SERVICE_URL
 # throws some uncatchable, unimportant, warnings
 logging.getLogger("google.api_core.bidi").setLevel(logging.ERROR)
 
+from time import time
+
 
 class InputTooBig(Exception):
     pass

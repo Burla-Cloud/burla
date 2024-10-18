@@ -15,7 +15,6 @@ else:
     _BURLA_SERVICE_URL = "https://cluster.burla.dev"
 
 _BURLA_BACKEND_URL = "https://backend.burla.dev"
-_BURLA_JOBS_BUCKET = f"burla-jobs--{_BURLA_GCP_PROJECT}"
 
 # needed for service to record client version
 __version__ = "0.8.5"

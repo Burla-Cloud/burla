@@ -8,13 +8,11 @@ from google.cloud import firestore
 from google.cloud.firestore import DocumentReference
 from google.api_core.retry import Retry, if_exception_type
 from google.api_core.exceptions import Unknown
-from absl import logging as absl_logging
 
 from burla import _BURLA_SERVICE_URL
 
 # throws some uncatchable, unimportant, warnings
 logging.getLogger("google.api_core.bidi").setLevel(logging.ERROR)
-absl_logging.set_verbosity(absl_logging.ERROR)
 
 
 class InputTooBig(Exception):
@@ -85,7 +83,6 @@ def upload_inputs(DB: firestore.Client, inputs_id: str, inputs_pkl: list[bytes])
     Uploads inputs into a separate collection not connected to the job
     so that uploading can start before the job document is created.
     """
-    absl_logging.use_absl_handler()  # <- claude says this might stop the uncatchable asbl warnings
     batch_size = 100
     inputs_parent_doc = DB.collection("inputs").document(inputs_id)
 

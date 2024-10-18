@@ -2,13 +2,15 @@ from burla import remote_parallel_map
 
 
 def my_function(my_input):
-    print(f"hi #{my_input}")
+    # print(f"hi #{my_input}")
     return my_input * 2
 
 
 inputs = list(range(5_000_000))
 
-results = remote_parallel_map(my_function, inputs)
+result_generator = remote_parallel_map(my_function, inputs, spinner=False)
+
+results = [result for result in result_generator]
 
 print(f"num results: {len(results)}")
 # print("results: (document claimed at times)")

@@ -1,6 +1,8 @@
+import io
+import logging
+import requests
 from queue import Queue
 from threading import Event
-from concurrent.futures import ThreadPoolExecutor
 
 from google.cloud import firestore
 from google.cloud.firestore import DocumentReference
@@ -8,7 +10,7 @@ from google.api_core.retry import Retry, if_exception_type
 from google.api_core.exceptions import Unknown
 from absl import logging as absl_logging
 
-import logging
+from burla import _BURLA_SERVICE_URL
 
 # throws some uncatchable, unimportant, warnings
 logging.getLogger("google.api_core.bidi").setLevel(logging.ERROR)
@@ -19,84 +21,58 @@ class InputTooBig(Exception):
     pass
 
 
-class StatusMessage:
-    function_name = None
-    total_cpus = None
-    total_gpus = None
-    n_inputs = None
+def periodiocally_healthcheck_job(
+    job_id: str,
+    healthcheck_frequency_sec: int,
+    auth_headers: dict,
+    stop_event: Event,
+    cluster_error_event: Event,
+    auth_error_event: Event,
+):
+    while not stop_event.is_set():
+        response = requests.get(f"{_BURLA_SERVICE_URL}/v1/jobs/{job_id}", headers=auth_headers)
+        stop_event.wait(healthcheck_frequency_sec)
+        if response.status_code == 200:
+            stop_event.wait(healthcheck_frequency_sec)
+            continue
 
-    uploading_inputs = "Uploading Inputs ..."
-    uploading_function = "Uploading Function ..."
-    downloading = "Downloading Outputs ..."
-
-    @classmethod
-    def preparing(cls):
-        msg = f"Preparing to run {cls.n_inputs} inputs through `{cls.function_name}` with "
-        if cls.total_gpus > 0:
-            msg += f"{cls.total_cpus} CPUs, and {cls.total_gpus} GPUs."
+        if response.status_code == 401:
+            auth_error_event.set()
+        elif response.status_code == 404:
+            # this thread often runs for a bit after the job has ended, causing 404s
+            # for now, just ignore these.
+            pass
         else:
-            msg += f"{cls.total_cpus} CPUs."
-        return msg
-
-    @classmethod
-    def running(cls):
-        msg = f"Running {cls.n_inputs} inputs through `{cls.function_name}` with {cls.total_cpus} "
-        msg += f"CPUs, and {cls.total_gpus} GPUs." if cls.total_gpus > 0 else "CPUs."
-        return msg
+            cluster_error_event.set()
+        return
 
 
-class JobTimeoutError(Exception):
-    def __init__(self, job_id, timeout):
-        super().__init__(f"Burla job with id: '{job_id}' timed out after {timeout} seconds.")
-
-
-class InstallError(Exception):
-    def __init__(self, stdout: str):
-        super().__init__(
-            f"The following error occurred attempting to pip install packages:\n{stdout}"
-        )
-
-
-class ServerError(Exception):
-    def __init__(self):
-        super().__init__(
-            (
-                "An unknown error occurred in Burla's cloud, this is not an error with your code. "
-                "Someone has been notified, please try again later."
-            )
-        )
-
-
-def nopath_warning(message, category, filename, lineno, line=None):
-    return f"{category.__name__}: {message}\n"
-
-
-def print_logs_from_db(job_doc_ref: DocumentReference, stop_event: Event, spinner: Spinner):
+def print_logs_from_db(
+    job_doc_ref: DocumentReference, stop_event: Event, log_msg_stdout: io.TextIOWrapper
+):
 
     def on_snapshot(collection_snapshot, changes, read_time):
         for change in changes:
             if change.type.name == "ADDED":
-                spinner.write(change.document.to_dict()["msg"])
+                log_msg_stdout.write(change.document.to_dict()["msg"])
 
     collection_ref = job_doc_ref.collection("logs")
     query_watch = collection_ref.on_snapshot(on_snapshot)
 
-    try:
-        while not stop_event.is_set():
-            stop_event.wait(0.5)  # this does not block the processing of new documents
-    finally:
-        query_watch.unsubscribe()
+    while not stop_event.is_set():
+        stop_event.wait(0.5)  # this does not block the processing of new documents
+    query_watch.unsubscribe()
 
 
-def enqueue_outputs_from_db(job_doc_ref: DocumentReference, stop_event: Event, output_queue: Queue):
-
+def enqueue_results_from_db(job_doc_ref: DocumentReference, stop_event: Event, queue: Queue):
     def on_snapshot(collection_snapshot, changes, read_time):
         for change in changes:
             if change.type.name == "ADDED":
-                output_pkl = change.document.to_dict()["output"]
-                output_queue.put(cloudpickle.loads(output_pkl))
+                result = change.document.to_dict()
+                result_tuple = (change.document.id, result["is_error"], result["result_pkl"])
+                queue.put(result_tuple)
 
-    collection_ref = job_doc_ref.collection("outputs")
+    collection_ref = job_doc_ref.collection("results")
     query_watch = collection_ref.on_snapshot(on_snapshot)
 
     while not stop_event.is_set():

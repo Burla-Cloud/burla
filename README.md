@@ -2,8 +2,7 @@
 
 #### Burla is a library for running python functions on remote computers.
 
-### How does it work?
-Burla is a library with only one function: remote_parallel_map.  
+It only has one function: remote_parallel_map.  
 Given some python function, and a list of arguments, remote_parallel_map calls the given function, on every argument in the list, at the same time, each on a separate virtual machine in the cloud.
 
 Here's an example:
@@ -31,7 +30,7 @@ With Burla, running code on remote computers feels the same as running locally. 
 
 [Click here to learn more about remote_parallel_map.](https://docs.burla.dev/overview)
 
-### Where does my code run?
+#### Where does my code run?
 Burla is open-source cluster-compute software designed to be self-hosted in the cloud.  
 To use Burla you must have a cluster running that the client knows about.  
 Currently, our library is hardcoded to only call our free public cluster (cluster.burla.dev) which we've deployed to make Burla easy for anyone to try. This cluster is currently configured to run 16 nodes, each with 32 cpus & 128G ram.  
@@ -39,3 +38,4 @@ Burla clusters are multi-tenant/ can run many jobs from separate users.
 Nodes in a burla cluster are single-tenant/ your job will never be on the same machine as another job.
 
 [Click here to learn more about how burla-clusters work.](https://docs.burla.dev/overview#how-does-it-work)
+

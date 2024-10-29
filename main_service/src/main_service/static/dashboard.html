@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Burla Cluster</title>
+    <link rel="icon" href="/static/favicon.ico" type="image/x-icon">
+    <style>
+        html,
+        body {
+            height: 100%;
+            overflow-x: hidden;
+            /* Prevent horizontal overflow */
+            overflow-y: hidden;
+            /* Allow vertical scrolling only if necessary */
+        }
+
+        body {
+            display: flex;
+            justify-content: center;
+            /* Centers content horizontally */
+            align-items: flex-start;
+            /* Aligns content to the top */
+            min-height: 100vh;
+            margin: 0;
+            padding: 0;
+            padding-top: 50px;
+        }
+
+        .content {
+            line-height: 1.4;
+            font-size: 16px;
+            padding: 0 25px;
+            max-width: 38em;
+            text-align: left;
+            margin-top: 45px;
+            width: 100%;
+            box-sizing: border-box;
+            margin-left: 30px;
+        }
+
+        ul {
+            margin-top: 0px;
+            padding: 0;
+            list-style-position: inside;
+            text-align: left;
+        }
+
+        h2 {
+            margin-bottom: 0px;
+            padding: 0;
+            text-align: left;
+        }
+
+        footer {
+            position: fixed;
+            bottom: 12px;
+            font-size: 0.8rem;
+            width: 100%;
+            text-align: center;
+        }
+
+        img,
+        button {
+            display: block;
+            margin: 0 0 1rem 0;
+            text-align: left;
+            margin-top: 5px;
+        }
+
+        @media (max-width: 768px) {
+            .content {
+                margin-top: 10px;
+                padding: 0 15px;
+            }
+        }
+
+        .loader {
+            display: inline-block;
+            font-family: inherit;
+            font-size: inherit;
+            margin-left: 10px;
+        }
+
+        #response-container {
+            margin-top: 28px;
+            padding: 0;
+            text-align: left;
+        }
+
+        #response-message {
+            display: inline-block;
+            margin: 0;
+            padding: 0;
+            font-family: inherit;
+            font-size: inherit;
+        }
+
+        p {
+            margin-top: 10px;
+            /* Reduce the top margin to move it closer */
+            margin-bottom: 5px;
+            /* Remove any bottom margin */
+        }
+    </style>
+    <script src="/static/functions.js"></script>
+</head>
+
+<body>
+    <div class="content">
+        <img src="/static/logo_noborder.png" style="width: 20%; height: auto;" />
+        <br>
+        <p>Click the button below to start the cluster, it should take 1-2 minutes to boot up.</p>
+        <button onclick="startCluster();">Start/Restart Cluster</button>
+        <div id="response-container">
+            <span id="response-message"></span>
+        </div>
+        <p>_____________________________________________________________</p>
+        Cluster Status: <span id="cluster-status"></span>
+        <div id="monitor-message"></div>
+        <p>_____________________________________________________________</p>
+        <br>
+        <p>Email jake@burla.dev if you run into any issues, thanks for trying Burla!</p>
+    </div>
+</body>
+
+</html>

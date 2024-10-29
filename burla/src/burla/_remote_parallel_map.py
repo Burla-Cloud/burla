@@ -180,7 +180,7 @@ def remote_parallel_map(
 
     # wrap user function with a for loop because sending too many inputs causes firestore issues
     # this is a temporary fix:
-    max_inputs = 256
+    max_inputs = min(len(inputs), 256)
     batch_size = len(inputs) // max_inputs
     remainder = len(inputs) % max_inputs
     start = 0

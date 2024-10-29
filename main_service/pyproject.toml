@@ -1,0 +1,35 @@
+[tool.poetry]
+name = "main_service"
+version = "0.8.5"
+description = ""
+authors = ["Jacob Zuliani <jake@burla.dev>"]
+packages = [{include = "main_service", from = "src"}]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+google-cloud-logging = "^3.5.0"
+grpcio = "^1.54.2"
+google-cloud-firestore = "^2.11.1"
+google-cloud-secret-manager = "^2.16.2"
+google-cloud-run = "^0.9.1"
+google-api-python-client = "^2.97.0"
+google-auth = "^2.22.0"
+google-cloud-storage = "^2.10.0"
+cloudpickle = "^2.2.1"
+tblib = "^3.0.0"
+google-cloud-compute = "^1.14.1"
+fastapi = "^0.109.0"
+uvicorn = "^0.25.0"
+starlette = "^0.35.1"
+pytz = "^2024.1"
+python-multipart = "^0.0.9"
+itsdangerous = "^2.2.0"
+slack-sdk = "^3.33.0"
+
+[tool.poetry.group.dev.dependencies]
+black = "^23.1.0"
+pytest = "^7.4.3"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

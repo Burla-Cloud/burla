@@ -13,10 +13,9 @@ requests = "^2.32.3"
 yaspin = "^2.5.0"
 cloudpickle = "^3.0.0"
 tblib = "^3.0.0"
-google-cloud-firestore = "^2.19.0"
 tomli = "^2.0.1"
 ipython = "^7.0.0"
-google = "2.0.3"
+google-cloud-firestore = "2.16.1"
 
 [tool.poetry.scripts]
 burla = "burla.__init__:init_cli"

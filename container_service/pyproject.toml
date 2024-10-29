@@ -1,0 +1,25 @@
+[tool.poetry]
+name = "container_service"
+version = "0.8.6"
+description = ""
+authors = ["Jacob Zuliani <jake@burla.dev>"]
+packages = [{include = "container_service", from = "src"}]
+
+[tool.poetry.dependencies]
+python = ">=3.10,<4.0"
+flask = "^3.0.3"
+gunicorn = "^23.0.0"
+google-cloud-firestore = "^2.19.0"
+google-api-python-client = "^2.147.0"
+cloudpickle = "^3.0.0"
+tblib = "^3.0.0"
+google-cloud-logging = "^3.8.0"
+google-cloud-secret-manager = "^2.16.4"
+pandas = "^2.2.3"
+numpy = "^2.1.2"
+scikit-learn = "^1.5.2"
+google-cloud-storage = "^2.18.2"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

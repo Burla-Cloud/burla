@@ -1,0 +1,39 @@
+
+# This is the base image to the default docker image that all user-submitted functions are run in.
+# The container_service is installed on top of this image in `Dockerfile`
+# ^^ This is done so we can quickly deploy the container_service 
+# by baking it into & uploading a new image without needing to install python again
+
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+
+# Set to non-interactive (this prevents some prompts)
+ENV DEBIAN_FRONTEND=noninteractive
+# so we can call `pyenv`
+ENV PYENV_ROOT="$HOME/.pyenv"
+ENV PATH="$PYENV_ROOT/bin:$PATH"
+# use 32 cores to install python
+ENV MAKEOPTS="-j32"
+
+# Install dependencies and pyenv
+RUN apt update -y && apt upgrade -y && apt-get update -y && apt-get install -y make curl git wget \
+    llvm zlib1g-dev build-essential libbz2-dev libncurses5-dev libffi-dev libreadline-dev \
+    libncursesw5-dev xz-utils tk-dev libssl-dev libsqlite3-dev liblzma-dev && \
+    curl https://pyenv.run | bash && \
+    echo 'eval "$(pyenv init -)"' >> ~/.bashrc
+
+# The python versions installed here must be called using their full path
+# Like this, ex: `/.pyenv/versions/3.11.*/bin/python3.11`
+# We tried to add it to $PATH with the docker command: `ENV PATH="/.pyenv/versions/3.9.*/bin:$PATH"`
+# But for an unknown reason this did not work.
+RUN pyenv install 3.10 && \
+    pyenv install 3.11 && \
+    pyenv install 3.12
+
+# Install all python packages with each python version.
+WORKDIR /burla
+ADD ./src /burla/src
+ADD pyproject.toml /burla
+RUN /.pyenv/versions/3.10.*/bin/python3.10 -m pip install -e . && \
+    /.pyenv/versions/3.11.*/bin/python3.11 -m pip install -e . && \
+    /.pyenv/versions/3.12.*/bin/python3.12 -m pip install -e .

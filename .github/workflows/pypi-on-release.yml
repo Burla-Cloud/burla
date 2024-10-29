@@ -14,4 +14,6 @@ jobs:
           architecture: x64
       - run: pip install poetry==1.5.1
       - run: poetry build
+        working-directory: ./burla
       - run: poetry publish --username=__token__ --password=${{ secrets.PYPI_TOKEN }}
+        working-directory: ./burla

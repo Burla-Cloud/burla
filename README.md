@@ -2,7 +2,7 @@
 
 #### Burla is a library for running python functions on remote computers.
 
-It only has one function: remote_parallel_map.  
+Burla only has one function: **remote_parallel_map**.  
 Given some python function, and a list of arguments, remote_parallel_map calls the given function, on every argument in the list, at the same time, each on a separate virtual machine in the cloud.
 
 Here's an example:

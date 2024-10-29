@@ -9,7 +9,7 @@ def test_base():
         print(my_input)
         return my_input
 
-    my_inputs = list(range(4))
+    my_inputs = list(range(5))
     start = time()
 
     generator = remote_parallel_map(my_function, my_inputs)

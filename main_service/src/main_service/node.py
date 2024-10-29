@@ -102,7 +102,7 @@ else:
 NODE_BOOT_TIMEOUT = 60 * 3
 NODE_SVC_PORT = "8080"
 ACCEPTABLE_ZONES = ["us-central1-b", "us-central1-c", "us-central1-f", "us-central1-a"]
-NODE_SVC_VERSION = "0.8.5"  # <- this maps to a git tag/release or branch
+NODE_SVC_VERSION = "0.8.6"  # <- this maps to a git tag/release or branch
 
 
 class Node:
@@ -297,7 +297,11 @@ class Node:
 
         gcloud config set account {GCE_DEFAULT_SVC}
 
-        git clone --depth 1 --branch {NODE_SVC_VERSION} https://github.com/Burla-Cloud/node_service.git
+        git clone --depth 1 --branch {NODE_SVC_VERSION} https://github.com/Burla-Cloud/burla.git  --no-checkout
+        cd burla
+        git sparse-checkout init --cone
+        git sparse-checkout set node_service
+        git checkout {NODE_SVC_VERSION}
         cd node_service
         python3.11 -m pip install --break-system-packages .
         echo "Done installing packages."

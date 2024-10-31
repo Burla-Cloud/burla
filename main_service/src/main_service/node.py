@@ -102,7 +102,7 @@ else:
 NODE_BOOT_TIMEOUT = 60 * 3
 NODE_SVC_PORT = "8080"
 ACCEPTABLE_ZONES = ["us-central1-b", "us-central1-c", "us-central1-f", "us-central1-a"]
-NODE_SVC_VERSION = "0.8.6"  # <- this maps to a git tag/release or branch
+NODE_SVC_VERSION = "0.8.7"  # <- this maps to a git tag/release or branch
 
 
 class Node:

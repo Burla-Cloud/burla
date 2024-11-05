@@ -1,6 +1,7 @@
 import sys
 import requests
 from itertools import groupby
+from typing import Optional
 from datetime import datetime, timedelta, timezone
 
 from fastapi import Request, HTTPException
@@ -24,8 +25,8 @@ def format_traceback(traceback_details: list):
 
 class Logger:
 
-    def __init__(self, request: Request):
-        self.loggable_request = self.__loggable_request(request)
+    def __init__(self, request: Optional[Request] = None):
+        self.loggable_request = self.__loggable_request(request) if request else {}
 
     def __make_serializeable(self, obj):
         """

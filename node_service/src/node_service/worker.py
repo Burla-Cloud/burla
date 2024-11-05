@@ -13,16 +13,6 @@ from node_service import PROJECT_ID, IN_DEV, ACCESS_TOKEN
 from node_service.helpers import next_free_port
 
 LOGGER = logging.Client().logger("node_service")
-DEVELOPMENT_VOLUMES = {
-    f"{os.environ.get('HOME')}/.config/gcloud": {
-        "bind": "/root/.config/gcloud",
-        "mode": "ro",
-    },
-    f"{os.environ.get('HOME')}/Documents/burla/container_service": {
-        "bind": "/burla",
-        "mode": "ro",
-    },
-}
 
 
 class Worker:
@@ -53,15 +43,27 @@ class Worker:
         while self.container is None:
             port = next_free_port()
             gunicorn_command = f"gunicorn -t 60 -b 0.0.0.0:{port} container_service:app"
-            short_image_name = image.split("/")[-1].split(":")[0]
+
+            if IN_DEV:
+                host_config = docker_client.create_host_config(
+                    port_bindings={port: port},
+                    network_mode="local-burla-cluster",
+                    binds={
+                        f"{os.environ['HOST_HOME_DIR']}/.config/gcloud": "/root/.config/gcloud",
+                        f"{os.environ['HOST_PWD']}/container_service": "/burla",
+                    },
+                )
+            else:
+                host_config = docker_client.create_host_config(port_bindings={port: port})
+
             try:
+                container_name = f"container_service_{uuid4().hex[:4]}"
                 container = docker_client.create_container(
                     image=image,
                     command=["/bin/sh", "-c", f"{python_executable} -m {gunicorn_command}"],
-                    name=f"{short_image_name}_{str(uuid4())[:8]}",
+                    name=container_name,
                     ports=[port],
-                    volumes=DEVELOPMENT_VOLUMES if IN_DEV else None,
-                    host_config=docker_client.create_host_config(port_bindings={port: port}),
+                    host_config=host_config,
                     environment={
                         "GOOGLE_CLOUD_PROJECT": PROJECT_ID,
                         "PROJECT_ID": PROJECT_ID,
@@ -121,7 +123,7 @@ class Worker:
 
         self.docker_client = docker_client
         self.python_version = python_version
-        self.host = f"http://127.0.0.1:{port}"
+        self.host = f"http://{container_name}:{port}" if IN_DEV else f"http://127.0.0.1:{port}"
 
         if self.status() != "READY":
             raise Exception("Worker failed to start.")

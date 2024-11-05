@@ -1,5 +1,6 @@
 import sys
 import socket
+import random
 from itertools import groupby
 from typing import Optional
 from datetime import datetime, timedelta, timezone
@@ -10,7 +11,7 @@ from fastapi import Request
 from node_service import IN_DEV, GCL_CLIENT, SELF
 
 
-PRIVATE_PORT_QUEUE = deque(range(32768, 60999))  # <- these ports should be mostly free.
+PRIVATE_PORT_QUEUE = list(range(32768, 60999))  # <- these ports should be mostly free.
 
 
 def startup_error_msg(container_logs, image):
@@ -27,9 +28,10 @@ def next_free_port():
     """
     pops ports from `PRIVATE_PORT_QUEUE` until free one is found.
     The "correct" way to do this is to bind to port 0 which tells the os to return a random free
-    port. This was attempted first, but it kept returning already-in-use ports.
+    port. This was attempted first, but it kept returning already-in-use ports?
     """
-    port = PRIVATE_PORT_QUEUE.pop()
+    index = random.randint(0, len(PRIVATE_PORT_QUEUE) - 1)
+    port = PRIVATE_PORT_QUEUE.pop(index)
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         if s.connect_ex(("localhost", port)) != 0:
             return port

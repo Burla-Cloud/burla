@@ -6,11 +6,13 @@ from uuid import uuid4
 from time import time
 from typing import Callable
 from requests.exceptions import HTTPError
+from contextlib import asynccontextmanager
 
 from google.cloud import firestore, logging
 from fastapi.responses import Response, FileResponse, RedirectResponse
 from fastapi import FastAPI, Request, BackgroundTasks, Depends
 from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool
 
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.datastructures import UploadFile
@@ -18,21 +20,39 @@ from starlette.datastructures import UploadFile
 os.environ["GRPC_VERBOSITY"] = "ERROR"
 os.environ["GLOG_minloglevel"] = "2"
 
-
-IN_DEV = os.environ.get("IN_DEV") == "True"
-IN_PROD = os.environ.get("IN_PROD") == "True"
-assert not (IN_DEV and IN_PROD)
-
-PROJECT_ID = "burla-prod" if IN_PROD else os.environ.get("PROJECT_ID")
-JOB_ENV_REPO = f"us-docker.pkg.dev/{PROJECT_ID}/burla-job-containers/default"
+ACCESS_TOKEN = os.environ.get("ACCESS_TOKEN")  # <- only used in dev
+PROJECT_ID = os.environ.get("PROJECT_ID")
 BURLA_BACKEND_URL = "https://backend.burla.dev"
-
-os.environ["GRPC_VERBOSITY"] = "ERROR"  # gRPC streams throw some unblockable annoying warnings
 
 # reduces number of instances / saves across some requests as opposed to using Depends
 GCL_CLIENT = logging.Client().logger("main_service")
 DB = firestore.Client(project=PROJECT_ID)
 
+IN_LOCAL_DEV_MODE = os.environ.get("IN_LOCAL_DEV_MODE") == "True"  # Cluster is run 100% locally
+IN_REMOTE_DEV_MODE = os.environ.get("IN_REMOTE_DEV_MODE") == "True"  # Only main_svc is run locally
+IN_DEV = IN_LOCAL_DEV_MODE or IN_REMOTE_DEV_MODE
+IN_PROD = os.environ.get("IN_PROD") == "True"
+
+if not (IN_LOCAL_DEV_MODE or IN_REMOTE_DEV_MODE or IN_PROD):
+    raise Exception("One of [IN_LOCAL_DEV_MODE, IN_REMOTE_DEV_MODE, IN_PROD] must be set to `True`")
+
+job_env_repo = f"us-docker.pkg.dev/{PROJECT_ID}/burla-job-containers/default"
+LOCAL_DEV_CONFIG = {
+    "Nodes": [
+        {
+            "containers": [
+                {
+                    "image": f"{job_env_repo}/image-nogpu:latest",
+                    "python_executable": "/.pyenv/versions/3.11.*/bin/python3.11",
+                    "python_version": "3.11",
+                },
+            ],
+            "machine_type": "n4-standard-2",  # <- means nothing, num containers set in node init
+            "quantity": 2,
+            "inactivity_shutdown_time_sec": 60 * 15,
+        }
+    ]
+}
 
 from main_service.helpers import validate_headers_and_login, Logger, format_traceback
 
@@ -88,26 +108,50 @@ def get_add_background_task_function(
 
 
 from main_service.endpoints.jobs import router as jobs_router
-from main_service.endpoints.cluster import router as cluster_router
-
-application = FastAPI(docs_url=None, redoc_url=None)
-application.include_router(jobs_router)
-application.include_router(cluster_router)
-application.add_middleware(SessionMiddleware, secret_key=uuid4().hex)
-application.mount("/static", StaticFiles(directory="src/main_service/static"), name="static")
+from main_service.endpoints.cluster import router as cluster_router, restart_cluster
 
 
-@application.get("/")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+
+    # Start cluster strait away if in dev:
+    if IN_LOCAL_DEV_MODE:
+        logger = Logger()
+        try:
+            background_tasks = BackgroundTasks()
+            add_background_task = get_add_background_task_function(background_tasks, logger=logger)
+            await run_in_threadpool(
+                restart_cluster, add_background_task=add_background_task, logger=logger
+            )
+            for task in background_tasks.tasks:
+                await task()
+        except Exception as e:
+            exc_type, exc_value, exc_traceback = sys.exc_info()
+            tb_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
+            traceback_str = format_traceback(tb_details)
+            logger.log(str(e), "ERROR", traceback=traceback_str)
+
+    yield
+
+
+app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None)
+app.include_router(jobs_router)
+app.include_router(cluster_router)
+app.add_middleware(SessionMiddleware, secret_key=uuid4().hex)
+app.mount("/static", StaticFiles(directory="src/main_service/static"), name="static")
+
+
+@app.get("/")
 def dashboard():
     return FileResponse("src/main_service/static/dashboard.html")
 
 
-@application.get("/favicon.ico")
+@app.get("/favicon.ico")
 async def favicon():
     return RedirectResponse(url="/static/favicon.ico")
 
 
-@application.middleware("http")
+@app.middleware("http")
 async def login__log_and_time_requests__log_errors(request: Request, call_next):
     """
     Fastapi `@app.exception_handler` will completely hide errors if middleware is used.

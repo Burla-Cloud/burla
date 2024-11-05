@@ -3,7 +3,6 @@ import sys
 import json
 import asyncio
 import traceback
-import subprocess
 import requests
 from uuid import uuid4
 from time import time
@@ -20,15 +19,11 @@ from google.cloud.compute_v1 import InstancesClient
 
 IN_DEV = os.environ.get("IN_DEV") == "True"
 
-if IN_DEV:
-    cmd = ["gcloud", "config", "get-value", "project"]
-    os.environ["PROJECT_ID"] = subprocess.run(cmd, capture_output=True, text=True).stdout.strip()
-
 PROJECT_ID = os.environ["PROJECT_ID"]
 INSTANCE_NAME = os.environ["INSTANCE_NAME"]
 INACTIVITY_SHUTDOWN_TIME_SEC = os.environ.get("INACTIVITY_SHUTDOWN_TIME_SEC")
 JOBS_BUCKET = f"burla-jobs--{PROJECT_ID}"
-INSTANCE_N_CPUS = 1 if IN_DEV else os.cpu_count()
+INSTANCE_N_CPUS = 2 if IN_DEV else os.cpu_count()
 GCL_CLIENT = logging.Client().logger("node_service", labels=dict(INSTANCE_NAME=INSTANCE_NAME))
 
 url = "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token"
@@ -140,10 +135,10 @@ async def shutdown_if_idle_for_too_long():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    logger = Logger()
 
     try:
         # boot containers before accepting any requests.
-        logger = Logger()
         logger.log(f"Starting workers ...")
         containers = [Container(**c) for c in json.loads(os.environ["CONTAINERS"])]
         await run_in_threadpool(reboot_containers, new_container_config=containers, logger=logger)

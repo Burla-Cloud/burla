@@ -25,6 +25,7 @@ pytz = "^2024.1"
 python-multipart = "^0.0.9"
 itsdangerous = "^2.2.0"
 slack-sdk = "^3.33.0"
+docker = "^7.1.0"
 
 [tool.poetry.group.dev.dependencies]
 black = "^23.1.0"

@@ -1,8 +1,8 @@
 import json
 import asyncio
+import docker
 from time import time
 from typing import Callable
-from uuid import uuid4
 
 import slack_sdk
 from fastapi import APIRouter, Depends
@@ -11,7 +11,14 @@ from google.cloud.compute_v1 import InstancesClient
 from starlette.responses import StreamingResponse
 from concurrent.futures import ThreadPoolExecutor
 
-from main_service import DB, IN_PROD, PROJECT_ID, get_logger, get_add_background_task_function
+from main_service import (
+    DB,
+    IN_PROD,
+    IN_LOCAL_DEV_MODE,
+    LOCAL_DEV_CONFIG,
+    get_logger,
+    get_add_background_task_function,
+)
 from main_service.cluster import reconcile
 from main_service.node import Container, Node
 from main_service.helpers import Logger, get_secret
@@ -37,28 +44,45 @@ def restart_cluster(
     # delete all nodes
     node_filter = FieldFilter("status", "in", ["READY", "BOOTING", "RUNNING"])
     for node_snapshot in DB.collection("nodes").where(filter=node_filter).stream():
-        node = Node.from_snapshot(DB, logger, add_background_task, node_snapshot, instance_client)
+        node = Node.from_snapshot(DB, logger, node_snapshot, instance_client)
         futures.append(executor.submit(node.delete))
 
     # add nodes according to cluster_config doc
-    def _add_node_logged(machine_type, containers, inactivity_time):
+    def _add_node_logged(machine_type, containers, node_service_port, inactivity_time):
         Node.start(
             db=DB,
             logger=logger,
-            add_background_task=add_background_task,
             machine_type=machine_type,
             containers=containers,
+            service_port=node_service_port,
+            as_local_container=IN_LOCAL_DEV_MODE,  # <- start in a container if IN_LOCAL_DEV_MODE
             inactivity_shutdown_time_sec=inactivity_time,
             verbose=True,
         )
 
+    # remove any existing `node_service` containers if in IN_LOCAL_DEV_MODE
+    if IN_LOCAL_DEV_MODE:
+        docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
+        for container in docker_client.containers():
+            if container["Names"][0][1:13] == "node_service":
+                docker_client.remove_container(container["Id"], force=True)
+
+    # use separate cluster config if IN_LOCAL_DEV_MODE:
     config = DB.collection("cluster_config").document("cluster_config").get().to_dict()
+    config = LOCAL_DEV_CONFIG if IN_LOCAL_DEV_MODE else config
+    node_service_port = 8080  # <- must default to 8080 because only 8080 is open in GCP firewall
+
     for node_spec in config["Nodes"]:
         for _ in range(node_spec["quantity"]):
+
+            if IN_LOCAL_DEV_MODE:  # avoid trying to open same port on multiple containers
+                node_service_port += 1
             machine_type = node_spec["machine_type"]
             containers = [Container.from_dict(c) for c in node_spec["containers"]]
             inactivity_time = node_spec.get("inactivity_shutdown_time_sec")
-            future = executor.submit(_add_node_logged, machine_type, containers, inactivity_time)
+
+            node_args = (machine_type, containers, node_service_port, inactivity_time)
+            future = executor.submit(_add_node_logged, *node_args)
             futures.append(future)
 
     # wait until all operations done

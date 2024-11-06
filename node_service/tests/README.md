@@ -1,4 +1,4 @@
-### How to test the container service
+### How to test the node service
 
 This service has no test suite,  
 To test it we run the integration tests in the burla client (the python package).  

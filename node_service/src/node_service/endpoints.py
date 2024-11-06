@@ -152,8 +152,8 @@ def execute(
         raise Exception(f"failed to assign workers to inputs at indicies: {unassigned_indicies}")
 
     SELF["workers"] = workers_to_keep
-    # remove_workers = lambda workers_to_remove: [w.remove() for w in workers_to_remove]
-    # add_background_task(remove_workers, workers_to_remove)
+    remove_workers = lambda workers_to_remove: [w.remove() for w in workers_to_remove]
+    add_background_task(remove_workers, workers_to_remove)
 
     starting_index = request_json["starting_index"]
     ending_index = starting_index + len(workers_to_keep)

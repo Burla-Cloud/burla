@@ -35,11 +35,25 @@ local-dev-cluster:
 # Only the `main_service` is run locally, nodes are started as GCE VM's in the test cloud.
 # Uses cluster config from firestore doc: `/databases/(default)/cluster_config/cluster_config`
 remote-dev-cluster:
-
-	# DONT LET THIS RUN IF THERE ARE CHANGES IN CONTAINER SVC SINCE LAST IMAGE PUSH
-
-	# ALSO dont let this run if there are uncomitted changes in the node service!!!
-
+	CONTAINER_SVC_TS=$$(cat ./container_service/last_image_pushed_at.txt); \
+	CONTAINER_SVC_DIR="./container_service/src/container_service"; \
+	CONTAINER_SVC_DIFF=$$(git diff --stat "@{$${CONTAINER_SVC_TS}}" -- "$${CONTAINER_SVC_DIR}"); \
+	CONTAINER_SVC_HAS_DIFF=$$(echo "$${CONTAINER_SVC_DIFF}" | grep -q . && echo "true" || echo "false"); \
+	NODE_SVC_DIFF=$$(git diff -- "./node_service/src/node_service"); \
+	NODE_SVC_HAS_DIFF=$$(echo "$${NODE_SVC_DIFF}" | grep -q . && echo "true" || echo "false"); \
+	if [ "$${CONTAINER_SVC_HAS_DIFF}" = "true" ]; then \
+		echo "DEPLOYED CONTAINER SERVICE NOT UP TO DATE!"; \
+		echo "Your local container service is different from the cluster's container service."; \
+		echo "To fix this, run 'make image_nogpu' from './container_service'."; \
+	fi; \
+	if [ "$${NODE_SVC_HAS_DIFF}" = "true" ]; then \
+		echo "DEPLOYED NODE SERVICE NOT UP TO DATE!"; \
+		echo "Your local node service is different from the cluster's node service."; \
+		echo "To fix this, commit your node service code to the latest release branch."; \
+	fi; \
+	if [ "$${CONTAINER_SVC_HAS_DIFF}" = "true" ] || [ "$${NODE_SVC_HAS_DIFF}" = "true" ]; then \
+		exit 0; \
+	fi; \
 	PROJECT_ID=$$(gcloud config get-value project) \
 	PROJECT_NUM=$$(gcloud projects describe $${PROJECT_ID} --format="value(projectNumber)") \
 	MAIN_SVC_IMAGE_NAME=$$( echo \
@@ -61,21 +75,3 @@ remote-dev-cluster:
 # Moves latest container service image to prod & 
 # Builds new main-service image, moves to prod, then deploys prod main service
 # deploy-prod:
-# any changes in container service since last image pushed?
-
-# test:
-# 	TIMESTAMP=$$(cat container_service/last_image_pushed_at.txt); \
-# 	DIRECTORY="./container_service/src/container_service"; \
-# 	if git diff --stat "@{$${TIMESTAMP}}" -- "$${DIRECTORY}" | grep -q .; then \
-# 		echo "DEPLOYED CONTAINER SERVICE NOT UP TO DATE!"; \
-# 	else \
-# 		echo "No unstaged/staged changes in $${DIRECTORY} since $${TIMESTAMP}."; \
-# 	fi
-
-test:
-	DIRECTORY="./node_service/src/node_service"; \
-	if git diff -- "$${DIRECTORY}" | grep -q .; then \
-		echo "UNCOMITTED NODE SERVICE CHANGES DETECTED!"; \
-	else \
-		echo "No unstaged/staged changes in $${DIRECTORY} since $${TIMESTAMP}."; \
-	fi

@@ -73,17 +73,6 @@ move-test-image-to-prod:
 	docker push $${PROD_IMAGE_NAME}
 
 deploy-prod:
-	set -e; \
-	echo ; \
-	echo HAVE YOU MOVED THE LATEST TEST-IMAGE TO PROD?; \
-	while true; do \
-		read -p "Do you want to continue? (yes/no): " yn; \
-		case $$yn in \
-			[Yy]* ) echo "Continuing..."; break;; \
-			[Nn]* ) echo "Exiting..."; exit;; \
-			* ) echo "Please answer yes or no.";; \
-		esac; \
-	done; \
 	PROD_IMAGE_TAG=$$( \
 		gcloud artifacts tags list \
 			--package=$(ARTIFACT_PKG_NAME) \
@@ -94,35 +83,17 @@ deploy-prod:
 	); \
 	PROD_IMAGE_NAME=$$( echo $(PROD_IMAGE_BASE_NAME):$${PROD_IMAGE_TAG} ); \
 	gcloud run deploy $(WEBSERVICE_NAME) \
-	--image=$${PROD_IMAGE_NAME} \
-	--project burla-prod \
-	--region=us-central1 \
-	--set-env-vars PROJECT_ID=burla-prod,IN_PROD=True \
-	--min-instances 1 \
-	--max-instances 20 \
-	--memory 4Gi \
-	--cpu 1 \
-	--timeout 360 \
-	--concurrency 20 \
-	--allow-unauthenticated
-
-deploy-dev-to-prod:
-	set -e; \
-	echo ; \
-	echo This will deploy the current local project DIRECTLY TO PROD!; \
-	echo ARE YOU SURE YOU WANT TO DO THIS?; \
-	echo ; \
-	while true; do \
-		read -p "Do you want to continue? (yes/no): " yn; \
-		case $$yn in \
-			[Yy]* ) echo "Continuing..."; break;; \
-			[Nn]* ) echo "Exiting..."; exit;; \
-			* ) echo "Please answer yes or no.";; \
-		esac; \
-	done; \
-	$(MAKE) image; \
-	$(MAKE) move-test-image-to-prod; \
-	echo "yes" | $(MAKE) deploy-prod
+		--image=$${PROD_IMAGE_NAME} \
+		--project burla-prod \
+		--region=us-central1 \
+		--set-env-vars PROJECT_ID=burla-prod,IN_PROD=True \
+		--min-instances 1 \
+		--max-instances 20 \
+		--memory 4Gi \
+		--cpu 1 \
+		--timeout 360 \
+		--concurrency 20 \
+		--allow-unauthenticated
 
 image:
 	set -e; \

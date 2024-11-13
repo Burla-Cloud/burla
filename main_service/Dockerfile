@@ -18,4 +18,4 @@ RUN poetry install --sync
 ENV PYTHONDONTWRITEBYTECODE 1
 
 ENV IN_PROD True
-ENTRYPOINT poetry run uvicorn main_service:application --host 0.0.0.0 --port 8080
+ENTRYPOINT poetry run uvicorn main_service:app --host 0.0.0.0 --port 8080

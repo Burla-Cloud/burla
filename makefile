@@ -1,18 +1,18 @@
 .ONESHELL:
 .SILENT:
 
-# test:
-# 	poetry -C ./client run pytest ./client/tests
+PROJECT_ID := $(shell gcloud config get-value project 2>/dev/null)
+PROJECT_NUM := $(shell gcloud projects describe $(PROJECT_ID) --format="value(projectNumber)")
+ACCESS_TOKEN := $(shell gcloud auth print-access-token)
+MAIN_SVC_IMAGE_NAME := us-docker.pkg.dev/$(PROJECT_ID)/burla-main-service/burla-main-service:latest
+
+
+test:
+	poetry -C ./client run pytest ./client/tests -s
 
 # The cluster is run 100% locally using the config `LOCAL_DEV_CONFIG` in `main_service.__init__.py`
 # All components (main_svc, node_svc, container_svc) will restart when changes to code are made.
 local-dev-cluster:
-	PROJECT_ID=$$(gcloud config get-value project) \
-	PROJECT_NUM=$$(gcloud projects describe $${PROJECT_ID} --format="value(projectNumber)") \
-	ACCESS_TOKEN=$$(gcloud auth print-access-token); \
-	MAIN_SVC_IMAGE_NAME=$$( echo \
-		"us-docker.pkg.dev/$${PROJECT_ID}/burla-main-service/burla-main-service:latest" \
-	); \
 	docker network create local-burla-cluster; \
 	docker run --rm -it \
 		--name main_service \
@@ -20,21 +20,21 @@ local-dev-cluster:
 		-v $(PWD)/main_service:/burla/main_service \
 		-v ~/.config/gcloud:/root/.config/gcloud \
 		-v /var/run/docker.sock:/var/run/docker.sock \
-		-e ACCESS_TOKEN=$${ACCESS_TOKEN} \
-		-e GOOGLE_CLOUD_PROJECT=$${PROJECT_ID} \
-		-e PROJECT_ID=$${PROJECT_ID} \
-		-e PROJECT_NUM=$${PROJECT_NUM} \
+		-e ACCESS_TOKEN=$(ACCESS_TOKEN) \
+		-e GOOGLE_CLOUD_PROJECT=$(PROJECT_ID) \
+		-e PROJECT_ID=$(PROJECT_ID) \
+		-e PROJECT_NUM=$(PROJECT_NUM) \
 		-e IN_LOCAL_DEV_MODE=True \
 		-e IN_PROD=False \
 		-e HOST_PWD=$(PWD) \
 		-e HOST_HOME_DIR=$${HOME} \
 		-p 5001:5001 \
-		--entrypoint poetry $${MAIN_SVC_IMAGE_NAME} run \
-			uvicorn main_service:app --host 0.0.0.0 --port 5001 --reload
+		--entrypoint poetry \
+		$(MAIN_SVC_IMAGE_NAME) run uvicorn main_service:app --host 0.0.0.0 --port 5001 --reload
 
-# Only the `main_service` is run locally, nodes are started as GCE VM's in the test cloud.
-# Uses cluster config from firestore doc: `/databases/(default)/cluster_config/cluster_config`
-remote-dev-cluster:
+# private recipe,
+# exits with error if deployed container service or node service are not up to date with local
+__check-local-services-up-to-date:
 	CONTAINER_SVC_TS=$$(cat ./container_service/last_image_pushed_at.txt); \
 	CONTAINER_SVC_DIR="./container_service/src/container_service"; \
 	CONTAINER_SVC_DIFF=$$(git diff --stat "@{$${CONTAINER_SVC_TS}}" -- "$${CONTAINER_SVC_DIR}"); \
@@ -52,26 +52,46 @@ remote-dev-cluster:
 		echo "To fix this, commit your node service code to the latest release branch."; \
 	fi; \
 	if [ "$${CONTAINER_SVC_HAS_DIFF}" = "true" ] || [ "$${NODE_SVC_HAS_DIFF}" = "true" ]; then \
-		exit 0; \
+		exit 1; \
 	fi; \
-	PROJECT_ID=$$(gcloud config get-value project) \
-	PROJECT_NUM=$$(gcloud projects describe $${PROJECT_ID} --format="value(projectNumber)") \
-	MAIN_SVC_IMAGE_NAME=$$( echo \
-		"us-docker.pkg.dev/$${PROJECT_ID}/burla-main-service/burla-main-service:latest" \
-	); \
+	echo "deployed container service and node service are up to date with local versions.";
+
+
+# Only the `main_service` is run locally, nodes are started as GCE VM's in the test cloud.
+# Uses cluster config from firestore doc: `/databases/(default)/cluster_config/cluster_config`
+remote-dev-cluster:
+	$(MAKE) __check-local-services-up-to-date && echo "" || exit 1; \
+	:; \
 	docker run --rm -it \
 		--name main_service \
 		-v $(PWD)/main_service:/burla/main_service \
 		-v ~/.config/gcloud:/root/.config/gcloud \
-		-e GOOGLE_CLOUD_PROJECT=$${PROJECT_ID} \
-		-e PROJECT_ID=$${PROJECT_ID} \
-		-e PROJECT_NUM=$${PROJECT_NUM} \
+		-e GOOGLE_CLOUD_PROJECT=$(PROJECT_ID) \
+		-e PROJECT_ID=$(PROJECT_ID) \
+		-e PROJECT_NUM=$(PROJECT_NUM) \
 		-e IN_REMOTE_DEV_MODE=True \
 		-e IN_PROD=False \
 		-p 5001:5001 \
-		--entrypoint poetry $${MAIN_SVC_IMAGE_NAME} run \
-			uvicorn main_service:app --host 0.0.0.0 --port 5001 --reload
+		--entrypoint poetry \
+		$(MAIN_SVC_IMAGE_NAME) run uvicorn main_service:app --host 0.0.0.0 --port 5001 --reload
 
 # Moves latest container service image to prod & 
 # Builds new main-service image, moves to prod, then deploys prod main service
-# deploy-prod:
+deploy-prod:
+	$(MAKE) __check-local-services-up-to-date && echo "" || exit 1; \
+	:; \
+	cd ./container_service; \
+	echo "moving latest container service image from test to prod."; \
+	$(MAKE) move-image-nogpu-to-prod; \
+	cd ..; \
+	:; \
+	cd ./main_service; \
+	echo "creating new main-service image."; \
+	$(MAKE) image; \
+	:; \
+	echo "moving latest main service image from test to prod."; \
+	$(MAKE) move-test-image-to-prod; \
+	:; \
+	echo "deploying latest main service image."; \
+	$(MAKE) deploy-prod
+

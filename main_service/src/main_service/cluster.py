@@ -1,9 +1,7 @@
-from typing import List, Optional, Callable
+from typing import Callable
 from concurrent.futures import ThreadPoolExecutor
-from copy import copy
 import requests
 from dataclasses import dataclass
-from uuid import uuid4
 from time import time
 
 from google.cloud import firestore
@@ -11,7 +9,7 @@ from google.cloud.firestore import FieldFilter
 from google.cloud.compute_v1 import InstancesClient
 from google.api_core.exceptions import NotFound
 
-from main_service import PROJECT_ID
+from main_service import PROJECT_ID, IN_LOCAL_DEV_MODE
 from main_service.node import Node, Container
 from main_service.helpers import Logger
 
@@ -80,6 +78,10 @@ def reconcile(db: firestore.Client, logger: Logger, add_background_task: Callabl
 
     Below I remove nodes from the nodes list as they are addressed / fixed.
     """
+    # skip for now if developing locally
+    if IN_LOCAL_DEV_MODE:
+        return
+
     logger.log("Reconciling now.")
     instance_client = InstancesClient()
 
@@ -92,7 +94,7 @@ def reconcile(db: firestore.Client, logger: Logger, add_background_task: Callabl
     node_not_deleted = FieldFilter("status", "not-in", ["DELETED", "FAILED"])
     node_doc_snapshots = db.collection("nodes").where(filter=node_not_deleted).stream()
     for node_snapshot in node_doc_snapshots:
-        node = Node.from_snapshot(db, logger, add_background_task, node_snapshot)
+        node = Node.from_snapshot(db, logger, node_snapshot)
         nodes.append(node)
 
     # Get list of burla nodes from GCE
@@ -178,7 +180,6 @@ def reconcile(db: firestore.Client, logger: Logger, add_background_task: Callabl
                     Node.start(
                         db=db,
                         logger=logger,
-                        add_background_task=add_background_task,
                         machine_type=machine_type,
                         containers=containers,
                         inactivity_shutdown_time_sec=inactivity_shutdown_time_sec,

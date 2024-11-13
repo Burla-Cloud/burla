@@ -11,31 +11,6 @@ firewall = Firewall(
 )
 FirewallsClient().insert(project=PROJECT_ID, firewall_resource=firewall).result()
 ```
-
-The disk image was built by creating a blank debian-12 instance then running the following:
-(basically just installs git, docker, and gcloud, and authenticates docker using gcloud.)
-```
-apt-get update && apt-get install -y git ca-certificates curl gnupg
-apt install -y python3-pip
-
-install -m 0755 -d /etc/apt/keyrings
-curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-chmod a+r /etc/apt/keyrings/docker.gpg
-echo \
-  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian \
-  $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
-  tee /etc/apt/sources.list.d/docker.list > /dev/null
-apt-get update
-apt-get install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-
-# use gcloud (should be installed) it to authenticate docker with GAR
-gcloud auth configure-docker us-docker.pkg.dev
-
-# install latest node service and pip install packages for faster node starts (less to install)
-git clone --depth 1 --branch ??? https://github.com/Burla-Cloud/node_service.git
-# pull latest container service image for faster node starts (less to download)
-docker pull us-docker.pkg.dev/<YOUR PROJECT HERE>/burla-job-containers/default/image-nogpu:???
-```
 """
 
 import os
@@ -47,8 +22,9 @@ from dataclasses import dataclass, asdict
 from requests.exceptions import ConnectionError, ConnectTimeout, Timeout
 from time import sleep, time
 from uuid import uuid4
-from typing import Optional, Callable
+from typing import Optional
 
+import docker
 from google.api_core.exceptions import NotFound, ServiceUnavailable, Conflict
 from google.cloud import firestore
 from google.cloud.firestore import DocumentSnapshot
@@ -66,7 +42,7 @@ from google.cloud.compute_v1 import (
     Scheduling,
 )
 
-from main_service import PROJECT_ID, IN_PROD
+from main_service import PROJECT_ID, IN_PROD, IN_DEV, ACCESS_TOKEN, IN_LOCAL_DEV_MODE
 from main_service.helpers import Logger, format_traceback
 
 
@@ -100,9 +76,8 @@ else:
     GCE_DEFAULT_SVC = f"{PROJECT_NUM}-compute@developer.gserviceaccount.com"
 
 NODE_BOOT_TIMEOUT = 60 * 3
-NODE_SVC_PORT = "8080"
 ACCEPTABLE_ZONES = ["us-central1-b", "us-central1-c", "us-central1-f", "us-central1-a"]
-NODE_SVC_VERSION = "0.8.6"  # <- this maps to a git tag/release or branch
+NODE_SVC_VERSION = "0.8.7"  # <- this maps to a git tag/release or branch
 
 
 class Node:
@@ -116,7 +91,6 @@ class Node:
         cls,
         db: firestore.Client,
         logger: Logger,
-        add_background_task: Callable,
         node_snapshot: DocumentSnapshot,
         instance_client: Optional[InstancesClient] = None,
     ):
@@ -125,7 +99,6 @@ class Node:
         self.node_ref = node_snapshot.reference
         self.db = db
         self.logger = logger
-        self.add_background_task = add_background_task
         self.instance_name = node_doc["instance_name"]
         self.machine_type = node_doc["machine_type"]
         self.containers = [Container.from_dict(c) for c in node_doc["containers"]]
@@ -143,9 +116,10 @@ class Node:
         cls,
         db: firestore.Client,
         logger: Logger,
-        add_background_task: Callable,
         machine_type: str,
         containers: list[Container],
+        service_port: int = 8080,  # <- this needs to be open in your cloud firewall!
+        as_local_container: bool = False,
         instance_client: Optional[InstancesClient] = None,
         inactivity_shutdown_time_sec: Optional[int] = None,
         verbose=False,
@@ -155,9 +129,9 @@ class Node:
         self = cls.__new__(cls)
         self.db = db
         self.logger = logger
-        self.add_background_task = add_background_task
         self.machine_type = machine_type
         self.containers = containers
+        self.port = service_port
         self.inactivity_shutdown_time_sec = inactivity_shutdown_time_sec
         self.instance_client = instance_client if instance_client else InstancesClient()
 
@@ -175,11 +149,30 @@ class Node:
         current_state = dict(self.__dict__)  # <- create copy to modify / save
         current_state["status"] = "BOOTING"
         current_state["containers"] = [container.to_dict() for container in containers]
-        attrs_to_not_save = ["db", "logger", "add_background_task", "instance_client", "node_ref"]
+        attrs_to_not_save = ["db", "logger", "instance_client", "node_ref"]
         current_state = {k: v for k, v in current_state.items() if k not in attrs_to_not_save}
         self.node_ref.set(current_state)
 
-        self.__start(disk_image=disk_image, disk_size=disk_size)
+        if as_local_container:
+            assert IN_DEV == True
+            self.__start_svc_in_local_container()
+        else:
+            self.__start_svc_in_vm(disk_image=disk_image, disk_size=disk_size)
+
+        start = time()
+        status = self.status()
+        while status != "READY":
+            sleep(1)
+            booting_too_long = (time() - start) > NODE_BOOT_TIMEOUT
+            status = self.status()
+
+            if status == "FAILED" or booting_too_long:
+                self.delete()
+                msg = f"Node {self.instance_name} Failed to start! (timeout={booting_too_long})"
+                raise Exception(msg)
+
+        self.node_ref.update(dict(host=self.host, zone=self.zone))  # node svc marks itself as ready
+        self.is_booting = False
         return self
 
     def time_until_booted(self):
@@ -224,7 +217,49 @@ class Node:
         else:
             raise Exception("Node not booting but also has no hostname?")
 
-    def __start(self, disk_image: str, disk_size: int):
+    def __start_svc_in_local_container(self):
+        image = f"us-docker.pkg.dev/{PROJECT_ID}/burla-node-service/burla-node-service:latest"
+        command = f"uvicorn node_service:app --host 0.0.0.0 --port {self.port} --workers 1 "
+        command += "--timeout-keep-alive 600 --reload"
+
+        docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
+        host_config = docker_client.create_host_config(
+            port_bindings={self.port: self.port},
+            network_mode="local-burla-cluster",
+            binds={
+                f"{os.environ['HOST_HOME_DIR']}/.config/gcloud": "/root/.config/gcloud",
+                f"{os.environ['HOST_PWD']}/node_service": "/burla/node_service",
+                "/var/run/docker.sock": "/var/run/docker.sock",
+            },
+        )
+
+        auth_config = {"username": "oauth2accesstoken", "password": ACCESS_TOKEN}
+        docker_client.pull(image, auth_config=auth_config)
+
+        container_name = f"node_service_{uuid4().hex[:4]}"
+        container = docker_client.create_container(
+            image=image,
+            command=["bash", "-c", f"python3.11 -m {command}"],
+            name=container_name,
+            ports=[self.port],
+            host_config=host_config,
+            environment={
+                "GOOGLE_CLOUD_PROJECT": PROJECT_ID,
+                "PROJECT_ID": PROJECT_ID,
+                "IN_DEV": IN_DEV,
+                "IN_PROD": False,
+                "HOST_HOME_DIR": os.environ["HOST_HOME_DIR"],
+                "HOST_PWD": os.environ["HOST_PWD"],
+                "INSTANCE_NAME": self.instance_name,
+                "CONTAINERS": json.dumps([c.to_dict() for c in self.containers]),
+                "INACTIVITY_SHUTDOWN_TIME_SEC": self.inactivity_shutdown_time_sec,
+            },
+            detach=True,
+        )
+        docker_client.start(container=container.get("Id"))
+        self.host = f"http://{container_name}:{self.port}"
+
+    def __start_svc_in_vm(self, disk_image: str, disk_size: int):
         disk_params = AttachedDiskInitializeParams(source_image=disk_image, disk_size_gb=disk_size)
         disk = AttachedDisk(auto_delete=True, boot=True, initialize_params=disk_params)
 
@@ -269,23 +304,9 @@ class Node:
 
         kw = dict(project=PROJECT_ID, zone=zone, instance=self.instance_name)
         external_ip = self.instance_client.get(**kw).network_interfaces[0].access_configs[0].nat_i_p
-        self.host = f"http://{external_ip}:{NODE_SVC_PORT}"
+
+        self.host = f"http://{external_ip}:{self.port}"
         self.zone = zone
-
-        start = time()
-        status = self.status()
-        while status != "READY":
-            sleep(1)
-            booting_too_long = (time() - start) > NODE_BOOT_TIMEOUT
-            status = self.status()
-
-            if status == "FAILED" or booting_too_long:
-                self.delete()
-                msg = f"Node {self.instance_name} Failed to start! (timeout={booting_too_long})"
-                raise Exception(msg)
-
-        self.node_ref.update(dict(host=self.host, zone=self.zone))  # node svc marks itself as ready
-        self.is_booting = False
 
     def __get_startup_script(self):
         return f"""
@@ -312,7 +333,7 @@ class Node:
         export CONTAINERS='{json.dumps([c.to_dict() for c in self.containers])}'
         export INACTIVITY_SHUTDOWN_TIME_SEC="{self.inactivity_shutdown_time_sec}"
 
-        python3.11 -m uvicorn node_service:app --host 0.0.0.0 --port 8080 --workers 1 --timeout-keep-alive 600
+        python3.11 -m uvicorn node_service:app --host 0.0.0.0 --port {self.port} --workers 1 --timeout-keep-alive 600
         """
 
     def __get_shutdown_script(self):

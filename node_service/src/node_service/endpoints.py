@@ -16,6 +16,7 @@ from google.cloud import firestore
 
 from node_service import (
     PROJECT_ID,
+    IN_DEV,
     SELF,
     INSTANCE_N_CPUS,
     INSTANCE_NAME,
@@ -35,8 +36,6 @@ router = APIRouter()
 def watch_job(job_id: str):
     """Runs in an independent thread, restarts node when all workers are done or if any failed."""
     logger = Logger()
-
-    start = time()
 
     try:
         while True:
@@ -153,8 +152,8 @@ def execute(
         raise Exception(f"failed to assign workers to inputs at indicies: {unassigned_indicies}")
 
     SELF["workers"] = workers_to_keep
-    # remove_workers = lambda workers_to_remove: [w.remove() for w in workers_to_remove]
-    # add_background_task(remove_workers, workers_to_remove)
+    remove_workers = lambda workers_to_remove: [w.remove() for w in workers_to_remove]
+    add_background_task(remove_workers, workers_to_remove)
 
     starting_index = request_json["starting_index"]
     ending_index = starting_index + len(workers_to_keep)
@@ -199,9 +198,12 @@ def reboot_containers(
             }
         )
 
-        # remove all containers (except those named `main_service`)
+        # remove all worker containers
         for container in docker_client.containers():
-            if container["Names"][0] != "/main_service":
+            container_name = container["Names"][0]
+            is_worker_container = container_name[1:13] not in ["main_service", "node_service"]
+
+            if is_worker_container:
                 try:
                     docker_client.remove_container(container["Id"], force=True)
                 except (APIError, NotFound, requests.exceptions.HTTPError) as e:
@@ -240,11 +242,12 @@ def reboot_containers(
 
         # Sometimes on larger machines, some containers don't start, or get stuck in "CREATED" state
         # This has not been diagnosed, this check is performed to ensure all containers started.
-        containers = [c for c in docker_client.containers() if c["Names"][0] != "/main_service"]
-        containers_status = [c["State"] for c in containers]
-        num_running_containers = sum([status == "running" for status in containers_status])
+        _containers = docker_client.containers()
+        is_worker_container = lambda c: c["Names"][0][1:13] not in ["main_service", "node_service"]
+        worker_containers_status = [c["State"] for c in _containers if is_worker_container(c)]
+        num_running_containers = sum([status == "running" for status in worker_containers_status])
         expected_n_containers = len(SELF["current_container_config"]) * INSTANCE_N_CPUS
-        some_containers_missing = num_running_containers != expected_n_containers
+        some_containers_missing = num_running_containers < expected_n_containers
 
         if some_containers_missing:
             SELF["FAILED"] = True

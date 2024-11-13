@@ -114,7 +114,7 @@ from main_service.endpoints.cluster import router as cluster_router, restart_clu
 @asynccontextmanager
 async def lifespan(app: FastAPI):
 
-    # Start cluster strait away if in dev:
+    # Start cluster straight away if in dev:
     if IN_LOCAL_DEV_MODE:
         logger = Logger()
         try:

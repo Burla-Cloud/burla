@@ -81,17 +81,10 @@ deploy-prod:
 	$(MAKE) __check-local-services-up-to-date && echo "" || exit 1; \
 	:; \
 	cd ./container_service; \
-	echo "moving latest container service image from test to prod."; \
 	$(MAKE) move-image-nogpu-to-prod; \
 	cd ..; \
-	:; \
 	cd ./main_service; \
-	echo "creating new main-service image."; \
 	$(MAKE) image; \
-	:; \
-	echo "moving latest main service image from test to prod."; \
 	$(MAKE) move-test-image-to-prod; \
-	:; \
-	echo "deploying latest main service image."; \
 	$(MAKE) deploy-prod
 

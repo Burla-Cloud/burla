@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "burla"
-version = "0.8.8"
+version = "0.8.9"
 description = "Scale your program across 1000s of computers with one line of code."
 authors = ["Jake Zuliani <jake@burla.dev>"]
 
@@ -23,6 +23,7 @@ burla = "burla.__init__:init_cli"
 [tool.poetry.group.dev.dependencies]
 black = "^23.3.0"
 pytest = "^7.4.2"
+docker = "^7.1.0"
 
 # indicate if in dev,
 # cannot use env variable or, once installed (on a developer pc), pkg would think it's in dev

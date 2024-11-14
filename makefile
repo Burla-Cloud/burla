@@ -7,8 +7,12 @@ ACCESS_TOKEN := $(shell gcloud auth print-access-token)
 MAIN_SVC_IMAGE_NAME := us-docker.pkg.dev/$(PROJECT_ID)/burla-main-service/burla-main-service:latest
 
 
-test:
+test-local:
 	poetry -C ./client run pytest ./client/tests -s
+
+# TODO: tests designed to run when cluster is in remote dev mode
+test-remote:
+	:;
 
 # The cluster is run 100% locally using the config `LOCAL_DEV_CONFIG` in `main_service.__init__.py`
 # All components (main_svc, node_svc, container_svc) will restart when changes to code are made.

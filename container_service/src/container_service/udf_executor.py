@@ -55,7 +55,11 @@ class InputGetter:
                 is_claimed = response.json()["fields"]["claimed"]["booleanValue"]
                 break
             if response.status_code != 404:
-                raise Exception(f"non 404/200 response trying to get input {input_index}?")
+                try:
+                    response.raise_for_status()
+                except Exception as e:
+                    msg = f"non 404/200 response trying to get input {input_index}?"
+                    raise Exception(msg) from e
             sleep(i * i * 0.1)  # 0.0, 0.1, 0.4, 0.9, 1.6, 2.5, 3.6, 4.9, 6.4, 8.1 ...
 
         if not input_pkl:

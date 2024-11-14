@@ -8,11 +8,10 @@ MAIN_SVC_IMAGE_NAME := us-docker.pkg.dev/$(PROJECT_ID)/burla-main-service/burla-
 
 
 test-local:
-	poetry -C ./client run pytest ./client/tests -s
+	poetry -C ./client run pytest ./client/tests/test_in_local_dev_mode.py -s
 
-# TODO: tests designed to run when cluster is in remote dev mode
 test-remote:
-	:;
+	poetry -C ./client run pytest ./client/tests/test_in_remote_dev_mode.py -s
 
 # The cluster is run 100% locally using the config `LOCAL_DEV_CONFIG` in `main_service.__init__.py`
 # All components (main_svc, node_svc, container_svc) will restart when changes to code are made.

@@ -3,9 +3,9 @@ import pickle
 
 from flask import jsonify, Blueprint, request
 
-from container_service import SELF, LOGGER, IN_DEV
-from container_service.udf_executor import execute_job
-from container_service.helpers import ThreadWithExc
+from worker_service import SELF, LOGGER, IN_DEV
+from worker_service.udf_executor import execute_job
+from worker_service.helpers import ThreadWithExc
 
 BP = Blueprint("endpoints", __name__)
 ERROR_ALREADY_LOGGED = False
@@ -20,7 +20,7 @@ def get_status():
      1. “READY”: This service is ready to start processing a subjob.
      2. “RUNNING”: This service is processing a subjob.
      3. “FAILED”: This service had an internal error and failed to process the subjob.
-     4. “DONE”: This container successfully processed the subjob.
+     4. “DONE”: This worker successfully processed the subjob.
     """
     global ERROR_ALREADY_LOGGED
 

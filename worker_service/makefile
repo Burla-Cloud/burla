@@ -52,4 +52,4 @@ move-image-nogpu-to-prod:
 	docker tag $${PROD_IMAGE_NAME} $${PROD_IMAGE_BASE_NAME}:latest; \
 	docker push $${PROD_IMAGE_NAME}; \
 	docker push $${PROD_IMAGE_BASE_NAME}:latest; \
-	echo "Moved latest container service image to prod"
+	echo "Moved latest worker service image to prod"

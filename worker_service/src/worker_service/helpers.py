@@ -4,7 +4,7 @@ import traceback
 
 from google.cloud.secretmanager import SecretManagerServiceClient
 
-from container_service import PROJECT_ID
+from worker_service import PROJECT_ID
 
 
 def get_secret(secret_name: str):

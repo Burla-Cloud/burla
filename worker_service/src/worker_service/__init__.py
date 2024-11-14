@@ -20,9 +20,9 @@ SELF = {
     "started_at": None,
     "starting_index": None,
 }
-LOGGER = logging.Client().logger("container_service")
+LOGGER = logging.Client().logger("worker_service")
 
-from container_service.endpoints import BP as endpoints_bp
+from worker_service.endpoints import BP as endpoints_bp
 
 app = Flask(__name__)
 app.register_blueprint(endpoints_bp)

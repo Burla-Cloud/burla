@@ -12,4 +12,4 @@ Email `jake@burla.dev` if you're interested in contributing, or just [put time o
 
 If running in `local-dev-mode` errors will be visible in docker desktop container logs.  
 If running in `remote-dev-mode` errors will be visible in the terminal where the `main_service`
-is running, or google-cloud-logging for errors from the `node_service` or `container_service`.
+is running, or google-cloud-logging for errors from the `node_service` or `worker_service`.

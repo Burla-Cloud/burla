@@ -8,7 +8,7 @@ from typing import Union
 import cloudpickle
 from tblib import Traceback
 
-from container_service import SELF, PROJECT_ID
+from worker_service import SELF, PROJECT_ID
 
 FIRESTORE_URL = "https://firestore.googleapis.com"
 DB_BASE_URL = f"{FIRESTORE_URL}/v1/projects/{PROJECT_ID}/databases/(default)/documents"

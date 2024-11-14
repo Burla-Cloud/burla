@@ -22,11 +22,11 @@ def local_cluster_in_standby():
     containers = docker_client.containers.list()
     main_svc_containers = [c for c in containers if c.name == "main_service"]
     node_svc_containers = [c for c in containers if c.name.startswith("node_service")]
-    container_svc_containers = [c for c in containers if c.name.startswith("container_service")]
+    worker_svc_containers = [c for c in containers if c.name.startswith("worker_service")]
     in_standby = True
     in_standby = len(main_svc_containers) == N_STANDBY_MAIN_SVC_CONTAINERS
     in_standby = len(node_svc_containers) == N_STANDBY_NODE_SVC_CONTAINERS
-    in_standby = len(container_svc_containers) == N_STANDBY_WORKER_CONTAINERS
+    in_standby = len(worker_svc_containers) == N_STANDBY_WORKER_CONTAINERS
     return in_standby
 
 
@@ -60,7 +60,7 @@ def test_base():
         raise Exception("Local cluster not in standby.")
 
     containers = docker_client.containers.list()
-    pre_job_worker_names = set([c.name for c in containers if c.name.startswith("container")])
+    pre_job_worker_names = set([c.name for c in containers if c.name.startswith("worker")])
 
     run_simple_test_job()
 
@@ -71,7 +71,7 @@ def test_base():
 
     while not all_workers_rebooted:
         containers = docker_client.containers.list()
-        post_job_worker_names = set([c.name for c in containers if c.name.startswith("container")])
+        post_job_worker_names = set([c.name for c in containers if c.name.startswith("worker")])
 
         num_workers_removed = len(pre_job_worker_names - post_job_worker_names)
         all_pre_job_workers_removed = num_workers_removed == N_STANDBY_WORKER_CONTAINERS

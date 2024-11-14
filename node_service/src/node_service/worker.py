@@ -16,7 +16,7 @@ LOGGER = logging.Client().logger("node_service")
 
 
 class Worker:
-    """An instance of this = a running container with a running `container_service` instance."""
+    """An instance of this = a running container with a running `worker_service` instance."""
 
     def __init__(
         self,
@@ -42,7 +42,7 @@ class Worker:
 
         while self.container is None:
             port = next_free_port()
-            gunicorn_command = f"gunicorn -t 60 -b 0.0.0.0:{port} container_service:app"
+            gunicorn_command = f"gunicorn -t 60 -b 0.0.0.0:{port} worker_service:app"
 
             if IN_DEV:
                 host_config = docker_client.create_host_config(
@@ -50,14 +50,14 @@ class Worker:
                     network_mode="local-burla-cluster",
                     binds={
                         f"{os.environ['HOST_HOME_DIR']}/.config/gcloud": "/root/.config/gcloud",
-                        f"{os.environ['HOST_PWD']}/container_service": "/burla",
+                        f"{os.environ['HOST_PWD']}/worker_service": "/burla",
                     },
                 )
             else:
                 host_config = docker_client.create_host_config(port_bindings={port: port})
 
             try:
-                container_name = f"container_service_{uuid4().hex[:4]}"
+                container_name = f"worker_service_{uuid4().hex[:4]}"
                 container = docker_client.create_container(
                     image=image,
                     command=["/bin/sh", "-c", f"{python_executable} -m {gunicorn_command}"],

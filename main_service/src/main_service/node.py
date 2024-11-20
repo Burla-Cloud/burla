@@ -181,8 +181,12 @@ class Node:
         return max(0, time_until_booted)
 
     def reboot(self):
-        response = requests.post(f"{self.host}/reboot")
-        response.raise_for_status()
+        try:
+            response = requests.post(f"{self.host}/reboot")
+            response.raise_for_status()
+        except requests.exceptions.HTTPError as e:
+            if not "409" in e:  # 409 means node is already rebooting.
+                raise e
 
     def delete(self):
         """

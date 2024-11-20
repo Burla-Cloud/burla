@@ -1,6 +1,5 @@
 import sys
 import pickle
-import requests
 from time import time, sleep
 from typing import List
 from threading import Thread
@@ -10,13 +9,11 @@ import asyncio
 import aiohttp
 
 import docker
-from docker.errors import APIError, NotFound
 from fastapi import APIRouter, Path, Depends, Response
 from google.cloud import firestore
 
 from node_service import (
     PROJECT_ID,
-    IN_DEV,
     SELF,
     INSTANCE_N_CPUS,
     INSTANCE_NAME,
@@ -26,9 +23,9 @@ from node_service import (
     get_add_background_task_function,
     Container,
 )
-from node_service.helpers import Logger, format_traceback
+from node_service.helpers import Logger, format_traceback, ignore_400_409_404
 from node_service.worker import Worker
-from node_service import ACCESS_TOKEN
+from node_service import ACCESS_TOKEN, IN_LOCAL_DEV_MODE
 
 router = APIRouter()
 
@@ -37,17 +34,26 @@ def watch_job(job_id: str):
     """Runs in an independent thread, restarts node when all workers are done or if any failed."""
     logger = Logger()
 
+    # Detect udf error inside workers here
+    # if there is one, get host of all other workers and restart them
+    # or send message to the main_service to restart all workers ???
+
     try:
         while True:
             sleep(2)
             workers_status = [worker.status() for worker in SELF["workers"]]
             any_failed = any([status == "FAILED" for status in workers_status])
             all_done = all([status == "DONE" for status in workers_status])
+            logger.log(f"Got workers status: all_done={all_done}, any_failed={any_failed}")
             if all_done or any_failed:
                 break
 
         if not SELF["BOOTING"]:
+            logger.log("Rebooting node.")
             reboot_containers(logger=logger)
+        else:
+            logger.log("NOT rebooting because node is ALREADY rebooting!")
+
     except Exception as e:
         exc_type, exc_value, exc_traceback = sys.exc_info()
         tb_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
@@ -198,18 +204,56 @@ def reboot_containers(
             }
         )
 
-        # remove all worker containers
-        for container in docker_client.containers():
-            container_name = container["Names"][0]
-            is_worker_container = container_name[1:13] not in ["main_service", "node_service"]
+        threads = []
+        if IN_LOCAL_DEV_MODE:
+            # allow us to read old worker logs before workers are deleteted.
+            # workers are marked as "old", then deleted in subsequent restart.
+            # `just_marked_old`/`worker_just_created` exist to prevent race condition where
+            # one node_service makes workers and the other instantly marks them old/deletes them.
+            workers_marked_old = []
+            old_workers_removed = []
 
-            if is_worker_container:
-                try:
-                    docker_client.remove_container(container["Id"], force=True)
-                except (APIError, NotFound, requests.exceptions.HTTPError) as e:
-                    # re-raise any errors that aren't an "already-in-progress" error
-                    if not (("409" in str(e)) or ("404" in str(e))):
-                        raise e
+            # REGARDING `ignore_400_409_404`:
+            # We assume that when these errors occur it is always because the operation has already
+            # been completed/is-happening by another thread.
+
+            for container in docker_client.containers(all=True):
+                name = container["Names"][0][1:]
+                is_worker = "worker" in name
+                is_old = name.startswith("OLD")
+                worker_belongs_to_self = f"node_{INSTANCE_NAME[11:]}" in name
+
+                if is_old and worker_belongs_to_self:
+                    remove_container = ignore_400_409_404(docker_client.remove_container)
+                    kwargs = {"container": container["Id"], "force": True}
+                    threads.append(Thread(target=remove_container, kwargs=kwargs))
+                    old_workers_removed.append(name)
+
+                elif is_worker and worker_belongs_to_self:
+                    rename_container = ignore_400_409_404(docker_client.rename)
+                    stop_container = ignore_400_409_404(docker_client.stop)
+                    rename_args = (container["Id"], f"OLD--{name}")
+                    stop_kwargs = {"container": container["Id"], "timeout": 0}
+                    threads.append(Thread(target=rename_container, args=rename_args))
+                    threads.append(Thread(target=stop_container, kwargs=stop_kwargs))
+                    workers_marked_old.append(name)
+
+            logger.log(f'Marked {len(workers_marked_old)} workers as "OLD": {workers_marked_old}')
+            logger.log(f'Removed {len(old_workers_removed)} "OLD" workers: {old_workers_removed}')
+        else:
+            # remove all worker containers
+            workers_removed = []
+            for container in docker_client.containers():
+                if "worker" in container["Names"][0]:
+                    remove_container = ignore_400_409_404(docker_client.remove_container)
+                    kwargs = {"container": container["Id"], "force": True}
+                    threads.append(Thread(target=remove_container, kwargs=kwargs))
+                    workers_removed.append(container["Names"][0])
+
+            logger.log(f"Removed {len(workers_removed)} workers: {workers_removed}")
+
+        [thread.start() for thread in threads]
+        [thread.join() for thread in threads]
 
         def create_worker(*a, **kw):
             # Log error inside thread because sometimes it isn't sent to the main thread, idk why.
@@ -237,8 +281,9 @@ def reboot_containers(
                 threads.append(thread)
                 thread.start()
 
-        for thread in threads:
-            thread.join()
+        [thread.join() for thread in threads]
+        worker_names = [w.container_name for w in SELF["workers"]]
+        logger.log(f'Started {len(SELF["workers"])} new workers: {worker_names}')
 
         # Sometimes on larger machines, some containers don't start, or get stuck in "CREATED" state
         # This has not been diagnosed, this check is performed to ensure all containers started.
@@ -263,3 +308,5 @@ def reboot_containers(
     except Exception as e:
         SELF["FAILED"] = True
         raise e
+
+    logger.log(f"Done Rebooting.\n{INSTANCE_NAME} is READY!")

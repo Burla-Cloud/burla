@@ -1,9 +1,9 @@
 [tool.poetry]
-name = "container_service"
-version = "0.8.8"
+name = "worker_service"
+version = "0.8.9"
 description = ""
 authors = ["Jacob Zuliani <jake@burla.dev>"]
-packages = [{include = "container_service", from = "src"}]
+packages = [{include = "worker_service", from = "src"}]
 
 [tool.poetry.dependencies]
 python = ">=3.10,<4.0"
@@ -16,7 +16,7 @@ tblib = "^3.0.0"
 google-cloud-logging = "^3.8.0"
 google-cloud-secret-manager = "^2.16.4"
 
-# These packages are not used by the container service
+# These packages are not used by the worker service
 # These exist so that users can run code in burla that uses these packages
 pandas = "^2.2.3"
 numpy = "^2.1.2"

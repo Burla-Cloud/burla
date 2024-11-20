@@ -1,7 +1,7 @@
 
 # This is the base image to the default docker image that all user-submitted functions are run in.
-# The container_service is installed on top of this image in `Dockerfile`
-# ^^ This is done so we can quickly deploy the container_service 
+# The worker_service is installed on top of this image in `Dockerfile`
+# ^^ This is done so we can quickly deploy the worker_service 
 # by baking it into & uploading a new image without needing to install python again
 
 ARG BASE_IMAGE

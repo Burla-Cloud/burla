@@ -4,6 +4,7 @@ import json
 import asyncio
 import traceback
 import requests
+from pathlib import Path
 from uuid import uuid4
 from time import time
 from typing import Callable
@@ -17,6 +18,7 @@ from starlette.datastructures import UploadFile
 from google.cloud import logging
 from google.cloud.compute_v1 import InstancesClient
 
+IN_LOCAL_DEV_MODE = os.environ.get("IN_LOCAL_DEV_MODE") == "True"  # Cluster is runing 100% locally
 IN_DEV = os.environ.get("IN_DEV") == "True"
 
 PROJECT_ID = os.environ["PROJECT_ID"]
@@ -137,12 +139,15 @@ async def shutdown_if_idle_for_too_long():
 async def lifespan(app: FastAPI):
     logger = Logger()
 
+    # In dev all the workers restart everytime I hit save (server is in "reload" mode)
+    # This is annoying but you must leave it like this, otherwise stuff won't restart correctly!
+    # (you tried skipping the worker restarts here when reloading,
+    # this won't work because this whole file re-runs, and SELF is reset when reloading.)
+
     try:
         # boot containers before accepting any requests.
-        logger.log(f"Starting workers ...")
         containers = [Container(**c) for c in json.loads(os.environ["CONTAINERS"])]
         await run_in_threadpool(reboot_containers, new_container_config=containers, logger=logger)
-        logger.log(f"Started {len(SELF['workers'])} workers.")
 
         if INACTIVITY_SHUTDOWN_TIME_SEC:
             SELF["current_time_until_shutdown"] = int(INACTIVITY_SHUTDOWN_TIME_SEC)
@@ -159,7 +164,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None)
+app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None)  #
 app.include_router(endpoints_router)
 
 

@@ -2,16 +2,29 @@ import sys
 import socket
 import random
 from itertools import groupby
-from typing import Optional
+from typing import Optional, Callable
 from datetime import datetime, timedelta, timezone
-
-from collections import deque
+from requests.exceptions import HTTPError
 
 from fastapi import Request
+from docker.errors import APIError, NotFound
 from node_service import IN_DEV, GCL_CLIENT, SELF
 
 
 PRIVATE_PORT_QUEUE = list(range(32768, 60999))  # <- these ports should be mostly free.
+
+
+def ignore_400_409_404(f: Callable):
+
+    def wrapped(*a, **kw):
+        try:
+            f(*a, **kw)
+        except (APIError, NotFound, HTTPError) as e:
+            # ignore errors indicating the desired operation already happened.
+            if not ("400" in str(e) or "404" in str(e) or "409" in str(e)):
+                raise e
+
+    return wrapped
 
 
 def startup_error_msg(container_logs, image):
@@ -86,9 +99,11 @@ class Logger:
     def log(self, message: str, severity="INFO", **kw):
         if IN_DEV and "traceback" in kw.keys():
             print(f"\nERROR: {message.strip()}\n{kw['traceback'].strip()}\n", file=sys.stderr)
+            sys.stdout.flush()
         elif IN_DEV:
             eastern_time = datetime.now(timezone.utc) + timedelta(hours=-4)
             print(f"{eastern_time.strftime('%I:%M:%S.%f %p')}: {message}")
+            sys.stdout.flush()
         else:
             struct = dict(message=message, request=self.loggable_request, **kw)
             GCL_CLIENT.log_struct(struct, severity=severity)

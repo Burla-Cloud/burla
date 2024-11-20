@@ -16,6 +16,7 @@ test-remote:
 # The cluster is run 100% locally using the config `LOCAL_DEV_CONFIG` in `main_service.__init__.py`
 # All components (main_svc, node_svc, worker_svc) will restart when changes to code are made.
 local-dev-cluster:
+	set -e; \
 	docker network create local-burla-cluster; \
 	docker run --rm -it \
 		--name main_service \
@@ -38,6 +39,7 @@ local-dev-cluster:
 # private recipe,
 # exits with error if deployed worker service or node service are not up to date with local
 __check-local-services-up-to-date:
+	set -e; \
 	WORKER_SVC_TS=$$(cat ./worker_service/last_image_pushed_at.txt); \
 	WORKER_SVC_DIR="./worker_service/src/worker_service"; \
 	WORKER_SVC_DIFF=$$(git diff --stat "@{$${WORKER_SVC_TS}}" -- "$${WORKER_SVC_DIR}"); \
@@ -63,6 +65,7 @@ __check-local-services-up-to-date:
 # Only the `main_service` is run locally, nodes are started as GCE VM's in the test cloud.
 # Uses cluster config from firestore doc: `/databases/(default)/cluster_config/cluster_config`
 remote-dev-cluster:
+	set -e; \
 	$(MAKE) __check-local-services-up-to-date && echo "" || exit 1; \
 	:; \
 	docker run --rm -it \
@@ -81,6 +84,7 @@ remote-dev-cluster:
 # Moves latest worker service image to prod & 
 # Builds new main-service image, moves to prod, then deploys prod main service
 deploy-prod:
+	set -e; \
 	$(MAKE) __check-local-services-up-to-date && echo "" || exit 1; \
 	:; \
 	cd ./worker_service; \

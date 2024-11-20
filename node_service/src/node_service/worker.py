@@ -57,7 +57,7 @@ class Worker:
                 host_config = docker_client.create_host_config(port_bindings={port: port})
 
             try:
-                container_name = f"worker_{uuid4().hex[:4]}--node_{INSTANCE_NAME[11:]}"
+                container_name = f"worker_{uuid4().hex[:8]}--node_{INSTANCE_NAME[11:]}"
                 container = docker_client.create_container(
                     image=image,
                     command=["/bin/sh", "-c", f"{python_executable} -m {gunicorn_command}"],

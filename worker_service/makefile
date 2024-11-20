@@ -14,7 +14,8 @@ base_image_nogpu:
 # This adds a layer on top of `base_image_nogpu` that only updates the baked-in code with new code.
 # This exists as a separate image so we can update the baked-in code quickly.
 image_nogpu:
-	echo -n $$(date "+%Y-%m-%d %H:%M:%S") > last_image_pushed_at.txt; \
+	set -e; \
+	printf "$$(date "+%Y-%m-%d %H:%M:%S")" > last_image_pushed_at.txt; \
 	gcloud builds submit . \
 		--config cloudbuild.yml \
 		--substitutions _IMAGE_NAME="image-nogpu"

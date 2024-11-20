@@ -180,6 +180,10 @@ class Node:
         time_until_booted = TOTAL_BOOT_TIME - time_spent_booting
         return max(0, time_until_booted)
 
+    def reboot(self):
+        response = requests.get(f"{self.host}/reboot")
+        response.raise_for_status()
+
     def delete(self):
         """
         An `instance_client.delete` request creates an `operation` that runs in the background.

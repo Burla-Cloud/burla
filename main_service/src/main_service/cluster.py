@@ -155,7 +155,7 @@ def reconcile(db: firestore.Client, logger: Logger, add_background_task: Callabl
             if job_ended:
                 msg = f"Rebooting node {node.instance_name}"
                 logger.log(msg + f"because it's job ({node.current_job}) has ended.")
-                node.async_reboot()
+                add_background_task(node.reboot)
         elif status == "FAILED":
             # Delete node
             logger.log(f"Deleting node: {node.instance_name} because it has FAILED")

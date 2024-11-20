@@ -3,7 +3,7 @@ import pickle
 
 from flask import jsonify, Blueprint, request
 
-from worker_service import SELF, LOGGER, IN_DEV
+from worker_service import SELF, LOGGER, IN_LOCAL_DEV_MODE
 from worker_service.udf_executor import execute_job
 from worker_service.helpers import ThreadWithExc
 
@@ -23,6 +23,8 @@ def get_status():
      4. “DONE”: This worker successfully processed the subjob.
     """
     global ERROR_ALREADY_LOGGED
+    bar = "----------------------------------"
+    status_log = f"{bar}\nReceived request to get worker status.\n"
 
     thread_is_running = SELF["subjob_thread"] and SELF["subjob_thread"].is_alive()
     thread_traceback_str = SELF["subjob_thread"].traceback_str if SELF["subjob_thread"] else None
@@ -34,11 +36,12 @@ def get_status():
     DONE = SELF["DONE"]
 
     # print error if in development so I dont need to go to google cloud logging to see it
-    if IN_DEV and SELF["subjob_thread"] and SELF["subjob_thread"].traceback_str:
-        print(f"WORKER LOGS:\n{SELF['WORKER_LOGS']}")
+    if IN_LOCAL_DEV_MODE and SELF["subjob_thread"] and SELF["subjob_thread"].traceback_str:
+        status_log += "ERROR DETECTED IN WORKER THREAD (printing in stderr).\n"
         print(thread_traceback_str, file=sys.stderr)
 
     if FAILED and not ERROR_ALREADY_LOGGED:
+        status_log += "ERROR DETECTED IN WORKER THREAD (logging in GCL).\n"
         struct = {"severity": "ERROR", "worker_logs": SELF["WORKER_LOGS"]}
         if thread_traceback_str:
             struct.update({"traceback": thread_traceback_str})
@@ -48,13 +51,17 @@ def get_status():
         ERROR_ALREADY_LOGGED = True
 
     if READY:
-        return jsonify({"status": "READY"})
+        status = "READY"
     elif RUNNING:
-        return jsonify({"status": "RUNNING"})
+        status = "RUNNING"
     elif FAILED:
-        return jsonify({"status": "FAILED"})
+        status = "FAILED"
     elif DONE:
-        return jsonify({"status": "DONE"})
+        status = "DONE"
+
+    status_log += f"Status = {status}"
+    SELF["WORKER_LOGS"].append(f"{status_log}\n{bar}")
+    return jsonify({"status": status})
 
 
 @BP.post("/jobs/<job_id>")
@@ -68,7 +75,8 @@ def start_job(job_id: str):
     if function_pkl:
         function_pkl = function_pkl.read()
 
-    SELF["WORKER_LOGS"].append(f"STARTING WORK ON INDEX #{request_json['starting_index']}")
+    SELF["WORKER_LOGS"].append(f"Executing job {job_id}.")
+    SELF["WORKER_LOGS"].append(f"STARTING WORK AT INDEX #{request_json['starting_index']}")
 
     # ThreadWithExc is a thread that catches and stores errors.
     # We need so we can save the error until the status of this service is checked.

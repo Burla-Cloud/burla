@@ -49,7 +49,7 @@ def restart_cluster(
 
     # add nodes according to cluster_config doc
     def _add_node_logged(machine_type, containers, node_service_port, inactivity_time):
-        Node.start(
+        node = Node.start(
             db=DB,
             logger=logger,
             machine_type=machine_type,
@@ -59,12 +59,14 @@ def restart_cluster(
             inactivity_shutdown_time_sec=inactivity_time,
             verbose=True,
         )
+        return node.instance_name
 
     # remove any existing `node_service` containers if in IN_LOCAL_DEV_MODE
+    # this has to be done before starting new node_services so ports are available
     if IN_LOCAL_DEV_MODE:
         docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
         for container in docker_client.containers():
-            if container["Names"][0][1:13] == "node_service":
+            if container["Names"][0].startswith("/node"):
                 docker_client.remove_container(container["Id"], force=True)
 
     # use separate cluster config if IN_LOCAL_DEV_MODE:
@@ -75,7 +77,7 @@ def restart_cluster(
     for node_spec in config["Nodes"]:
         for _ in range(node_spec["quantity"]):
 
-            if IN_LOCAL_DEV_MODE:  # avoid trying to open same port on multiple containers
+            if IN_LOCAL_DEV_MODE:  # avoid trying to open same port on multiple local containers
                 node_service_port += 1
             machine_type = node_spec["machine_type"]
             containers = [Container.from_dict(c) for c in node_spec["containers"]]
@@ -86,8 +88,19 @@ def restart_cluster(
             futures.append(future)
 
     # wait until all operations done
-    [future.result() for future in futures]
+    exec_results = [future.result() for future in futures]
+    node_instance_names = [result for result in exec_results if result is not None]
     executor.shutdown(wait=True)
+
+    # remove any old containers created by old nodes (new nodes only responsible for their workers)
+    if IN_LOCAL_DEV_MODE:
+        node_ids = [name[11:] for name in node_instance_names]
+        for container in docker_client.containers(all=True):
+            name = container["Names"][0]
+            is_main_service = name.startswith("/main_service")
+            belongs_to_current_node = any([id in name for id in node_ids])
+            if not (is_main_service or belongs_to_current_node):
+                docker_client.remove_container(container["Id"], force=True)
 
     logger.log("Done restarting, reconciling ...")
     add_background_task(reconcile, DB, logger, add_background_task)

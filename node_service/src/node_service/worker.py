@@ -9,7 +9,7 @@ from time import sleep
 import docker
 from google.cloud import logging
 
-from node_service import PROJECT_ID, IN_DEV, ACCESS_TOKEN
+from node_service import PROJECT_ID, IN_DEV, ACCESS_TOKEN, INSTANCE_NAME, IN_LOCAL_DEV_MODE
 from node_service.helpers import next_free_port
 
 LOGGER = logging.Client().logger("node_service")
@@ -44,7 +44,7 @@ class Worker:
             port = next_free_port()
             gunicorn_command = f"gunicorn -t 60 -b 0.0.0.0:{port} worker_service:app"
 
-            if IN_DEV:
+            if IN_LOCAL_DEV_MODE:
                 host_config = docker_client.create_host_config(
                     port_bindings={port: port},
                     network_mode="local-burla-cluster",
@@ -57,7 +57,7 @@ class Worker:
                 host_config = docker_client.create_host_config(port_bindings={port: port})
 
             try:
-                container_name = f"worker_service_{uuid4().hex[:4]}"
+                container_name = f"worker_{uuid4().hex[:4]}--node_{INSTANCE_NAME[11:]}"
                 container = docker_client.create_container(
                     image=image,
                     command=["/bin/sh", "-c", f"{python_executable} -m {gunicorn_command}"],
@@ -67,12 +67,13 @@ class Worker:
                     environment={
                         "GOOGLE_CLOUD_PROJECT": PROJECT_ID,
                         "PROJECT_ID": PROJECT_ID,
-                        "IN_DEV": IN_DEV,
+                        "IN_LOCAL_DEV_MODE": IN_LOCAL_DEV_MODE,
                     },
                     detach=True,
                 )
                 docker_client.start(container=container.get("Id"))
                 self.container = container
+                self.container_name = container_name
             except docker.errors.APIError as e:
                 if ("address already in use" in str(e)) or ("port is already allocated" in str(e)):
                     # This leaves an extra container in the "Created" state.

@@ -2,12 +2,19 @@
 The tests here assume the cluster is running in "local-dev-mode".
 """
 
+import os
 import sys
 from io import StringIO
 from time import time, sleep
 
+import pytest
 import docker
+from google.cloud import firestore
+
 from burla import remote_parallel_map
+
+# hide annpying firestore log messages
+os.environ["GRPC_VERBOSITY"] = "ERROR"
 
 
 # ALL ASSUMPTIONS REGARDING STANDBY STATE ARE HERE:
@@ -16,61 +23,59 @@ N_STANDBY_MAIN_SVC_CONTAINERS = 1
 N_STANDBY_NODE_SVC_CONTAINERS = 2
 N_STANDBY_WORKER_CONTAINERS = 4
 
+DOCKER_CLIENT = docker.from_env()
+
 
 def local_cluster_in_standby():
-    docker_client = docker.from_env()
-    containers = docker_client.containers.list()
+    containers = DOCKER_CLIENT.containers.list()
     main_svc_containers = [c for c in containers if c.name == "main_service"]
-    node_svc_containers = [c for c in containers if c.name.startswith("node_service")]
-    worker_svc_containers = [c for c in containers if c.name.startswith("worker_service")]
+    node_svc_containers = [c for c in containers if c.name.startswith("node")]
+    worker_svc_containers = [c for c in containers if c.name.startswith("worker")]
     in_standby = True
     in_standby = len(main_svc_containers) == N_STANDBY_MAIN_SVC_CONTAINERS
     in_standby = len(node_svc_containers) == N_STANDBY_NODE_SVC_CONTAINERS
     in_standby = len(worker_svc_containers) == N_STANDBY_WORKER_CONTAINERS
+
+    # if good so far, assert both nodes are in state "ready":
+    if in_standby:
+        nodes_collection = firestore.Client().collection("nodes")
+        for node_container in node_svc_containers:
+            node_doc = nodes_collection.document(f"burla-node-{node_container.name[-8:]}")
+            in_standby = node_doc.get().to_dict()["status"] == "READY"
+
     return in_standby
 
 
-def run_simple_test_job(n_inputs=5):
-    test_inputs = list(range(n_inputs))
-    stdout = StringIO()
-    sys.stdout = stdout
-    start = time()
-
-    def simple_test_function(test_input):
-        print(test_input)
-        return test_input
-
-    results = list(remote_parallel_map(simple_test_function, test_inputs))
-
-    e2e_runtime = time() - start
-    sys.stdout = sys.__stdout__
-    stdout = stdout.getvalue()
-
-    assert e2e_runtime < 10
-    assert all([result in test_inputs for result in results])
-    assert len(results) == len(test_inputs)
-    for i in range(n_inputs):
-        assert str(i) in stdout
-
-
-def test_base():
-    docker_client = docker.from_env()
+def _test_remote_parallel_map(*a, **kw):
 
     if not local_cluster_in_standby():
         raise Exception("Local cluster not in standby.")
 
-    containers = docker_client.containers.list()
+    containers = DOCKER_CLIENT.containers.list()
     pre_job_worker_names = set([c.name for c in containers if c.name.startswith("worker")])
 
-    run_simple_test_job()
+    stdout = StringIO()
+    sys.stdout = stdout
+    start = time()
 
-    # ensure workers reboot within 10s
+    exception = None
+    try:
+        results = list(remote_parallel_map(*a, **kw))
+    except Exception as e:
+        exception = e
+
+    runtime = time() - start
+    sys.stdout = sys.__stdout__
+    stdout = stdout.getvalue()
+
+    # ensure workers reboot
     start = time()
     reboot_timeout_seconds = 10
     all_workers_rebooted = False
+    cluster_in_standby = False
 
-    while not all_workers_rebooted:
-        containers = docker_client.containers.list()
+    while not (all_workers_rebooted and cluster_in_standby):
+        containers = DOCKER_CLIENT.containers.list()
         post_job_worker_names = set([c.name for c in containers if c.name.startswith("worker")])
 
         num_workers_removed = len(pre_job_worker_names - post_job_worker_names)
@@ -78,9 +83,43 @@ def test_base():
         correct_num_post_job_workers = len(post_job_worker_names) == N_STANDBY_WORKER_CONTAINERS
         all_workers_rebooted = all_pre_job_workers_removed and correct_num_post_job_workers
 
+        cluster_in_standby = local_cluster_in_standby()
+
         if reboot_timeout_seconds < time() - start:
             raise Exception(f"workers not rebooted after {reboot_timeout_seconds}s")
         else:
             sleep(0.1)
 
-    assert local_cluster_in_standby()
+    # check this last because no mattter what the cluster should reboot properly.
+    if exception:
+        raise exception
+
+    return results, stdout, runtime
+
+
+def test_base():
+
+    my_inputs = list(range(5))
+
+    def my_function(test_input):
+        print(test_input)
+        return test_input
+
+    results, stdout, runtime = _test_remote_parallel_map(my_function, my_inputs)
+
+    print(f"E2E remote_parallel_map runtime: {runtime}")
+    assert runtime < 10
+    assert all([result in my_inputs for result in results])
+    assert len(results) == len(my_inputs)
+    for i in range(len(my_inputs)):
+        assert str(i) in stdout
+
+
+def test_udf_error():
+
+    def my_function(test_input):
+        print(1 / 0)
+        return test_input
+
+    with pytest.raises(ZeroDivisionError):
+        _test_remote_parallel_map(my_function, list(range(5)))

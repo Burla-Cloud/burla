@@ -168,6 +168,7 @@ def execute_job(
             input_index, input_pkl = input_getter.get_next_input()
         except EmptyInputQueue:
             SELF["DONE"] = True
+            SELF["WORKER_LOGS"].append(f"Input queue is empty.\nDone executing job: {job_id}.")
             return
 
         # run UDF:

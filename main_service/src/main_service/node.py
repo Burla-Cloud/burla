@@ -135,7 +135,7 @@ class Node:
         self.inactivity_shutdown_time_sec = inactivity_shutdown_time_sec
         self.instance_client = instance_client if instance_client else InstancesClient()
 
-        self.instance_name = f"burla-node-{uuid4().hex[:12]}"
+        self.instance_name = f"burla-node-{uuid4().hex[:8]}"
         self.started_booting_at = time()
         self.is_booting = True
         self.host = None
@@ -236,7 +236,7 @@ class Node:
         auth_config = {"username": "oauth2accesstoken", "password": ACCESS_TOKEN}
         docker_client.pull(image, auth_config=auth_config)
 
-        container_name = f"node_service_{uuid4().hex[:4]}"
+        container_name = f"node_{self.instance_name[11:]}"
         container = docker_client.create_container(
             image=image,
             command=["bash", "-c", f"python3.11 -m {command}"],
@@ -246,6 +246,7 @@ class Node:
             environment={
                 "GOOGLE_CLOUD_PROJECT": PROJECT_ID,
                 "PROJECT_ID": PROJECT_ID,
+                "IN_LOCAL_DEV_MODE": IN_LOCAL_DEV_MODE,
                 "IN_DEV": IN_DEV,
                 "IN_PROD": False,
                 "HOST_HOME_DIR": os.environ["HOST_HOME_DIR"],
@@ -253,6 +254,7 @@ class Node:
                 "INSTANCE_NAME": self.instance_name,
                 "CONTAINERS": json.dumps([c.to_dict() for c in self.containers]),
                 "INACTIVITY_SHUTDOWN_TIME_SEC": self.inactivity_shutdown_time_sec,
+                "BOOTING_FOR_FIRST_TIME": "True",
             },
             detach=True,
         )

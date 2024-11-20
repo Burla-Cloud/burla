@@ -181,7 +181,7 @@ class Node:
         return max(0, time_until_booted)
 
     def reboot(self):
-        response = requests.get(f"{self.host}/reboot")
+        response = requests.post(f"{self.host}/reboot", json={})
         response.raise_for_status()
 
     def delete(self):

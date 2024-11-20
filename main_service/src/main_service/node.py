@@ -185,7 +185,7 @@ class Node:
             response = requests.post(f"{self.host}/reboot")
             response.raise_for_status()
         except requests.exceptions.HTTPError as e:
-            if not "409" in e:  # 409 means node is already rebooting.
+            if not "409" in str(e):  # 409 means node is already rebooting.
                 raise e
 
     def delete(self):

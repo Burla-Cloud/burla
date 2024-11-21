@@ -10,6 +10,9 @@ MAIN_SVC_IMAGE_NAME := us-docker.pkg.dev/$(PROJECT_ID)/burla-main-service/burla-
 test-local:
 	poetry -C ./client run pytest ./client/tests/test_in_local_dev_mode.py -s -x --disable-warnings
 
+test-jupyter:
+	poetry -C ./client run jupyter-lab
+
 test-remote:
 	poetry -C ./client run pytest ./client/tests/test_in_remote_dev_mode.py -s -x --disable-warnings
 

@@ -24,6 +24,7 @@ burla = "burla.__init__:init_cli"
 black = "^23.3.0"
 pytest = "^7.4.2"
 docker = "^7.1.0"
+jupyterlab = "^4.3.1"
 
 # indicate if in dev,
 # cannot use env variable or, once installed (on a developer pc), pkg would think it's in dev

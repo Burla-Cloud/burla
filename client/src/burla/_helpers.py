@@ -80,7 +80,7 @@ def enqueue_results_from_db(job_doc_ref: DocumentReference, stop_event: Event, q
     query_watch.unsubscribe()
 
 
-def upload_inputs(DB: firestore.Client, inputs_id: str, inputs_pkl: list[bytes]):
+def upload_inputs(DB: firestore.Client, inputs_id: str, inputs_pkl: list[bytes], stop_event: Event):
     """
     Uploads inputs into a separate collection not connected to the job
     so that uploading can start before the job document is created.
@@ -108,6 +108,9 @@ def upload_inputs(DB: firestore.Client, inputs_id: str, inputs_pkl: list[bytes])
         for local_input_index, input_pkl in enumerate(input_batch):
             input_index = local_input_index + batch_min_index
             input_too_big = len(input_pkl) > 1_000_000  # 1MB size limit per firestore doc
+
+            if stop_event.is_set():
+                return
 
             # if batch will contain too much data (10MB), push it before adding input to next batch.
             if total_n_bytes_firestore_batch + len(input_pkl) > 10_000_000:

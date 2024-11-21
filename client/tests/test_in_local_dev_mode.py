@@ -7,7 +7,6 @@ import sys
 from io import StringIO
 from time import time, sleep
 
-import pytest
 import docker
 from google.cloud import firestore
 
@@ -24,6 +23,25 @@ N_STANDBY_NODE_SVC_CONTAINERS = 2
 N_STANDBY_WORKER_CONTAINERS = 4
 
 DOCKER_CLIENT = docker.from_env()
+
+
+class Tee:
+    """Captures stdout while also printing stuff."""
+
+    def __init__(self):
+        self.stdout = sys.__stdout__
+        self.buffer = StringIO()
+
+    def write(self, message):
+        self.stdout.write(message)
+        self.buffer.write(message)
+
+    def flush(self):
+        self.stdout.flush()
+        self.buffer.flush()
+
+    def isatty(self):
+        return self.stdout.isatty()
 
 
 def local_cluster_in_standby():
@@ -58,8 +76,8 @@ def rpm_assert_restart(*a, **kw):
     containers = DOCKER_CLIENT.containers.list()
     pre_job_worker_names = set([c.name for c in containers if c.name.startswith("worker")])
 
-    stdout = StringIO()
-    sys.stdout = stdout
+    tee = Tee()
+    sys.stdout = tee
     start = time()
 
     rpm_exception = None
@@ -71,7 +89,7 @@ def rpm_assert_restart(*a, **kw):
 
     runtime = time() - start
     sys.stdout = sys.__stdout__
-    stdout = stdout.getvalue()
+    stdout = tee.buffer.getvalue()
 
     # ensure workers reboot
     start = time()

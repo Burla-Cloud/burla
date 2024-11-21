@@ -46,7 +46,11 @@ def local_cluster_in_standby():
     return in_standby
 
 
-def _test_remote_parallel_map(*a, **kw):
+def rpm_assert_restart(*a, **kw):
+    """
+    asserts cluster is in standby and restarts itself correctly before/after calling rpm.
+    returns any errors thrown by rpm, still asserts cluster restarted correctly.
+    """
 
     if not local_cluster_in_standby():
         raise Exception("Local cluster not in standby.")
@@ -58,11 +62,12 @@ def _test_remote_parallel_map(*a, **kw):
     sys.stdout = stdout
     start = time()
 
-    exception = None
+    rpm_exception = None
     try:
         results = list(remote_parallel_map(*a, **kw))
     except Exception as e:
-        exception = e
+        rpm_exception = e
+        results = None
 
     runtime = time() - start
     sys.stdout = sys.__stdout__
@@ -90,11 +95,7 @@ def _test_remote_parallel_map(*a, **kw):
         else:
             sleep(0.1)
 
-    # check this last because no mattter what the cluster should reboot properly.
-    if exception:
-        raise exception
-
-    return results, stdout, runtime
+    return results, stdout, runtime, rpm_exception
 
 
 def test_base():
@@ -105,7 +106,10 @@ def test_base():
         print(test_input)
         return test_input
 
-    results, stdout, runtime = _test_remote_parallel_map(my_function, my_inputs)
+    results, stdout, runtime, rpm_exception = rpm_assert_restart(my_function, my_inputs)
+
+    if rpm_exception:
+        raise rpm_exception
 
     print(f"E2E remote_parallel_map runtime: {runtime}")
     assert runtime < 10
@@ -116,10 +120,19 @@ def test_base():
 
 
 def test_udf_error():
+    """
+    Ensure the error is re-raised.
+    Also ensure that other nodes quickly stop once one throws an error.
+    """
 
     def my_function(test_input):
-        print(1 / 0)
+        if test_input == 2:
+            print(1 / 0)
+        else:
+            sleep(60)
         return test_input
 
-    with pytest.raises(ZeroDivisionError):
-        _test_remote_parallel_map(my_function, list(range(5)))
+    _, _, runtime, rpm_exception = rpm_assert_restart(my_function, list(range(5)))
+
+    assert isinstance(rpm_exception, ZeroDivisionError)
+    assert runtime < 10  # <- IMPORTANT! asserts the other nodes restarted before udf finished

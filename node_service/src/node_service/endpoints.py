@@ -2,7 +2,7 @@ import sys
 import pickle
 from time import time, sleep
 from typing import List
-from threading import Thread
+from threading import Thread, Event
 from typing import Optional, Callable
 import traceback
 import asyncio
@@ -33,10 +33,19 @@ router = APIRouter()
 def watch_job(job_id: str):
     """Runs in an independent thread, restarts node when all workers are done or if any failed."""
     logger = Logger()
+    UDF_error_thrown = Event()
 
-    # Detect udf error inside workers here
-    # if there is one, get host of all other workers and restart them
-    # or send message to the main_service to restart all workers ???
+    def on_snapshot(collection_snapshot, changes, read_time):
+        for change in changes:
+            if change.type.name == "ADDED":
+                doc = change.document
+                if doc.get("is_error") is True:
+                    UDF_error_thrown.set()
+
+    # Watch for UDF errors from other nodes:
+    # restart if a udf error from any other node is detected.
+    job_doc = firestore.Client(project=PROJECT_ID).collection("jobs").document(job_id)
+    UDF_error_watcher = job_doc.collection("results").on_snapshot(on_snapshot)
 
     try:
         while True:
@@ -45,7 +54,7 @@ def watch_job(job_id: str):
             any_failed = any([status == "FAILED" for status in workers_status])
             all_done = all([status == "DONE" for status in workers_status])
             logger.log(f"Got workers status: all_done={all_done}, any_failed={any_failed}")
-            if all_done or any_failed:
+            if all_done or any_failed or UDF_error_thrown.is_set():
                 break
 
         if not SELF["BOOTING"]:
@@ -55,6 +64,7 @@ def watch_job(job_id: str):
             logger.log("NOT rebooting because node is ALREADY rebooting!")
 
     except Exception as e:
+        UDF_error_watcher.unsubscribe()
         exc_type, exc_value, exc_traceback = sys.exc_info()
         tb_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
         traceback_str = format_traceback(tb_details)

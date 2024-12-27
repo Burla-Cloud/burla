@@ -114,6 +114,7 @@ async def shutdown_if_idle_for_too_long():
     # this is in a for loop so the wait time can be extended while waiting
     while SELF["current_time_until_shutdown"] > 1:
         await asyncio.sleep(1)
+        SELF["current_time_until_shutdown"] -= 1
 
     if not IN_DEV:
         msg = f'time remaining: {SELF["current_time_until_shutdown"]}'

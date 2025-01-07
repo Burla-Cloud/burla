@@ -38,7 +38,7 @@ else:
 
 # This MUST be set to the same value as `JOB_HEALTHCHECK_FREQUENCY_SEC` in the client.
 # Nodes will restart themself if they dont get a new healthcheck from the client every X seconds.
-JOB_HEALTHCHECK_FREQUENCY_SEC = 5
+JOB_HEALTHCHECK_FREQUENCY_SEC = 3
 
 SELF = {
     "workers": [],

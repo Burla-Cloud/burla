@@ -46,7 +46,7 @@ SELF = {
     "current_job": None,
     "current_container_config": [],
     "time_until_inactivity_shutdown": None,
-    "time_until_client_disconnect_shutdown": JOB_HEALTHCHECK_FREQUENCY_SEC,
+    "time_until_client_disconnect_shutdown": JOB_HEALTHCHECK_FREQUENCY_SEC + 2,
     "BOOTING": False,
     "RUNNING": False,
     "FAILED": False,

@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "burla"
-version = "0.8.12"
+version = "0.8.13"
 description = "Scale your program across 1000s of computers with one line of code."
 authors = ["Jake Zuliani <jake@burla.dev>"]
 

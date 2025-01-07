@@ -36,12 +36,17 @@ else:
     response.raise_for_status()
     ACCESS_TOKEN = response.json().get("access_token")
 
+# This MUST be set to the same value as `JOB_HEALTHCHECK_FREQUENCY_SEC` in the client.
+# Nodes will restart themself if they dont get a new healthcheck from the client every X seconds.
+JOB_HEALTHCHECK_FREQUENCY_SEC = 3
+
 SELF = {
     "workers": [],
     "job_watcher_thread": None,
     "current_job": None,
     "current_container_config": [],
-    "current_time_until_shutdown": None,
+    "time_until_inactivity_shutdown": None,
+    "time_until_client_disconnect_shutdown": JOB_HEALTHCHECK_FREQUENCY_SEC,
     "BOOTING": False,
     "RUNNING": False,
     "FAILED": False,
@@ -112,13 +117,12 @@ async def shutdown_if_idle_for_too_long():
     """WARNING: Errors/stdout from this function are completely hidden!"""
 
     # this is in a for loop so the wait time can be extended while waiting
-    while SELF["current_time_until_shutdown"] > 1:
+    while SELF["time_until_inactivity_shutdown"] > 1:
         await asyncio.sleep(1)
-        SELF["current_time_until_shutdown"] -= 1
+        SELF["time_until_inactivity_shutdown"] -= 1
 
     if not IN_DEV:
-        msg = f'time remaining: {SELF["current_time_until_shutdown"]}'
-        msg += f"SHUTTING DOWN NODE DUE TO INACTIVITY: {INSTANCE_NAME}"
+        msg = f"SHUTTING DOWN NODE DUE TO INACTIVITY: {INSTANCE_NAME}"
         struct = dict(message=msg)
         GCL_CLIENT.log_struct(struct, severity="WARNING")
 
@@ -151,7 +155,7 @@ async def lifespan(app: FastAPI):
         await run_in_threadpool(reboot_containers, new_container_config=containers, logger=logger)
 
         if INACTIVITY_SHUTDOWN_TIME_SEC:
-            SELF["current_time_until_shutdown"] = int(INACTIVITY_SHUTDOWN_TIME_SEC)
+            SELF["time_until_inactivity_shutdown"] = int(INACTIVITY_SHUTDOWN_TIME_SEC)
             asyncio.create_task(shutdown_if_idle_for_too_long())
             logger.log(f"Set to shutdown if idle for {INACTIVITY_SHUTDOWN_TIME_SEC} sec.")
 
@@ -238,5 +242,5 @@ async def log_and_time_requests__log_errors(request: Request, call_next):
         add_background_task(logger.log, msg, latency=latency)
 
     if INACTIVITY_SHUTDOWN_TIME_SEC:
-        SELF["current_time_until_shutdown"] = int(INACTIVITY_SHUTDOWN_TIME_SEC)
+        SELF["time_until_inactivity_shutdown"] = int(INACTIVITY_SHUTDOWN_TIME_SEC)
     return response

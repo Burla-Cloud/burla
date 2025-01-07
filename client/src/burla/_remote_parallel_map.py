@@ -28,8 +28,9 @@ from burla._helpers import (
 # increase at your own risk, burla may break.
 MAX_PARALLELISM = 1000
 
-# this can be kinda high because healthcheck failures should theoretically be pretty rare.
-JOB_HEALTHCHECK_FREQUENCY_SEC = 20
+# This MUST be set to the same value as `JOB_HEALTHCHECK_FREQUENCY_SEC` in the node service.
+# Nodes will restart themself if they dont get a new healthcheck from the client every X seconds.
+JOB_HEALTHCHECK_FREQUENCY_SEC = 5
 
 # Try to instantiate clients now to minimize latency when calling `remote_parallel_map`.
 # This may not work for a variety of reasons, (user not logged in yet / planning to use api_key).

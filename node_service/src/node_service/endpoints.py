@@ -82,7 +82,7 @@ def get_job_status(job_id: str = Path(...)):
         return Response("job not found", status_code=404)
 
     # reset because healtheck received
-    SELF["time_until_client_disconnect_shutdown"] = JOB_HEALTHCHECK_FREQUENCY_SEC
+    SELF["time_until_client_disconnect_shutdown"] = JOB_HEALTHCHECK_FREQUENCY_SEC + 2
 
     workers_status = [worker.status() for worker in SELF["workers"]]
     any_failed = any([status == "FAILED" for status in workers_status])

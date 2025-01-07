@@ -17,6 +17,7 @@ from node_service import (
     SELF,
     INSTANCE_N_CPUS,
     INSTANCE_NAME,
+    JOB_HEALTHCHECK_FREQUENCY_SEC,
     get_request_json,
     get_logger,
     get_request_files,
@@ -50,11 +51,15 @@ def watch_job(job_id: str):
     try:
         while True:
             sleep(2)
+            SELF["time_until_client_disconnect_shutdown"] -= 2
+            client_disconnected = SELF["time_until_client_disconnect_shutdown"] < 0
+
             workers_status = [worker.status() for worker in SELF["workers"]]
             any_failed = any([status == "FAILED" for status in workers_status])
             all_done = all([status == "DONE" for status in workers_status])
             logger.log(f"Got workers status: all_done={all_done}, any_failed={any_failed}")
-            if all_done or any_failed or UDF_error_thrown.is_set():
+
+            if all_done or any_failed or UDF_error_thrown.is_set() or client_disconnected:
                 break
 
         if not SELF["BOOTING"]:
@@ -75,6 +80,9 @@ def watch_job(job_id: str):
 def get_job_status(job_id: str = Path(...)):
     if not job_id == SELF["current_job"]:
         return Response("job not found", status_code=404)
+
+    # reset because healtheck received
+    SELF["time_until_client_disconnect_shutdown"] = JOB_HEALTHCHECK_FREQUENCY_SEC
 
     workers_status = [worker.status() for worker in SELF["workers"]]
     any_failed = any([status == "FAILED" for status in workers_status])

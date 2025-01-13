@@ -10,41 +10,33 @@ from google.api_core.retry import Retry, if_exception_type
 from google.api_core.exceptions import Unknown
 
 from burla import _BURLA_SERVICE_URL
+from burla._auth import AuthException
 
 # throws some uncatchable, unimportant, warnings
 logging.getLogger("google.api_core.bidi").setLevel(logging.ERROR)
-
-from time import time
 
 
 class InputTooBig(Exception):
     pass
 
 
-def periodiocally_healthcheck_job(
-    job_id: str,
-    healthcheck_frequency_sec: int,
-    auth_headers: dict,
-    stop_event: Event,
-    cluster_error_event: Event,
-    auth_error_event: Event,
-):
-    while not stop_event.is_set():
-        response = requests.get(f"{_BURLA_SERVICE_URL}/v1/jobs/{job_id}", headers=auth_headers)
-        stop_event.wait(healthcheck_frequency_sec)
-        if response.status_code == 200:
-            stop_event.wait(healthcheck_frequency_sec)
-            continue
+class UnknownClusterError(Exception):
+    def __init__(self):
+        msg = "An unknown error occurred inside your Burla cluster, "
+        msg += "this is not an error with your code."
+        super().__init__(msg)
 
-        if response.status_code == 401:
-            auth_error_event.set()
-        elif response.status_code == 404:
-            # this thread often runs for a bit after the job has ended, causing 404s
-            # for now, just ignore these.
-            pass
-        else:
-            cluster_error_event.set()
-        return
+
+def healthcheck_job(job_id: str, auth_headers: dict):
+    response = requests.get(f"{_BURLA_SERVICE_URL}/v1/jobs/{job_id}", headers=auth_headers)
+    if response.status_code == 401:
+        raise AuthException()
+    elif response.status_code == 404:
+        # this thread often runs for a bit after the job has ended, causing 404s
+        # for now, just ignore these.
+        pass
+    else:
+        UnknownClusterError()
 
 
 def print_logs_from_db(

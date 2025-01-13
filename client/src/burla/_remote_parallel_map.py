@@ -22,7 +22,7 @@ from burla._helpers import (
     upload_inputs,
     print_logs_from_db,
     enqueue_results_from_db,
-    periodiocally_healthcheck_job,
+    healthcheck_job,
 )
 
 # increase at your own risk, burla may break.
@@ -42,13 +42,6 @@ try:
 except:
     DB = None
     BURLA_AUTH_HEADERS = None
-
-
-class UnknownClusterError(Exception):
-    def __init__(self):
-        msg = "An unknown error occurred inside your Burla cluster, "
-        msg += "this is not an error with your code."
-        super().__init__(msg)
 
 
 class MainServiceError(Exception):
@@ -125,22 +118,15 @@ def _watch_job(job_id: str, n_inputs: int, log_msg_stdout: io.TextIOWrapper, sto
     result_thread = Thread(target=enqueue_results_from_db, args=args, daemon=True)
     result_thread.start()
 
-    # Run periodic healthchecks on the job/cluster from a separate thread.
-    cluster_error_event = Event()
-    auth_error_event = Event()
-    args = (job_id, JOB_HEALTHCHECK_FREQUENCY_SEC, BURLA_AUTH_HEADERS, stop_event)
-    args += (cluster_error_event, auth_error_event)
-    healthchecker_thread = Thread(target=periodiocally_healthcheck_job, args=args, daemon=True)
-    healthchecker_thread.start()
-
+    time_since_last_healthcheck = 0
     n_results_received = 0
     while n_results_received < n_inputs:
         sleep(0.05)
+        time_since_last_healthcheck += 0.05
 
-        if cluster_error_event.is_set():
-            raise UnknownClusterError()
-        if auth_error_event.is_set():
-            raise AuthException()
+        if time_since_last_healthcheck > JOB_HEALTHCHECK_FREQUENCY_SEC:
+            healthcheck_job(job_id=job_id, auth_headers=BURLA_AUTH_HEADERS)
+            time_since_last_healthcheck = 0
 
         while not result_queue.empty():
             n_results_received += 1

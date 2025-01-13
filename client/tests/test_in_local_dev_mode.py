@@ -121,7 +121,9 @@ def test_base():
     my_inputs = list(range(5))
 
     def my_function(test_input):
-        print(test_input)
+        print(f"starting #{test_input}")
+        sleep(10)
+        print(f"finishing #{test_input}")
         return test_input
 
     results, stdout, runtime, rpm_exception = rpm_assert_restart(my_function, my_inputs)
@@ -130,7 +132,7 @@ def test_base():
         raise rpm_exception
 
     print(f"E2E remote_parallel_map runtime: {runtime}")
-    assert runtime < 10
+    assert runtime < 30
     assert all([result in my_inputs for result in results])
     assert len(results) == len(my_inputs)
     for i in range(len(my_inputs)):

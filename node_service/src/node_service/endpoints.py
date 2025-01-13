@@ -50,9 +50,15 @@ def watch_job(job_id: str):
 
     try:
         while True:
+
             sleep(2)
             SELF["time_until_client_disconnect_shutdown"] -= 2
             client_disconnected = SELF["time_until_client_disconnect_shutdown"] < 0
+
+            shutdown_time = SELF["time_until_client_disconnect_shutdown"]
+            msg = f"DECREMENTED SHOUTDOWN TIME -2s: {shutdown_time}\n"
+            msg += f"client_disconnected: {client_disconnected}"
+            print(msg)
 
             workers_status = [worker.status() for worker in SELF["workers"]]
             any_failed = any([status == "FAILED" for status in workers_status])
@@ -82,7 +88,11 @@ def get_job_status(job_id: str = Path(...)):
         return Response("job not found", status_code=404)
 
     # reset because healtheck received
-    SELF["time_until_client_disconnect_shutdown"] = JOB_HEALTHCHECK_FREQUENCY_SEC + 2
+    # no real reason I picked 10 here other than that 5 barely worked
+    # fixing this properly dosent matter because we should move to grpc soonish
+    SELF["time_until_client_disconnect_shutdown"] = JOB_HEALTHCHECK_FREQUENCY_SEC + 10
+    shutdown_time = SELF["time_until_client_disconnect_shutdown"]
+    print(f"HEALTHCHECK RECEIVED: RESETTING SHOUTDOWN TIME: {shutdown_time}\n")
 
     workers_status = [worker.status() for worker in SELF["workers"]]
     any_failed = any([status == "FAILED" for status in workers_status])

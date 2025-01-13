@@ -37,7 +37,7 @@ Currently, our library is hardcoded to only call our free public cluster (cluste
 Burla clusters are multi-tenant / can run many jobs from separate users.  
 Nodes in a burla cluster are single-tenant / your job will never be on the same machine as another job.
 
-[Click here to learn more about how burla-clusters work.](https://docs.burla.dev/overview#how-does-it-work)
+[Click here to learn more about how burla-clusters work.](https://docs.burla.dev/how-does-it-work)
 
 &nbsp;
 &nbsp;

@@ -62,17 +62,18 @@ def watch_job(job_id: str):
 
             if all_done:
                 logger.log("ENDING JOB: all workers are done.")
+                break
             elif any_failed:
                 logger.log("ENDING JOB: at least one worker crashed!")
+                break
             elif UDF_error_thrown.is_set():
                 logger.log("ENDING JOB: user function has thrown an exception!")
+                break
             elif client_disconnected:
                 last_healthcheck = JOB_HEALTHCHECK_FREQUENCY_SEC + 8
                 msg = "ENDING JOB: "
                 msg += f"No healthcheck received from client in the last {last_healthcheck}s!"
                 logger.log(msg)
-
-            if all_done or any_failed or UDF_error_thrown.is_set() or client_disconnected:
                 break
 
         if not SELF["BOOTING"]:

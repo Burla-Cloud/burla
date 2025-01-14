@@ -40,15 +40,14 @@ else:
 # Nodes will restart themself if they dont get a new healthcheck from the client every X seconds.
 JOB_HEALTHCHECK_FREQUENCY_SEC = 3
 
-# no real reason I picked +10 for `time_until_client_disconnect_shutdown` other than that 5
-# barely worked. Fixing this properly dosent matter because we should move to grpc soonish
+# no real reason I picked +8 for `time_until_client_disconnect_shutdown`, except that 3 didnt work
 SELF = {
     "workers": [],
     "job_watcher_thread": None,
     "current_job": None,
     "current_container_config": [],
     "time_until_inactivity_shutdown": None,
-    "time_until_client_disconnect_shutdown": JOB_HEALTHCHECK_FREQUENCY_SEC + 10,
+    "time_until_client_disconnect_shutdown": JOB_HEALTHCHECK_FREQUENCY_SEC + 8,
     "BOOTING": False,
     "RUNNING": False,
     "FAILED": False,

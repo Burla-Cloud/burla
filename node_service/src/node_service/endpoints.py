@@ -60,6 +60,18 @@ def watch_job(job_id: str):
             all_done = all([status == "DONE" for status in workers_status])
             logger.log(f"Got workers status: all_done={all_done}, any_failed={any_failed}")
 
+            if all_done:
+                logger.log("ENDING JOB: all workers are done.")
+            elif any_failed:
+                logger.log("ENDING JOB: at least one worker crashed!")
+            elif UDF_error_thrown.is_set():
+                logger.log("ENDING JOB: user function has thrown an exception!")
+            elif client_disconnected:
+                last_healthcheck = JOB_HEALTHCHECK_FREQUENCY_SEC + 6
+                msg = "ENDING JOB: "
+                msg += f"No healthcheck received from client in the last {last_healthcheck}s!"
+                logger.log(msg)
+
             if all_done or any_failed or UDF_error_thrown.is_set() or client_disconnected:
                 break
 
@@ -83,9 +95,8 @@ def get_job_status(job_id: str = Path(...)):
         return Response("job not found", status_code=404)
 
     # reset because healtheck received
-    # no real reason I picked 10 here other than that 5 barely worked
-    # fixing this properly dosent matter because we should move to grpc soonish
-    SELF["time_until_client_disconnect_shutdown"] = JOB_HEALTHCHECK_FREQUENCY_SEC + 10
+    # no real reason I picked 6 here, except that 3 didn't work
+    SELF["time_until_client_disconnect_shutdown"] = JOB_HEALTHCHECK_FREQUENCY_SEC + 6
 
     workers_status = [worker.status() for worker in SELF["workers"]]
     any_failed = any([status == "FAILED" for status in workers_status])

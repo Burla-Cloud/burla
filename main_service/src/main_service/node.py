@@ -77,7 +77,7 @@ else:
 
 NODE_BOOT_TIMEOUT = 60 * 3
 ACCEPTABLE_ZONES = ["us-central1-b", "us-central1-c", "us-central1-f", "us-central1-a"]
-NODE_SVC_VERSION = "0.8.17"  # <- this maps to a git tag/release or branch
+NODE_SVC_VERSION = "0.8.18"  # <- this maps to a git tag/release or branch
 
 
 class Node:

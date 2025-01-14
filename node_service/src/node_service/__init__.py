@@ -4,7 +4,6 @@ import json
 import asyncio
 import traceback
 import requests
-from pathlib import Path
 from uuid import uuid4
 from time import time
 from typing import Callable
@@ -18,6 +17,7 @@ from starlette.datastructures import UploadFile
 from google.cloud import logging
 from google.cloud.compute_v1 import InstancesClient
 
+__version__ = "0.8.18"
 IN_LOCAL_DEV_MODE = os.environ.get("IN_LOCAL_DEV_MODE") == "True"  # Cluster is runing 100% locally
 IN_DEV = os.environ.get("IN_DEV") == "True"
 
@@ -144,6 +144,7 @@ async def shutdown_if_idle_for_too_long():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger = Logger()
+    logger.log(f"Booting node service version {__version__}")
 
     # In dev all the workers restart everytime I hit save (server is in "reload" mode)
     # This is annoying but you must leave it like this, otherwise stuff won't restart correctly!

@@ -17,7 +17,7 @@ else:
 _BURLA_BACKEND_URL = "https://backend.burla.dev"
 
 # needed for service to record client version
-__version__ = "0.8.17"
+__version__ = "0.8.18"
 
 from burla._auth import login
 from burla._remote_parallel_map import remote_parallel_map

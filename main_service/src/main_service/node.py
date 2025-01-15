@@ -328,6 +328,7 @@ class Node:
 
         gcloud config set account {GCE_DEFAULT_SVC}
 
+        echo "DOWNLOADING BURLA NODE SERVICE V{NODE_SVC_VERSION}"
         git clone --depth 1 --branch {NODE_SVC_VERSION} https://github.com/Burla-Cloud/burla.git  --no-checkout
         cd burla
         git sparse-checkout init --cone

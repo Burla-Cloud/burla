@@ -70,7 +70,7 @@ def watch_job(job_id: str):
                 logger.log("ENDING JOB: user function has thrown an exception!")
                 break
             elif client_disconnected:
-                last_healthcheck = JOB_HEALTHCHECK_FREQUENCY_SEC + 8
+                last_healthcheck = JOB_HEALTHCHECK_FREQUENCY_SEC + 6
                 msg = "ENDING JOB: "
                 msg += f"No healthcheck received from client in the last {last_healthcheck}s!"
                 logger.log(msg)
@@ -96,8 +96,8 @@ def get_job_status(job_id: str = Path(...)):
         return Response("job not found", status_code=404)
 
     # reset because healtheck received
-    # no real reason I picked 8 here, except that 3 didn't work
-    SELF["time_until_client_disconnect_shutdown"] = JOB_HEALTHCHECK_FREQUENCY_SEC + 8
+    # no real reason I picked 6 here, except that 3 didn't work
+    SELF["time_until_client_disconnect_shutdown"] = JOB_HEALTHCHECK_FREQUENCY_SEC + 6
 
     workers_status = [worker.status() for worker in SELF["workers"]]
     any_failed = any([status == "FAILED" for status in workers_status])
@@ -334,6 +334,8 @@ def reboot_containers(
         else:
             SELF["BOOTING"] = False
             SELF["current_job"] = None
+            # no real reason I picked 6 here, except that 3 didn't work
+            SELF["time_until_client_disconnect_shutdown"] = JOB_HEALTHCHECK_FREQUENCY_SEC + 6
             node_doc.update({"status": "READY"})
 
         SELF["job_watcher_thread"] = None

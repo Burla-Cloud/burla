@@ -17,7 +17,7 @@ from starlette.datastructures import UploadFile
 from google.cloud import logging
 from google.cloud.compute_v1 import InstancesClient
 
-__version__ = "0.8.18"
+__version__ = "0.8.20"
 IN_LOCAL_DEV_MODE = os.environ.get("IN_LOCAL_DEV_MODE") == "True"  # Cluster is runing 100% locally
 IN_DEV = os.environ.get("IN_DEV") == "True"
 
@@ -40,14 +40,14 @@ else:
 # Nodes will restart themself if they dont get a new healthcheck from the client every X seconds.
 JOB_HEALTHCHECK_FREQUENCY_SEC = 3
 
-# no real reason I picked +8 for `time_until_client_disconnect_shutdown`, except that 3 didnt work
+# no real reason I picked +6 for `time_until_client_disconnect_shutdown`, except that 3 didnt work
 SELF = {
     "workers": [],
     "job_watcher_thread": None,
     "current_job": None,
     "current_container_config": [],
     "time_until_inactivity_shutdown": None,
-    "time_until_client_disconnect_shutdown": JOB_HEALTHCHECK_FREQUENCY_SEC + 8,
+    "time_until_client_disconnect_shutdown": JOB_HEALTHCHECK_FREQUENCY_SEC + 6,
     "BOOTING": False,
     "RUNNING": False,
     "FAILED": False,

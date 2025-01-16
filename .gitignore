@@ -180,4 +180,18 @@ cython_debug/
 .DS_Store
 
 # node / frontend stuff
-main_service/frontend/node_modules
+main_service/frontend/node_modules/
+
+# Build outputs
+main_service/frontend/dist/
+main_service/frontend/build/
+
+# Environment files
+main_service/frontend/.env*
+
+# Logs
+main_service/frontend/*.log
+
+# OS/IDE files
+main_service/frontend/.DS_Store
+main_service/frontend/.vscode/

@@ -178,3 +178,6 @@ cython_debug/
 /docs/\_build/
 /src/\*.egg-info/
 .DS_Store
+
+# node / frontend stuff
+main_service/frontend/node_modules

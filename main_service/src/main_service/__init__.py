@@ -5,6 +5,7 @@ import traceback
 from uuid import uuid4
 from time import time
 from typing import Callable
+from pathlib import Path
 from requests.exceptions import HTTPError
 from contextlib import asynccontextmanager
 
@@ -138,17 +139,16 @@ app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None)
 app.include_router(jobs_router)
 app.include_router(cluster_router)
 app.add_middleware(SessionMiddleware, secret_key=uuid4().hex)
-app.mount("/static", StaticFiles(directory="src/main_service/static"), name="static")
 
 
+# don't move! must be declared before static files are mounted to the same path below.
 @app.get("/")
 def dashboard():
     return FileResponse("src/main_service/static/dashboard.html")
 
 
-@app.get("/favicon.ico")
-async def favicon():
-    return RedirectResponse(url="/static/favicon.ico")
+# must be mounted after the above endpoint (`/`) is declared, or this will overwrite that endpoint.
+app.mount("/", StaticFiles(directory="src/main_service/static"), name="static")
 
 
 @app.middleware("http")
@@ -158,13 +158,17 @@ async def login__log_and_time_requests__log_errors(request: Request, call_next):
     Catching errors in a `Depends` function will not distinguish
         http errors originating here vs other services.
     """
-
     start = time()
     request.state.uuid = uuid4().hex
+    url_path = Path(request.url.path)
 
-    public_endpoints = ["/", "/favicon.ico", "/v1/cluster", "/v1/cluster/restart"]
-    requesting_public_endpoint = request.url.path in public_endpoints
-    requesting_static_file = request.url.path.startswith("/static")
+    # Check if requesting a static file from root URL
+    static_dir = Path("src/main_service/static")
+    requested_file = static_dir / url_path.relative_to("/")
+    requesting_static_file = requested_file.exists() and requested_file.is_file()
+
+    public_endpoints = ["/", "/v1/cluster", "/v1/cluster/restart"]
+    requesting_public_endpoint = str(url_path) in public_endpoints
     request_requires_auth = not (requesting_public_endpoint or requesting_static_file)
 
     if request_requires_auth:

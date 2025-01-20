@@ -12,6 +12,7 @@ PROD_IMAGE_BASE_NAME := us-docker.pkg.dev/burla-prod/$(ARTIFACT_REPO_NAME)/$(ART
 build-frontend:
 	set -e; \
 	cd ./frontend; \
+	npm i; \
 	npm run build; \
 	rm -r ../src/main_service/static; \
 	mv dist ../src/main_service/static

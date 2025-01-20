@@ -18,9 +18,9 @@ test-remote:
 
 # The cluster is run 100% locally using the config `LOCAL_DEV_CONFIG` in `main_service.__init__.py`
 # All components (main_svc, node_svc, worker_svc) will restart when changes to code are made.
+# TODO: 	printf "$$(date "+%Y-%m-%d %H:%M:%S")" > .local_cluster_started_at.txt; 
 local-dev-cluster:
 	set -e; \
-	printf "$$(date "+%Y-%m-%d %H:%M:%S")" > .local_cluster_started_at.txt; \
 	docker network create local-burla-cluster || true; \
 	docker run --rm -it \
 		--name main_service \

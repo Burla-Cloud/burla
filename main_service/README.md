@@ -15,7 +15,7 @@ It is currently not possible to run more than one "cluster" using a single "main
 #### Dev:
 
 To avoid the need for CORS middleware I use a script that builds the react website every time I hit save. It takes about the same amount of time to build as the fastapi webservice takes to reload, so it dosent actually slow anything down much.  
-To get this setup install the vscode extension called "Run on Save", the publisher is "emeraldwalk". After installing add the following to your `settings.json` (open this by hitting `Cmd` + `Shift` + `P`, then type `Preferences: Open Settings (JSON)` and select it):
+To get this setup install the vscode extension called "Run on Save", the publisher is "emeraldwalk". After installing add the following to your `settings.json` (open this by hitting `Cmd + Shift + P`, then type `Preferences: Open Settings (JSON)` and select it):
 ```json
 {
     // <other settings you've set will be here, add below to the main dict>
@@ -29,4 +29,5 @@ To get this setup install the vscode extension called "Run on Save", the publish
     }
 }
 ```
-Now the website should build everytime you hit save!
+Now the website should build everytime you hit save! (It should take <2s to build)  
+To see the output of this command press `Cmd + Shift + U`, then select `Run on Save` in the dropdown.

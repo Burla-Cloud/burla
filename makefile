@@ -20,6 +20,7 @@ test-remote:
 # All components (main_svc, node_svc, worker_svc) will restart when changes to code are made.
 local-dev-cluster:
 	set -e; \
+	printf "$$(date "+%Y-%m-%d %H:%M:%S")" > .local_cluster_started_at.txt; \
 	docker network create local-burla-cluster || true; \
 	docker run --rm -it \
 		--name main_service \

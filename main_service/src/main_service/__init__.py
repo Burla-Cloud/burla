@@ -9,8 +9,9 @@ from pathlib import Path
 from requests.exceptions import HTTPError
 from contextlib import asynccontextmanager
 
+import docker
 from google.cloud import firestore, logging
-from fastapi.responses import Response, FileResponse, RedirectResponse
+from fastapi.responses import Response, FileResponse
 from fastapi import FastAPI, Request, BackgroundTasks, Depends
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
@@ -115,8 +116,19 @@ from main_service.endpoints.cluster import router as cluster_router, restart_clu
 @asynccontextmanager
 async def lifespan(app: FastAPI):
 
-    # Start cluster straight away if in dev:
+    # check if cluster is already running, in which case, don't restart it
+    # (because it takes forever (11s) and isn't necessary since individual svc's restart on save)
+    CLUSTER_ALREADY_RUNNING = False
     if IN_LOCAL_DEV_MODE:
+        docker_client = docker.from_env()
+        for container in docker_client.containers.list():
+            if container.name.startswith("node") or container.name.startswith("worker"):
+                CLUSTER_ALREADY_RUNNING = True
+                break
+        docker_client.close()
+
+    # Start cluster straight away if in dev:
+    if IN_LOCAL_DEV_MODE and not CLUSTER_ALREADY_RUNNING:
         logger = Logger()
         try:
             background_tasks = BackgroundTasks()
@@ -144,7 +156,7 @@ app.add_middleware(SessionMiddleware, secret_key=uuid4().hex)
 # don't move! must be declared before static files are mounted to the same path below.
 @app.get("/")
 def dashboard():
-    return FileResponse("src/main_service/static/dashboard.html")
+    return FileResponse("src/main_service/static/index.html")
 
 
 # must be mounted after the above endpoint (`/`) is declared, or this will overwrite that endpoint.

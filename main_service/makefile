@@ -9,22 +9,12 @@ ARTIFACT_PKG_NAME := $(WEBSERVICE_NAME)
 PROD_IMAGE_BASE_NAME := us-docker.pkg.dev/burla-prod/$(ARTIFACT_REPO_NAME)/$(ARTIFACT_PKG_NAME)
 
 .PHONY: frontend
-frontend:
-	set -e; \
-	cd ./frontend; \
-	npm run dev
-
-.PHONY: frontend
 build-frontend:
 	set -e; \
 	cd ./frontend; \
 	npm run build; \
 	rm -r ../src/main_service/static; \
 	mv dist ../src/main_service/static
-
-backend:
-	set -e; \
-	poetry run uvicorn main_service:application --host 0.0.0.0 --port 5001 --reload
 
 deploy-test:
 	set -e; \

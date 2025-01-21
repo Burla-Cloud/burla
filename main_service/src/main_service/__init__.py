@@ -9,7 +9,6 @@ from pathlib import Path
 from requests.exceptions import HTTPError
 from contextlib import asynccontextmanager
 
-import docker
 from google.cloud import firestore, logging
 from fastapi.responses import Response, FileResponse
 from fastapi import FastAPI, Request, BackgroundTasks, Depends
@@ -116,29 +115,17 @@ from main_service.endpoints.cluster import router as cluster_router, restart_clu
 @asynccontextmanager
 async def lifespan(app: FastAPI):
 
-    # TODO:
-    # the issue with this is if you re-run "make local-dev-cluster" the cluster does NOT restart.
-    # to fix this have
+    # Start the cluster only if the command `make local-dev-cluster` was JUST run.
+    #
+    # why? because it takes forever (11s) to restart the cluster and it isn't necessary to restart
+    # it frequently since individual svc's reload on on their own when a file save is detected.
+    cluster_started_at_ts = float(Path(".local_cluster_last_started_at.txt").read_text().strip())
+    cluster_just_started = cluster_started_at_ts > time() - 8
 
-    # check if cluster is already running, in which case, don't restart it
-    # (because it takes forever (11s) and isn't necessary since individual svc's restart on save)
-    # TEMPORARY THIS DOSENT WORK! ^
-    CLUSTER_ALREADY_RUNNING = False
-
-    # HI JOE! comment the below chunk of code out (temporary) to make it not restart the entire
-    # cluster every time you hit save (which takes forever).
-    ################################################################################
-    if IN_LOCAL_DEV_MODE:
-        docker_client = docker.from_env()
-        for container in docker_client.containers.list():
-            if container.name.startswith("node") or container.name.startswith("worker"):
-                CLUSTER_ALREADY_RUNNING = True
-                break
-        docker_client.close()
-    ################################################################################
-
-    # Start cluster straight away if in dev:
-    if IN_LOCAL_DEV_MODE and not CLUSTER_ALREADY_RUNNING:
+    # Start cluster if in dev, and `make local-dev-cluster` was just run under a second ago.
+    # (prevent restarting cluster when main service reloads due to file save)
+    if IN_LOCAL_DEV_MODE and cluster_just_started:
+        print("Booting Cluster!")
         logger = Logger()
         try:
             background_tasks = BackgroundTasks()
@@ -153,6 +140,7 @@ async def lifespan(app: FastAPI):
             tb_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
             traceback_str = format_traceback(tb_details)
             logger.log(str(e), "ERROR", traceback=traceback_str)
+        print("Done booting cluster!")
 
     yield
 

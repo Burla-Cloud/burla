@@ -39,6 +39,23 @@ Nodes in a burla cluster are single-tenant / your job will never be on the same 
 
 [Click here to learn more about how burla-clusters work.](https://docs.burla.dev/how-does-it-work)
 
+#### Developing:
+
+If you want to contribute, send me an [email](mailto:jake@burla.dev)!  
+We are still early so there is quite a bit of undocumented / manual setup necessary to get a dev environment going.  
+Please read the [how-it-works](https://docs.burla.dev/how-does-it-work) page as a prerequisite.
+  
+Here is a quick attempt to explain how dev works. The cluster can be run in three modes:
+- `local dev mode`:  
+    In this mode the entire cluster runs locally, each service runs in it's own docker container, in the docker-network "local-burla-cluster". This mode does NOT use docker-compose. This is the most common mode used when devloping burla.  
+    Anytime some file is saved:
+    - The dashboard builds itself into the `main_service/src/main_service/static` folder (see `main_service` readme for setup).
+    - The appropriate service reloads itself (eg: if a file in the `node_service` is saved, any node service's reload themself).  
+- `remote dev mode`:  
+    In this mode only the main service runs locally, the node and worker services run in the cloud in the same way they would in a prod scenario. Useful when testing features / issues that only appear at scale.  
+- `production`:  
+    Everything runs in the cloud.
+
 &nbsp;
 &nbsp;
 

@@ -14,8 +14,7 @@ build-frontend:
 	cd ./frontend; \
 	npm i; \
 	npm run build; \
-	rm -r ../src/main_service/static; \
-	mv dist ../src/main_service/static
+	rsync -a --delete dist/ ../src/main_service/static/
 
 deploy-test:
 	set -e; \

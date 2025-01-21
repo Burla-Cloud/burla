@@ -195,3 +195,6 @@ main_service/frontend/*.log
 # OS/IDE files
 main_service/frontend/.DS_Store
 main_service/frontend/.vscode/
+
+
+main_service/.local_cluster_last_started_at.txt

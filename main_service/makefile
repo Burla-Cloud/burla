@@ -14,7 +14,9 @@ build-frontend:
 	cd ./frontend; \
 	npm i; \
 	npm run build; \
-	rsync -a --delete dist/ ../src/main_service/static/
+	rsync -a --delete dist/ ../src/main_service/static/; \
+	cd ..; \
+	printf "$$(date +%s)" > .frontend_last_built_at.txt
 
 deploy-test:
 	set -e; \

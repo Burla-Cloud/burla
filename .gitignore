@@ -196,5 +196,6 @@ main_service/frontend/*.log
 main_service/frontend/.DS_Store
 main_service/frontend/.vscode/
 
-
+# custom
 main_service/.local_cluster_last_started_at.txt
+main_service/.frontend_last_built_at.txt

@@ -141,6 +141,13 @@ async def lifespan(app: FastAPI):
             traceback_str = format_traceback(tb_details)
             logger.log(str(e), "ERROR", traceback=traceback_str)
         print("Done booting cluster!")
+    elif IN_LOCAL_DEV_MODE:
+        frontend_built_at = float(Path(".frontend_last_built_at.txt").read_text().strip())
+        frontend_rebuilt = time() - frontend_built_at < 4
+        if frontend_rebuilt:
+            print(f"Successfully rebuilt frontend.")
+        else:
+            print(f"FAILED to rebuild frontend?, check logs with `Cmd + Shift + U`.")
 
     yield
 

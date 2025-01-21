@@ -1,80 +1,151 @@
-import { motion } from "framer-motion";
-import { ClusterNodeList } from "@/components/ClusterNodeList";
+import { useState } from "react";
+import { ClusterStatusCard } from "@/components/ClusterStatusCard";
 import { ClusterControls } from "@/components/ClusterControls";
-import { ClusterConfigForm } from "@/components/ClusterConfigForm";
-import { Separator } from "@/components/ui/separator";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { ScrollArea } from "@/components/ui/scroll-area";
+import { NodesList } from "@/components/NodesList";
+import { useToast } from "@/components/ui/use-toast";
+import clusterImage from "@/assets/burla_logo.png";
+
+
+type ClusterStatus = "RUNNING" | "STOPPED" | "STARTING" | "STOPPING";
+type NodeStatus = ClusterStatus;
+
+interface Node {
+  id: string;
+  name: string;
+  status: NodeStatus;
+  type: string;
+  cpus: number;
+  gpus: number;
+  memory: string;
+  age: string;
+}
+
+const MOCK_NODES: Node[] = [
+  { 
+    id: "1", 
+    name: "burla-node-14fd50f2", 
+    status: "STOPPED", 
+    type: "n2-standard-16",
+    cpus: 16,
+    gpus: 0,
+    memory: "64Gi",
+    age: "2 days ago"
+  },
+  { 
+    id: "2", 
+    name: "burla-node-1d5f5e28", 
+    status: "STOPPED", 
+    type: "n2-standard-16",
+    cpus: 16,
+    gpus: 0,
+    memory: "64Gi",
+    age: "2 days ago"
+  },
+  { 
+    id: "3", 
+    name: "burla-node-60acd984", 
+    status: "STOPPED", 
+    type: "n2-standard-16",
+    cpus: 16,
+    gpus: 0,
+    memory: "64Gi",
+    age: "2 days ago"
+  },
+];
 
 const Index = () => {
+  const [nodes, setNodes] = useState<Node[]>(MOCK_NODES);
+  const { toast } = useToast();
+
+  const calculateClusterStatus = (nodes: Node[]): ClusterStatus => {
+    if (nodes.length === 0 || nodes.every(node => node.status === "STOPPED")) {
+      return "STOPPED";
+    }
+    if (nodes.some(node => node.status === "STARTING")) {
+      return "STARTING";
+    }
+    if (nodes.some(node => node.status === "STOPPING")) {
+      return "STOPPING";
+    }
+    if (nodes.every(node => node.status === "RUNNING")) {
+      return "RUNNING";
+    }
+    return "STOPPED";
+  };
+
+  const clusterStatus = calculateClusterStatus(nodes);
+
+  const startCluster = () => {
+    setNodes(nodes.map(node => ({ ...node, status: "STARTING" as const })));
+    
+    // Simulate cluster startup
+    setTimeout(() => {
+      setNodes(nodes.map(node => ({ ...node, status: "RUNNING" as const })));
+      toast({
+        title: "Cluster Started",
+        description: "The cluster has been successfully started.",
+      });
+    }, 3000);
+  };
+
+  const stopCluster = () => {
+    setNodes(nodes.map(node => ({ ...node, status: "STOPPING" as const })));
+    
+    // Simulate cluster shutdown
+    setTimeout(() => {
+      setNodes(nodes.map(node => ({ ...node, status: "STOPPED" as const })));
+      toast({
+        title: "Cluster Stopped",
+        description: "The cluster has been successfully stopped.",
+      });
+    }, 3000);
+  };
+
+  const deleteNode = (nodeId: string) => {
+    setNodes(nodes.filter(node => node.id !== nodeId));
+    toast({
+      title: "Node Deleted",
+      description: `Node ${nodeId} has been deleted.`,
+    });
+  };
+
   return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      transition={{ duration: 0.6, ease: "easeOut" }}
-      className="min-h-screen bg-background"
-    >
-      <div className="flex">
-        {/* Main Content */}
-        <div className="flex-1 p-6">
-          <div className="max-w-4xl space-y-8 page-transition">
-            <div className="space-y-4">
-              <span className="inline-block px-3 py-1 text-sm tracking-wide bg-secondary rounded-full text-primary/80">
-                Cluster Dashboard
-              </span>
-              <h1 className="text-4xl font-medium tracking-tight sm:text-5xl text-primary">
-                Compute Cluster Status
-              </h1>
-              <p className="text-lg text-muted-foreground max-w-[42rem]">
-                Monitor your compute nodes and their current status in real-time
-              </p>
+    <div className="min-h-screen bg-gray-50 py-20">
+      <div className="container max-w-4xl mx-auto px-4">
+        {/* Cluster Image */}
+        <div className="mb-8">
+          <img 
+            src={clusterImage} 
+            alt="Cluster Management" 
+            className="w-32 h-auto" // Smaller size
+          />
+        </div>
+        
+        {/* Cluster Status and Controls */}
+        <div className="space-y-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <ClusterStatusCard status={clusterStatus} />
+            <div className="flex items-center justify-center">
+              <ClusterControls
+                status={clusterStatus}
+                onStart={startCluster}
+                onStop={stopCluster}
+              />
             </div>
-            
-            <ClusterControls />
-            <ClusterNodeList />
+          </div>
+          
+          <NodesList nodes={nodes} onDeleteNode={deleteNode} />
+          
+          <div className="text-center text-sm text-gray-500 mt-8">
+            Need help? Contact support at{" "}
+            <a href="mailto:jake@burla.dev" className="text-blue-500 hover:underline">
+              jake@burla.dev
+            </a>
           </div>
         </div>
-
-        {/* Right Sidebar */}
-        <div className="w-[400px] border-l min-h-screen">
-          <Tabs defaultValue="dashboard" className="h-full">
-            <div className="border-b px-4 py-2">
-              <TabsList className="w-full">
-                <TabsTrigger value="dashboard" className="flex-1">Dashboard</TabsTrigger>
-                <TabsTrigger value="settings" className="flex-1">Settings</TabsTrigger>
-              </TabsList>
-            </div>
-
-            <ScrollArea className="h-[calc(100vh-56px)]">
-              <TabsContent value="dashboard" className="p-4 m-0">
-                <div className="space-y-4">
-                  <h2 className="text-2xl font-medium tracking-tight text-primary">
-                    Quick Overview
-                  </h2>
-                  <p className="text-muted-foreground">
-                    Monitor your cluster's performance and status
-                  </p>
-                  <ClusterNodeList />
-                </div>
-              </TabsContent>
-
-              <TabsContent value="settings" className="p-4 m-0">
-                <div className="space-y-4">
-                  <h2 className="text-2xl font-medium tracking-tight text-primary">
-                    Cluster Configuration
-                  </h2>
-                  <p className="text-muted-foreground">
-                    Modify your cluster settings and container configurations
-                  </p>
-                  <ClusterConfigForm />
-                </div>
-              </TabsContent>
-            </ScrollArea>
-          </Tabs>
-        </div>
       </div>
-    </motion.div>
+    </div>
   );
-}
+};
 
 export default Index;

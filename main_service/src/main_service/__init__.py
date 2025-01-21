@@ -3,7 +3,7 @@ import os
 import json
 import traceback
 from uuid import uuid4
-from time import time
+from time import time, sleep
 from typing import Callable
 from pathlib import Path
 from requests.exceptions import HTTPError
@@ -142,9 +142,19 @@ async def lifespan(app: FastAPI):
             logger.log(str(e), "ERROR", traceback=traceback_str)
         print("Done booting cluster!")
     elif IN_LOCAL_DEV_MODE:
-        frontend_built_at = float(Path(".frontend_last_built_at.txt").read_text().strip())
-        frontend_rebuilt = time() - frontend_built_at < 4
-        if frontend_rebuilt:
+
+        def frontend_built_successfully(attempt=1):
+            if attempt == 3:
+                return False
+            else:
+                frontend_built_at = float(Path(".frontend_last_built_at.txt").read_text().strip())
+                frontend_rebuilt = time() - frontend_built_at < 4
+                if not frontend_rebuilt:
+                    sleep(2)  # wait a couple sec then try again (could still be building right now)
+                    return frontend_built_successfully(attempt=attempt + 1)
+                return True
+
+        if frontend_built_successfully():
             print(f"Successfully rebuilt frontend.")
         else:
             print(f"FAILED to rebuild frontend?, check logs with `Cmd + Shift + U`.")
@@ -158,7 +168,7 @@ app.include_router(cluster_router)
 app.add_middleware(SessionMiddleware, secret_key=uuid4().hex)
 
 
-# don't move! must be declared before static files are mounted to the same path below.
+# don't move this function! must be declared before static files are mounted to the same path below.
 @app.get("/")
 def dashboard():
     return FileResponse("src/main_service/static/index.html")

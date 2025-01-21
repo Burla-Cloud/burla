@@ -116,9 +116,9 @@ from main_service.endpoints.cluster import router as cluster_router, restart_clu
 async def lifespan(app: FastAPI):
 
     # Start the cluster only if the command `make local-dev-cluster` was JUST run.
-    #
     # why? because it takes forever (11s) to restart the cluster and it isn't necessary to restart
     # it frequently since individual svc's reload on on their own when a file save is detected.
+    # ex: if you save a file in the `node_service`, the `node_service` will reload, etc.
     cluster_started_at_ts = float(Path(".local_cluster_last_started_at.txt").read_text().strip())
     cluster_just_started = cluster_started_at_ts > time() - 8
 

@@ -42,9 +42,9 @@ class Worker:
 
         while self.container is None:
             port = next_free_port()
-            gunicorn_command = f"gunicorn -t 60 -b 0.0.0.0:{port} worker_service:app"
 
             if IN_LOCAL_DEV_MODE:
+                gunicorn_command = f"gunicorn -t 60 -b 0.0.0.0:{port} --reload worker_service:app"
                 host_config = docker_client.create_host_config(
                     port_bindings={port: port},
                     network_mode="local-burla-cluster",
@@ -54,6 +54,7 @@ class Worker:
                     },
                 )
             else:
+                gunicorn_command = f"gunicorn -t 60 -b 0.0.0.0:{port} worker_service:app"
                 host_config = docker_client.create_host_config(port_bindings={port: port})
 
             try:

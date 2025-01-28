@@ -8,7 +8,6 @@ import slack_sdk
 from fastapi import APIRouter, Depends, HTTPException
 from google.cloud.firestore_v1 import FieldFilter
 from google.cloud.compute_v1 import InstancesClient, ZonesClient, ListInstancesRequest
-from google.auth import default
 from starlette.responses import StreamingResponse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -110,90 +109,40 @@ def restart_cluster(
     logger.log(f"Restarted after {duration//60}m {duration%60}s")
 
 
+@router.post("/v1/cluster/shutdown")
+async def shutdown_cluster(logger: Logger = Depends(get_logger)):
 
-@router.post("/v1/cluster/delete")
-async def delete_all_vms():
-    """
-    Endpoint to delete all running VM instances in the specified Google Cloud project.
+    start = time()
+    instance_client = InstancesClient()
 
-    :param project_id: Google Cloud project ID.
-    :return: List of successfully deleted VMs or an error message.
-    """
-    try:
-        # Initialize Google Cloud Compute clients
-        instance_client = InstancesClient()
-        zones_client = ZonesClient()
+    if IN_PROD:
+        client = slack_sdk.WebClient(token=get_secret("slackbot-token"))
+        client.chat_postMessage(channel="user-activity", text="Someone shut the prod cluster off.")
 
-        # Get all zones in the project
-        zones = [zone.name for zone in zones_client.list(project=DB)]
+    futures = []
+    executor = ThreadPoolExecutor(max_workers=32)
 
-        # Prepare to track deleted VMs and errors
-        deleted_vms = []
-        errors = []
+    # delete all nodes
+    node_filter = FieldFilter("status", "in", ["READY", "BOOTING", "RUNNING"])
+    for node_snapshot in DB.collection("nodes").where(filter=node_filter).stream():
+        node = Node.from_snapshot(DB, logger, node_snapshot, instance_client)
+        futures.append(executor.submit(node.delete))
 
-        # Function to delete a single VM
-        def delete_vm(zone: str, instance_name: str):
-            try:
-                print(f"Deleting instance: {instance_name} in zone {zone}")
-                operation = instance_client.delete(
-                    project=DB,
-                    zone=zone,
-                    instance=instance_name,
-                )
-                operation.result()  # Wait for the operation to complete
-                return {"name": instance_name, "zone": zone}
-            except Exception as e:
-                return {"error": str(e), "name": instance_name, "zone": zone}
+    # remove any existing node/worker service containers if in IN_LOCAL_DEV_MODE
+    if IN_LOCAL_DEV_MODE:
+        docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
+        for container in docker_client.containers():
+            is_node_service_container = container["Names"][0].startswith("/node")
+            is_worker_service_container = "worker" in container["Names"][0]
+            if is_node_service_container or is_worker_service_container:
+                docker_client.remove_container(container["Id"], force=True)
 
-        # Collect all running VMs across zones
-        all_running_instances = []
-        for zone in zones:
-            try:
-                request = ListInstancesRequest(project=DB, zone=zone)
-                instances = instance_client.list(request=request)
+    # wait until all operations done
+    [future.result() for future in futures]
+    executor.shutdown(wait=True)
 
-                for instance in instances:
-                    if instance.status == "RUNNING":
-                        all_running_instances.append((zone, instance.name))
-            except Exception as e:
-                errors.append({"zone": zone, "error": str(e)})
-
-        # Delete all running VMs concurrently
-        with ThreadPoolExecutor(max_workers=32) as executor:
-            future_to_instance = {
-                executor.submit(delete_vm, zone, instance_name): (zone, instance_name)
-                for zone, instance_name in all_running_instances
-            }
-
-            for future in as_completed(future_to_instance):
-                zone, instance_name = future_to_instance[future]
-                try:
-                    result = future.result()
-                    if "error" in result:
-                        errors.append(result)
-                    else:
-                        deleted_vms.append(result)
-                except Exception as e:
-                    errors.append({"zone": zone, "name": instance_name, "error": str(e)})
-
-        # Prepare the response
-        if not deleted_vms:
-            return {"message": "No running VMs were found to delete."}
-
-        response = {
-            "message": "Successfully deleted the following VMs:",
-            "deleted_vms": deleted_vms,
-        }
-
-        if errors:
-            response["errors"] = errors
-
-        return response
-
-    except Exception as e:
-        # Handle global errors and return a 500 response
-        raise HTTPException(status_code=500, detail=f"Error deleting VMs: {str(e)}")
-
+    duration = time() - start
+    logger.log(f"Shut down after {duration//60}m {duration%60}s")
 
 
 @router.get("/v1/cluster")

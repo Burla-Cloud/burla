@@ -5,11 +5,11 @@ from time import time
 from typing import Callable
 
 import slack_sdk
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from google.cloud.firestore_v1 import FieldFilter
-from google.cloud.compute_v1 import InstancesClient, ZonesClient, ListInstancesRequest
+from google.cloud.compute_v1 import InstancesClient
 from starlette.responses import StreamingResponse
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 
 from main_service import (
     DB,

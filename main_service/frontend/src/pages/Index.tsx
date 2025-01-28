@@ -5,7 +5,6 @@ import { NodesList } from "@/components/NodesList";
 import { useToast } from "@/components/ui/use-toast";
 import clusterImage from "@/assets/burla_logo.png";
 
-
 type ClusterStatus = "RUNNING" | "STOPPED" | "STARTING" | "STOPPING";
 type NodeStatus = ClusterStatus;
 
@@ -41,72 +40,80 @@ const MOCK_NODES: Node[] = [
     memory: "64Gi",
     age: "2 days ago"
   },
-  { 
-    id: "3", 
-    name: "burla-node-60acd984", 
-    status: "STOPPED", 
-    type: "n2-standard-16",
-    cpus: 16,
-    gpus: 0,
-    memory: "64Gi",
-    age: "2 days ago"
-  },
 ];
 
 const Index = () => {
   const [nodes, setNodes] = useState<Node[]>(MOCK_NODES);
   const { toast } = useToast();
 
-  const calculateClusterStatus = (nodes: Node[]): ClusterStatus => {
-    if (nodes.length === 0 || nodes.every(node => node.status === "STOPPED")) {
-      return "STOPPED";
+  const [status, setStatus] = useState<ClusterStatus>("STOPPED");
+
+  const startCluster = async (newStatus: "STARTING" | "RUNNING" | "OFF") => {
+    setStatus(newStatus);
+
+    if (newStatus === "STARTING") {
+      try {
+        const response = await fetch("http://localhost:5001/v1/cluster/restart", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+        });
+
+        if (response.ok) {
+          setStatus("RUNNING");
+          setNodes(nodes.map((node) => ({ ...node, status: "RUNNING" })));
+          toast({
+            title: "Cluster Started",
+            description: "The cluster has been successfully started.",
+          });
+        } else {
+          throw new Error("Failed to restart the cluster");
+        }
+      } catch (error) {
+        console.error("Error restarting the cluster:", error);
+        setStatus("OFF");
+        toast({
+          title: "Error",
+          description: "Failed to restart the cluster. Please try again.",
+          variant: "destructive",
+        });
+      }
     }
-    if (nodes.some(node => node.status === "STARTING")) {
-      return "STARTING";
-    }
-    if (nodes.some(node => node.status === "STOPPING")) {
-      return "STOPPING";
-    }
-    if (nodes.every(node => node.status === "RUNNING")) {
-      return "RUNNING";
-    }
-    return "STOPPED";
   };
 
-  const clusterStatus = calculateClusterStatus(nodes);
+  const stopCluster = async (newStatus: "STOPPING" | "OFF") => {
+    setStatus(newStatus);
 
-  const startCluster = () => {
-    setNodes(nodes.map(node => ({ ...node, status: "STARTING" as const })));
-    
-    // Simulate cluster startup
-    setTimeout(() => {
-      setNodes(nodes.map(node => ({ ...node, status: "RUNNING" as const })));
-      toast({
-        title: "Cluster Started",
-        description: "The cluster has been successfully started.",
-      });
-    }, 3000);
-  };
+    if (newStatus === "STOPPING") {
+      try {
+        const response = await fetch("http://localhost:5001/v1/cluster/delete", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+        });
 
-  const stopCluster = () => {
-    setNodes(nodes.map(node => ({ ...node, status: "STOPPING" as const })));
-    
-    // Simulate cluster shutdown
-    setTimeout(() => {
-      setNodes(nodes.map(node => ({ ...node, status: "STOPPED" as const })));
-      toast({
-        title: "Cluster Stopped",
-        description: "The cluster has been successfully stopped.",
-      });
-    }, 3000);
-  };
-
-  const deleteNode = (nodeId: string) => {
-    setNodes(nodes.filter(node => node.id !== nodeId));
-    toast({
-      title: "Node Deleted",
-      description: `Node ${nodeId} has been deleted.`,
-    });
+        if (response.ok) {
+          setStatus("OFF");
+          setNodes(nodes.map((node) => ({ ...node, status: "STOPPED" })));
+          toast({
+            title: "Cluster Stopped",
+            description: "The cluster has been successfully stopped.",
+          });
+        } else {
+          throw new Error("Failed to stop the cluster");
+        }
+      } catch (error) {
+        console.error("Error stopping the cluster:", error);
+        setStatus("RUNNING");
+        toast({
+          title: "Error",
+          description: "Failed to stop the cluster. Please try again.",
+          variant: "destructive",
+        });
+      }
+    }
   };
 
   return (
@@ -114,31 +121,36 @@ const Index = () => {
       <div className="container max-w-4xl mx-auto px-4">
         {/* Cluster Image */}
         <div className="mb-8">
-          <img 
-            src={clusterImage} 
-            alt="Cluster Management" 
-            className="w-32 h-auto" // Smaller size
+          <img
+            src={clusterImage}
+            alt="Cluster Management"
+            className="w-32 h-auto"
           />
         </div>
-        
+
         {/* Cluster Status and Controls */}
         <div className="space-y-6">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <ClusterStatusCard status={clusterStatus} />
+            <ClusterStatusCard status={status} />
             <div className="flex items-center justify-center">
               <ClusterControls
-                status={clusterStatus}
+                status={status}
                 onStart={startCluster}
                 onStop={stopCluster}
               />
             </div>
           </div>
-          
-          <NodesList nodes={nodes} onDeleteNode={deleteNode} />
-          
+
+          <NodesList nodes={nodes} onDeleteNode={(nodeId) => {
+            setNodes(nodes.filter((node) => node.id !== nodeId));
+          }} />
+
           <div className="text-center text-sm text-gray-500 mt-8">
             Need help? Contact support at{" "}
-            <a href="mailto:jake@burla.dev" className="text-blue-500 hover:underline">
+            <a
+              href="mailto:jake@burla.dev"
+              className="text-blue-500 hover:underline"
+            >
               jake@burla.dev
             </a>
           </div>

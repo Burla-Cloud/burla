@@ -5,11 +5,12 @@ from time import time
 from typing import Callable
 
 import slack_sdk
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from google.cloud.firestore_v1 import FieldFilter
-from google.cloud.compute_v1 import InstancesClient
+from google.cloud.compute_v1 import InstancesClient, ZonesClient, ListInstancesRequest
+from google.auth import default
 from starlette.responses import StreamingResponse
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from main_service import (
     DB,
@@ -107,6 +108,92 @@ def restart_cluster(
 
     duration = time() - start
     logger.log(f"Restarted after {duration//60}m {duration%60}s")
+
+
+
+@router.post("/v1/cluster/delete")
+async def delete_all_vms():
+    """
+    Endpoint to delete all running VM instances in the specified Google Cloud project.
+
+    :param project_id: Google Cloud project ID.
+    :return: List of successfully deleted VMs or an error message.
+    """
+    try:
+        # Initialize Google Cloud Compute clients
+        instance_client = InstancesClient()
+        zones_client = ZonesClient()
+
+        # Get all zones in the project
+        zones = [zone.name for zone in zones_client.list(project=DB)]
+
+        # Prepare to track deleted VMs and errors
+        deleted_vms = []
+        errors = []
+
+        # Function to delete a single VM
+        def delete_vm(zone: str, instance_name: str):
+            try:
+                print(f"Deleting instance: {instance_name} in zone {zone}")
+                operation = instance_client.delete(
+                    project=DB,
+                    zone=zone,
+                    instance=instance_name,
+                )
+                operation.result()  # Wait for the operation to complete
+                return {"name": instance_name, "zone": zone}
+            except Exception as e:
+                return {"error": str(e), "name": instance_name, "zone": zone}
+
+        # Collect all running VMs across zones
+        all_running_instances = []
+        for zone in zones:
+            try:
+                request = ListInstancesRequest(project=DB, zone=zone)
+                instances = instance_client.list(request=request)
+
+                for instance in instances:
+                    if instance.status == "RUNNING":
+                        all_running_instances.append((zone, instance.name))
+            except Exception as e:
+                errors.append({"zone": zone, "error": str(e)})
+
+        # Delete all running VMs concurrently
+        with ThreadPoolExecutor(max_workers=32) as executor:
+            future_to_instance = {
+                executor.submit(delete_vm, zone, instance_name): (zone, instance_name)
+                for zone, instance_name in all_running_instances
+            }
+
+            for future in as_completed(future_to_instance):
+                zone, instance_name = future_to_instance[future]
+                try:
+                    result = future.result()
+                    if "error" in result:
+                        errors.append(result)
+                    else:
+                        deleted_vms.append(result)
+                except Exception as e:
+                    errors.append({"zone": zone, "name": instance_name, "error": str(e)})
+
+        # Prepare the response
+        if not deleted_vms:
+            return {"message": "No running VMs were found to delete."}
+
+        response = {
+            "message": "Successfully deleted the following VMs:",
+            "deleted_vms": deleted_vms,
+        }
+
+        if errors:
+            response["errors"] = errors
+
+        return response
+
+    except Exception as e:
+        # Handle global errors and return a 500 response
+        raise HTTPException(status_code=500, detail=f"Error deleting VMs: {str(e)}")
+
 
 
 @router.get("/v1/cluster")

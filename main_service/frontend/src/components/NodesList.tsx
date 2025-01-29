@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import { Cpu, Database, Trash2, Microchip } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useState } from "react";
+import { useNodes } from "@/contexts/NodesContext";
 
 interface Node {
   id: string;
@@ -18,11 +19,11 @@ interface Node {
 }
 
 interface NodesListProps {
-  nodes: Node[];
   onDeleteNode: (nodeId: string) => void;
 }
 
-export const NodesList = ({ nodes, onDeleteNode }: NodesListProps) => {
+export const NodesList = ({ onDeleteNode }: NodesListProps) => {
+  const { nodes } = useNodes();
   const [parallelism, setParallelism] = useState(0);
 
   const getStatusDisplay = (status: Node["status"]) => {

@@ -11,7 +11,7 @@ export const useClusterControl = () => {
     setStatus("STARTING");
     
     try {
-      const response = await fetch("http://localhost:5001/v1/cluster/restart", {
+      const response = await fetch("/v1/cluster/restart", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -44,7 +44,7 @@ export const useClusterControl = () => {
     setStatus("STOPPING");
     
     try {
-      const response = await fetch("http://localhost:5001/v1/cluster/delete", {
+      const response = await fetch("/v1/cluster/delete", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

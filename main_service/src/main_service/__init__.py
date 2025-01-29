@@ -167,14 +167,13 @@ app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None)
 app.include_router(jobs_router)
 app.include_router(cluster_router)
 app.add_middleware(SessionMiddleware, secret_key=uuid4().hex)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://0.0.0.0:5001", "http://localhost:5001"],  # Add your frontend URLs here
-    allow_credentials=True,
-    allow_methods=["*"],  # Allow all HTTP methods (POST, GET, OPTIONS, etc.)
-    allow_headers=["*"],  # Allow all headers (e.g., Content-Type, Authorization)
-)
-
+# app.add_middleware(
+#     CORSMiddleware,
+#     allow_origins=["http://0.0.0.0:5001", "http://localhost:5001"],  # Add your frontend URLs here
+#     allow_credentials=True,
+#     allow_methods=["*"],  # Allow all HTTP methods (POST, GET, OPTIONS, etc.)
+#     allow_headers=["*"],  # Allow all headers (e.g., Content-Type, Authorization)
+# )
 
 
 # don't move this function! must be declared before static files are mounted to the same path below.
@@ -203,7 +202,7 @@ async def login__log_and_time_requests__log_errors(request: Request, call_next):
     requested_file = static_dir / url_path.relative_to("/")
     requesting_static_file = requested_file.exists() and requested_file.is_file()
 
-    public_endpoints = ["/", "/v1/cluster", "/v1/cluster/restart", "/v1/cluster/delete"]
+    public_endpoints = ["/", "/v1/cluster", "/v1/cluster/restart", "/v1/cluster/shutdown"]
     requesting_public_endpoint = str(url_path) in public_endpoints
     request_requires_auth = not (requesting_public_endpoint or requesting_static_file)
 

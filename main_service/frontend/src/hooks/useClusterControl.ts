@@ -44,7 +44,7 @@ export const useClusterControl = () => {
     setStatus("STOPPING");
     
     try {
-      const response = await fetch("/v1/cluster/delete", {
+      const response = await fetch("/v1/cluster/shutdown", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

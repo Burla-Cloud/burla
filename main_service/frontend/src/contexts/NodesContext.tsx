@@ -21,7 +21,7 @@ export const NodesProvider = ({ children }: { children: React.ReactNode }) => {
   const [nodes, setNodes] = useState<Node[]>([]);
 
   useEffect(() => {
-    const eventSource = new EventSource('/api/v1/cluster');
+    const eventSource = new EventSource('/v1/cluster');
 
     eventSource.onmessage = (event) => {
       const data = JSON.parse(event.data);

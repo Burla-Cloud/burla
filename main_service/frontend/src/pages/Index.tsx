@@ -20,25 +20,25 @@ interface Node {
 }
 
 const MOCK_NODES: Node[] = [
-  { 
-    id: "1", 
-    name: "burla-node-14fd50f2", 
-    status: "STOPPED", 
+  {
+    id: "1",
+    name: "burla-node-14fd50f2",
+    status: "STOPPED",
     type: "n2-standard-16",
     cpus: 16,
     gpus: 0,
     memory: "64Gi",
-    age: "2 days ago"
+    age: "2 days ago",
   },
-  { 
-    id: "2", 
-    name: "burla-node-1d5f5e28", 
-    status: "STOPPED", 
+  {
+    id: "2",
+    name: "burla-node-1d5f5e28",
+    status: "STOPPED",
     type: "n2-standard-16",
     cpus: 16,
     gpus: 0,
     memory: "64Gi",
-    age: "2 days ago"
+    age: "2 days ago",
   },
 ];
 
@@ -71,9 +71,12 @@ const Index = () => {
             </div>
           </div>
 
-          <NodesList nodes={nodes} onDeleteNode={(nodeId) => {
-            setNodes(nodes.filter((node) => node.id !== nodeId));
-          }} />
+          <NodesList
+            nodes={nodes}
+            onDeleteNode={(nodeId) => {
+              setNodes(nodes.filter((node) => node.id !== nodeId));
+            }}
+          />
 
           <div className="text-center text-sm text-gray-500 mt-8">
             Need help? Contact support at{" "}

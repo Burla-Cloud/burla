@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState } from "react";
 import { useToast } from "@/components/ui/use-toast";
 
 type ClusterStatus = "RUNNING" | "STOPPED" | "STARTING" | "STOPPING";
@@ -9,7 +9,7 @@ export const useClusterControl = () => {
 
   const startCluster = async () => {
     setStatus("STARTING");
-    
+
     try {
       const response = await fetch("/v1/cluster/restart", {
         method: "POST",
@@ -19,7 +19,7 @@ export const useClusterControl = () => {
       });
 
       if (!response.ok) {
-        throw new Error("Failed to restart the cluster");
+        throw new Error("Failed to start the cluster");
       }
 
       setStatus("RUNNING");
@@ -28,7 +28,6 @@ export const useClusterControl = () => {
         description: "Cluster has been started successfully",
       });
       return true;
-
     } catch (error) {
       setStatus("STOPPED");
       toast({
@@ -42,7 +41,7 @@ export const useClusterControl = () => {
 
   const stopCluster = async () => {
     setStatus("STOPPING");
-    
+
     try {
       const response = await fetch("/v1/cluster/shutdown", {
         method: "POST",
@@ -61,7 +60,6 @@ export const useClusterControl = () => {
         description: "Cluster has been stopped successfully",
       });
       return true;
-
     } catch (error) {
       setStatus("RUNNING");
       toast({
@@ -78,4 +76,4 @@ export const useClusterControl = () => {
     startCluster,
     stopCluster,
   };
-}; 
+};

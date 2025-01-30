@@ -23,10 +23,7 @@ export const ClusterControls = ({
         onClick={onStart}
         disabled={isStarting || isRunning || isStopping}
         className="w-32 text-white disabled:bg-gray-400"
-        style={{
-          backgroundColor: "#3b5a64",
-          hover: { backgroundColor: "#2d454c" },
-        }}
+        style={{ backgroundColor: "#3b5a64" }}
       >
         <Power className="mr-2 h-4 w-4" />
         Start

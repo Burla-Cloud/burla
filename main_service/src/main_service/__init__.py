@@ -120,12 +120,14 @@ async def lifespan(app: FastAPI):
     # why? because it takes forever (11s) to restart the cluster and it isn't necessary to restart
     # it frequently since individual svc's reload on on their own when a file save is detected.
     # ex: if you save a file in the `node_service`, the `node_service` will reload, etc.
-    cluster_started_at_ts = float(Path(".local_cluster_last_started_at.txt").read_text().strip())
-    cluster_just_started = cluster_started_at_ts > time() - 8
+    svc_started_at_ts = float(Path(".main_svc_last_started_at.txt").read_text().strip())
+    svc_just_started = svc_started_at_ts > time() - 8
+
+    autoboot_cluster_on_first_start = os.environ.get("AUTOBOOT_CLUSTER_ON_START") == "True"
 
     # Start cluster if in dev, and `make local-dev-cluster` was just run under a second ago.
     # (prevent restarting cluster when main service reloads due to file save)
-    if IN_LOCAL_DEV_MODE and cluster_just_started:
+    if IN_LOCAL_DEV_MODE and svc_just_started and autoboot_cluster_on_first_start:
         print("Booting Cluster!")
         logger = Logger()
         try:
@@ -142,7 +144,7 @@ async def lifespan(app: FastAPI):
             traceback_str = format_traceback(tb_details)
             logger.log(str(e), "ERROR", traceback=traceback_str)
         print("Done booting cluster!")
-    elif IN_LOCAL_DEV_MODE:
+    elif IN_LOCAL_DEV_MODE and (not svc_just_started):
 
         def frontend_built_successfully(attempt=1):
             if attempt == 3:
@@ -151,7 +153,7 @@ async def lifespan(app: FastAPI):
                 frontend_built_at = float(Path(".frontend_last_built_at.txt").read_text().strip())
                 frontend_rebuilt = time() - frontend_built_at < 4
                 if not frontend_rebuilt:
-                    sleep(2)  # wait a couple sec then try again (could still be building right now)
+                    sleep(2)  # wait a couple sec then try again (could still be building)
                     return frontend_built_successfully(attempt=attempt + 1)
                 return True
 

@@ -3,14 +3,16 @@ import os
 import json
 import traceback
 from uuid import uuid4
-from time import time
+from time import time, sleep
 from typing import Callable
+from pathlib import Path
 from requests.exceptions import HTTPError
 from contextlib import asynccontextmanager
 
 from google.cloud import firestore, logging
-from fastapi.responses import Response, FileResponse, RedirectResponse
+from fastapi.responses import Response, FileResponse
 from fastapi import FastAPI, Request, BackgroundTasks, Depends
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
@@ -114,8 +116,19 @@ from main_service.endpoints.cluster import router as cluster_router, restart_clu
 @asynccontextmanager
 async def lifespan(app: FastAPI):
 
-    # Start cluster straight away if in dev:
-    if IN_LOCAL_DEV_MODE:
+    # Start the cluster only if the command `make local-dev-cluster` was JUST run.
+    # why? because it takes forever (11s) to restart the cluster and it isn't necessary to restart
+    # it frequently since individual svc's reload on on their own when a file save is detected.
+    # ex: if you save a file in the `node_service`, the `node_service` will reload, etc.
+    svc_started_at_ts = float(Path(".main_svc_last_started_at.txt").read_text().strip())
+    svc_just_started = svc_started_at_ts > time() - 8
+
+    autoboot_cluster_on_first_start = os.environ.get("AUTOBOOT_CLUSTER_ON_START") == "True"
+
+    # Start cluster if in dev, and `make local-dev-cluster` was just run under a second ago.
+    # (prevent restarting cluster when main service reloads due to file save)
+    if IN_LOCAL_DEV_MODE and svc_just_started and autoboot_cluster_on_first_start:
+        print("Booting Cluster!")
         logger = Logger()
         try:
             background_tasks = BackgroundTasks()
@@ -130,6 +143,24 @@ async def lifespan(app: FastAPI):
             tb_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
             traceback_str = format_traceback(tb_details)
             logger.log(str(e), "ERROR", traceback=traceback_str)
+        print("Done booting cluster!")
+    elif IN_LOCAL_DEV_MODE and (not svc_just_started):
+
+        def frontend_built_successfully(attempt=1):
+            if attempt == 3:
+                return False
+            else:
+                frontend_built_at = float(Path(".frontend_last_built_at.txt").read_text().strip())
+                frontend_rebuilt = time() - frontend_built_at < 4
+                if not frontend_rebuilt:
+                    sleep(2)  # wait a couple sec then try again (could still be building)
+                    return frontend_built_successfully(attempt=attempt + 1)
+                return True
+
+        if frontend_built_successfully():
+            print(f"Successfully rebuilt frontend.")
+        else:
+            print(f"FAILED to rebuild frontend?, check logs with `Cmd + Shift + U`.")
 
     yield
 
@@ -138,17 +169,23 @@ app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None)
 app.include_router(jobs_router)
 app.include_router(cluster_router)
 app.add_middleware(SessionMiddleware, secret_key=uuid4().hex)
-app.mount("/static", StaticFiles(directory="src/main_service/static"), name="static")
+# app.add_middleware(
+#     CORSMiddleware,
+#     allow_origins=["http://0.0.0.0:5001", "http://localhost:5001"],  # Add your frontend URLs here
+#     allow_credentials=True,
+#     allow_methods=["*"],  # Allow all HTTP methods (POST, GET, OPTIONS, etc.)
+#     allow_headers=["*"],  # Allow all headers (e.g., Content-Type, Authorization)
+# )
 
 
+# don't move this function! must be declared before static files are mounted to the same path below.
 @app.get("/")
 def dashboard():
-    return FileResponse("src/main_service/static/dashboard.html")
+    return FileResponse("src/main_service/static/index.html")
 
 
-@app.get("/favicon.ico")
-async def favicon():
-    return RedirectResponse(url="/static/favicon.ico")
+# must be mounted after the above endpoint (`/`) is declared, or this will overwrite that endpoint.
+app.mount("/", StaticFiles(directory="src/main_service/static"), name="static")
 
 
 @app.middleware("http")
@@ -158,13 +195,17 @@ async def login__log_and_time_requests__log_errors(request: Request, call_next):
     Catching errors in a `Depends` function will not distinguish
         http errors originating here vs other services.
     """
-
     start = time()
     request.state.uuid = uuid4().hex
+    url_path = Path(request.url.path)
 
-    public_endpoints = ["/", "/favicon.ico", "/v1/cluster", "/v1/cluster/restart"]
-    requesting_public_endpoint = request.url.path in public_endpoints
-    requesting_static_file = request.url.path.startswith("/static")
+    # Check if requesting a static file from root URL
+    static_dir = Path("src/main_service/static")
+    requested_file = static_dir / url_path.relative_to("/")
+    requesting_static_file = requested_file.exists() and requested_file.is_file()
+
+    public_endpoints = ["/", "/v1/cluster", "/v1/cluster/restart", "/v1/cluster/shutdown"]
+    requesting_public_endpoint = str(url_path) in public_endpoints
     request_requires_auth = not (requesting_public_endpoint or requesting_static_file)
 
     if request_requires_auth:

@@ -16,7 +16,6 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
 lib64/
 parts/
 sdist/
@@ -176,5 +175,25 @@ cython_debug/
 /.vscode/
 /dist/
 /docs/\_build/
-/src/\*.egg-info/
 .DS_Store
+
+# node / frontend stuff
+main_service/frontend/node_modules/
+
+# Build outputs
+main_service/frontend/dist/
+main_service/frontend/build/
+
+# Environment files
+main_service/frontend/.env*
+
+# Logs
+main_service/frontend/*.log
+
+# OS/IDE files
+main_service/frontend/.DS_Store
+main_service/frontend/.vscode/
+
+# custom
+main_service/main_svc_last_started_at.txt
+main_service/.frontend_last_built_at.txt

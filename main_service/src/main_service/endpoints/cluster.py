@@ -109,6 +109,42 @@ def restart_cluster(
     logger.log(f"Restarted after {duration//60}m {duration%60}s")
 
 
+@router.post("/v1/cluster/shutdown")
+async def shutdown_cluster(logger: Logger = Depends(get_logger)):
+
+    start = time()
+    instance_client = InstancesClient()
+
+    if IN_PROD:
+        client = slack_sdk.WebClient(token=get_secret("slackbot-token"))
+        client.chat_postMessage(channel="user-activity", text="Someone shut the prod cluster off.")
+
+    futures = []
+    executor = ThreadPoolExecutor(max_workers=32)
+
+    # delete all nodes
+    node_filter = FieldFilter("status", "in", ["READY", "BOOTING", "RUNNING"])
+    for node_snapshot in DB.collection("nodes").where(filter=node_filter).stream():
+        node = Node.from_snapshot(DB, logger, node_snapshot, instance_client)
+        futures.append(executor.submit(node.delete))
+
+    # remove any existing node/worker service containers if in IN_LOCAL_DEV_MODE
+    if IN_LOCAL_DEV_MODE:
+        docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
+        for container in docker_client.containers():
+            is_node_service_container = container["Names"][0].startswith("/node")
+            is_worker_service_container = "worker" in container["Names"][0]
+            if is_node_service_container or is_worker_service_container:
+                docker_client.remove_container(container["Id"], force=True)
+
+    # wait until all operations done
+    [future.result() for future in futures]
+    executor.shutdown(wait=True)
+
+    duration = time() - start
+    logger.log(f"Shut down after {duration//60}m {duration%60}s")
+
+
 @router.get("/v1/cluster")
 async def cluster_info():
     node_name_to_status = {}

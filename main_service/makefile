@@ -8,9 +8,15 @@ ARTIFACT_REPO_NAME := $(WEBSERVICE_NAME)
 ARTIFACT_PKG_NAME := $(WEBSERVICE_NAME)
 PROD_IMAGE_BASE_NAME := us-docker.pkg.dev/burla-prod/$(ARTIFACT_REPO_NAME)/$(ARTIFACT_PKG_NAME)
 
-service:
+.PHONY: frontend
+build-frontend:
 	set -e; \
-	poetry run uvicorn main_service:application --host 0.0.0.0 --port 5001 --reload
+	cd ./frontend; \
+	npm i; \
+	npm run build; \
+	rsync -a --delete dist/ ../src/main_service/static/; \
+	cd ..; \
+	printf "$$(date +%s)" > .frontend_last_built_at.txt
 
 deploy-test:
 	set -e; \

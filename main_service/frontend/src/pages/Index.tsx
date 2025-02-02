@@ -79,7 +79,7 @@ const Index = () => {
           />
 
           <div className="text-center text-sm text-gray-500 mt-8">
-            Need help? Contact support at{" "}
+            Need help? Email me! {" "}
             <a
               href="mailto:jake@burla.dev"
               className="text-blue-500 hover:underline"

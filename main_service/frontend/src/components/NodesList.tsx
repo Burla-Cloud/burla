@@ -22,14 +22,27 @@ export const NodesList = () => {
             className="text-xl font-semibold"
             style={{ color: "#3b5a64" }}
           >
-            Manage the Cluster
+            Welcome to Burla!
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-1 gap-4">
-            Click "Start" above to boot the cluster (1-2 minutes). Manage node
-            statuses and view configuration details below, from boot-up to
-            shutdown or deletion.
+            {/* below div is necessary, or links create line breaks around them for some reason*/}
+            <div>
+              This is our demo cluster (Burla is built to be self-hosted), use it for free, but not for anything important!<br /> 
+              Click "Start" to boot eight, 32 CPU machines (1-2 minutes). Click "Stop" to shut them down.<br /> 
+              Machines die after 10 min of inactivity, {" "}
+              <a href="mailto:jake@burla.dev" className="text-blue-500 hover:underline">email me</a> 
+              &nbsp;to have this or any other settings changed.<br /> <br /> 
+              Confused? see our {" "}
+              <a href="https://colab.research.google.com/drive/17MWiQFyFKxTmNBaq7POGL0juByWIMA3w?usp=sharing" className="text-blue-500 hover:underline">quickstart</a>
+              , {" "}
+              <a href="https://docs.burla.dev" className="text-blue-500 hover:underline">documentation</a>
+              , or {" "}
+              <a href="mailto:jake@burla.dev" className="text-blue-500 hover:underline">send me an email</a>
+              !<br />
+              Thank you for trying Burla!
+            </div>
           </div>
         </CardContent>
       </Card>

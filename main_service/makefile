@@ -37,17 +37,21 @@ deploy-test:
 	); \
 	TEST_IMAGE_NAME=$$( echo $${TEST_IMAGE_BASE_NAME}:$${TEST_IMAGE_TAG} ); \
 	gcloud run deploy $(WEBSERVICE_NAME) \
-	--image=$${TEST_IMAGE_NAME} \
-	--project $${PROJECT_ID} \
-	--region=us-central1 \
-	--set-env-vars PROJECT_ID=$${PROJECT_ID},PROJECT_NUM=$${PROJECT_NUM} \
-	--min-instances 0 \
-	--max-instances 5 \
-	--memory 2Gi \
-	--cpu 1 \
-	--timeout 360 \
-	--concurrency 20 \
-	--allow-unauthenticated
+		--image=$${TEST_IMAGE_NAME} \
+		--project $${PROJECT_ID} \
+		--region=us-central1 \
+		--set-env-vars PROJECT_ID=$${PROJECT_ID},PROJECT_NUM=$${PROJECT_NUM} \
+		--min-instances 0 \
+		--max-instances 5 \
+		--memory 2Gi \
+		--cpu 1 \
+		--timeout 360 \
+		--concurrency 20 \
+		--allow-unauthenticated;
+	gcloud run services update-traffic $(WEBSERVICE_NAME) \
+		--project $${PROJECT_ID} \
+		--region=us-central1 \
+		--to-latest
 
 move-test-image-to-prod:
 	set -e; \
@@ -99,7 +103,11 @@ deploy-prod:
 		--cpu 1 \
 		--timeout 360 \
 		--concurrency 20 \
-		--allow-unauthenticated
+		--allow-unauthenticated;
+	gcloud run services update-traffic $(WEBSERVICE_NAME) \
+		--project burla-prod \
+		--region=us-central1 \
+		--to-latest
 
 image:
 	set -e; \

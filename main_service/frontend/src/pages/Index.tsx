@@ -19,31 +19,9 @@ interface Node {
   age: string;
 }
 
-const MOCK_NODES: Node[] = [
-  {
-    id: "1",
-    name: "burla-node-14fd50f2",
-    status: "STOPPED",
-    type: "n2-standard-16",
-    cpus: 16,
-    gpus: 0,
-    memory: "64Gi",
-    age: "2 days ago",
-  },
-  {
-    id: "2",
-    name: "burla-node-1d5f5e28",
-    status: "STOPPED",
-    type: "n2-standard-16",
-    cpus: 16,
-    gpus: 0,
-    memory: "64Gi",
-    age: "2 days ago",
-  },
-];
 
 const Index = () => {
-  const [nodes, setNodes] = useState<Node[]>(MOCK_NODES);
+  const [nodes, setNodes] = useState<Node[]>([]);
   const { status, startCluster, stopCluster } = useClusterControl();
 
   return (

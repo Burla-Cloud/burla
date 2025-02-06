@@ -1,79 +1,76 @@
-import { useState } from "react";
 import { useToast } from "@/components/ui/use-toast";
-
-type ClusterStatus = "RUNNING" | "STOPPED" | "STARTING" | "STOPPING";
+import { useCluster } from "@/contexts/ClusterContext";
 
 export const useClusterControl = () => {
-  const [status, setStatus] = useState<ClusterStatus>("STOPPED");
-  const { toast } = useToast();
+    const { toast } = useToast();
+    const { clusterStatus, setClusterStatus } = useCluster();
 
-  const startCluster = async () => {
-    setStatus("STARTING");
+    // There is no difference between starting and rebooting.
+    // the backend will realise there is nothing to stop/turn off, then start the cluster.
 
-    try {
-      const response = await fetch("/v1/cluster/restart", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-      });
+    const rebootCluster = async () => {
+        try {
+            if (clusterStatus === "ON") {
+                setClusterStatus("REBOOTING");
+            } else {
+                setClusterStatus("BOOTING");
+            }
 
-      if (!response.ok) {
-        throw new Error("Failed to start the cluster");
-      }
+            const response = await fetch("/v1/cluster/restart", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+            });
 
-      setStatus("RUNNING");
-      toast({
-        title: "Success",
-        description: "Cluster has been started successfully",
-      });
-      return true;
-    } catch (error) {
-      setStatus("STOPPED");
-      toast({
-        variant: "destructive",
-        title: "Error",
-        description: "Failed to start the cluster. Please try again.",
-      });
-      return false;
-    }
-  };
+            if (!response.ok) {
+                setClusterStatus(null); // Reset to calculated status
+                throw new Error("Failed to start the cluster");
+            }
 
-  const stopCluster = async () => {
-    setStatus("STOPPING");
+            toast({
+                title: "Success",
+                description: "Cluster has been started successfully",
+            });
+            return true;
+        } catch (error) {
+            toast({
+                variant: "destructive",
+                title: "Error",
+                description: "Failed to start the cluster. Please try again.",
+            });
+            return false;
+        }
+    };
 
-    try {
-      const response = await fetch("/v1/cluster/shutdown", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-      });
+    const stopCluster = async () => {
+        try {
+            setClusterStatus("STOPPING");
+            const response = await fetch("/v1/cluster/shutdown", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+            });
 
-      if (!response.ok) {
-        throw new Error("Failed to stop the cluster");
-      }
+            if (!response.ok) {
+                setClusterStatus(null); // Reset to calculated status
+                throw new Error("Failed to stop the cluster");
+            }
 
-      setStatus("STOPPED");
-      toast({
-        title: "Success",
-        description: "Cluster has been stopped successfully",
-      });
-      return true;
-    } catch (error) {
-      setStatus("RUNNING");
-      toast({
-        variant: "destructive",
-        title: "Error",
-        description: "Failed to stop the cluster. Please try again.",
-      });
-      return false;
-    }
-  };
+            toast({
+                title: "Success",
+                description: "Cluster has been stopped successfully",
+            });
+            return true;
+        } catch (error) {
+            toast({
+                variant: "destructive",
+                title: "Error",
+                description: "Failed to stop the cluster. Please try again.",
+            });
+            return false;
+        }
+    };
 
-  return {
-    status,
-    startCluster,
-    stopCluster,
-  };
+    return {
+        rebootCluster,
+        stopCluster,
+    };
 };

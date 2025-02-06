@@ -25,12 +25,16 @@ from main_service.helpers import Logger, get_secret
 
 router = APIRouter()
 
+# TODO: MODE THIS TO A GLOBAL FIRESTORE DOC
+CLUSTER_STOP_REQUESTED = False
+
 
 @router.post("/v1/cluster/restart")
 def restart_cluster(
     add_background_task: Callable = Depends(get_add_background_task_function),
     logger: Logger = Depends(get_logger),
 ):
+    global CLUSTER_STOP_REQUESTED
     start = time()
     instance_client = InstancesClient()
 
@@ -102,8 +106,14 @@ def restart_cluster(
             if not (is_main_service or belongs_to_current_node):
                 docker_client.remove_container(container["Id"], force=True)
 
-    logger.log("Done restarting, reconciling ...")
-    add_background_task(reconcile, DB, logger, add_background_task)
+    # Now, before doing further reconciliation, check if a shutdown was requested:
+    if CLUSTER_STOP_REQUESTED:
+        logger.log("Stop requested during reboot: aborting startup and shutting down.")
+        # Queue a shutdown operation to ensure that any newly started nodes are removed.
+        add_background_task(shutdown_cluster, logger)
+    else:
+        logger.log("Done restarting, reconciling ...")
+        add_background_task(reconcile, DB, logger, add_background_task)
 
     duration = time() - start
     logger.log(f"Restarted after {duration//60}m {duration%60}s")
@@ -111,7 +121,8 @@ def restart_cluster(
 
 @router.post("/v1/cluster/shutdown")
 async def shutdown_cluster(logger: Logger = Depends(get_logger)):
-
+    global CLUSTER_STOP_REQUESTED
+    CLUSTER_STOP_REQUESTED = True  # mark that a stop has been requested
     start = time()
     instance_client = InstancesClient()
 
@@ -137,7 +148,6 @@ async def shutdown_cluster(logger: Logger = Depends(get_logger)):
             if is_node_service_container or is_worker_service_container:
                 docker_client.remove_container(container["Id"], force=True)
 
-    # wait until all operations done
     [future.result() for future in futures]
     executor.shutdown(wait=True)
 

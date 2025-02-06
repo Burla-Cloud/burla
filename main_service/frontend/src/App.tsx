@@ -5,16 +5,16 @@ import Index from "@/pages/Index";
 import { NodesProvider } from "@/contexts/NodesContext";
 
 const App = () => (
-  <NodesProvider>
-    <TooltipProvider>
-      <Toaster />
-      <BrowserRouter>
-        <Routes>
-          <Route path="/" element={<Index />} />
-        </Routes>
-      </BrowserRouter>
-    </TooltipProvider>
-  </NodesProvider>
+    <NodesProvider>
+        <TooltipProvider>
+            <Toaster />
+            <BrowserRouter>
+                <Routes>
+                    <Route path="/" element={<Index />} />
+                </Routes>
+            </BrowserRouter>
+        </TooltipProvider>
+    </NodesProvider>
 );
 
 export default App;

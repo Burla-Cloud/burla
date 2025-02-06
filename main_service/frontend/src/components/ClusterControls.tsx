@@ -1,30 +1,41 @@
 import { Button } from "@/components/ui/button";
-import { Power, PowerOff } from "lucide-react";
+import { Power, PowerOff, RefreshCw } from "lucide-react";
 import { ClusterStatus } from "@/types/cluster";
 
 interface ClusterControlsProps {
     status: ClusterStatus;
-    onStart: () => void;
+    onReboot: () => void;
     onStop: () => void;
 }
 
-export const ClusterControls = ({ status, onStart, onStop }: ClusterControlsProps) => {
+export const ClusterControls = ({ status, onReboot, onStop }: ClusterControlsProps) => {
+    const isRebooting = status === "REBOOTING";
     const isStarting = status === "BOOTING";
     const isStopping = status === "STOPPING";
     const isOn = status === "ON";
     const isOff = status === "OFF";
 
+    let startButtonIcon;
+    let startButtonText;
+    if (isOn || isRebooting) {
+        startButtonIcon = <RefreshCw className="mr-2 h-4 w-4" />;
+        startButtonText = "Restart";
+    } else {
+        startButtonIcon = <Power className="mr-2 h-4 w-4" />;
+        startButtonText = "Start";
+    }
+
     return (
         <div className="flex space-x-4">
             <Button
                 size="lg"
-                onClick={onStart}
-                disabled={isStarting || isOn || isStopping}
+                onClick={onReboot}
+                disabled={isStarting || isStopping || isRebooting}
                 className="w-32 text-white disabled:bg-gray-400"
                 style={{ backgroundColor: "#3b5a64" }}
             >
-                <Power className="mr-2 h-4 w-4" />
-                Start
+                {startButtonIcon}
+                {startButtonText}
             </Button>
             <Button
                 variant="destructive"

@@ -9,6 +9,7 @@ interface ClusterStatusCardProps {
 const statusConfig = {
     ON: { color: "bg-green-500", text: "On", pulse: false },
     OFF: { color: "bg-gray-500", text: "Off", pulse: false },
+    REBOOTING: { color: "bg-yellow-500", text: "Rebooting", pulse: true },
     BOOTING: { color: "bg-yellow-500", text: "Starting", pulse: true },
     STOPPING: { color: "bg-yellow-500", text: "Stopping", pulse: true },
 };

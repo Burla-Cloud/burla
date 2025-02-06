@@ -7,7 +7,7 @@ import { useNodes } from "@/contexts/NodesContext";
 import { useCluster } from "@/contexts/ClusterContext";
 
 const Index = () => {
-    const { startCluster, stopCluster } = useClusterControl();
+    const { rebootCluster, stopCluster } = useClusterControl();
     const { nodes } = useNodes();
     const { clusterStatus } = useCluster();
 
@@ -24,7 +24,7 @@ const Index = () => {
                         <div className="flex items-center justify-center">
                             <ClusterControls
                                 status={clusterStatus}
-                                onStart={startCluster}
+                                onReboot={rebootCluster}
                                 onStop={stopCluster}
                             />
                         </div>

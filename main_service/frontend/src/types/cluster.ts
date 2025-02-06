@@ -1,4 +1,4 @@
-export type ClusterStatus = "ON" | "OFF" | "BOOTING" | "STOPPING";
+export type ClusterStatus = "ON" | "OFF" | "BOOTING" | "REBOOTING" | "STOPPING";
 export type NodeStatus = "READY" | "RUNNING" | "BOOTING" | "STOPPING";
 
 // If we simply name it `Node`, it will conflict with the Node type in React.

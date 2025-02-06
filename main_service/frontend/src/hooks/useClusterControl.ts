@@ -3,11 +3,19 @@ import { useCluster } from "@/contexts/ClusterContext";
 
 export const useClusterControl = () => {
     const { toast } = useToast();
-    const { setClusterStatus } = useCluster();
+    const { clusterStatus, setClusterStatus } = useCluster();
 
-    const startCluster = async () => {
+    // There is no difference between starting and rebooting.
+    // the backend will realise there is nothing to stop/turn off, then start the cluster.
+
+    const rebootCluster = async () => {
         try {
-            setClusterStatus("BOOTING");
+            if (clusterStatus === "ON") {
+                setClusterStatus("REBOOTING");
+            } else {
+                setClusterStatus("BOOTING");
+            }
+
             const response = await fetch("/v1/cluster/restart", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
@@ -62,7 +70,7 @@ export const useClusterControl = () => {
     };
 
     return {
-        startCluster,
+        rebootCluster,
         stopCluster,
     };
 };

@@ -20,7 +20,7 @@ export const ClusterProvider = ({ children }: { children: React.ReactNode }) => 
 
     const statusFromNodes = useMemo(() => {
         if (nodes.length === 0) return "OFF";
-        if (nodes.some((node) => node.status === "READY")) return "ON";
+        if (nodes.some((node) => node.status === "READY" || node.status === "RUNNING")) return "ON";
         if (nodes.every((node) => node.status === "BOOTING")) return "BOOTING";
         if (nodes.every((node) => node.status === "STOPPING")) return "STOPPING";
         return "OFF";
@@ -29,10 +29,14 @@ export const ClusterProvider = ({ children }: { children: React.ReactNode }) => 
     // always use statusFromButtons unless it's set to null
     const currentStatus = statusFromButtons ?? statusFromNodes;
 
-    // set statusFromButtons to null as soon as the nodes are updated!
+    // Only clear statusFromButtons if we were rebooting and just finished, or not rebooting.
     useEffect(() => {
-        setStatusFromButtons(null);
-    }, [nodes]);
+        if (statusFromButtons !== "REBOOTING") {
+            setStatusFromButtons(null);
+        } else if (statusFromButtons === "REBOOTING" && statusFromNodes === "ON") {
+            setStatusFromButtons(null);
+        }
+    }, [statusFromNodes]);
 
     return (
         <ClusterContext.Provider

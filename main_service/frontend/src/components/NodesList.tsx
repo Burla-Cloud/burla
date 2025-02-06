@@ -9,19 +9,28 @@ import {
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 import { Cpu, Database } from "lucide-react";
-import { useNodes } from "@/contexts/NodesContext";
+import { NodeStatus, BurlaNode } from "@/types/cluster";
 
-export const NodesList = () => {
-    const { nodes } = useNodes();
+interface NodesListProps {
+    nodes: BurlaNode[];
+}
+
+export const NodesList = ({ nodes }: NodesListProps) => {
+    const getStatusClass = (nodeStatus: NodeStatus | null) => {
+        const statusClasses = {
+            READY: "bg-green-500",
+            RUNNING: "bg-green-500 animate-pulse",
+            BOOTING: "bg-yellow-500 animate-pulse",
+            STOPPING: "bg-gray-300 animate-pulse",
+        };
+        return cn("w-2 h-2 rounded-full", nodeStatus ? statusClasses[nodeStatus] : "bg-gray-300");
+    };
 
     return (
         <div className="space-y-6">
             <Card className="w-full">
                 <CardHeader>
-                    <CardTitle
-                        className="text-xl font-semibold"
-                        style={{ color: "#3b5a64" }}
-                    >
+                    <CardTitle className="text-xl font-semibold" style={{ color: "#3b5a64" }}>
                         Welcome to Burla!
                     </CardTitle>
                 </CardHeader>
@@ -29,12 +38,11 @@ export const NodesList = () => {
                     <div className="grid grid-cols-1 md:grid-cols-1 gap-4">
                         {/* below div is necessary, or links create line breaks around them for some reason*/}
                         <div>
-                            This is our demo cluster (Burla is built to be
-                            self-hosted), use it for free, but not for anything
-                            important!
+                            This is our demo cluster (Burla is built to be self-hosted), use it for
+                            free, but not for anything important!
                             <br />
-                            Click "Start" to boot eight, 32 CPU machines (1-2
-                            minutes). Click "Stop" to shut them down.
+                            Click "Start" to boot eight, 32 CPU machines (1-2 minutes). Click "Stop"
+                            to shut them down.
                             <br />
                             Machines die after 10 min of inactivity,{" "}
                             <a
@@ -75,10 +83,7 @@ export const NodesList = () => {
 
             <Card className="w-full">
                 <CardHeader className="flex flex-row items-center justify-between">
-                    <CardTitle
-                        className="text-xl font-semibold"
-                        style={{ color: "#3b5a64" }}
-                    >
+                    <CardTitle className="text-xl font-semibold" style={{ color: "#3b5a64" }}>
                         Nodes
                     </CardTitle>
                 </CardHeader>
@@ -98,29 +103,8 @@ export const NodesList = () => {
                                 <TableRow key={node.id}>
                                     <TableCell>
                                         <div className="flex items-center space-x-2">
-                                            <div
-                                                className={cn(
-                                                    "w-2 h-2 rounded-full",
-                                                    node.status === "READY"
-                                                        ? "bg-green-500"
-                                                        : node.status ===
-                                                          "RUNNING"
-                                                        ? "bg-green-500 animate-pulse"
-                                                        : node.status ===
-                                                          "STARTING"
-                                                        ? "bg-yellow-500 animate-pulse"
-                                                        : node.status ===
-                                                          "STOPPING"
-                                                        ? "bg-gray-300 animate-pulse"
-                                                        : "bg-gray-300" // Default
-                                                )}
-                                            />
-                                            <span
-                                                className={cn(
-                                                    "text-sm capitalize",
-                                                    node.status
-                                                )}
-                                            >
+                                            <div className={getStatusClass(node.status)} />
+                                            <span className={cn("text-sm capitalize", node.status)}>
                                                 {node.status}
                                             </span>
                                         </div>

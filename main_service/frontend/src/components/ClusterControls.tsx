@@ -12,6 +12,7 @@ export const ClusterControls = ({ status, onStart, onStop }: ClusterControlsProp
     const isStarting = status === "BOOTING";
     const isStopping = status === "STOPPING";
     const isOn = status === "ON";
+    const isOff = status === "OFF";
 
     return (
         <div className="flex space-x-4">
@@ -29,7 +30,7 @@ export const ClusterControls = ({ status, onStart, onStop }: ClusterControlsProp
                 variant="destructive"
                 size="lg"
                 onClick={onStop}
-                disabled={isStopping || !isOn || isStarting}
+                disabled={isStopping || isOff}
                 className="w-32"
             >
                 <PowerOff className="mr-2 h-4 w-4" />

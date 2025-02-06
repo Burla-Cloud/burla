@@ -15,9 +15,6 @@ export const NodesProvider = ({ children }: { children: React.ReactNode }) => {
             if (data.deleted) {
                 return prevNodes.filter((node) => node.id !== data.nodeId);
             }
-
-            console.log("Node status:", data.status);
-
             const existingNode = prevNodes.find((node) => node.id === data.nodeId);
             if (!existingNode) {
                 return [...prevNodes, createNewNode(data)];

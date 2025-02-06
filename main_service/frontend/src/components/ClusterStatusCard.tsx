@@ -7,10 +7,10 @@ interface ClusterStatusCardProps {
 }
 
 const statusConfig = {
-    ON: { color: "bg-green-500", text: "On" },
-    OFF: { color: "bg-gray-500", text: "Off" },
-    BOOTING: { color: "bg-yellow-500", text: "Starting" },
-    STOPPING: { color: "bg-yellow-500", text: "Stopping" },
+    ON: { color: "bg-green-500", text: "On", pulse: false },
+    OFF: { color: "bg-gray-500", text: "Off", pulse: false },
+    BOOTING: { color: "bg-yellow-500", text: "Starting", pulse: true },
+    STOPPING: { color: "bg-yellow-500", text: "Stopping", pulse: true },
 };
 
 export const ClusterStatusCard = ({ status }: ClusterStatusCardProps) => {
@@ -25,7 +25,11 @@ export const ClusterStatusCard = ({ status }: ClusterStatusCardProps) => {
             </CardHeader>
             <CardContent>
                 <div className="flex items-center space-x-2">
-                    <div className={cn("w-3 h-3 rounded-full animate-pulse", config.color)} />
+                    <div
+                        className={cn("w-3 h-3 rounded-full", config.color, {
+                            "animate-pulse": config.pulse,
+                        })}
+                    />
                     <span className="text-lg">{config.text}</span>
                 </div>
             </CardContent>

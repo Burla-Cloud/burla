@@ -25,8 +25,63 @@ from main_service.helpers import Logger, get_secret
 
 router = APIRouter()
 
-# TODO: MODE THIS TO A GLOBAL FIRESTORE DOC
-CLUSTER_STOP_REQUESTED = False
+
+def _cluster_shutdown_futures(
+    executor: ThreadPoolExecutor, instance_client: InstancesClient, logger: Logger
+):
+    futures = []
+
+    # remove all containers that are NOT the MAIN_SERVICE
+    if IN_LOCAL_DEV_MODE:
+        docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
+        for container in docker_client.containers():
+            is_not_main_service = not container["Names"][0].startswith("/main_service")
+            if is_not_main_service:
+                futures.append(
+                    executor.submit(docker_client.remove_container, container["Id"], force=True)
+                )
+
+    # delete all nodes
+    node_filter = FieldFilter("status", "in", ["READY", "BOOTING", "RUNNING"])
+    for node_snapshot in DB.collection("nodes").where(filter=node_filter).stream():
+        node = Node.from_snapshot(DB, logger, node_snapshot, instance_client)
+        futures.append(executor.submit(node.delete))
+
+    return futures
+
+
+def _cluster_startup_futures(executor: ThreadPoolExecutor, logger: Logger):
+    futures = []
+
+    # use separate cluster config if IN_LOCAL_DEV_MODE:
+    config = DB.collection("cluster_config").document("cluster_config").get().to_dict()
+    config = LOCAL_DEV_CONFIG if IN_LOCAL_DEV_MODE else config
+    node_service_port = 8080  # <- must default to 8080 because only 8080 is open in GCP firewall
+
+    # schedule adding nodes
+    for node_spec in config["Nodes"]:
+        for _ in range(node_spec["quantity"]):
+
+            if IN_LOCAL_DEV_MODE:  # avoid trying to open same port on multiple local containers
+                node_service_port += 1
+
+            machine_type = node_spec["machine_type"]
+            containers = [Container.from_dict(c) for c in node_spec["containers"]]
+            inactivity_time = node_spec.get("inactivity_shutdown_time_sec")
+            node_args = dict(
+                db=DB,
+                logger=logger,
+                machine_type=machine_type,
+                containers=containers,
+                service_port=node_service_port,
+                as_local_container=IN_LOCAL_DEV_MODE,  # <- start in a container if IN_LOCAL_DEV_MODE
+                inactivity_shutdown_time_sec=inactivity_time,
+                verbose=True,
+            )
+            future = executor.submit(Node.start, **node_args)
+            futures.append(future)
+
+    return futures
 
 
 @router.post("/v1/cluster/restart")
@@ -34,122 +89,68 @@ def restart_cluster(
     add_background_task: Callable = Depends(get_add_background_task_function),
     logger: Logger = Depends(get_logger),
 ):
-    global CLUSTER_STOP_REQUESTED
     start = time()
     instance_client = InstancesClient()
-
-    if IN_PROD:
-        client = slack_sdk.WebClient(token=get_secret("slackbot-token"))
-        client.chat_postMessage(channel="user-activity", text="Someone started the prod cluster.")
-
     futures = []
     executor = ThreadPoolExecutor(max_workers=32)
 
-    # delete all nodes
-    node_filter = FieldFilter("status", "in", ["READY", "BOOTING", "RUNNING"])
-    for node_snapshot in DB.collection("nodes").where(filter=node_filter).stream():
-        node = Node.from_snapshot(DB, logger, node_snapshot, instance_client)
-        futures.append(executor.submit(node.delete))
+    if IN_PROD:
+        client = slack_sdk.WebClient(token=get_secret("slackbot-token"))
+        msg = "Someone started/restarted the prod cluster."
+        client.chat_postMessage(channel="user-activity", text=msg)
 
-    # add nodes according to cluster_config doc
-    def _add_node_logged(machine_type, containers, node_service_port, inactivity_time):
-        node = Node.start(
-            db=DB,
-            logger=logger,
-            machine_type=machine_type,
-            containers=containers,
-            service_port=node_service_port,
-            as_local_container=IN_LOCAL_DEV_MODE,  # <- start in a container if IN_LOCAL_DEV_MODE
-            inactivity_shutdown_time_sec=inactivity_time,
-            verbose=True,
-        )
-        return node.instance_name
+    # schedule shotdown of all CURRENT nodes and containers
+    shutdown_futures = _cluster_shutdown_futures(executor, instance_client, logger)
+    futures.extend(shutdown_futures)
 
-    # remove any existing `node_service` containers if in IN_LOCAL_DEV_MODE
-    # this has to be done before starting new node_services so ports are available
-    if IN_LOCAL_DEV_MODE:
-        docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
-        for container in docker_client.containers():
-            if container["Names"][0].startswith("/node"):
-                docker_client.remove_container(container["Id"], force=True)
+    # check if stop requested, if so don't schedule any new nodes
+    cluster_status = DB.collection("cluster_status").document("current").get().to_dict()
+    cluster_stop_requested = cluster_status and cluster_status.get("stop_requested", False)
 
-    # use separate cluster config if IN_LOCAL_DEV_MODE:
-    config = DB.collection("cluster_config").document("cluster_config").get().to_dict()
-    config = LOCAL_DEV_CONFIG if IN_LOCAL_DEV_MODE else config
-    node_service_port = 8080  # <- must default to 8080 because only 8080 is open in GCP firewall
+    if cluster_stop_requested:
+        # schuedule startup of any NEW nodes / containers
+        startup_futures = _cluster_startup_futures(executor, logger)
+        futures.extend(startup_futures)
 
-    for node_spec in config["Nodes"]:
-        for _ in range(node_spec["quantity"]):
-
-            if IN_LOCAL_DEV_MODE:  # avoid trying to open same port on multiple local containers
-                node_service_port += 1
-            machine_type = node_spec["machine_type"]
-            containers = [Container.from_dict(c) for c in node_spec["containers"]]
-            inactivity_time = node_spec.get("inactivity_shutdown_time_sec")
-
-            node_args = (machine_type, containers, node_service_port, inactivity_time)
-            future = executor.submit(_add_node_logged, *node_args)
-            futures.append(future)
-
-    # wait until all operations done
-    exec_results = [future.result() for future in futures]
-    node_instance_names = [result for result in exec_results if result is not None]
+    # wait until all scheduled operations complete:
+    [future.result() for future in futures]
     executor.shutdown(wait=True)
 
-    # remove any old containers created by old nodes (new nodes only responsible for their workers)
-    if IN_LOCAL_DEV_MODE:
-        node_ids = [name[11:] for name in node_instance_names]
-        for container in docker_client.containers(all=True):
-            name = container["Names"][0]
-            is_main_service = name.startswith("/main_service")
-            belongs_to_current_node = any([id in name for id in node_ids])
-            if not (is_main_service or belongs_to_current_node):
-                docker_client.remove_container(container["Id"], force=True)
+    # check again if stop was requested
+    cluster_status = DB.collection("cluster_status").document("current").get().to_dict()
+    cluster_stop_requested = cluster_status and cluster_status.get("stop_requested", False)
 
-    # Now, before doing further reconciliation, check if a shutdown was requested:
-    if CLUSTER_STOP_REQUESTED:
-        logger.log("Stop requested during reboot: aborting startup and shutting down.")
-        # Queue a shutdown operation to ensure that any newly started nodes are removed.
+    # if so, schedule shutdown again to ensure any nodes that still managed to start are shutdown.
+    if cluster_stop_requested:
+        logger.log("Stop requested during reboot: aborting startup and shutting down!")
         add_background_task(shutdown_cluster, logger)
+        # reset shutdown requested indicator:
+        DB.collection("cluster_status").document("current").set({"stop_requested": False})
     else:
         logger.log("Done restarting, reconciling ...")
         add_background_task(reconcile, DB, logger, add_background_task)
 
     duration = time() - start
-    logger.log(f"Restarted after {duration//60}m {duration%60}s")
+    logger.log(f"Exiting restart after {duration//60}m {duration%60}s")
 
 
 @router.post("/v1/cluster/shutdown")
 async def shutdown_cluster(logger: Logger = Depends(get_logger)):
-    global CLUSTER_STOP_REQUESTED
-    CLUSTER_STOP_REQUESTED = True  # mark that a stop has been requested
     start = time()
     instance_client = InstancesClient()
+    DB.collection("cluster_status").document("current").set({"stop_requested": True})
 
     if IN_PROD:
         client = slack_sdk.WebClient(token=get_secret("slackbot-token"))
         client.chat_postMessage(channel="user-activity", text="Someone shut the prod cluster off.")
 
     futures = []
-    executor = ThreadPoolExecutor(max_workers=32)
+    with ThreadPoolExecutor(max_workers=32) as executor:
+        futures = _cluster_shutdown_futures(executor, instance_client, logger)
+        [future.result() for future in futures]
 
-    # delete all nodes
-    node_filter = FieldFilter("status", "in", ["READY", "BOOTING", "RUNNING"])
-    for node_snapshot in DB.collection("nodes").where(filter=node_filter).stream():
-        node = Node.from_snapshot(DB, logger, node_snapshot, instance_client)
-        futures.append(executor.submit(node.delete))
-
-    # remove any existing node/worker service containers if in IN_LOCAL_DEV_MODE
-    if IN_LOCAL_DEV_MODE:
-        docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
-        for container in docker_client.containers():
-            is_node_service_container = container["Names"][0].startswith("/node")
-            is_worker_service_container = "worker" in container["Names"][0]
-            if is_node_service_container or is_worker_service_container:
-                docker_client.remove_container(container["Id"], force=True)
-
-    [future.result() for future in futures]
-    executor.shutdown(wait=True)
+    # reset to False after shutdown finished.
+    DB.collection("cluster_status").document("current").set({"stop_requested": False})
 
     duration = time() - start
     logger.log(f"Shut down after {duration//60}m {duration%60}s")
@@ -157,35 +158,33 @@ async def shutdown_cluster(logger: Logger = Depends(get_logger)):
 
 @router.get("/v1/cluster")
 async def cluster_info():
-    node_name_to_status = {}
+    queue = asyncio.Queue()
+    current_loop = asyncio.get_running_loop()
 
-    async def node_stream():
+    # Callback to handle Firestore changes
+    def on_snapshot(query_snapshot, changes, read_time):
+        for change in changes:
+            doc = change.document
+            doc_data = doc.to_dict() or {}
+            instance_name = doc_data.get("instance_name")
+            if change.type.name == "REMOVED":
+                event_data = {"nodeId": instance_name, "deleted": True}
+            else:  # For ADDED or MODIFIED events
+                event_data = {"nodeId": instance_name, "status": doc_data.get("status")}
+            # Use call_soon_threadsafe because this callback runs in a separate thread.
+            current_loop.call_soon_threadsafe(queue.put_nowait, event_data)
+            print(f"Firestore on_snapshot event: {event_data}")
+
+    # Define your query with the same filter from before.
+    status_filter = FieldFilter("status", "not-in", ["DELETED", "FAILED"])
+    query = DB.collection("nodes").where(filter=status_filter)
+    # Subscribe to changes. The returned unsubscribe function can be used to close the listener.
+    unsubscribe = query.on_snapshot(on_snapshot)
+
+    try:
         while True:
-            status_filter = FieldFilter("status", "not-in", ["DELETED", "FAILED"])
-            node_docs = list(DB.collection("nodes").where(filter=status_filter).stream())
-            nodes = [doc.to_dict() for doc in node_docs]
-            node_names = [node["instance_name"] for node in nodes]
-            names_of_deleted_nodes = set(node_name_to_status.keys()) - set(node_names)
-
-            # brodcast deleted nodes:
-            for node_name in names_of_deleted_nodes:
-                event_data = dict(nodeId=node_name, deleted=True)
-                yield f"data: {json.dumps(event_data)}\n\n"
-                del node_name_to_status[node_name]
-                print(f"deleted node: {event_data}")
-
-            # brodcast status updates:
-            for node in nodes:
-                instance_name = node["instance_name"]
-                current_status = node["status"]
-                previous_status = node_name_to_status.get(instance_name)
-
-                if current_status != previous_status:
-                    node_name_to_status[instance_name] = current_status
-                    event_data = dict(nodeId=instance_name, status=current_status)
-                    yield f"data: {json.dumps(event_data)}\n\n"
-                    print(f"updated status: {event_data}")
-
-            await asyncio.sleep(1)
-
-    return StreamingResponse(node_stream(), media_type="text/event-stream")
+            # Wait for events from the Firestore snapshot listener.
+            event = await queue.get()
+            yield f"data: {json.dumps(event)}\n\n"
+    finally:
+        unsubscribe()  # Unsubscribe when the client disconnects.

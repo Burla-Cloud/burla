@@ -17,7 +17,7 @@ from starlette.datastructures import UploadFile
 from google.cloud import logging
 from google.cloud.compute_v1 import InstancesClient
 
-__version__ = "0.9.1"
+__version__ = "0.9.2"
 IN_LOCAL_DEV_MODE = os.environ.get("IN_LOCAL_DEV_MODE") == "True"  # Cluster is runing 100% locally
 IN_DEV = os.environ.get("IN_DEV") == "True"
 

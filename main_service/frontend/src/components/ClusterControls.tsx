@@ -41,7 +41,7 @@ export const ClusterControls = ({ status, onReboot, onStop }: ClusterControlsPro
                 variant="destructive"
                 size="lg"
                 onClick={onStop}
-                disabled={isStopping || isOff}
+                disabled={isStopping || isOff || isRebooting || isStarting}
                 className="w-32"
             >
                 <PowerOff className="mr-2 h-4 w-4" />

@@ -11,6 +11,8 @@ export const NodesProvider = ({ children }: { children: React.ReactNode }) => {
     const [nodes, setNodes] = useState<BurlaNode[]>([]);
 
     const handleNodeUpdate = (data: any) => {
+        console.log("Received node update:", data);
+
         setNodes((prevNodes) => {
             let newNodes;
             if (data.deleted) {
@@ -18,8 +20,16 @@ export const NodesProvider = ({ children }: { children: React.ReactNode }) => {
             } else {
                 const existingNode = prevNodes.find((node) => node.id === data.nodeId);
                 if (!existingNode) {
-                    newNodes = [...prevNodes, createNewNode(data)];
+                    const newNode = createNewNode(data);
+                    console.log("Creating new node:", newNode);
+                    newNodes = [...prevNodes, newNode];
                 } else {
+                    console.log(
+                        "Updating existing node:",
+                        existingNode,
+                        "with new status:",
+                        data.status
+                    );
                     newNodes = prevNodes.map((node) =>
                         node.id === data.nodeId
                             ? { ...node, status: data.status as NodeStatus }
@@ -27,19 +37,37 @@ export const NodesProvider = ({ children }: { children: React.ReactNode }) => {
                     );
                 }
             }
-            console.log("Current node statuses:");
-            newNodes.forEach((node) => {
-                console.log(`Node ${node.name}: ${node.status}`);
-            });
+
             return newNodes;
         });
     };
 
     useEffect(() => {
         const eventSource = new EventSource("/v1/cluster");
-        eventSource.onmessage = (event) => handleNodeUpdate(JSON.parse(event.data));
-        eventSource.onerror = (error) => console.error("EventSource failed:", error);
-        return () => eventSource.close();
+
+        // Add connection state handlers
+        eventSource.onopen = () => {
+            console.log("EventSource connected");
+        };
+
+        eventSource.onmessage = (event) => {
+            console.log("Raw event received:", event.data);
+            const parsedData = JSON.parse(event.data);
+            console.log("Parsed event data:", parsedData);
+            handleNodeUpdate(parsedData);
+        };
+
+        eventSource.onerror = (error) => {
+            console.error("EventSource error:", error);
+            // Optionally reconnect on error
+            // eventSource.close();
+        };
+
+        // Clean up
+        return () => {
+            console.log("Closing EventSource connection");
+            eventSource.close();
+        };
     }, []);
 
     return <NodesContext.Provider value={{ nodes }}>{children}</NodesContext.Provider>;

@@ -6,10 +6,11 @@ from typing import Callable
 
 import slack_sdk
 from fastapi import APIRouter, Depends
+from fastapi.responses import JSONResponse
 from google.cloud.firestore_v1 import FieldFilter
 from google.cloud.compute_v1 import InstancesClient
 from starlette.responses import StreamingResponse
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, wait
 
 from main_service import (
     DB,
@@ -53,16 +54,14 @@ def _cluster_shutdown_futures(
 def _cluster_startup_futures(executor: ThreadPoolExecutor, logger: Logger):
     futures = []
 
-    # use separate cluster config if IN_LOCAL_DEV_MODE:
     config = DB.collection("cluster_config").document("cluster_config").get().to_dict()
     config = LOCAL_DEV_CONFIG if IN_LOCAL_DEV_MODE else config
     node_service_port = 8080  # <- must default to 8080 because only 8080 is open in GCP firewall
 
-    # schedule adding nodes
     for node_spec in config["Nodes"]:
         for _ in range(node_spec["quantity"]):
 
-            if IN_LOCAL_DEV_MODE:  # avoid trying to open same port on multiple local containers
+            if IN_LOCAL_DEV_MODE:  # ports all need to be different if running locally
                 node_service_port += 1
 
             machine_type = node_spec["machine_type"]
@@ -85,60 +84,31 @@ def _cluster_startup_futures(executor: ThreadPoolExecutor, logger: Logger):
 
 
 @router.post("/v1/cluster/restart")
-def restart_cluster(
+async def restart_cluster(
     add_background_task: Callable = Depends(get_add_background_task_function),
     logger: Logger = Depends(get_logger),
 ):
     start = time()
     instance_client = InstancesClient()
-    futures = []
-    executor = ThreadPoolExecutor(max_workers=32)
 
     if IN_PROD:
         client = slack_sdk.WebClient(token=get_secret("slackbot-token"))
-        msg = "Someone started/restarted the prod cluster."
-        client.chat_postMessage(channel="user-activity", text=msg)
+        client.chat_postMessage(channel="user-activity", text="Prod cluster started/restarted.")
 
-    # schedule shotdown of all CURRENT nodes and containers
-    shutdown_futures = _cluster_shutdown_futures(executor, instance_client, logger)
-    futures.extend(shutdown_futures)
-
-    # check if stop requested, if so don't schedule any new nodes
-    cluster_status = DB.collection("cluster_status").document("current").get().to_dict()
-    cluster_stop_requested = cluster_status and cluster_status.get("stop_requested", False)
-
-    if cluster_stop_requested:
-        # schuedule startup of any NEW nodes / containers
+    with ThreadPoolExecutor(max_workers=32) as executor:
+        shutdown_futures = _cluster_shutdown_futures(executor, instance_client, logger)
         startup_futures = _cluster_startup_futures(executor, logger)
-        futures.extend(startup_futures)
-
-    # wait until all scheduled operations complete:
-    [future.result() for future in futures]
-    executor.shutdown(wait=True)
-
-    # check again if stop was requested
-    cluster_status = DB.collection("cluster_status").document("current").get().to_dict()
-    cluster_stop_requested = cluster_status and cluster_status.get("stop_requested", False)
-
-    # if so, schedule shutdown again to ensure any nodes that still managed to start are shutdown.
-    if cluster_stop_requested:
-        logger.log("Stop requested during reboot: aborting startup and shutting down!")
-        add_background_task(shutdown_cluster, logger)
-        # reset shutdown requested indicator:
-        DB.collection("cluster_status").document("current").set({"stop_requested": False})
-    else:
-        logger.log("Done restarting, reconciling ...")
-        add_background_task(reconcile, DB, logger, add_background_task)
+        [future.result() for future in shutdown_futures + startup_futures]
 
     duration = time() - start
-    logger.log(f"Exiting restart after {duration//60}m {duration%60}s")
+    logger.log(f"Done restarting after {duration//60}m {duration%60}s")
+    add_background_task(reconcile, DB, logger, add_background_task)
 
 
 @router.post("/v1/cluster/shutdown")
 async def shutdown_cluster(logger: Logger = Depends(get_logger)):
     start = time()
     instance_client = InstancesClient()
-    DB.collection("cluster_status").document("current").set({"stop_requested": True})
 
     if IN_PROD:
         client = slack_sdk.WebClient(token=get_secret("slackbot-token"))
@@ -149,42 +119,39 @@ async def shutdown_cluster(logger: Logger = Depends(get_logger)):
         futures = _cluster_shutdown_futures(executor, instance_client, logger)
         [future.result() for future in futures]
 
-    # reset to False after shutdown finished.
-    DB.collection("cluster_status").document("current").set({"stop_requested": False})
-
     duration = time() - start
     logger.log(f"Shut down after {duration//60}m {duration%60}s")
 
 
 @router.get("/v1/cluster")
-async def cluster_info():
+async def cluster_info(logger: Logger = Depends(get_logger)):
     queue = asyncio.Queue()
     current_loop = asyncio.get_running_loop()
 
-    # Callback to handle Firestore changes
-    def on_snapshot(query_snapshot, changes, read_time):
-        for change in changes:
-            doc = change.document
-            doc_data = doc.to_dict() or {}
-            instance_name = doc_data.get("instance_name")
-            if change.type.name == "REMOVED":
-                event_data = {"nodeId": instance_name, "deleted": True}
-            else:  # For ADDED or MODIFIED events
-                event_data = {"nodeId": instance_name, "status": doc_data.get("status")}
-            # Use call_soon_threadsafe because this callback runs in a separate thread.
-            current_loop.call_soon_threadsafe(queue.put_nowait, event_data)
-            print(f"Firestore on_snapshot event: {event_data}")
+    async def node_stream():
 
-    # Define your query with the same filter from before.
-    status_filter = FieldFilter("status", "not-in", ["DELETED", "FAILED"])
-    query = DB.collection("nodes").where(filter=status_filter)
-    # Subscribe to changes. The returned unsubscribe function can be used to close the listener.
-    unsubscribe = query.on_snapshot(on_snapshot)
+        def on_snapshot(query_snapshot, changes, read_time):
+            for change in changes:
+                doc_data = change.document.to_dict() or {}
+                instance_name = doc_data.get("instance_name")
 
-    try:
-        while True:
-            # Wait for events from the Firestore snapshot listener.
-            event = await queue.get()
-            yield f"data: {json.dumps(event)}\n\n"
-    finally:
-        unsubscribe()  # Unsubscribe when the client disconnects.
+                if change.type.name == "REMOVED":
+                    event_data = {"nodeId": instance_name, "deleted": True}
+                else:
+                    event_data = {"nodeId": instance_name, "status": doc_data.get("status")}
+
+                current_loop.call_soon_threadsafe(queue.put_nowait, event_data)
+                logger.log(f"Firestore event detected: {event_data}")
+
+        status_filter = FieldFilter("status", "not-in", ["DELETED", "FAILED"])
+        query = DB.collection("nodes").where(filter=status_filter)
+        unsubscribe = query.on_snapshot(on_snapshot)
+
+        try:
+            while True:
+                event = await queue.get()
+                yield f"data: {json.dumps(event)}\n\n"
+        finally:
+            unsubscribe()
+
+    return StreamingResponse(node_stream(), media_type="text/event-stream")

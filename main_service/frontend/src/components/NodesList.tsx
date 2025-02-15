@@ -26,6 +26,11 @@ export const NodesList = ({ nodes }: NodesListProps) => {
         return cn("w-2 h-2 rounded-full", nodeStatus ? statusClasses[nodeStatus] : "bg-gray-300");
     };
 
+    // console.log(`Nodes: ${nodes.length}`);
+    // nodes.forEach((node) => {
+    //     console.log(`Node ${node.name} status: ${node.status}`);
+    // });
+
     return (
         <div className="space-y-6">
             <Card className="w-full">

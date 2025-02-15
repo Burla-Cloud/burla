@@ -12,16 +12,26 @@ export const NodesProvider = ({ children }: { children: React.ReactNode }) => {
 
     const handleNodeUpdate = (data: any) => {
         setNodes((prevNodes) => {
+            let newNodes;
             if (data.deleted) {
-                return prevNodes.filter((node) => node.id !== data.nodeId);
+                newNodes = prevNodes.filter((node) => node.id !== data.nodeId);
+            } else {
+                const existingNode = prevNodes.find((node) => node.id === data.nodeId);
+                if (!existingNode) {
+                    newNodes = [...prevNodes, createNewNode(data)];
+                } else {
+                    newNodes = prevNodes.map((node) =>
+                        node.id === data.nodeId
+                            ? { ...node, status: data.status as NodeStatus }
+                            : node
+                    );
+                }
             }
-            const existingNode = prevNodes.find((node) => node.id === data.nodeId);
-            if (!existingNode) {
-                return [...prevNodes, createNewNode(data)];
-            }
-            return prevNodes.map((node) =>
-                node.id === data.nodeId ? { ...node, status: data.status as NodeStatus } : node
-            );
+            console.log("Current node statuses:");
+            newNodes.forEach((node) => {
+                console.log(`Node ${node.name}: ${node.status}`);
+            });
+            return newNodes;
         });
     };
 

@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "main_service"
-version = "0.9.1"
+version = "0.9.2"
 description = ""
 authors = ["Jacob Zuliani <jake@burla.dev>, Joseph Perry <joe@burla.dev>"]
 packages = [{include = "main_service", from = "src"}]
@@ -11,7 +11,7 @@ google-cloud-logging = "^3.5.0"
 grpcio = "^1.54.2"
 google-cloud-firestore = "^2.11.1"
 google-cloud-secret-manager = "^2.16.2"
-google-cloud-run = "^0.9.1"
+google-cloud-run = "^0.9.2"
 google-api-python-client = "^2.97.0"
 google-auth = "^2.22.0"
 google-cloud-storage = "^2.10.0"

@@ -25,16 +25,12 @@ from main_service.helpers import Logger, get_secret
 
 router = APIRouter()
 
-# TODO: MODE THIS TO A GLOBAL FIRESTORE DOC
-CLUSTER_STOP_REQUESTED = False
-
 
 @router.post("/v1/cluster/restart")
 def restart_cluster(
     add_background_task: Callable = Depends(get_add_background_task_function),
     logger: Logger = Depends(get_logger),
 ):
-    global CLUSTER_STOP_REQUESTED
     start = time()
     instance_client = InstancesClient()
 
@@ -106,14 +102,8 @@ def restart_cluster(
             if not (is_main_service or belongs_to_current_node):
                 docker_client.remove_container(container["Id"], force=True)
 
-    # Now, before doing further reconciliation, check if a shutdown was requested:
-    if CLUSTER_STOP_REQUESTED:
-        logger.log("Stop requested during reboot: aborting startup and shutting down.")
-        # Queue a shutdown operation to ensure that any newly started nodes are removed.
-        add_background_task(shutdown_cluster, logger)
-    else:
-        logger.log("Done restarting, reconciling ...")
-        add_background_task(reconcile, DB, logger, add_background_task)
+    logger.log("Done restarting, reconciling ...")
+    add_background_task(reconcile, DB, logger, add_background_task)
 
     duration = time() - start
     logger.log(f"Restarted after {duration//60}m {duration%60}s")
@@ -121,8 +111,6 @@ def restart_cluster(
 
 @router.post("/v1/cluster/shutdown")
 async def shutdown_cluster(logger: Logger = Depends(get_logger)):
-    global CLUSTER_STOP_REQUESTED
-    CLUSTER_STOP_REQUESTED = True  # mark that a stop has been requested
     start = time()
     instance_client = InstancesClient()
 
@@ -156,36 +144,34 @@ async def shutdown_cluster(logger: Logger = Depends(get_logger)):
 
 
 @router.get("/v1/cluster")
-async def cluster_info():
-    node_name_to_status = {}
+async def cluster_info(logger: Logger = Depends(get_logger)):
+    queue = asyncio.Queue()
+    current_loop = asyncio.get_running_loop()
 
     async def node_stream():
-        while True:
-            status_filter = FieldFilter("status", "not-in", ["DELETED", "FAILED"])
-            node_docs = list(DB.collection("nodes").where(filter=status_filter).stream())
-            nodes = [doc.to_dict() for doc in node_docs]
-            node_names = [node["instance_name"] for node in nodes]
-            names_of_deleted_nodes = set(node_name_to_status.keys()) - set(node_names)
 
-            # brodcast deleted nodes:
-            for node_name in names_of_deleted_nodes:
-                event_data = dict(nodeId=node_name, deleted=True)
-                yield f"data: {json.dumps(event_data)}\n\n"
-                del node_name_to_status[node_name]
-                print(f"deleted node: {event_data}")
+        def on_snapshot(query_snapshot, changes, read_time):
+            for change in changes:
+                doc_data = change.document.to_dict() or {}
+                instance_name = doc_data.get("instance_name")
 
-            # brodcast status updates:
-            for node in nodes:
-                instance_name = node["instance_name"]
-                current_status = node["status"]
-                previous_status = node_name_to_status.get(instance_name)
+                if change.type.name == "REMOVED":
+                    event_data = {"nodeId": instance_name, "deleted": True}
+                else:
+                    event_data = {"nodeId": instance_name, "status": doc_data.get("status")}
 
-                if current_status != previous_status:
-                    node_name_to_status[instance_name] = current_status
-                    event_data = dict(nodeId=instance_name, status=current_status)
-                    yield f"data: {json.dumps(event_data)}\n\n"
-                    print(f"updated status: {event_data}")
+                current_loop.call_soon_threadsafe(queue.put_nowait, event_data)
+                logger.log(f"Firestore event detected: {event_data}")
 
-            await asyncio.sleep(1)
+        status_filter = FieldFilter("status", "in", ["READY", "BOOTING", "RUNNING"])
+        query = DB.collection("nodes").where(filter=status_filter)
+        unsubscribe = query.on_snapshot(on_snapshot)
+
+        try:
+            while True:
+                event = await queue.get()
+                yield f"data: {json.dumps(event)}\n\n"
+        finally:
+            unsubscribe()
 
     return StreamingResponse(node_stream(), media_type="text/event-stream")

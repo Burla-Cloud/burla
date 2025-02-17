@@ -486,7 +486,7 @@ protobuf = ">=3.20.2,<4.21.0 || >4.21.0,<4.21.1 || >4.21.1,<4.21.2 || >4.21.2,<4
 
 [[package]]
 name = "google-cloud-run"
-version = "0.9.2"
+version = "0.9.3"
 description = "Google Cloud Run API client library"
 optional = false
 python-versions = ">=3.7"

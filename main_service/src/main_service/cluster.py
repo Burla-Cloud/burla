@@ -176,13 +176,14 @@ def reconcile(db: firestore.Client, logger: Logger, add_background_task: Callabl
                 machine = spec["machine_type"]
                 logger.log(f"Adding another {machine} because cluster is {node_deficit-i} short.")
 
-                def add_node(machine_type, containers, inactivity_shutdown_time_sec):
+                def add_node(machine_type, containers, inactivity_shutdown_time_sec, disk_size):
                     Node.start(
                         db=db,
                         logger=logger,
                         machine_type=machine_type,
                         containers=containers,
                         inactivity_shutdown_time_sec=inactivity_shutdown_time_sec,
+                        disk_size=disk_size,
                         verbose=True,
                     )
 
@@ -191,6 +192,7 @@ def reconcile(db: firestore.Client, logger: Logger, add_background_task: Callabl
                     spec["machine_type"],
                     containers,
                     spec.get("inactivity_shutdown_time_sec"),
+                    spec.get("disk_size"),
                 )
 
         # too many of this machine_type on standby ?  (remove some standby nodes ?)

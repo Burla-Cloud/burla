@@ -25,8 +25,7 @@ from burla._helpers import (
     healthcheck_job,
 )
 
-# increase at your own risk, burla may break.
-MAX_PARALLELISM = 1000
+MAX_PARALLELISM = 1000  # outdated.
 
 # This MUST be set to the same value as `JOB_HEALTHCHECK_FREQUENCY_SEC` in the node service.
 # Nodes will restart themself if they dont get a new healthcheck from the client every X seconds.
@@ -148,11 +147,49 @@ def remote_parallel_map(
     func_cpu: int = 1,
     func_ram: int = 4,
     spinner: bool = True,
+    generator: bool = False,
     max_parallelism: Optional[int] = None,
     api_key: Optional[str] = None,
 ):
     """
-    TODO: add docstring
+    Run an arbitrary Python function on many remote computers in parallel.
+
+    Run provided function_ on each item in inputs at the same time, each on a separate CPU,
+    up to 256 CPUs (as of 1/3/25). If more than 256 inputs are provided, inputs are queued and
+    processed sequentially on each worker. Any exception raised by `function_`
+    (including its stack trace) will be re-raised on the client machine.
+
+    Args:
+        function_ (Callable):
+            A Python function that accepts a single input argument. For example, calling
+            `function_(inputs[0])` should not raise an exception.
+        inputs (Iterable[Any]):
+            An iterable of elements that will be passed to `function_`.
+        func_cpu (int, optional):
+            The number of CPUs allocated for each instance of `function_`. The maximum allowable
+            value is 32. Defaults to 1.
+        func_ram (int, optional):
+            The amount of RAM (in GB) allocated for each instance of `function_`. The maximum
+            allowable value is 128. Defaults to 4.
+        spinner (bool, optional):
+            If set to False, disables the display of the status indicator/spinner. Defaults to True.
+        generator (bool, optional):
+            If True, returns a generator that yields outputs as they are produced; otherwise,
+            returns a list of outputs once all have been processed. Defaults to False.
+        max_parallelism (int, optional):
+            The maximum number of `function_` instances allowed to be running at the same time.
+            Defaults to the number of available CPUs divided by `func_cpu`.
+        api_key (str, optional):
+            An API key for use in deployment environments where `burla login` cannot be run.
+
+    Returns:
+        List[Any] or Generator[Any, None, None]:
+            A list containing the objects returned by `function_` in no particular order.
+            If `generator=True`, returns a generator that yields results as they are produced.
+
+    See Also:
+        For more info see our overview: https://docs.burla.dev/overview
+        or API-Reference: https://docs.burla.dev/api-reference
     """
     max_parallelism = max_parallelism if max_parallelism else len(inputs)
     max_parallelism = max_parallelism if max_parallelism < MAX_PARALLELISM else MAX_PARALLELISM
@@ -198,9 +235,15 @@ def remote_parallel_map(
         if spinner:
             spinner.text = f"Running {len(inputs)} inputs through `{function_.__name__}`"
         log_msg_stdout = spinner if spinner else sys.stdout
-        # yield from _watch_job(job_id, len(inputs), log_msg_stdout)
-        for output_batch in _watch_job(job_id, len(input_batches), log_msg_stdout, stop_event):
-            yield from output_batch
+        if generator:
+            # from before the temporary fix:
+            # yield from _watch_job(job_id, len(inputs), log_msg_stdout)
+            for output_batch in _watch_job(job_id, len(input_batches), log_msg_stdout, stop_event):
+                yield from output_batch
+        else:
+            results = []
+            for output_batch in _watch_job(job_id, len(input_batches), log_msg_stdout, stop_event):
+                results.extend(output_batch)
 
     except Exception as e:
         if spinner:
@@ -212,3 +255,6 @@ def remote_parallel_map(
     if spinner:
         spinner.text = "Done!"
         spinner.ok("✔")
+
+    if not generator:
+        return results

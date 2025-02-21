@@ -48,7 +48,7 @@ def restart_cluster(
         futures.append(executor.submit(node.delete))
 
     # add nodes according to cluster_config doc
-    def _add_node_logged(machine_type, containers, node_service_port, inactivity_time):
+    def _add_node_logged(machine_type, containers, node_service_port, inactivity_time, disk_size):
         node = Node.start(
             db=DB,
             logger=logger,
@@ -57,6 +57,7 @@ def restart_cluster(
             service_port=node_service_port,
             as_local_container=IN_LOCAL_DEV_MODE,  # <- start in a container if IN_LOCAL_DEV_MODE
             inactivity_shutdown_time_sec=inactivity_time,
+            disk_size=disk_size,
             verbose=True,
         )
         return node.instance_name
@@ -82,8 +83,9 @@ def restart_cluster(
             machine_type = node_spec["machine_type"]
             containers = [Container.from_dict(c) for c in node_spec["containers"]]
             inactivity_time = node_spec.get("inactivity_shutdown_time_sec")
+            disk_size = node_spec.get("disk_size")
 
-            node_args = (machine_type, containers, node_service_port, inactivity_time)
+            node_args = (machine_type, containers, node_service_port, inactivity_time, disk_size)
             future = executor.submit(_add_node_logged, *node_args)
             futures.append(future)
 

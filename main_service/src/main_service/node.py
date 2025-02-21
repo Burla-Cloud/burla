@@ -77,7 +77,7 @@ else:
 
 NODE_BOOT_TIMEOUT = 60 * 3
 ACCEPTABLE_ZONES = ["us-central1-b", "us-central1-c", "us-central1-f", "us-central1-a"]
-NODE_SVC_VERSION = "0.9.3"  # <- this maps to a git tag/release or branch
+NODE_SVC_VERSION = "0.9.4"  # <- this maps to a git tag/release or branch
 
 
 class Node:
@@ -122,9 +122,9 @@ class Node:
         as_local_container: bool = False,
         instance_client: Optional[InstancesClient] = None,
         inactivity_shutdown_time_sec: Optional[int] = None,
+        disk_size: Optional[int] = None,
         verbose=False,
         disk_image: str = "projects/burla-prod/global/images/burla-cluster-node-image-6",
-        disk_size: int = 20,  # <- (Gigabytes) minimum is 10 due to disk image
     ):
         self = cls.__new__(cls)
         self.db = db
@@ -133,6 +133,7 @@ class Node:
         self.containers = containers
         self.port = service_port
         self.inactivity_shutdown_time_sec = inactivity_shutdown_time_sec
+        self.disk_size = disk_size if disk_size else 20  # minimum is 10 due to disk image
         self.instance_client = instance_client if instance_client else InstancesClient()
 
         self.instance_name = f"burla-node-{uuid4().hex[:8]}"
@@ -157,7 +158,7 @@ class Node:
             assert IN_DEV == True
             self.__start_svc_in_local_container()
         else:
-            self.__start_svc_in_vm(disk_image=disk_image, disk_size=disk_size)
+            self.__start_svc_in_vm(disk_image=disk_image, disk_size=self.disk_size)
 
         start = time()
         status = self.status()

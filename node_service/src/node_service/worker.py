@@ -27,10 +27,13 @@ class Worker:
     ):
         self.container = None
         attempt = 0
+        image_stored_in_gcp = "docker.pkg.dev" in image or "gcr.io" in image
 
-        # Use the provided APIClient directly
-        auth_config = {"username": "oauth2accesstoken", "password": ACCESS_TOKEN}
-        docker_client.pull(image, auth_config=auth_config)
+        if image_stored_in_gcp:
+            auth_config = {"username": "oauth2accesstoken", "password": ACCESS_TOKEN}
+            docker_client.pull(image, auth_config=auth_config)
+        else:
+            docker_client.pull(image)
 
         # ODDLY, if `docker_client.pull` fails to pull the image, it will NOT throw an error...
         # check here that the image was actually pulled and exists on disk,

@@ -40,7 +40,7 @@ deploy-test:
 		--image=$${TEST_IMAGE_NAME} \
 		--project $${PROJECT_ID} \
 		--region=us-central1 \
-		--set-env-vars PROJECT_ID=$${PROJECT_ID},PROJECT_NUM=$${PROJECT_NUM} \
+		--set-env-vars PROJECT_ID=$${PROJECT_ID},PROJECT_NUM=$${PROJECT_NUM},IN_TEST=True \
 		--min-instances 0 \
 		--max-instances 5 \
 		--memory 2Gi \
@@ -96,7 +96,7 @@ deploy-prod:
 		--image=$${PROD_IMAGE_NAME} \
 		--project burla-prod \
 		--region=us-central1 \
-		--set-env-vars PROJECT_ID=burla-prod,IN_PROD=True \
+		--set-env-vars PROJECT_ID=burla-prod,PROJECT_NUM=1057122726382,IN_PROD=True \
 		--min-instances 1 \
 		--max-instances 20 \
 		--memory 4Gi \

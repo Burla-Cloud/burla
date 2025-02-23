@@ -68,12 +68,8 @@ class Container:
 TOTAL_BOOT_TIME = 60
 TOTAL_REBOOT_TIME = 30
 
-# default compute engine svc account
-if IN_PROD:
-    GCE_DEFAULT_SVC = "1057122726382-compute@developer.gserviceaccount.com"
-else:
-    PROJECT_NUM = os.environ["PROJECT_NUM"]
-    GCE_DEFAULT_SVC = f"{PROJECT_NUM}-compute@developer.gserviceaccount.com"
+PROJECT_NUM = os.environ["PROJECT_NUM"]
+GCE_DEFAULT_SVC = f"{PROJECT_NUM}-compute@developer.gserviceaccount.com"
 
 NODE_BOOT_TIMEOUT = 60 * 3
 ACCEPTABLE_ZONES = ["us-central1-b", "us-central1-c", "us-central1-f", "us-central1-a"]

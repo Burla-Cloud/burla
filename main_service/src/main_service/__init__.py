@@ -33,10 +33,12 @@ DB = firestore.Client(project=PROJECT_ID)
 IN_LOCAL_DEV_MODE = os.environ.get("IN_LOCAL_DEV_MODE") == "True"  # Cluster is run 100% locally
 IN_REMOTE_DEV_MODE = os.environ.get("IN_REMOTE_DEV_MODE") == "True"  # Only main_svc is run locally
 IN_DEV = IN_LOCAL_DEV_MODE or IN_REMOTE_DEV_MODE
-IN_PROD = os.environ.get("IN_PROD") == "True"
+IN_TEST = os.environ.get("IN_TEST") == "True"  # nothing different happens
+IN_PROD = os.environ.get("IN_PROD") == "True"  # sends slack alerts
 
-if not (IN_LOCAL_DEV_MODE or IN_REMOTE_DEV_MODE or IN_PROD):
-    raise Exception("One of [IN_LOCAL_DEV_MODE, IN_REMOTE_DEV_MODE, IN_PROD] must be set to `True`")
+if not (IN_LOCAL_DEV_MODE or IN_REMOTE_DEV_MODE or IN_PROD or IN_TEST):
+    options = "[IN_LOCAL_DEV_MODE, IN_REMOTE_DEV_MODE, IN_PROD, IN_TEST]"
+    raise Exception(f"One of {options} must be set to `True`")
 
 job_env_repo = f"us-docker.pkg.dev/{PROJECT_ID}/burla-job-containers/default"
 LOCAL_DEV_CONFIG = {
@@ -116,35 +118,7 @@ from main_service.endpoints.cluster import router as cluster_router, restart_clu
 @asynccontextmanager
 async def lifespan(app: FastAPI):
 
-    # Start the cluster only if the command `make local-dev-cluster` was JUST run.
-    # why? because it takes forever (11s) to restart the cluster and it isn't necessary to restart
-    # it frequently since individual svc's reload on on their own when a file save is detected.
-    # ex: if you save a file in the `node_service`, the `node_service` will reload, etc.
-    svc_started_at_ts = float(Path(".main_svc_last_started_at.txt").read_text().strip())
-    svc_just_started = svc_started_at_ts > time() - 8
-
-    autoboot_cluster_on_first_start = os.environ.get("AUTOBOOT_CLUSTER_ON_START") == "True"
-
-    # Start cluster if in dev, and `make local-dev-cluster` was just run under a second ago.
-    # (prevent restarting cluster when main service reloads due to file save)
-    if IN_LOCAL_DEV_MODE and svc_just_started and autoboot_cluster_on_first_start:
-        print("Booting Cluster!")
-        logger = Logger()
-        try:
-            background_tasks = BackgroundTasks()
-            add_background_task = get_add_background_task_function(background_tasks, logger=logger)
-            await run_in_threadpool(
-                restart_cluster, add_background_task=add_background_task, logger=logger
-            )
-            for task in background_tasks.tasks:
-                await task()
-        except Exception as e:
-            exc_type, exc_value, exc_traceback = sys.exc_info()
-            tb_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
-            traceback_str = format_traceback(tb_details)
-            logger.log(str(e), "ERROR", traceback=traceback_str)
-        print("Done booting cluster!")
-    elif IN_LOCAL_DEV_MODE and (not svc_just_started):
+    if IN_LOCAL_DEV_MODE:
 
         def frontend_built_successfully(attempt=1):
             if attempt == 3:
@@ -169,13 +143,6 @@ app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None)
 app.include_router(jobs_router)
 app.include_router(cluster_router)
 app.add_middleware(SessionMiddleware, secret_key=uuid4().hex)
-# app.add_middleware(
-#     CORSMiddleware,
-#     allow_origins=["http://0.0.0.0:5001", "http://localhost:5001"],  # Add your frontend URLs here
-#     allow_credentials=True,
-#     allow_methods=["*"],  # Allow all HTTP methods (POST, GET, OPTIONS, etc.)
-#     allow_headers=["*"],  # Allow all headers (e.g., Content-Type, Authorization)
-# )
 
 
 # don't move this function! must be declared before static files are mounted to the same path below.

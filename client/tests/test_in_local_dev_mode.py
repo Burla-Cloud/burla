@@ -70,6 +70,9 @@ def rpm_assert_restart(*a, **kw):
     returns any errors thrown by rpm, still asserts cluster restarted correctly.
     """
 
+    # switch host before importing
+    os.environ["BURLA_API_URL"] = "http://localhost:5001"
+
     if not local_cluster_in_standby():
         raise Exception("Local cluster not in standby.")
 
@@ -82,7 +85,7 @@ def rpm_assert_restart(*a, **kw):
 
     rpm_exception = None
     try:
-        results = list(remote_parallel_map(*a, **kw))
+        results = remote_parallel_map(*a, **kw)
     except Exception as e:
         rpm_exception = e
         results = None
@@ -109,7 +112,10 @@ def rpm_assert_restart(*a, **kw):
         cluster_in_standby = local_cluster_in_standby()
 
         if reboot_timeout_seconds < time() - start:
-            raise Exception(f"workers not rebooted after {reboot_timeout_seconds}s")
+            if rpm_exception:
+                raise rpm_exception
+            else:
+                raise Exception(f"workers not rebooted after {reboot_timeout_seconds}s")
         else:
             sleep(0.1)
 

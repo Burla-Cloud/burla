@@ -1,16 +1,18 @@
+import os
 import io
 import logging
 import requests
 from queue import Queue
 from threading import Event
 
+import google.auth
 from google.cloud import firestore
 from google.cloud.firestore import DocumentReference
 from google.api_core.retry import Retry, if_exception_type
 from google.api_core.exceptions import Unknown
+from google.auth.exceptions import DefaultCredentialsError
 
-from burla import _BURLA_SERVICE_URL
-from burla._auth import AuthException
+from burla._auth import AuthException, get_gcs_credentials
 
 # throws some uncatchable, unimportant, warnings
 logging.getLogger("google.api_core.bidi").setLevel(logging.ERROR)
@@ -27,8 +29,35 @@ class UnknownClusterError(Exception):
         super().__init__(msg)
 
 
+def get_host():
+    # not defined in init because users often change this post-import
+    custom_host = os.environ.get("BURLA_API_URL")
+    return custom_host or "https://cluster.burla.dev"
+
+
+def using_demo_cluster():
+    # not defined in init because users often change this post-import
+    return not bool(os.environ.get("BURLA_API_URL"))
+
+
+def get_db(auth_headers: dict):
+    if using_demo_cluster():
+        credentials = get_gcs_credentials(auth_headers)
+        return firestore.Client(credentials=credentials, project="burla-prod")
+    else:
+        # use user's local google project/creds if not using our cluster.
+        try:
+            credentials, project = google.auth.default()
+            return firestore.Client(credentials=credentials, project=project)
+        except DefaultCredentialsError as e:
+            raise Exception(
+                "No Google Application Default Credentials found. "
+                "Please ensure you have a valid Google Cloud account and are logged in."
+            ) from e
+
+
 def healthcheck_job(job_id: str, auth_headers: dict):
-    response = requests.get(f"{_BURLA_SERVICE_URL}/v1/jobs/{job_id}", headers=auth_headers)
+    response = requests.get(f"{get_host()}/v1/jobs/{job_id}", headers=auth_headers)
     if response.status_code == 401:
         raise AuthException()
     elif response.status_code == 404:

@@ -7,11 +7,10 @@ from uuid import uuid4
 from pathlib import Path
 from typing import Tuple, Optional
 
-import google.auth
 from google.oauth2 import service_account
 from appdirs import user_config_dir
 
-from burla import _BURLA_BACKEND_URL, IN_DEV
+from burla import _BURLA_BACKEND_URL
 
 AUTH_TIMEOUT_SECONDS = 180
 BURLA_APPDATA_DIR = Path(user_config_dir(appname="burla", appauthor="burla"))
@@ -32,15 +31,12 @@ class AuthException(Exception):
 
 
 def get_gcs_credentials(burla_auth_headers: dict):
-    if IN_DEV:
-        credentials, _ = google.auth.default()
-    else:
-        url = f"{_BURLA_BACKEND_URL}/v1/private/svc_account"
-        response = requests.get(url, headers=burla_auth_headers)
-        response.raise_for_status()
-        service_account_info = json.loads(response.json())
-        credentials = service_account.Credentials.from_service_account_info(service_account_info)
-        return credentials
+    url = f"{_BURLA_BACKEND_URL}/v1/private/svc_account"
+    response = requests.get(url, headers=burla_auth_headers)
+    response.raise_for_status()
+    service_account_info = json.loads(response.json())
+    credentials = service_account.Credentials.from_service_account_info(service_account_info)
+    return credentials
 
 
 def get_auth_headers(api_key: Optional[str] = None) -> Tuple[str, str]:

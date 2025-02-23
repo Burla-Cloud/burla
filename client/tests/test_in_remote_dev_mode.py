@@ -2,11 +2,13 @@
 The tests here assume the cluster is running in "remote-dev-mode".
 """
 
+import os
 import sys
 from io import StringIO
 from time import time
 
 import docker
+
 from burla import remote_parallel_map
 
 
@@ -18,6 +20,10 @@ def in_remote_dev_mode():
 
 
 def run_simple_test_job(n_inputs=5):
+
+    # switch host before importing
+    os.environ["BURLA_API_URL"] = "http://localhost:5001"
+
     test_inputs = list(range(n_inputs))
     stdout = StringIO()
     sys.stdout = stdout
@@ -27,7 +33,7 @@ def run_simple_test_job(n_inputs=5):
         print(test_input)
         return test_input
 
-    results = list(remote_parallel_map(simple_test_function, test_inputs))
+    results = remote_parallel_map(simple_test_function, test_inputs)
 
     e2e_runtime = time() - start
     sys.stdout = sys.__stdout__

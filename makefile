@@ -126,3 +126,11 @@ deploy-prod:
 	$(MAKE) move-test-image-to-prod; \
 	$(MAKE) deploy-prod
 
+deploy-test:
+	set -e; \
+	$(MAKE) __check-local-services-up-to-date && echo "" || exit 1; \
+	:; \
+	cd ./main_service; \
+	$(MAKE) image; \
+	$(MAKE) deploy-test
+

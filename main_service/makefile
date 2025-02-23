@@ -47,7 +47,8 @@ deploy-test:
 		--cpu 1 \
 		--timeout 360 \
 		--concurrency 20 \
-		--allow-unauthenticated;
+		--allow-unauthenticated; \
+	echo $${PROJECT_ID}; \
 	gcloud run services update-traffic $(WEBSERVICE_NAME) \
 		--project $${PROJECT_ID} \
 		--region=us-central1 \
@@ -103,7 +104,7 @@ deploy-prod:
 		--cpu 1 \
 		--timeout 360 \
 		--concurrency 20 \
-		--allow-unauthenticated;
+		--allow-unauthenticated; \
 	gcloud run services update-traffic $(WEBSERVICE_NAME) \
 		--project burla-prod \
 		--region=us-central1 \

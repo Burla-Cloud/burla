@@ -83,7 +83,7 @@ def restart_cluster(
             machine_type = node_spec["machine_type"]
             containers = [Container.from_dict(c) for c in node_spec["containers"]]
             inactivity_time = node_spec.get("inactivity_shutdown_time_sec")
-            disk_size = node_spec.get("disk_size")
+            disk_size = node_spec.get("disk_size_gb")
 
             node_args = (machine_type, containers, node_service_port, inactivity_time, disk_size)
             future = executor.submit(_add_node_logged, *node_args)

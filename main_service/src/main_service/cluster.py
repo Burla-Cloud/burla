@@ -192,7 +192,7 @@ def reconcile(db: firestore.Client, logger: Logger, add_background_task: Callabl
                     spec["machine_type"],
                     containers,
                     spec.get("inactivity_shutdown_time_sec"),
-                    spec.get("disk_size"),
+                    spec.get("disk_size_gb"),
                 )
 
         # too many of this machine_type on standby ?  (remove some standby nodes ?)

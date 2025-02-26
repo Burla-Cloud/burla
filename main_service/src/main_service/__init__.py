@@ -172,16 +172,15 @@ async def login__log_and_time_requests__log_errors(request: Request, call_next):
     requesting_public_endpoint = str(url_path) in public_endpoints
     request_requires_auth = not (requesting_public_endpoint or requesting_static_file)
 
-    # if request_requires_auth:
-    #     try:
-    #         user_info = validate_headers_and_login(request)
-    #         request.state.user_email = user_info.get("email")
-    #     except HTTPError as e:
-    #         if "401" in str(e):
-    #             return Response(status_code=401, content="Unauthorized.")
-    #         else:
-    #             raise e
-    request.state.user_email = "anon@thebackendbroke.help"
+    if request_requires_auth:
+        try:
+            user_info = validate_headers_and_login(request)
+            request.state.user_email = user_info.get("email")
+        except HTTPError as e:
+            if "401" in str(e):
+                return Response(status_code=401, content="Unauthorized.")
+            else:
+                raise e
 
     # If `get_logger` was a dependency this will be the second time a Logger is created.
     # This is fine because creating this object only attaches the `request` to a function.

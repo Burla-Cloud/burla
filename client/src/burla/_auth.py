@@ -66,26 +66,22 @@ def _get_login_response(client_id, attempt=0):
 
 
 def login():
+    client_id = uuid4().hex
+    login_url = f"{_BURLA_BACKEND_URL}/v1/login/{client_id}"
 
-    print("This is broken right now. But don't worry, we simply removed the need to login!")
-    print("Calls to remote_parallel_map are now automatically authorized!")
+    if IN_COLAB:
+        print(f"Please navigate to the following URL to login:\n\n    {login_url}\n")
+        print(f"(We are unable to automatically open this from a Google Colab notebook)")
+    else:
+        print(f"Your browser has been opened to visit:\n\n    {login_url}\n")
+        webbrowser.open(login_url)
+    auth_token, email = _get_login_response(client_id)
 
-    # client_id = uuid4().hex
-    # login_url = f"{_BURLA_BACKEND_URL}/v1/login/{client_id}"
+    message = f"Thank you for registering with Burla! You are now logged in as [{email}].\n"
+    message += "Please email jake@burla.dev with any questions!\n"
+    print(message)
 
-    # if IN_COLAB:
-    #     print(f"Please navigate to the following URL to login:\n\n    {login_url}\n")
-    #     print(f"(We are unable to automatically open this from a Google Colab notebook)")
-    # else:
-    #     print(f"Your browser has been opened to visit:\n\n    {login_url}\n")
-    #     webbrowser.open(login_url)
-    # auth_token, email = _get_login_response(client_id)
-
-    # message = f"Thank you for registering with Burla! You are now logged in as [{email}].\n"
-    # message += "Please email jake@burla.dev with any questions!\n"
-    # print(message)
-
-    # if not CONFIG_PATH.exists():
-    #     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    #     CONFIG_PATH.touch()
-    # CONFIG_PATH.write_text(json.dumps({"auth_token": auth_token, "email": email}))
+    if not CONFIG_PATH.exists():
+        CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        CONFIG_PATH.touch()
+    CONFIG_PATH.write_text(json.dumps({"auth_token": auth_token, "email": email}))

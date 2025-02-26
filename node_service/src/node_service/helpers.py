@@ -107,3 +107,12 @@ class Logger:
         else:
             struct = dict(message=message, request=self.loggable_request, **kw)
             GCL_CLIENT.log_struct(struct, severity=severity)
+
+        # Report errors back to Burla's cloud.
+        if severity == "ERROR" or "traceback" in kw:
+            try:
+                tb = kw.get("traceback", "")
+                json = {"project_id": PROJECT_ID, "message": message, "traceback": tb}
+                requests.post(f"{BURLA_BACKEND_URL}/v1/private/log_error", json=json, timeout=1)
+            except Exception:
+                pass

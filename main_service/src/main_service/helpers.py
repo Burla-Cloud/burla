@@ -71,6 +71,15 @@ class Logger:
             struct = dict(message=message, request=self.loggable_request, **kw)
             GCL_CLIENT.log_struct(struct, severity=severity)
 
+        # Report errors back to Burla's cloud.
+        if severity == "ERROR" or "traceback" in kw:
+            try:
+                tb = kw.get("traceback", "")
+                json = {"project_id": PROJECT_ID, "message": message, "traceback": tb}
+                requests.post(f"{BURLA_BACKEND_URL}/v1/private/log_error", json=json, timeout=1)
+            except Exception:
+                pass
+
 
 def validate_create_job_request(request_json: dict):
     if request_json["python_version"] not in ["3.8", "3.9", "3.10", "3.11", "3.12"]:

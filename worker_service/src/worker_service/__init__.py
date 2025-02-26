@@ -54,4 +54,11 @@ def log_exception(exception):
         log = {"severity": "ERROR", "exception": traceback_str, "request": request_json}
         LOGGER.log_struct(log)
 
+    # Report errors back to Burla's cloud.
+    try:
+        json = {"project_id": PROJECT_ID, "message": exc_type, "traceback": traceback_str}
+        requests.post(f"{BURLA_BACKEND_URL}/v1/private/log_error", json=json, timeout=1)
+    except Exception:
+        pass
+
     abort(500)

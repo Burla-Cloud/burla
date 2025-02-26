@@ -12,6 +12,10 @@ import docker
 from burla import remote_parallel_map
 
 
+# call the locally running instance of Burla!
+os.environ["BURLA_API_URL"] = "http://localhost:5001"
+
+
 def in_remote_dev_mode():
     docker_client = docker.from_env()
     main_svc_container = docker_client.containers.get("main_service")
@@ -20,9 +24,6 @@ def in_remote_dev_mode():
 
 
 def run_simple_test_job(n_inputs=5):
-
-    # switch host before importing
-    os.environ["BURLA_API_URL"] = "http://localhost:5001"
 
     test_inputs = list(range(n_inputs))
     stdout = StringIO()

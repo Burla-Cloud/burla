@@ -21,7 +21,6 @@ test-remote:
 # All components (main_svc, node_svc, worker_svc) will restart when changes to code are made.
 local-dev:
 	set -e; \
-	printf "$$(date +%s)" > main_service/.main_svc_last_started_at.txt; \
 	docker network create local-burla-cluster 2>/dev/null || true; \
 	docker run --rm -it \
 		--name main_service \
@@ -46,7 +45,6 @@ local-dev:
 # All components (main_svc, node_svc, worker_svc) will restart when changes to code are made.
 local-dev-cluster:
 	set -e; \
-	printf "$$(date +%s)" > main_service/.main_svc_last_started_at.txt; \
 	docker network create local-burla-cluster 2>/dev/null || true; \
 	docker run --rm -it \
 		--name main_service \

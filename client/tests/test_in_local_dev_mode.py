@@ -12,8 +12,9 @@ from google.cloud import firestore
 
 from burla import remote_parallel_map
 
-# hide annpying firestore log messages
-os.environ["GRPC_VERBOSITY"] = "ERROR"
+
+# call the locally running instance of Burla!
+os.environ["BURLA_API_URL"] = "http://localhost:5001"
 
 
 # ALL ASSUMPTIONS REGARDING STANDBY STATE ARE HERE:
@@ -23,6 +24,9 @@ N_STANDBY_NODE_SVC_CONTAINERS = 2
 N_STANDBY_WORKER_CONTAINERS = 4
 
 DOCKER_CLIENT = docker.from_env()
+
+# hide annpying firestore log messages
+os.environ["GRPC_VERBOSITY"] = "ERROR"
 
 
 class Tee:
@@ -69,9 +73,6 @@ def rpm_assert_restart(*a, **kw):
     asserts cluster is in standby and restarts itself correctly before/after calling rpm.
     returns any errors thrown by rpm, still asserts cluster restarted correctly.
     """
-
-    # switch host before importing
-    os.environ["BURLA_API_URL"] = "http://localhost:5001"
 
     if not local_cluster_in_standby():
         raise Exception("Local cluster not in standby.")

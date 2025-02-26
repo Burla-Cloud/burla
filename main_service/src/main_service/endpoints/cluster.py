@@ -35,8 +35,12 @@ def restart_cluster(
     instance_client = InstancesClient()
 
     if IN_PROD:
-        client = slack_sdk.WebClient(token=get_secret("slackbot-token"))
-        client.chat_postMessage(channel="user-activity", text="Someone started the prod cluster.")
+        try:
+            client = slack_sdk.WebClient(token=get_secret("slackbot-token"))
+            msg = "Someone started the prod cluster."
+            client.chat_postMessage(channel="user-activity", text=msg)
+        except Exception:
+            pass
 
     futures = []
     executor = ThreadPoolExecutor(max_workers=32)
@@ -117,8 +121,12 @@ async def shutdown_cluster(logger: Logger = Depends(get_logger)):
     instance_client = InstancesClient()
 
     if IN_PROD:
-        client = slack_sdk.WebClient(token=get_secret("slackbot-token"))
-        client.chat_postMessage(channel="user-activity", text="Someone shut the prod cluster off.")
+        try:
+            client = slack_sdk.WebClient(token=get_secret("slackbot-token"))
+            msg = "Someone shut the prod cluster off."
+            client.chat_postMessage(channel="user-activity", text=msg)
+        except Exception:
+            pass
 
     futures = []
     executor = ThreadPoolExecutor(max_workers=32)

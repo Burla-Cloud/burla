@@ -162,50 +162,55 @@ def reconcile(db: firestore.Client, logger: Logger, add_background_task: Callabl
             node.delete()
             nodes.remove(node)
 
-    # 3. Check that the cluster does or will match the specified default configuration.
-    config = db.collection("cluster_config").document("cluster_config").get().to_dict()
-    for spec in config["Nodes"]:
-        # standby_nodes = [n for n in nodes if n.current_job is None]
-        standby_nodes = [n for n in nodes if n.machine_type == spec["machine_type"]]
+    #
+    # This part is BROKEN and sometimes creates a runaway cluster scenario where it adds nodes
+    # forever in a loop.
+    #
+    #
+    # # 3. Check that the cluster does or will match the specified default configuration.
+    # config = db.collection("cluster_config").document("cluster_config").get().to_dict()
+    # for spec in config["Nodes"]:
+    #     # standby_nodes = [n for n in nodes if n.current_job is None]
+    #     standby_nodes = [n for n in nodes if n.machine_type == spec["machine_type"]]
 
-        # not enough of this machine_type on standby ? (add more standby nodes ?)
-        if len(standby_nodes) < spec["quantity"]:
-            node_deficit = spec["quantity"] - len(standby_nodes)
-            for i in range(node_deficit):
-                containers = [Container.from_dict(c) for c in spec["containers"]]
-                machine = spec["machine_type"]
-                logger.log(f"Adding another {machine} because cluster is {node_deficit-i} short.")
+    #     # not enough of this machine_type on standby ? (add more standby nodes ?)
+    #     if len(standby_nodes) < spec["quantity"]:
+    #         node_deficit = spec["quantity"] - len(standby_nodes)
+    #         for i in range(node_deficit):
+    #             containers = [Container.from_dict(c) for c in spec["containers"]]
+    #             machine = spec["machine_type"]
+    #             logger.log(f"Adding another {machine} because cluster is {node_deficit-i} short.")
 
-                def add_node(machine_type, containers, inactivity_shutdown_time_sec, disk_size):
-                    Node.start(
-                        db=db,
-                        logger=logger,
-                        machine_type=machine_type,
-                        containers=containers,
-                        inactivity_shutdown_time_sec=inactivity_shutdown_time_sec,
-                        disk_size=disk_size,
-                        verbose=True,
-                    )
+    #             def add_node(machine_type, containers, inactivity_shutdown_time_sec, disk_size):
+    #                 Node.start(
+    #                     db=db,
+    #                     logger=logger,
+    #                     machine_type=machine_type,
+    #                     containers=containers,
+    #                     inactivity_shutdown_time_sec=inactivity_shutdown_time_sec,
+    #                     disk_size=disk_size,
+    #                     verbose=True,
+    #                 )
 
-                add_background_task(
-                    add_node,
-                    spec["machine_type"],
-                    containers,
-                    spec.get("inactivity_shutdown_time_sec"),
-                    spec.get("disk_size_gb"),
-                )
+    #             add_background_task(
+    #                 add_node,
+    #                 spec["machine_type"],
+    #                 containers,
+    #                 spec.get("inactivity_shutdown_time_sec"),
+    #                 spec.get("disk_size_gb"),
+    #             )
 
-        # too many of this machine_type on standby ?  (remove some standby nodes ?)
-        elif len(standby_nodes) > spec["quantity"]:
-            nodes_to_remove = sorted(standby_nodes, key=lambda n: n.time_until_booted())
-            num_extra_nodes = len(standby_nodes) - spec["quantity"]
-            nodes_to_remove = nodes_to_remove[-num_extra_nodes:]
+    #     # too many of this machine_type on standby ?  (remove some standby nodes ?)
+    #     elif len(standby_nodes) > spec["quantity"]:
+    #         nodes_to_remove = sorted(standby_nodes, key=lambda n: n.time_until_booted())
+    #         num_extra_nodes = len(standby_nodes) - spec["quantity"]
+    #         nodes_to_remove = nodes_to_remove[-num_extra_nodes:]
 
-            for i, node in enumerate(nodes_to_remove):
-                surplus = len(nodes_to_remove) - i
-                machine = spec["machine_type"]
-                logger.log(f"DELETING an {machine} node because cluster has {surplus} too many")
-                node.delete()
+    #         for i, node in enumerate(nodes_to_remove):
+    #             surplus = len(nodes_to_remove) - i
+    #             machine = spec["machine_type"]
+    #             logger.log(f"DELETING an {machine} node because cluster has {surplus} too many")
+    #             node.delete()
 
     # record globally that reconciling is done, prevents simoultainous reconciling
     reconcile_marker_ref = db.collection("global_reconcile_marker").document("marker")

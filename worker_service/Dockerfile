@@ -1,12 +1,6 @@
+FROM python:3.11
 
-# This is the default docker image that all user-submitted functions are run in.
-# This separate image inherits from `Dockerfile.base` so we can quickly deploy the worker_service
-# by baking it into & uploading a new image without needing to install python again
+ADD . .
+RUN python3.11 -m pip install -e .
 
-ARG BASE_IMAGE
-FROM ${BASE_IMAGE}
-
-WORKDIR /burla
-RUN rm pyproject.toml && rm -rf ./src
-ADD ./src /burla/src
-ADD pyproject.toml /burla
+ENTRYPOINT python3.11 -m uvicorn main_service:app --host 0.0.0.0 --port 8080

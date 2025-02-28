@@ -117,11 +117,11 @@ deploy-prod:
 	$(MAKE) __check-local-services-up-to-date && echo "" || exit 1; \
 	:; \
 	cd ./worker_service; \
-	$(MAKE) move-image-nogpu-to-prod; \
+	$(MAKE) image; \
+	$(MAKE) publish-prod-image; \
 	cd ..; \
 	cd ./main_service; \
 	$(MAKE) image; \
-	$(MAKE) move-test-image-to-prod; \
 	$(MAKE) deploy-prod
 
 deploy-test:

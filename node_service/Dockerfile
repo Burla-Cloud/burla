@@ -6,6 +6,13 @@
 # docker python client at the host machines docker service (because you cannot run docker in docker).
 
 # To create a new VM disk image, simply replicate the below commands on a raw debian-12 disk.
+
+# MAKE SURE YOU MAKE ANY NEW IMAGES PUBLIC!
+# use this command:
+# gcloud compute images add-iam-policy-binding IMAGE_NAME \
+#   --member=allAuthenticatedUsers \
+#   --role=roles/compute.imageUser
+
 # ================================================
 
 FROM debian:12

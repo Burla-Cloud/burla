@@ -29,8 +29,7 @@ BURLA_BACKEND_URL = "https://backend.burla.dev"
 GCL_CLIENT = logging.Client().logger("main_service")
 DB = firestore.Client(database="burla")
 
-# config used only when in local dev mode
-LOCAL_DEV_CONFIG = {
+LOCAL_DEV_CONFIG = {  # <- config used only in local dev mode
     "Nodes": [
         {
             "containers": [
@@ -41,6 +40,22 @@ LOCAL_DEV_CONFIG = {
                 },
             ],
             "machine_type": "n4-standard-2",  # <- means nothing here, this is set in node __init__
+            "quantity": 2,
+            "inactivity_shutdown_time_sec": 60 * 10,
+        }
+    ]
+}
+DEFAULT_CONFIG = {  # <- config used only when config is missing from firestore
+    "Nodes": [
+        {
+            "containers": [
+                {
+                    "image": "jakezuliani/burla_worker_service:latest",
+                    "python_executable": "python3.11",
+                    "python_version": "3.11",
+                },
+            ],
+            "machine_type": "n4-standard-2",
             "quantity": 2,
             "inactivity_shutdown_time_sec": 60 * 10,
         }

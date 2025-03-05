@@ -76,8 +76,9 @@ remote-dev:
 		-v ~/.config/gcloud:/root/.config/gcloud \
 		-e GOOGLE_CLOUD_PROJECT=$(PROJECT_ID) \
 		-p 5001:5001 \
-		--entrypoint poetry \
-		$(MAIN_SVC_IMAGE_NAME) run uvicorn main_service:app --host 0.0.0.0 --port 5001 --reload
+		--entrypoint python3.11 \
+		$(MAIN_SVC_IMAGE_NAME) -m uvicorn main_service:app --host 0.0.0.0 --port 5001 --reload \
+			--reload-exclude main_service/frontend/node_modules/
 
 # Moves latest worker service image to prod & 
 # Builds new main-service image, moves to prod, then deploys prod main service

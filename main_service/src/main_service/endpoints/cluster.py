@@ -15,6 +15,7 @@ from main_service import (
     DB,
     IN_LOCAL_DEV_MODE,
     LOCAL_DEV_CONFIG,
+    DEFAULT_CONFIG,
     PROJECT_ID,
     BURLA_BACKEND_URL,
     get_logger,
@@ -74,9 +75,14 @@ def restart_cluster(
                 docker_client.remove_container(container["Id"], force=True)
 
     # use separate cluster config if IN_LOCAL_DEV_MODE:
-    config = DB.collection("cluster_config").document("cluster_config").get().to_dict()
-    config = LOCAL_DEV_CONFIG if IN_LOCAL_DEV_MODE else config
-    node_service_port = 8080  # <- must default to 8080 because only 8080 is open in GCP firewall
+    config_doc = DB.collection("cluster_config").document("cluster_config").get()
+    if not config_doc.exists:
+        config_doc.reference.set(DEFAULT_CONFIG)
+        config = DEFAULT_CONFIG
+    else:
+        config = LOCAL_DEV_CONFIG if IN_LOCAL_DEV_MODE else config_doc.to_dict()
+
+    node_service_port = 8080  # <- must default to 8080 because only 8080 was opened in GCP firewall
 
     for node_spec in config["Nodes"]:
         for _ in range(node_spec["quantity"]):

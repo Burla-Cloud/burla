@@ -176,7 +176,7 @@ def execute(
         async with aiohttp.ClientSession() as session:
             tasks = []
             for index, worker in enumerate(workers):
-                url = f"{worker.host}/jobs/{job_id}"
+                url = f"{worker.url}/jobs/{job_id}"
                 worker_starting_index = request_json["starting_index"] + index
                 tasks.append(assign_worker(session, url, worker_starting_index))
                 worker.id = worker_starting_index

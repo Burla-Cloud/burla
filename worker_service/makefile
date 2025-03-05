@@ -43,6 +43,7 @@ publish-prod-image:
 
 image:
 	set -e; \
+	printf "$$(date "+%Y-%m-%d %H:%M:%S")" > last_image_pushed_at.txt; \
 	PROJECT_ID=$$(gcloud config get-value project 2>/dev/null); \
 	TEST_IMAGE_BASE_NAME=$$( echo \
 		"us-docker.pkg.dev/$${PROJECT_ID}/$(ARTIFACT_REPO_NAME)/$(ARTIFACT_PKG_NAME)" \

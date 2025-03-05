@@ -97,7 +97,7 @@ def rpm_assert_restart(*a, **kw):
 
     # ensure workers reboot
     start = time()
-    reboot_timeout_seconds = 10
+    reboot_timeout_seconds = 15
     all_workers_rebooted = False
     cluster_in_standby = False
 

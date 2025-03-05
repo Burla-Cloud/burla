@@ -37,8 +37,9 @@ local-dev:
 		$(MAIN_SVC_IMAGE_NAME) -m uvicorn main_service:app --host 0.0.0.0 --port 5001 --reload \
 			--reload-exclude main_service/frontend/node_modules/
 
-# private recipe,
-# exits with error if deployed worker service or node service are not up to date with local
+# raise error if local node/worker services are different from remote-dev versions
+# does the worker service have a git diff since AFTER the last image was pushed?
+# does the node service have a git diff?
 __check-local-services-up-to-date:
 	set -e; \
 	WORKER_SVC_TS=$$(cat ./worker_service/last_image_pushed_at.txt); \

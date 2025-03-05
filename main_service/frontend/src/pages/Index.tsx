@@ -1,22 +1,22 @@
 import { ClusterStatusCard } from "@/components/ClusterStatusCard";
 import { ClusterControls } from "@/components/ClusterControls";
 import { NodesList } from "@/components/NodesList";
-import clusterImage from "@/assets/burla_logo.png";
 import { useClusterControl } from "@/hooks/useClusterControl";
 import { useNodes } from "@/contexts/NodesContext";
 import { useCluster } from "@/contexts/ClusterContext";
 
-const Index = () => {
+const Dashboard = () => {
     const { rebootCluster, stopCluster } = useClusterControl();
     const { nodes } = useNodes();
     const { clusterStatus } = useCluster();
 
     return (
-        <div className="min-h-screen bg-gray-50 py-20">
-            <div className="container max-w-4xl mx-auto px-4">
-                <div className="mb-8">
-                    <img src={clusterImage} className="w-32 h-auto" />
-                </div>
+        <div className="flex-1 flex flex-col justify-start px-12 pt-0">
+            <div className="max-w-6xl mx-auto w-full">
+                {/* Move Dashboard Heading Up Precisely */}
+                <h1 className="text-3xl font-bold mt-[-4px] mb-4" style={{ color: "#3b5a64" }}>
+                    Dashboard
+                </h1>
 
                 <div className="space-y-6">
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -44,4 +44,5 @@ const Index = () => {
     );
 };
 
-export default Index;
+export default Dashboard;
+

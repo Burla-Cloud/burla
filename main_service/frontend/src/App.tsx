@@ -1,7 +1,10 @@
+import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
+import Sidebar from "@/components/Sidebar";
+import Dashboard from "@/pages/Index";
+import Jobs from "@/pages/Jobs";
+// import Settings from "@/pages/Settings";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
-import Index from "@/pages/Index";
 import { NodesProvider } from "@/contexts/NodesContext";
 import { ClusterProvider } from "@/contexts/ClusterContext";
 import ErrorBoundary from "@/components/ErrorBoundary";
@@ -12,11 +15,21 @@ const App = () => (
             <ClusterProvider>
                 <TooltipProvider>
                     <Toaster />
-                    <BrowserRouter>
-                        <Routes>
-                            <Route path="/" element={<Index />} />
-                        </Routes>
-                    </BrowserRouter>
+                    <Router>
+                        <div className="flex min-h-screen bg-gray-50">
+                            {/* Sidebar stays on all pages */}
+                            <Sidebar />
+
+                            {/* Main Content */}
+                            <div className="flex-1 py-10 px-12 flex items-start">
+                                <Routes>
+                                    <Route path="/" element={<Dashboard />} />
+                                    <Route path="/jobs" element={<Jobs />} />
+                                    {/* <Route path="/settings" element={<Settings />} /> */}
+                                </Routes>
+                            </div>
+                        </div>
+                    </Router>
                 </TooltipProvider>
             </ClusterProvider>
         </NodesProvider>
@@ -24,3 +37,5 @@ const App = () => (
 );
 
 export default App;
+
+

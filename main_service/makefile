@@ -21,9 +21,6 @@ build-frontend:
 deploy-test:
 	set -e; \
 	PROJECT_ID=$$(gcloud config get-value project 2>/dev/null); \
-	PROJECT_NUM=$$( \
-		gcloud projects describe $${PROJECT_ID} --format="value(projectNumber)"  2>/dev/null \
-	); \
 	TEST_IMAGE_BASE_NAME=$$( echo \
 		"us-docker.pkg.dev/$${PROJECT_ID}/$(ARTIFACT_REPO_NAME)/$(ARTIFACT_PKG_NAME)" \
 	); \
@@ -40,7 +37,6 @@ deploy-test:
 		--image=$${TEST_IMAGE_NAME} \
 		--project $${PROJECT_ID} \
 		--region=us-central1 \
-		--set-env-vars PROJECT_ID=$${PROJECT_ID},PROJECT_NUM=$${PROJECT_NUM},IN_TEST=True \
 		--min-instances 0 \
 		--max-instances 5 \
 		--memory 2Gi \
@@ -59,7 +55,6 @@ deploy-prod:
 		--image=jakezuliani/burla_main_service:latest \
 		--project burla-prod \
 		--region=us-central1 \
-		--set-env-vars PROJECT_ID=burla-prod,PROJECT_NUM=1057122726382,IN_PROD=True \
 		--min-instances 1 \
 		--max-instances 20 \
 		--memory 4Gi \
@@ -128,24 +123,16 @@ image:
 container:
 	set -e; \
 	PROJECT_ID=$$(gcloud config get-value project 2>/dev/null); \
-	PROJECT_NUM=$$( \
-		gcloud projects describe $${PROJECT_ID} --format="value(projectNumber)"  2>/dev/null \
-	); \
 	TEST_IMAGE_NAME=$$( echo \
 		"us-docker.pkg.dev/$${PROJECT_ID}/$(ARTIFACT_REPO_NAME)/$(ARTIFACT_PKG_NAME):latest" \
 	); \
-	ACCESS_TOKEN=$$(gcloud auth print-access-token); \
 	docker run --rm -it \
 		--name main_service \
 		-v $(PWD):/burla/main_service \
 		-v ~/.config/gcloud:/root/.config/gcloud \
 		-v /var/run/docker.sock:/var/run/docker.sock \
 		-e GOOGLE_CLOUD_PROJECT=$${PROJECT_ID} \
-		-e PROJECT_ID=$${PROJECT_ID} \
-		-e PROJECT_NUM=$${PROJECT_NUM} \
 		-e IN_LOCAL_DEV_MODE=True \
-		-e IN_PROD=False \
-		-e ACCESS_TOKEN=$${ACCESS_TOKEN} \
 		-e HOST_PWD=$(PWD) \
 		-e HOST_HOME_DIR=$${HOME} \
 		-p 5001:5001 \

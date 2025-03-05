@@ -60,7 +60,7 @@ def local_cluster_in_standby():
 
     # if good so far, assert both nodes are in state "ready":
     if in_standby:
-        nodes_collection = firestore.Client().collection("nodes")
+        nodes_collection = firestore.Client(database="burla").collection("nodes")
         for node_container in node_svc_containers:
             node_doc = nodes_collection.document(f"burla-node-{node_container.name[-8:]}")
             in_standby = node_doc.get().to_dict()["status"] == "READY"

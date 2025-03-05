@@ -1,14 +1,14 @@
 import sys
 import socket
 import random
+import requests
 from itertools import groupby
 from typing import Optional, Callable
-from datetime import datetime, timedelta, timezone
 from requests.exceptions import HTTPError
 
 from fastapi import Request
 from docker.errors import APIError, NotFound
-from node_service import IN_DEV, GCL_CLIENT, SELF
+from node_service import IN_LOCAL_DEV_MODE, GCL_CLIENT, SELF, PROJECT_ID, BURLA_BACKEND_URL
 
 
 PRIVATE_PORT_QUEUE = list(range(32768, 60999))  # <- these ports should be mostly free.
@@ -97,14 +97,12 @@ class Logger:
         return self.__make_serializeable(request_dict)
 
     def log(self, message: str, severity="INFO", **kw):
-        if IN_DEV and "traceback" in kw.keys():
+        if "traceback" in kw.keys():
             print(f"\nERROR: {message.strip()}\n{kw['traceback'].strip()}\n", file=sys.stderr)
-            sys.stdout.flush()
-        elif IN_DEV:
-            eastern_time = datetime.now(timezone.utc) + timedelta(hours=-4)
-            print(f"{eastern_time.strftime('%I:%M:%S.%f %p')}: {message}")
-            sys.stdout.flush()
         else:
+            print(message)
+
+        if not IN_LOCAL_DEV_MODE:
             struct = dict(message=message, request=self.loggable_request, **kw)
             GCL_CLIENT.log_struct(struct, severity=severity)
 
@@ -113,6 +111,6 @@ class Logger:
             try:
                 tb = kw.get("traceback", "")
                 json = {"project_id": PROJECT_ID, "message": message, "traceback": tb}
-                requests.post(f"{BURLA_BACKEND_URL}/v1/private/log_error", json=json, timeout=1)
+                requests.post(f"{BURLA_BACKEND_URL}/v1/telemetry/alert", json=json, timeout=1)
             except Exception:
                 pass

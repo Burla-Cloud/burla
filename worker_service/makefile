@@ -9,6 +9,10 @@ ARTIFACT_PKG_NAME := $(WEBSERVICE_NAME)
 PROD_IMAGE_BASE_NAME := us-docker.pkg.dev/burla-prod/$(ARTIFACT_REPO_NAME)/$(ARTIFACT_PKG_NAME)
 
 
+service:
+	python3.11 -m gunicorn -t 60 -b 0.0.0.0:8080 worker_service:app
+
+
 publish-prod-image:
 	set -e; \
 	PROJECT_ID=$$(gcloud config get-value project 2>/dev/null); \
@@ -63,3 +67,20 @@ image:
 	echo "$${TEST_IMAGE_NAME_LATEST}"; \
 	echo "";
 
+container:
+	set -e; \
+	PROJECT_ID=$$(gcloud config get-value project 2>/dev/null); \
+	TEST_IMAGE_NAME=$$( echo \
+		"us-docker.pkg.dev/$${PROJECT_ID}/$(ARTIFACT_REPO_NAME)/$(ARTIFACT_PKG_NAME):latest" \
+	); \
+	docker run --rm -it \
+		--name worker_service \
+		-v $(PWD):/burla/worker_service \
+		-v ~/.config/gcloud:/root/.config/gcloud \
+		-v /var/run/docker.sock:/var/run/docker.sock \
+		-e GOOGLE_CLOUD_PROJECT=$${PROJECT_ID} \
+		-e IN_LOCAL_DEV_MODE=True \
+		-e HOST_PWD=$(PWD) \
+		-e HOST_HOME_DIR=$${HOME} \
+		-p 8080:8080 \
+		$${TEST_IMAGE_NAME} bash

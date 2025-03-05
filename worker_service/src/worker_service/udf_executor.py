@@ -7,11 +7,11 @@ from typing import Union
 
 import cloudpickle
 from tblib import Traceback
-
-from worker_service import SELF, PROJECT_ID
+from google.auth.transport.requests import Request
+from worker_service import SELF, PROJECT_ID, CREDENTIALS
 
 FIRESTORE_URL = "https://firestore.googleapis.com"
-DB_BASE_URL = f"{FIRESTORE_URL}/v1/projects/{PROJECT_ID}/databases/(default)/documents"
+DB_BASE_URL = f"{FIRESTORE_URL}/v1/projects/{PROJECT_ID}/databases/burla/documents"
 
 
 class EmptyInputQueue(Exception):
@@ -148,10 +148,13 @@ def execute_job(
     n_inputs: int,
     starting_index: int,
     planned_future_job_parallelism: int,
-    sa_access_token: str,
     function_pkl: bytes,
 ):
-    db_headers = {"Authorization": f"Bearer {sa_access_token}", "Content-Type": "application/json"}
+    CREDENTIALS.refresh(Request())
+    db_headers = {
+        "Authorization": f"Bearer {CREDENTIALS.token}",
+        "Content-Type": "application/json",
+    }
 
     input_getter = InputGetter(
         db_headers,

@@ -1,10 +1,10 @@
 import json
 import asyncio
 import docker
+import requests
 from time import time
 from typing import Callable
 
-import slack_sdk
 from fastapi import APIRouter, Depends
 from google.cloud.firestore_v1 import FieldFilter
 from google.cloud.compute_v1 import InstancesClient
@@ -13,15 +13,16 @@ from concurrent.futures import ThreadPoolExecutor
 
 from main_service import (
     DB,
-    IN_PROD,
     IN_LOCAL_DEV_MODE,
     LOCAL_DEV_CONFIG,
+    PROJECT_ID,
+    BURLA_BACKEND_URL,
     get_logger,
     get_add_background_task_function,
 )
 from main_service.cluster import reconcile
 from main_service.node import Container, Node
-from main_service.helpers import Logger, get_secret
+from main_service.helpers import Logger
 
 router = APIRouter()
 
@@ -34,13 +35,11 @@ def restart_cluster(
     start = time()
     instance_client = InstancesClient()
 
-    if IN_PROD:
-        try:
-            client = slack_sdk.WebClient(token=get_secret("slackbot-token"))
-            msg = "Someone started the prod cluster."
-            client.chat_postMessage(channel="user-activity", text=msg)
-        except Exception:
-            pass
+    try:
+        json = {"project_id": PROJECT_ID, "message": "Someone turned the cluster on."}
+        requests.post(f"{BURLA_BACKEND_URL}/v1/telemetry/alert", json=json, timeout=1)
+    except Exception:
+        pass
 
     futures = []
     executor = ThreadPoolExecutor(max_workers=32)
@@ -120,13 +119,11 @@ async def shutdown_cluster(logger: Logger = Depends(get_logger)):
     start = time()
     instance_client = InstancesClient()
 
-    if IN_PROD:
-        try:
-            client = slack_sdk.WebClient(token=get_secret("slackbot-token"))
-            msg = "Someone shut the prod cluster off."
-            client.chat_postMessage(channel="user-activity", text=msg)
-        except Exception:
-            pass
+    try:
+        json = {"project_id": PROJECT_ID, "message": "Someone turned the cluster off."}
+        requests.post(f"{BURLA_BACKEND_URL}/v1/telemetry/alert", json=json, timeout=1)
+    except Exception:
+        pass
 
     futures = []
     executor = ThreadPoolExecutor(max_workers=32)

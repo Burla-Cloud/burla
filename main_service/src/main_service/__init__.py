@@ -9,6 +9,7 @@ from pathlib import Path
 from requests.exceptions import HTTPError
 from contextlib import asynccontextmanager
 
+import google.auth
 from google.cloud import firestore, logging
 from fastapi.responses import Response, FileResponse
 from fastapi import FastAPI, Request, BackgroundTasks, Depends
@@ -19,38 +20,29 @@ from starlette.datastructures import UploadFile
 os.environ["GRPC_VERBOSITY"] = "ERROR"
 os.environ["GLOG_minloglevel"] = "2"
 
-ACCESS_TOKEN = os.environ.get("ACCESS_TOKEN")  # <- only used in dev
-PROJECT_ID = os.environ.get("PROJECT_ID")
+# This is the only possible alternative "mode".
+# In this mode everything runs locally in docker containers.
+IN_LOCAL_DEV_MODE = os.environ.get("IN_LOCAL_DEV_MODE") == "True"
+
+CREDENTIALS, PROJECT_ID = google.auth.default()
 BURLA_BACKEND_URL = "https://backend.burla.dev"
-
-# reduces number of instances / saves across some requests as opposed to using Depends
 GCL_CLIENT = logging.Client().logger("main_service")
-DB = firestore.Client(project=PROJECT_ID)
+DB = firestore.Client(database="burla")
 
-IN_LOCAL_DEV_MODE = os.environ.get("IN_LOCAL_DEV_MODE") == "True"  # Cluster is run 100% locally
-IN_REMOTE_DEV_MODE = os.environ.get("IN_REMOTE_DEV_MODE") == "True"  # Only main_svc is run locally
-IN_DEV = IN_LOCAL_DEV_MODE or IN_REMOTE_DEV_MODE
-IN_TEST = os.environ.get("IN_TEST") == "True"  # nothing different happens
-IN_PROD = os.environ.get("IN_PROD") == "True"  # sends slack alerts
-
-if not (IN_LOCAL_DEV_MODE or IN_REMOTE_DEV_MODE or IN_PROD or IN_TEST):
-    options = "[IN_LOCAL_DEV_MODE, IN_REMOTE_DEV_MODE, IN_PROD, IN_TEST]"
-    raise Exception(f"One of {options} must be set to `True`")
-
-job_env_repo = f"us-docker.pkg.dev/{PROJECT_ID}/burla-job-containers/default"
+# config used only when in local dev mode
 LOCAL_DEV_CONFIG = {
     "Nodes": [
         {
             "containers": [
                 {
-                    "image": f"{job_env_repo}/image-nogpu:latest",
-                    "python_executable": "/.pyenv/versions/3.11.*/bin/python3.11",
+                    "image": "us-docker.pkg.dev/burla-test/burla-worker-service/burla-worker-service:latest",
+                    "python_executable": "python3.11",
                     "python_version": "3.11",
                 },
             ],
-            "machine_type": "n4-standard-2",  # <- means nothing, num containers set in node init
+            "machine_type": "n4-standard-2",  # <- means nothing here, this is set in node __init__
             "quantity": 2,
-            "inactivity_shutdown_time_sec": 60 * 15,
+            "inactivity_shutdown_time_sec": 60 * 10,
         }
     ]
 }
@@ -109,7 +101,7 @@ def get_add_background_task_function(
 
 
 from main_service.endpoints.jobs import router as jobs_router
-from main_service.endpoints.cluster import router as cluster_router, restart_cluster
+from main_service.endpoints.cluster import router as cluster_router
 
 
 @asynccontextmanager
@@ -205,7 +197,7 @@ async def login__log_and_time_requests__log_errors(request: Request, call_next):
         response.background = BackgroundTasks()
     add_background_task = get_add_background_task_function(response.background, logger=logger)
 
-    if not IN_DEV:
+    if not IN_LOCAL_DEV_MODE:
         msg = f"Received {request.method} at {request.url}"
         add_background_task(logger.log, msg)
 

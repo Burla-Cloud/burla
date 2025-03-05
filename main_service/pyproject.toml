@@ -27,6 +27,7 @@ itsdangerous = "^2.2.0"
 slack-sdk = "^3.33.0"
 docker = "^7.1.0"
 watchfiles = "^1.0.4"
+google-cloud-resource-manager = "^1.14.1"
 
 [tool.poetry.group.dev.dependencies]
 black = "^23.1.0"

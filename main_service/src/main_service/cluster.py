@@ -10,7 +10,7 @@ from google.cloud.compute_v1 import InstancesClient
 from google.api_core.exceptions import NotFound
 
 from main_service import PROJECT_ID, IN_LOCAL_DEV_MODE
-from main_service.node import Node, Container
+from main_service.node import Node
 from main_service.helpers import Logger
 
 
@@ -63,8 +63,10 @@ def reboot_nodes_with_job(db: firestore.Client, job_id: str):
 
 def async_ensure_reconcile(DB, logger, add_background_task):
     reconcile_marker_ref = DB.collection("global_reconcile_marker").document("marker")
-    is_reconciling = reconcile_marker_ref.get().to_dict()["is_reconciling"]
+    if not reconcile_marker_ref.get().exists:
+        reconcile_marker_ref.set({"is_reconciling": False})
 
+    is_reconciling = reconcile_marker_ref.get().to_dict().get("is_reconciling", False)
     if not is_reconciling:
         add_background_task(reconcile, DB, logger, add_background_task)
 

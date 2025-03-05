@@ -86,7 +86,6 @@ def start_job(job_id: str):
         request_json["n_inputs"],
         request_json["starting_index"],
         request_json["planned_future_job_parallelism"],
-        request_json["sa_access_token"],
         function_pkl,
     )
     thread = ThreadWithExc(target=execute_job, args=args)

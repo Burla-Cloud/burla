@@ -2,19 +2,10 @@ import sys
 import requests
 from itertools import groupby
 from typing import Optional
-from datetime import datetime, timedelta, timezone
 
 from fastapi import Request, HTTPException
-from google.cloud.secretmanager import SecretManagerServiceClient
 
-from main_service import PROJECT_ID, BURLA_BACKEND_URL, IN_DEV, GCL_CLIENT
-
-
-def get_secret(secret_name: str):
-    client = SecretManagerServiceClient()
-    secret_path = client.secret_version_path(PROJECT_ID, secret_name, "latest")
-    response = client.access_secret_version(request={"name": secret_path})
-    return response.payload.data.decode("UTF-8")
+from main_service import PROJECT_ID, BURLA_BACKEND_URL, GCL_CLIENT
 
 
 def format_traceback(traceback_details: list):
@@ -62,21 +53,20 @@ class Logger:
         return self.__make_serializeable(request_dict)
 
     def log(self, message: str, severity="INFO", **kw):
-        if IN_DEV and "traceback" in kw.keys():
+        if "traceback" in kw.keys():
             print(f"\nERROR: {message.strip()}\n{kw['traceback'].strip()}\n", file=sys.stderr)
-        elif IN_DEV:
-            eastern_time = datetime.now(timezone.utc) + timedelta(hours=-4)
-            print(f"{eastern_time.strftime('%I:%M:%S.%f %p')}: {message}")
         else:
-            struct = dict(message=message, request=self.loggable_request, **kw)
-            GCL_CLIENT.log_struct(struct, severity=severity)
+            print(message)
+
+        struct = dict(message=message, request=self.loggable_request, **kw)
+        GCL_CLIENT.log_struct(struct, severity=severity)
 
         # Report errors back to Burla's cloud.
         if severity == "ERROR" or "traceback" in kw:
             try:
                 tb = kw.get("traceback", "")
                 json = {"project_id": PROJECT_ID, "message": message, "traceback": tb}
-                requests.post(f"{BURLA_BACKEND_URL}/v1/private/log_error", json=json, timeout=1)
+                requests.post(f"{BURLA_BACKEND_URL}/v1/telemetry/alert", json=json, timeout=1)
             except Exception:
                 pass
 

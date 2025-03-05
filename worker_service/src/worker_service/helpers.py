@@ -3,17 +3,6 @@ import sys
 import traceback
 import logging as python_logging
 
-from google.cloud.secretmanager import SecretManagerServiceClient
-
-from worker_service import PROJECT_ID
-
-
-def get_secret(secret_name: str):
-    client = SecretManagerServiceClient()
-    secret_path = client.secret_version_path(PROJECT_ID, secret_name, "latest")
-    response = client.access_secret_version(request={"name": secret_path})
-    return response.payload.data.decode("UTF-8")
-
 
 class VerboseList(list):
     # simply printing instead of using the python logger causes SEGFAULT errors

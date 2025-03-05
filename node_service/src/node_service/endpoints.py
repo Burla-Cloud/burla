@@ -26,7 +26,7 @@ from node_service import (
 )
 from node_service.helpers import Logger, format_traceback, ignore_400_409_404
 from node_service.worker import Worker
-from node_service import ACCESS_TOKEN, IN_LOCAL_DEV_MODE
+from node_service import IN_LOCAL_DEV_MODE
 
 router = APIRouter()
 
@@ -45,7 +45,7 @@ def watch_job(job_id: str):
 
     # Watch for UDF errors from other nodes:
     # restart if a udf error from any other node is detected.
-    job_doc = firestore.Client(project=PROJECT_ID).collection("jobs").document(job_id)
+    job_doc = firestore.Client(database="burla").collection("jobs").document(job_id)
     UDF_error_watcher = job_doc.collection("results").on_snapshot(on_snapshot)
 
     try:
@@ -121,7 +121,7 @@ def execute(
     SELF["current_job"] = job_id
     SELF["RUNNING"] = True
     function_pkl = (request_files or {}).get("function_pkl")
-    db = firestore.Client(project=PROJECT_ID)
+    db = firestore.Client(project=PROJECT_ID, database="burla")
     node_doc = db.collection("nodes").document(INSTANCE_NAME)
     node_doc.update({"status": "RUNNING", "current_job": job_id})
 
@@ -166,7 +166,6 @@ def execute(
             "n_inputs": job["n_inputs"],
             "starting_index": starting_index,
             "planned_future_job_parallelism": job["planned_future_job_parallelism"],
-            "sa_access_token": ACCESS_TOKEN,
         }
         data = {"function_pkl": function_pkl, "request_json": pickle.dumps(request_json)}
         async with session.post(url, data=data) as response:
@@ -177,7 +176,7 @@ def execute(
         async with aiohttp.ClientSession() as session:
             tasks = []
             for index, worker in enumerate(workers):
-                url = f"{worker.host}/jobs/{job_id}"
+                url = f"{worker.url}/jobs/{job_id}"
                 worker_starting_index = request_json["starting_index"] + index
                 tasks.append(assign_worker(session, url, worker_starting_index))
                 worker.id = worker_starting_index
@@ -226,7 +225,11 @@ def reboot_containers(
             SELF["current_container_config"] = new_container_config
 
         docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
-        node_doc = firestore.Client(project=PROJECT_ID).collection("nodes").document(INSTANCE_NAME)
+        node_doc = (
+            firestore.Client(project=PROJECT_ID, database="burla")
+            .collection("nodes")
+            .document(INSTANCE_NAME)
+        )
         node_doc.update(
             {
                 "status": "BOOTING",

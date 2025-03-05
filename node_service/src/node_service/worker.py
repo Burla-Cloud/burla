@@ -8,8 +8,9 @@ from time import sleep
 
 import docker
 from google.cloud import logging
+from google.auth.transport.requests import Request
 
-from node_service import PROJECT_ID, IN_DEV, ACCESS_TOKEN, INSTANCE_NAME, IN_LOCAL_DEV_MODE
+from node_service import PROJECT_ID, INSTANCE_NAME, IN_LOCAL_DEV_MODE, CREDENTIALS
 from node_service.helpers import next_free_port
 
 LOGGER = logging.Client().logger("node_service")
@@ -27,10 +28,11 @@ class Worker:
     ):
         self.container = None
         attempt = 0
-        image_stored_in_gcp = "docker.pkg.dev" in image or "gcr.io" in image
 
+        image_stored_in_gcp = "docker.pkg.dev" in image or "gcr.io" in image
         if image_stored_in_gcp:
-            auth_config = {"username": "oauth2accesstoken", "password": ACCESS_TOKEN}
+            CREDENTIALS.refresh(Request())
+            auth_config = {"username": "oauth2accesstoken", "password": CREDENTIALS.token}
             docker_client.pull(image, auth_config=auth_config)
         else:
             docker_client.pull(image)
@@ -45,37 +47,38 @@ class Worker:
 
         while self.container is None:
             port = next_free_port()
+            cmd = [python_executable, "-m", "gunicorn", "-t", "60", "-b", f"0.0.0.0:{port}"]
 
             if IN_LOCAL_DEV_MODE:
-                gunicorn_command = f"gunicorn -t 60 -b 0.0.0.0:{port} --reload worker_service:app"
+                cmd.extend(["--reload", "worker_service:app"])
                 host_config = docker_client.create_host_config(
                     port_bindings={port: port},
                     network_mode="local-burla-cluster",
                     binds={
                         f"{os.environ['HOST_HOME_DIR']}/.config/gcloud": "/root/.config/gcloud",
-                        f"{os.environ['HOST_PWD']}/worker_service": "/burla",
+                        f"{os.environ['HOST_PWD']}/worker_service": "/burla/worker_service",
                     },
                 )
             else:
-                gunicorn_command = f"gunicorn -t 60 -b 0.0.0.0:{port} worker_service:app"
+                cmd.extend(["worker_service:app"])
                 host_config = docker_client.create_host_config(port_bindings={port: port})
 
             try:
                 container_name = f"worker_{uuid4().hex[:8]}--node_{INSTANCE_NAME[11:]}"
                 container = docker_client.create_container(
                     image=image,
-                    command=["/bin/sh", "-c", f"{python_executable} -m {gunicorn_command}"],
+                    command=cmd,
                     name=container_name,
                     ports=[port],
                     host_config=host_config,
                     environment={
                         "GOOGLE_CLOUD_PROJECT": PROJECT_ID,
-                        "PROJECT_ID": PROJECT_ID,
                         "IN_LOCAL_DEV_MODE": IN_LOCAL_DEV_MODE,
                     },
                     detach=True,
                 )
                 docker_client.start(container=container.get("Id"))
+
                 self.container = container
                 self.container_name = container_name
             except docker.errors.APIError as e:
@@ -128,7 +131,9 @@ class Worker:
 
         self.docker_client = docker_client
         self.python_version = python_version
-        self.host = f"http://{container_name}:{port}" if IN_DEV else f"http://127.0.0.1:{port}"
+
+        domain_name = container_name if IN_LOCAL_DEV_MODE else "127.0.0.1"
+        self.url = f"http://{domain_name}:{port}"
 
         if self.status() != "READY":
             raise Exception("Worker failed to start.")
@@ -169,12 +174,12 @@ class Worker:
             }
         )
 
-        if os.environ.get("IN_DEV"):  # <- to make debugging easier
-            print(container_logs, file=sys.stderr)
+        if IN_LOCAL_DEV_MODE:
+            print(container_logs, file=sys.stderr)  # <- to make local debugging easier
 
     def status(self, attempt: int = 0):
         try:
-            response = requests.get(f"{self.host}/")
+            response = requests.get(f"{self.url}/")
             response.raise_for_status()
             status = response.json()["status"]  # will be one of: READY, RUNNING, FAILED, DONE
         except requests.exceptions.ConnectionError:

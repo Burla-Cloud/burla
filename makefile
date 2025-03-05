@@ -28,45 +28,18 @@ local-dev:
 		-v $(PWD)/main_service:/burla/main_service \
 		-v ~/.config/gcloud:/root/.config/gcloud \
 		-v /var/run/docker.sock:/var/run/docker.sock \
-		-e ACCESS_TOKEN=$(ACCESS_TOKEN) \
 		-e GOOGLE_CLOUD_PROJECT=$(PROJECT_ID) \
-		-e PROJECT_ID=$(PROJECT_ID) \
-		-e PROJECT_NUM=$(PROJECT_NUM) \
 		-e IN_LOCAL_DEV_MODE=True \
-		-e IN_PROD=False \
 		-e HOST_PWD=$(PWD) \
 		-e HOST_HOME_DIR=$${HOME} \
 		-p 5001:5001 \
-		--entrypoint poetry \
-		$(MAIN_SVC_IMAGE_NAME) run uvicorn main_service:app --host 0.0.0.0 --port 5001 --reload \
+		--entrypoint python3.11 \
+		$(MAIN_SVC_IMAGE_NAME) -m uvicorn main_service:app --host 0.0.0.0 --port 5001 --reload \
 			--reload-exclude main_service/frontend/node_modules/
 
-# The cluster is run 100% locally using the config `LOCAL_DEV_CONFIG` in `main_service.__init__.py`
-# All components (main_svc, node_svc, worker_svc) will restart when changes to code are made.
-local-dev-cluster:
-	set -e; \
-	docker network create local-burla-cluster 2>/dev/null || true; \
-	docker run --rm -it \
-		--name main_service \
-		--network local-burla-cluster \
-		-v $(PWD)/main_service:/burla/main_service \
-		-v ~/.config/gcloud:/root/.config/gcloud \
-		-v /var/run/docker.sock:/var/run/docker.sock \
-		-e ACCESS_TOKEN=$(ACCESS_TOKEN) \
-		-e GOOGLE_CLOUD_PROJECT=$(PROJECT_ID) \
-		-e PROJECT_ID=$(PROJECT_ID) \
-		-e PROJECT_NUM=$(PROJECT_NUM) \
-		-e IN_LOCAL_DEV_MODE=True \
-		-e IN_PROD=False \
-		-e HOST_PWD=$(PWD) \
-		-e HOST_HOME_DIR=$${HOME} \
-		-e AUTOBOOT_CLUSTER_ON_START=True \
-		-p 5001:5001 \
-		--entrypoint poetry \
-		$(MAIN_SVC_IMAGE_NAME) run uvicorn main_service:app --host 0.0.0.0 --port 5001 --reload
-
-# private recipe,
-# exits with error if deployed worker service or node service are not up to date with local
+# raise error if local node/worker services are different from remote-dev versions
+# does the worker service have a git diff since AFTER the last image was pushed?
+# does the node service have a git diff?
 __check-local-services-up-to-date:
 	set -e; \
 	WORKER_SVC_TS=$$(cat ./worker_service/last_image_pushed_at.txt); \
@@ -92,7 +65,7 @@ __check-local-services-up-to-date:
 
 
 # Only the `main_service` is run locally, nodes are started as GCE VM's in the test cloud.
-# Uses cluster config from firestore doc: `/databases/(default)/cluster_config/cluster_config`
+# Uses cluster config from firestore doc: `/databases/burla/cluster_config/cluster_config`
 remote-dev:
 	set -e; \
 	$(MAKE) __check-local-services-up-to-date && echo "" || exit 1; \
@@ -102,13 +75,10 @@ remote-dev:
 		-v $(PWD)/main_service:/burla/main_service \
 		-v ~/.config/gcloud:/root/.config/gcloud \
 		-e GOOGLE_CLOUD_PROJECT=$(PROJECT_ID) \
-		-e PROJECT_ID=$(PROJECT_ID) \
-		-e PROJECT_NUM=$(PROJECT_NUM) \
-		-e IN_REMOTE_DEV_MODE=True \
-		-e IN_PROD=False \
 		-p 5001:5001 \
-		--entrypoint poetry \
-		$(MAIN_SVC_IMAGE_NAME) run uvicorn main_service:app --host 0.0.0.0 --port 5001 --reload
+		--entrypoint python3.11 \
+		$(MAIN_SVC_IMAGE_NAME) -m uvicorn main_service:app --host 0.0.0.0 --port 5001 --reload \
+			--reload-exclude main_service/frontend/node_modules/
 
 # Moves latest worker service image to prod & 
 # Builds new main-service image, moves to prod, then deploys prod main service
@@ -117,11 +87,11 @@ deploy-prod:
 	$(MAKE) __check-local-services-up-to-date && echo "" || exit 1; \
 	:; \
 	cd ./worker_service; \
-	$(MAKE) move-image-nogpu-to-prod; \
+	$(MAKE) image; \
+	$(MAKE) publish-prod-image; \
 	cd ..; \
 	cd ./main_service; \
 	$(MAKE) image; \
-	$(MAKE) move-test-image-to-prod; \
 	$(MAKE) deploy-prod
 
 deploy-test:

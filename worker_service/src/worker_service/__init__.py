@@ -1,15 +1,18 @@
 import os
 import sys
-import json
+import requests
 import traceback
 
 from flask import Flask, request, abort
+import google.auth
 from google.cloud import logging
+
 
 # Defined before importing helpers/endpoints to prevent cyclic imports
 IN_LOCAL_DEV_MODE = os.environ.get("IN_LOCAL_DEV_MODE") == "True"
-PROJECT_ID = os.environ.get("PROJECT_ID")
-JOBS_BUCKET = f"burla-jobs--{PROJECT_ID}"
+
+CREDENTIALS, PROJECT_ID = google.auth.default()  # need `CREDENTIALS` so token can be refreshed
+BURLA_BACKEND_URL = "https://backend.burla.dev"
 
 from worker_service.helpers import VerboseList  # <- same as a list but prints stuff you append.
 
@@ -57,7 +60,7 @@ def log_exception(exception):
     # Report errors back to Burla's cloud.
     try:
         json = {"project_id": PROJECT_ID, "message": exc_type, "traceback": traceback_str}
-        requests.post(f"{BURLA_BACKEND_URL}/v1/private/log_error", json=json, timeout=1)
+        requests.post(f"{BURLA_BACKEND_URL}/v1/telemetry/alert", json=json, timeout=1)
     except Exception:
         pass
 

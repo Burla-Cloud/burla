@@ -76,7 +76,7 @@ GCE_DEFAULT_SVC = f"{project.name.split('/')[-1]}-compute@developer.gserviceacco
 
 NODE_BOOT_TIMEOUT = 60 * 3
 ACCEPTABLE_ZONES = ["us-central1-b", "us-central1-c", "us-central1-f", "us-central1-a"]
-NODE_SVC_VERSION = "0.9.12"  # <- this maps to a git tag/release or branch
+NODE_SVC_VERSION = "0.9.13"  # <- this maps to a git tag/release or branch
 
 
 class Node:

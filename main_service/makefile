@@ -90,8 +90,9 @@ publish-prod-image:
 	echo $${DOCKERHUB_TOKEN} | docker login -u jakezuliani --password-stdin; \
 	:; \
 	docker tag $${TEST_IMAGE_NAME} jakezuliani/burla_main_service:$${TEST_IMAGE_TAG}; \
+	docker push jakezuliani/burla_main_service:$${TEST_IMAGE_TAG}; \
 	docker tag $${TEST_IMAGE_NAME} jakezuliani/burla_main_service:latest; \
-	docker push jakezuliani/burla_main_service:$${TEST_IMAGE_TAG} jakezuliani/burla_main_service:latest
+	docker push jakezuliani/burla_main_service:latest
 
 image:
 	set -e; \

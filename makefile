@@ -87,11 +87,11 @@ deploy-prod:
 	$(MAKE) __check-local-services-up-to-date && echo "" || exit 1; \
 	:; \
 	cd ./worker_service; \
-	$(MAKE) image; \
 	$(MAKE) publish-prod-image; \
 	cd ..; \
 	cd ./main_service; \
 	$(MAKE) image; \
+	$(MAKE) publish-prod-image; \
 	$(MAKE) deploy-prod
 
 deploy-test:

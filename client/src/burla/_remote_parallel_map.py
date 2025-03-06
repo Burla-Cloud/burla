@@ -253,16 +253,14 @@ def remote_parallel_map(
         if not generator:
             results = [item for item in _output_generator()]
 
-    except Exception as e:
         if spinner:
-            spinner.stop()
-        raise e
+            spinner.text = "Done!"
+            spinner.ok("✔")
+
     finally:
         stop_event.set()
-
-    if spinner:
-        spinner.text = "Done!"
-        spinner.ok("✔")
+        if spinner:
+            spinner.stop()
 
     if generator:
         return _output_generator()

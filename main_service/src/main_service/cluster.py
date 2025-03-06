@@ -89,7 +89,10 @@ def reconcile(db: firestore.Client, logger: Logger, add_background_task: Callabl
 
     # record globally that reconciling is happening, prevents simoultainous reconciling
     reconcile_marker_ref = db.collection("global_reconcile_marker").document("marker")
-    reconcile_marker_ref.update({"is_reconciling": True})
+    if not reconcile_marker_ref.get().exists:
+        reconcile_marker_ref.set({"is_reconciling": True})
+    else:
+        reconcile_marker_ref.update({"is_reconciling": True})
 
     # load nodes from db
     nodes = []

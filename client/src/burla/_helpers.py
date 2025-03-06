@@ -43,16 +43,15 @@ def using_demo_cluster():
 def get_db(auth_headers: dict):
     if using_demo_cluster():
         credentials = get_gcs_credentials(auth_headers)
-        return firestore.Client(credentials=credentials, project="burla-prod")
+        return firestore.Client(credentials=credentials, project="burla-prod", database="burla")
     else:
-        # use user's local google project/creds if not using our cluster.
         try:
             credentials, project = google.auth.default()
             return firestore.Client(credentials=credentials, project=project, database="burla")
         except DefaultCredentialsError as e:
             raise Exception(
                 "No Google Application Default Credentials found. "
-                "Please ensure you have a valid Google Cloud account and are logged in."
+                "Please run `gcloud auth application-default login`."
             ) from e
 
 

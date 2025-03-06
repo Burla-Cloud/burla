@@ -25,6 +25,8 @@ from uuid import uuid4
 from typing import Optional
 
 import docker
+from google.cloud import resourcemanager_v3
+from google.auth.transport.requests import Request
 from google.api_core.exceptions import NotFound, ServiceUnavailable, Conflict
 from google.cloud import firestore
 from google.cloud.firestore import DocumentSnapshot
@@ -42,7 +44,7 @@ from google.cloud.compute_v1 import (
     Scheduling,
 )
 
-from main_service import PROJECT_ID, IN_PROD, IN_DEV, ACCESS_TOKEN, IN_LOCAL_DEV_MODE
+from main_service import PROJECT_ID, CREDENTIALS, IN_LOCAL_DEV_MODE
 from main_service.helpers import Logger, format_traceback
 
 
@@ -68,12 +70,13 @@ class Container:
 TOTAL_BOOT_TIME = 60
 TOTAL_REBOOT_TIME = 30
 
-PROJECT_NUM = os.environ["PROJECT_NUM"]
-GCE_DEFAULT_SVC = f"{PROJECT_NUM}-compute@developer.gserviceaccount.com"
+client = resourcemanager_v3.ProjectsClient(credentials=CREDENTIALS)
+project = client.get_project(name=f"projects/{PROJECT_ID}")
+GCE_DEFAULT_SVC = f"{project.name.split('/')[-1]}-compute@developer.gserviceaccount.com"
 
 NODE_BOOT_TIMEOUT = 60 * 3
 ACCEPTABLE_ZONES = ["us-central1-b", "us-central1-c", "us-central1-f", "us-central1-a"]
-NODE_SVC_VERSION = "0.9.11"  # <- this maps to a git tag/release or branch
+NODE_SVC_VERSION = "0.9.12"  # <- this maps to a git tag/release or branch
 
 
 class Node:
@@ -151,7 +154,6 @@ class Node:
         self.node_ref.set(current_state)
 
         if as_local_container:
-            assert IN_DEV == True
             self.__start_svc_in_local_container()
         else:
             self.__start_svc_in_vm(disk_image=disk_image, disk_size=self.disk_size)
@@ -238,8 +240,13 @@ class Node:
             },
         )
 
-        auth_config = {"username": "oauth2accesstoken", "password": ACCESS_TOKEN}
-        docker_client.pull(image, auth_config=auth_config)
+        image_stored_in_gcp = "docker.pkg.dev" in image or "gcr.io" in image
+        if image_stored_in_gcp:
+            CREDENTIALS.refresh(Request())
+            auth_config = {"username": "oauth2accesstoken", "password": CREDENTIALS.token}
+            docker_client.pull(image, auth_config=auth_config)
+        else:
+            docker_client.pull(image)
 
         container_name = f"node_{self.instance_name[11:]}"
         container = docker_client.create_container(
@@ -250,10 +257,7 @@ class Node:
             host_config=host_config,
             environment={
                 "GOOGLE_CLOUD_PROJECT": PROJECT_ID,
-                "PROJECT_ID": PROJECT_ID,
                 "IN_LOCAL_DEV_MODE": IN_LOCAL_DEV_MODE,
-                "IN_DEV": IN_DEV,
-                "IN_PROD": False,
                 "HOST_HOME_DIR": os.environ["HOST_HOME_DIR"],
                 "HOST_PWD": os.environ["HOST_PWD"],
                 "INSTANCE_NAME": self.instance_name,
@@ -335,7 +339,6 @@ class Node:
         python3.11 -m pip install --break-system-packages .
         echo "Done installing packages."
 
-        export IN_PROD="{IN_PROD}"
         export INSTANCE_NAME="{self.instance_name}"
         export PROJECT_ID="{PROJECT_ID}"
         export CONTAINERS='{json.dumps([c.to_dict() for c in self.containers])}'
@@ -346,7 +349,7 @@ class Node:
 
     def __get_shutdown_script(self):
         firestore_base_url = "https://firestore.googleapis.com"
-        firestore_db_url = f"{firestore_base_url}/v1/projects/{PROJECT_ID}/databases/(default)"
+        firestore_db_url = f"{firestore_base_url}/v1/projects/{PROJECT_ID}/databases/burla"
         firestore_document_url = f"{firestore_db_url}/documents/nodes/{self.instance_name}"
         return f"""
         #! /bin/bash

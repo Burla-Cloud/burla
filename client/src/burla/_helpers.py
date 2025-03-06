@@ -48,7 +48,7 @@ def get_db(auth_headers: dict):
         # use user's local google project/creds if not using our cluster.
         try:
             credentials, project = google.auth.default()
-            return firestore.Client(credentials=credentials, project=project)
+            return firestore.Client(credentials=credentials, project=project, database="burla")
         except DefaultCredentialsError as e:
             raise Exception(
                 "No Google Application Default Credentials found. "

@@ -3,12 +3,13 @@ import sys
 import json
 import asyncio
 import traceback
-import requests
 from uuid import uuid4
 from time import time
 from typing import Callable
 from contextlib import asynccontextmanager
 
+import google.auth
+from google.auth.transport.requests import Request
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 from fastapi import FastAPI, Request, BackgroundTasks, Depends
@@ -17,24 +18,18 @@ from starlette.datastructures import UploadFile
 from google.cloud import logging
 from google.cloud.compute_v1 import InstancesClient
 
-__version__ = "0.9.11"
-IN_LOCAL_DEV_MODE = os.environ.get("IN_LOCAL_DEV_MODE") == "True"  # Cluster is runing 100% locally
-IN_DEV = os.environ.get("IN_DEV") == "True"
+__version__ = "0.9.12"
+CREDENTIALS, PROJECT_ID = google.auth.default()
+BURLA_BACKEND_URL = "https://backend.burla.dev"
 
-PROJECT_ID = os.environ["PROJECT_ID"]
+
+IN_LOCAL_DEV_MODE = os.environ.get("IN_LOCAL_DEV_MODE") == "True"  # Cluster running locally
+
 INSTANCE_NAME = os.environ["INSTANCE_NAME"]
 INACTIVITY_SHUTDOWN_TIME_SEC = os.environ.get("INACTIVITY_SHUTDOWN_TIME_SEC")
-JOBS_BUCKET = f"burla-jobs--{PROJECT_ID}"
-INSTANCE_N_CPUS = 2 if IN_DEV else os.cpu_count()
+INSTANCE_N_CPUS = 2 if IN_LOCAL_DEV_MODE else os.cpu_count()
 GCL_CLIENT = logging.Client().logger("node_service", labels=dict(INSTANCE_NAME=INSTANCE_NAME))
 
-url = "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token"
-if IN_DEV:
-    ACCESS_TOKEN = os.popen("gcloud auth print-access-token").read().strip()
-else:
-    response = requests.get(url, headers={"Metadata-Flavor": "Google"})
-    response.raise_for_status()
-    ACCESS_TOKEN = response.json().get("access_token")
 
 # This MUST be set to the same value as `JOB_HEALTHCHECK_FREQUENCY_SEC` in the client.
 # Nodes will restart themself if they dont get a new healthcheck from the client every X seconds.
@@ -122,7 +117,7 @@ async def shutdown_if_idle_for_too_long():
         await asyncio.sleep(1)
         SELF["time_until_inactivity_shutdown"] -= 1
 
-    if not IN_DEV:
+    if not IN_LOCAL_DEV_MODE:
         msg = f"SHUTTING DOWN NODE DUE TO INACTIVITY: {INSTANCE_NAME}"
         struct = dict(message=msg)
         GCL_CLIENT.log_struct(struct, severity="WARNING")
@@ -233,7 +228,7 @@ async def log_and_time_requests__log_errors(request: Request, call_next):
     if not response_contains_background_tasks:
         response.background = BackgroundTasks()
 
-    if not IN_DEV:
+    if not IN_LOCAL_DEV_MODE:
         add_background_task = get_add_background_task_function(response.background, logger=logger)
         msg = f"Received {request.method} at {request.url}"
         add_background_task(logger.log, msg)

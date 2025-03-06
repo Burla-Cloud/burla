@@ -59,8 +59,10 @@ image:
 	NEW_TEST_IMAGE_TAG=$$(($${TEST_IMAGE_TAG} + 1)); \
 	TEST_IMAGE_NAME_SEQUENTIAL=$$( echo $${TEST_IMAGE_BASE_NAME}:$${NEW_TEST_IMAGE_TAG} ); \
 	TEST_IMAGE_NAME_LATEST=$$( echo $${TEST_IMAGE_BASE_NAME}:latest ); \
-	docker buildx build --platform linux/amd64 -t $${TEST_IMAGE_NAME_SEQUENTIAL} --push .; \
-	docker buildx imagetools create -t $${TEST_IMAGE_NAME_LATEST} $${TEST_IMAGE_NAME_SEQUENTIAL}; \
+	docker build --platform linux/amd64 -t $${TEST_IMAGE_NAME_SEQUENTIAL} .; \
+	docker push $${TEST_IMAGE_NAME_SEQUENTIAL}; \
+	docker tag $${TEST_IMAGE_NAME_SEQUENTIAL} $${TEST_IMAGE_NAME_LATEST}; \
+	docker push $${TEST_IMAGE_NAME_LATEST}; \
 	echo "Successfully built Docker Image:"; \
 	echo "$${TEST_IMAGE_NAME_SEQUENTIAL}"; \
 	echo "$${TEST_IMAGE_NAME_LATEST}"; \

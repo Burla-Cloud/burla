@@ -90,9 +90,8 @@ publish-prod-image:
 	echo $${DOCKERHUB_TOKEN} | docker login -u jakezuliani --password-stdin; \
 	:; \
 	docker tag $${TEST_IMAGE_NAME} jakezuliani/burla_main_service:$${TEST_IMAGE_TAG}; \
-	docker push jakezuliani/burla_main_service:$${TEST_IMAGE_TAG}; \
 	docker tag $${TEST_IMAGE_NAME} jakezuliani/burla_main_service:latest; \
-	docker push jakezuliani/burla_main_service:latest
+	docker push jakezuliani/burla_main_service:$${TEST_IMAGE_TAG} jakezuliani/burla_main_service:latest
 
 image:
 	set -e; \
@@ -111,7 +110,7 @@ image:
 	NEW_TEST_IMAGE_TAG=$$(($${TEST_IMAGE_TAG} + 1)); \
 	TEST_IMAGE_NAME_SEQUENTIAL=$$( echo $${TEST_IMAGE_BASE_NAME}:$${NEW_TEST_IMAGE_TAG} ); \
 	TEST_IMAGE_NAME_LATEST=$$( echo $${TEST_IMAGE_BASE_NAME}:latest ); \
-	docker build -t $${TEST_IMAGE_NAME_SEQUENTIAL} .; \
+	docker build --platform linux/amd64 -t $${TEST_IMAGE_NAME_SEQUENTIAL} .; \
 	docker push $${TEST_IMAGE_NAME_SEQUENTIAL}; \
 	docker tag $${TEST_IMAGE_NAME_SEQUENTIAL} $${TEST_IMAGE_NAME_LATEST}; \
 	docker push $${TEST_IMAGE_NAME_LATEST}; \

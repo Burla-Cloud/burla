@@ -1,18 +1,3 @@
-"""
-This needs to be run once per project or the port 8080 will not be open!
-```
-from google.cloud.compute_v1 import Firewall, FirewallsClient, Allowed
-firewall = Firewall(
-    name="burla-cluster-node-firewall",
-    allowed=[Allowed(I_p_protocol="tcp", ports=["8080"])],
-    direction="INGRESS",
-    network="global/networks/default",
-    target_tags=["burla-cluster-node"],
-)
-FirewallsClient().insert(project=PROJECT_ID, firewall_resource=firewall).result()
-```
-"""
-
 import os
 import sys
 import json

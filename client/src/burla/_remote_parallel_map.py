@@ -194,11 +194,36 @@ def remote_parallel_map(
     """
     max_parallelism = max_parallelism if max_parallelism else len(inputs)
     max_parallelism = max_parallelism if max_parallelism < MAX_PARALLELISM else MAX_PARALLELISM
+    kwargs = dict(
+        function_=function_,
+        inputs=inputs,
+        func_cpu=func_cpu,
+        func_ram=func_ram,
+        spinner=spinner,
+        generator=generator,
+        max_parallelism=max_parallelism,
+        api_key=api_key,
+    )
     if spinner:
-        spinner = yaspin()
-        spinner.text = f"Preparing to run {len(inputs)} inputs through `{function_.__name__}`"
-        spinner.start()
+        with yaspin() as spinner:
+            kwargs["spinner"] = spinner
+            spinner.text = f"Preparing to run {len(inputs)} inputs through `{function_.__name__}`"
+            return _rpm(**kwargs)
+    else:
+        return _rpm(**kwargs)
 
+
+# temp: something to wrap with the spinner, I seem to be forced to use with statements
+def _rpm(
+    function_: Callable,
+    inputs: list,
+    func_cpu: int = 1,
+    func_ram: int = 4,
+    spinner: bool = True,
+    generator: bool = False,
+    max_parallelism: Optional[int] = None,
+    api_key: Optional[str] = None,
+):
     auth_headers = get_auth_headers(api_key)
     db = get_db(auth_headers)
 
@@ -264,6 +289,3 @@ def remote_parallel_map(
 
     finally:
         stop_event.set()
-        if spinner:
-            print("DEBUG: stopped spinner!")
-            spinner.stop()

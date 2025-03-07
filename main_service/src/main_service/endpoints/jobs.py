@@ -1,5 +1,6 @@
 import json
 import requests
+import asyncio
 from time import time
 from uuid import uuid4
 from typing import Optional, Callable
@@ -7,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import APIRouter, Path, Depends
 from fastapi.responses import JSONResponse
+from starlette.responses import StreamingResponse
 from google.cloud.firestore import FieldFilter, Increment
 
 
@@ -145,3 +147,48 @@ def run_job_healthcheck(
         response.raise_for_status()
         if response.json()["any_workers_failed"]:
             raise Exception(f"Worker failed. Check logs for node {node['instance_name']}")
+        
+
+@router.get("/v1/job_context")
+async def job_stream(logger: Logger = Depends(get_logger)):
+    queue = asyncio.Queue()
+    current_loop = asyncio.get_running_loop()
+    unsubscribe = None
+
+    async def stream_jobs():
+        nonlocal unsubscribe  # Ensure we can unsubscribe when needed
+
+        def on_snapshot(query_snapshot, changes, read_time):
+            for change in changes:
+                doc_data = change.document.to_dict() or {}
+                job_id = change.document.id
+                job_status = doc_data.get("status")
+                machine = doc_data.get("machine")
+
+                if change.type.name == "REMOVED":
+                    event_data = {"jobId": job_id, "deleted": True}
+                else:
+                    event_data = {"jobId": job_id, "status": job_status, "machine": machine}
+
+                # Ensure safe thread execution
+                asyncio.run_coroutine_threadsafe(queue.put(event_data), current_loop)
+                logger.log(f"Firestore event detected: {event_data}")
+
+        # Firestore query to stream updates where status is not null
+        query = DB.collection("jobs").where(filter=FieldFilter("status", "in", ["RUNNING", "FAILED", "IN_QUEUE", "COMPLETED"]))
+        unsubscribe = query.on_snapshot(on_snapshot)
+
+        try:
+            while True:
+                try:
+                    event = await queue.get()
+                    yield f"data: {json.dumps(event)}\n\n"
+                except asyncio.CancelledError:
+                    logger.log("Client disconnected, stopping stream.")
+                    break
+        finally:
+            if unsubscribe:
+                unsubscribe()
+                logger.log("Unsubscribed from Firestore snapshot.")
+
+    return StreamingResponse(stream_jobs(), media_type="text/event-stream")

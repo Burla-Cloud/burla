@@ -5,6 +5,7 @@ import { useClusterControl } from "@/hooks/useClusterControl";
 import { useNodes } from "@/contexts/NodesContext";
 import { useCluster } from "@/contexts/ClusterContext";
 
+
 const Dashboard = () => {
     const { rebootCluster, stopCluster } = useClusterControl();
     const { nodes } = useNodes();

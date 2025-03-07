@@ -49,7 +49,7 @@ class Logger:
         scope = {key: request.scope.get(key) for key in keys}
         request_dict = {
             "scope": scope,
-            "url": str(request.url),
+            "url": str(request.url), 
             "base_url": str(request.base_url),
             "headers": request.headers,
             "query_params": request.query_params,

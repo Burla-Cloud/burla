@@ -18,6 +18,10 @@ from burla._auth import AuthException, get_gcs_credentials
 logging.getLogger("google.api_core.bidi").setLevel(logging.ERROR)
 
 
+class GoogleLoginError(Exception):
+    pass
+
+
 class InputTooBig(Exception):
     pass
 
@@ -47,6 +51,12 @@ def get_db(auth_headers: dict):
     else:
         try:
             credentials, project = google.auth.default()
+            if project == "":
+                raise GoogleLoginError(
+                    "No google cloud project found, please sign in to the google cloud CLI:\n"
+                    "  1. gcloud config set project <your-project-id>\n"
+                    "  2. gcloud auth application-default login\n"
+                )
             return firestore.Client(credentials=credentials, project=project, database="burla")
         except DefaultCredentialsError as e:
             raise Exception(

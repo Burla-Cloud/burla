@@ -1,18 +1,3 @@
-"""
-This needs to be run once per project or the port 8080 will not be open!
-```
-from google.cloud.compute_v1 import Firewall, FirewallsClient, Allowed
-firewall = Firewall(
-    name="burla-cluster-node-firewall",
-    allowed=[Allowed(I_p_protocol="tcp", ports=["8080"])],
-    direction="INGRESS",
-    network="global/networks/default",
-    target_tags=["burla-cluster-node"],
-)
-FirewallsClient().insert(project=PROJECT_ID, firewall_resource=firewall).result()
-```
-"""
-
 import os
 import sys
 import json
@@ -76,7 +61,7 @@ GCE_DEFAULT_SVC = f"{project.name.split('/')[-1]}-compute@developer.gserviceacco
 
 NODE_BOOT_TIMEOUT = 60 * 3
 ACCEPTABLE_ZONES = ["us-central1-b", "us-central1-c", "us-central1-f", "us-central1-a"]
-NODE_SVC_VERSION = "0.9.13"  # <- this maps to a git tag/release or branch
+NODE_SVC_VERSION = "0.9.14"  # <- this maps to a git tag/release or branch
 
 
 class Node:

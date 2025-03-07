@@ -257,12 +257,13 @@ def remote_parallel_map(
             spinner.text = "Done!"
             spinner.ok("✔")
 
+        if generator:
+            return _output_generator()
+        else:
+            return results
+
     finally:
         stop_event.set()
         if spinner:
+            print("DEBUG: stopped spinner!")
             spinner.stop()
-
-    if generator:
-        return _output_generator()
-    else:
-        return results

@@ -21,38 +21,64 @@ export const JobsProvider = ({ children }: { children: React.ReactNode }) => {
             if (!response.ok) throw new Error("Failed to fetch jobs");
             const data = await response.json();
             console.log("🔥 Fetched jobs:", data);
-            setJobs(data.map(createNewJob)); // Ensure proper formatting
+
+            if (Array.isArray(data)) {
+                setJobs(data.map(createNewJob)); // Properly format job data
+            } else {
+                console.warn("⚠ Unexpected data format received:", data);
+                setJobs([]);
+            }
         } catch (error) {
             console.error("🔥 Failed to fetch jobs:", error);
         }
     };
 
     useEffect(() => {
-        fetchJobs(); // Fetch once on mount
+        fetchJobs(); // Initial fetch on mount
 
         const eventSource = new EventSource("/v1/job_context");
         console.log("✅ SSE Connection opened...");
 
         eventSource.onmessage = (event) => {
-            const jobData = JSON.parse(event.data);
-            console.log("🔥 Received job update:", jobData);
+            try {
+                const jobData = JSON.parse(event.data);
+                console.log("🔥 Received job update:", jobData);
 
-            setJobs((prevJobs) => {
-                let updatedJobs = [...prevJobs];
+                // Ensure jobData is an array
+                const parsedJobData = Array.isArray(jobData) ? jobData : [jobData];
 
-                const existingIndex = updatedJobs.findIndex((job) => job.id === jobData.jobId);
-                if (existingIndex === -1) {
-                    console.log("🆕 Adding new job:", jobData);
-                    updatedJobs.push(createNewJob(jobData));
-                } else {
-                    console.log("🔄 Updating job:", jobData);
-                    updatedJobs[existingIndex] = {
-                        ...updatedJobs[existingIndex],
-                        status: jobData.status as JobsStatus,
-                    };
-                }
-                return [...updatedJobs]; // Ensures state updates
-            });
+                setJobs((prevJobs) => {
+                    let updatedJobs = [...prevJobs];
+
+                    parsedJobData.forEach((jobData) => {
+                        const jobId = jobData.jobId;
+
+                        // **Handle deleted jobs**
+                        if (jobData.deleted) {
+                            console.log(`🗑 Removing job ${jobId} (deleted by API)`);
+                            updatedJobs = updatedJobs.filter((job) => job.id !== jobId);
+                        } else {
+                            // **Check if the job exists, update or add it**
+                            const existingIndex = updatedJobs.findIndex((job) => job.id === jobId);
+                            if (existingIndex === -1) {
+                                console.log("🆕 Adding new job:", jobData);
+                                updatedJobs.push(createNewJob(jobData));
+                            } else {
+                                console.log("🔄 Updating job:", jobData);
+                                updatedJobs[existingIndex] = {
+                                    ...updatedJobs[existingIndex],
+                                    status: jobData.status as JobsStatus,
+                                    machine: jobData.machine || "Unknown",
+                                };
+                            }
+                        }
+                    });
+
+                    return updatedJobs;
+                });
+            } catch (error) {
+                console.error("🔥 Error parsing SSE message:", error);
+            }
         };
 
         eventSource.onerror = (error) => {

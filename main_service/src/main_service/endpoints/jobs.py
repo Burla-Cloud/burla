@@ -63,7 +63,7 @@ def create_job(
             nodes_to_assign.append(node)
 
     job_id = str(uuid4())
-    job_ref = DB.collection("jobs").document(job_id)
+    job_ref = DB.collection("jobs").document(job_id) 
     job_ref.set(
         {
             "n_inputs": int(request_json["n_inputs"]),
@@ -158,7 +158,7 @@ async def job_stream(logger: Logger = Depends(get_logger)):
     async def stream_jobs():
         nonlocal unsubscribe  # Ensure we can unsubscribe when needed
 
-        def on_snapshot(query_snapshot, changes, read_time):
+        def on_snapshot(query_snapshot, changes, read_time): 
             for change in changes:
                 doc_data = change.document.to_dict() or {}
                 job_id = change.document.id
@@ -168,7 +168,7 @@ async def job_stream(logger: Logger = Depends(get_logger)):
                 if change.type.name == "REMOVED":
                     event_data = {"jobId": job_id, "deleted": True}
                 else:
-                    event_data = {"jobId": job_id, "status": job_status, "machine": machine}
+                    event_data = {"jobId": job_id, "status": job_status, "machine": machine} 
 
                 # Ensure safe thread execution
                 asyncio.run_coroutine_threadsafe(queue.put(event_data), current_loop)

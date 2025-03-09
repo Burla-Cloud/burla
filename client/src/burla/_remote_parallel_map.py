@@ -206,7 +206,6 @@ def remote_parallel_map(
     )
     if spinner:
         with yaspin() as spinner:
-            kwargs["spinner"] = spinner
             spinner.text = f"Preparing to run {len(inputs)} inputs through `{function_.__name__}`"
             return _rpm(**kwargs)
     else:

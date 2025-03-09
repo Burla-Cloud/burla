@@ -25,6 +25,13 @@ def _run_command(command, raise_error=True):
         return result
 
 
+def main_service_url():
+    result = _run_command(f"gcloud run services describe burla-main-service --region us-central1")
+    for line in result.stdout.decode().splitlines():
+        if line.startswith("URL:"):
+            return line.split()[1]
+
+
 def install():
     with yaspin() as spinner:
         _install(spinner)
@@ -157,11 +164,7 @@ def _install(spinner):
     spinner.text = "Deploying Burla-Main-Service to Google Cloud Run ... Done."
     spinner.ok("✓")
 
-    result = _run_command(f"gcloud run services describe burla-main-service --region us-central1")
-    for line in result.stdout.decode().splitlines():
-        if line.startswith("URL:"):
-            dashboard_url = line.split()[1]
-            break
+    dashboard_url = main_service_url()
 
     msg = f'\nSuccessfully installed inside project: "{PROJECT_ID}"!\n'
     msg += f"View your dashboard at {dashboard_url}\n"

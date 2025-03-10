@@ -104,3 +104,4 @@ const createNewJob = (data: any): BurlaJob => ({
 });
 
 export const useJobs = () => useContext(JobsContext);
+

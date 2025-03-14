@@ -13,9 +13,14 @@ from google.api_core.exceptions import Unknown
 from google.auth.exceptions import DefaultCredentialsError
 
 from burla._auth import AuthException, get_gcs_credentials
+from burla._install import main_service_url
 
 # throws some uncatchable, unimportant, warnings
 logging.getLogger("google.api_core.bidi").setLevel(logging.ERROR)
+
+
+class GoogleLoginError(Exception):
+    pass
 
 
 class InputTooBig(Exception):
@@ -43,16 +48,31 @@ def using_demo_cluster():
 def get_db(auth_headers: dict):
     if using_demo_cluster():
         credentials = get_gcs_credentials(auth_headers)
-        return firestore.Client(credentials=credentials, project="burla-prod")
+        return firestore.Client(credentials=credentials, project="burla-prod", database="burla")
     else:
-        # use user's local google project/creds if not using our cluster.
+        api_url_according_to_user = os.environ.get("BURLA_API_URL")
+
+        if api_url_according_to_user and api_url_according_to_user != main_service_url():
+            raise Exception(
+                f"You are pointing to the main service at {api_url_according_to_user}.\n"
+                f"However, according to the current project set in gcloud, "
+                f"the main_service is currently running at {main_service_url()}.\n"
+                f"Please ensure your gcloud is pointing at the same project that your burla "
+                "api is deployed in."
+            )
         try:
             credentials, project = google.auth.default()
-            return firestore.Client(credentials=credentials, project=project)
+            if project == "":
+                raise GoogleLoginError(
+                    "No google cloud project found, please sign in to the google cloud CLI:\n"
+                    "  1. gcloud config set project <your-project-id>\n"
+                    "  2. gcloud auth application-default login\n"
+                )
+            return firestore.Client(credentials=credentials, project=project, database="burla")
         except DefaultCredentialsError as e:
             raise Exception(
                 "No Google Application Default Credentials found. "
-                "Please ensure you have a valid Google Cloud account and are logged in."
+                "Please run `gcloud auth application-default login`."
             ) from e
 
 

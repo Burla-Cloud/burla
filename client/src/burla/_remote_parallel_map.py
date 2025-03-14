@@ -3,6 +3,7 @@ import sys
 import requests
 import pickle
 import json
+import inspect
 from six import reraise
 from threading import Thread, Event
 from typing import Callable, Optional
@@ -27,10 +28,10 @@ from burla._helpers import (
     get_host,
 )
 
-MAX_PARALLELISM = 1000  # outdated.
+MAX_PARALLELISM = 256
 
 # This MUST be set to the same value as `JOB_HEALTHCHECK_FREQUENCY_SEC` in the node service.
-# Nodes will restart themself if they dont get a new healthcheck from the client every X seconds.
+# Nodes will restart themself if theydont get a new healthcheck from the client every X seconds.
 JOB_HEALTHCHECK_FREQUENCY_SEC = 3
 
 
@@ -55,6 +56,12 @@ def _start_job(
     db: firestore.Client,
     auth_headers: dict,
 ) -> str:
+
+    sig = inspect.signature(function_)
+    if len(sig.parameters) != 1:
+        msg = "Function must accept exactly one argument! (even if it does nothing)\n"
+        msg += "Email jake@burla.dev if this pisses you off and we will fix it! :)"
+        raise ValueError(msg)
 
     inputs_pkl = [cloudpickle.dumps(input_) for input_ in inputs]
     inputs_size = sum([len(input_pkl) for input_pkl in inputs_pkl])
@@ -194,17 +201,42 @@ def remote_parallel_map(
     """
     max_parallelism = max_parallelism if max_parallelism else len(inputs)
     max_parallelism = max_parallelism if max_parallelism < MAX_PARALLELISM else MAX_PARALLELISM
+    kwargs = dict(
+        function_=function_,
+        inputs=inputs,
+        func_cpu=func_cpu,
+        func_ram=func_ram,
+        spinner=spinner,
+        generator=generator,
+        max_parallelism=max_parallelism,
+        api_key=api_key,
+    )
     if spinner:
-        spinner = yaspin()
-        spinner.text = f"Preparing to run {len(inputs)} inputs through `{function_.__name__}`"
-        spinner.start()
+        with yaspin() as spinner:
+            kwargs["spinner"] = spinner
+            spinner.text = f"Preparing to run {len(inputs)} inputs through `{function_.__name__}`"
+            return _rpm(**kwargs)
+    else:
+        return _rpm(**kwargs)
 
+
+# temp: something to wrap with the spinner, I seem to be forced to use with statements
+def _rpm(
+    function_: Callable,
+    inputs: list,
+    func_cpu: int = 1,
+    func_ram: int = 4,
+    spinner: bool = True,
+    generator: bool = False,
+    max_parallelism: Optional[int] = None,
+    api_key: Optional[str] = None,
+):
     auth_headers = get_auth_headers(api_key)
     db = get_db(auth_headers)
 
     # wrap user function with a for loop because sending too many inputs causes firestore issues
     # this is a temporary fix:
-    max_inputs = min(len(inputs), 256)
+    max_inputs = min(len(inputs), max_parallelism)
     batch_size = len(inputs) // max_inputs
     remainder = len(inputs) % max_inputs
     start = 0
@@ -253,18 +285,14 @@ def remote_parallel_map(
         if not generator:
             results = [item for item in _output_generator()]
 
-    except Exception as e:
         if spinner:
-            spinner.stop()
-        raise e
+            spinner.text = "Done!"
+            spinner.ok("✔")
+
+        if generator:
+            return _output_generator()
+        else:
+            return results
+
     finally:
         stop_event.set()
-
-    if spinner:
-        spinner.text = "Done!"
-        spinner.ok("✔")
-
-    if generator:
-        return _output_generator()
-    else:
-        return results

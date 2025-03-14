@@ -42,9 +42,6 @@ image:
 container:
 	set -e; \
 	PROJECT_ID=$$(gcloud config get-value project 2>/dev/null); \
-	PROJECT_NUM=$$( \
-		gcloud projects describe $${PROJECT_ID} --format="value(projectNumber)"  2>/dev/null \
-	); \
 	TEST_IMAGE_NAME=$$( echo \
 		"us-docker.pkg.dev/$${PROJECT_ID}/$(ARTIFACT_REPO_NAME)/$(ARTIFACT_PKG_NAME):latest" \
 	); \
@@ -52,10 +49,6 @@ container:
 		-v $(PWD):/burla/node_service \
 		-v ~/.config/gcloud:/root/.config/gcloud \
 		-v /var/run/docker.sock:/var/run/docker.sock \
-		-e IN_DEV=True \
-		-e IN_PROD=False \
 		-e GOOGLE_CLOUD_PROJECT=$${PROJECT_ID} \
-		-e PROJECT_ID=$${PROJECT_ID} \
-		-e PROJECT_NUM=$${PROJECT_NUM} \
 		-p 8080:8080 \
 		--entrypoint bash $${TEST_IMAGE_NAME}

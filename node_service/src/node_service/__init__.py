@@ -18,7 +18,7 @@ from starlette.datastructures import UploadFile
 from google.cloud import logging
 from google.cloud.compute_v1 import InstancesClient
 
-__version__ = "0.9.15"
+__version__ = "0.9.16"
 CREDENTIALS, PROJECT_ID = google.auth.default()
 BURLA_BACKEND_URL = "https://backend.burla.dev"
 

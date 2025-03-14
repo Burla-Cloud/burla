@@ -13,6 +13,7 @@ from google.api_core.exceptions import Unknown
 from google.auth.exceptions import DefaultCredentialsError
 
 from burla._auth import AuthException, get_gcs_credentials
+from burla._install import main_service_url
 
 # throws some uncatchable, unimportant, warnings
 logging.getLogger("google.api_core.bidi").setLevel(logging.ERROR)
@@ -49,6 +50,16 @@ def get_db(auth_headers: dict):
         credentials = get_gcs_credentials(auth_headers)
         return firestore.Client(credentials=credentials, project="burla-prod", database="burla")
     else:
+        api_url_according_to_user = os.environ.get("BURLA_API_URL")
+
+        if api_url_according_to_user and api_url_according_to_user != main_service_url():
+            raise Exception(
+                f"You are pointing to the main service at {api_url_according_to_user}.\n"
+                f"However, according to the current project set in gcloud, "
+                f"the main_service is currently running at {main_service_url()}.\n"
+                f"Please ensure your gcloud is pointing at the same project that your burla "
+                "api is deployed in."
+            )
         try:
             credentials, project = google.auth.default()
             if project == "":

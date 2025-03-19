@@ -1,6 +1,7 @@
 import json
 import requests
 import asyncio
+import datetime 
 from time import time
 from uuid import uuid4
 from typing import Optional, Callable
@@ -378,16 +379,22 @@ async def job_stream(logger: Logger = Depends(get_logger)):
             job_data = job_ref.get().to_dict() or {}
 
             n_inputs = job_data.get("n_inputs", 0)  # Default to 0 if not present
-            results = fetch_results_sync(job_id)
-            new_status = determine_job_status(results, n_inputs)
+            user = job_data.get("user", "unknown")
+            started_at_raw = job_data.get("started_at", None)  # Get raw timestamp
+            started_at = started_at = started_at_raw if isinstance(started_at_raw, (int, float)) else None
 
+
+            results = fetch_results_sync(job_id)
+            new_status = determine_job_status(results, n_inputs) 
             update_job_status(job_id, new_status)
 
             event_data = {
                 "jobId": job_id,
-                "status": new_status,  # Updated status
-                "results": results  # Only `is_error` values
-            }
+                "status": new_status, 
+                "results": results, 
+                "user": user,  
+                "started_at": started_at
+            } 
 
             current_loop.call_soon_threadsafe(queue.put_nowait, event_data)
             logger.log(f"✅ Firestore event pushed: {event_data}")
@@ -434,5 +441,5 @@ async def job_stream(logger: Logger = Depends(get_logger)):
                 watcher.unsubscribe()
             job_watchers.clear()
 
-    return StreamingResponse(stream_jobs(), media_type="text/event-stream")
+    return StreamingResponse(stream_jobs(), media_type="text/event-stream") 
 

@@ -16,6 +16,7 @@ tblib = "^3.0.0"
 tomli = "^2.0.1"
 ipython = "^7.0.0"
 google-cloud-firestore = "^2.20.1"
+docker = "^7.1.0"
 
 [tool.poetry.scripts]
 burla = "burla.__init__:init_cli"
@@ -23,7 +24,6 @@ burla = "burla.__init__:init_cli"
 [tool.poetry.group.dev.dependencies]
 black = "^23.3.0"
 pytest = "^7.4.2"
-docker = "^7.1.0"
 jupyterlab = "^4.3.1"
 
 [build-system]

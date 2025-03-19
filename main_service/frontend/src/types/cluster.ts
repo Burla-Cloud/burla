@@ -17,7 +17,7 @@ export interface BurlaNode {
 export interface BurlaJob {
     id: string;
     status: JobsStatus | null;
-    machine: string;
+    user: string; // Added user field
     checked: boolean | false;
-    submitted_date?: Date;
+    started_at?: number; // Renamed from submitted_date and ensured it's a timestamp
 }

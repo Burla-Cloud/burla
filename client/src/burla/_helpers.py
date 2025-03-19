@@ -52,14 +52,14 @@ def get_db(auth_headers: dict):
     else:
         api_url_according_to_user = os.environ.get("BURLA_API_URL")
 
-        if api_url_according_to_user and api_url_according_to_user != main_service_url():
-            raise Exception(
-                f"You are pointing to the main service at {api_url_according_to_user}.\n"
-                f"However, according to the current project set in gcloud, "
-                f"the main_service is currently running at {main_service_url()}.\n"
-                f"Please ensure your gcloud is pointing at the same project that your burla "
-                "api is deployed in."
-            )
+        # if api_url_according_to_user and api_url_according_to_user != main_service_url():
+        #     raise Exception(
+        #         f"You are pointing to the main service at {api_url_according_to_user}.\n"
+        #         f"However, according to the current project set in gcloud, "
+        #         f"the main_service is currently running at {main_service_url()}.\n"
+        #         f"Please ensure your gcloud is pointing at the same project that your burla "
+        #         "api is deployed in."
+        #     )
         try:
             credentials, project = google.auth.default()
             if project == "":

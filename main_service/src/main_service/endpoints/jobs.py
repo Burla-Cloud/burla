@@ -1,17 +1,20 @@
 import json
 import requests
 import asyncio
-import datetime 
-from time import time
+from threading import Timer 
+from datetime import datetime, timezone 
+from time import time, sleep
 from uuid import uuid4
 from typing import Optional, Callable
 from concurrent.futures import ThreadPoolExecutor
+import logging 
 
 from fastapi import APIRouter, Path, Depends
 from fastapi.responses import JSONResponse
 from starlette.responses import StreamingResponse
 from google.cloud import firestore 
 from google.cloud.firestore import FieldFilter, Increment
+from google.api_core.exceptions import GoogleAPICallError, NotFound
 
 
 from main_service import (
@@ -30,6 +33,9 @@ from main_service.cluster import (
 from main_service.helpers import validate_create_job_request, Logger
 
 router = APIRouter()
+
+logger = logging.getLogger("uvicorn")
+logger.setLevel(logging.INFO)
 
 
 @router.post("/v1/jobs/")
@@ -149,286 +155,97 @@ def run_job_healthcheck(
         response.raise_for_status()
         if response.json()["any_workers_failed"]:
             raise Exception(f"Worker failed. Check logs for node {node['instance_name']}")
-        
-
-# @router.get("/v1/job_context")
-# async def job_stream(logger: Logger = Depends(get_logger)):
-#     queue = asyncio.Queue()
-#     current_loop = asyncio.get_running_loop()
-
-#     def fetch_results_sync(job_id):
-#         """Fetch only the `is_error` field from the `results` sub-collection."""
-#         results_ref = DB.collection("jobs").document(job_id).collection("results")
-#         results_docs = results_ref.stream()
-#         return [{"is_error": result.to_dict().get("is_error", None)} for result in results_docs]
-
-#     def determine_job_status(results):
-#         """Determine job status based on `is_error` values."""
-#         if not results:  
-#             return "RUNNING"  # No results means job is still running
-#         elif any(result["is_error"] for result in results if result["is_error"] is not None):
-#             return "FAILED"  # At least one `is_error` is True
-#         else:
-#             return "COMPLETED"  # All `is_error` values are False
-
-#     def update_job_status(job_id, new_status):
-#         """Update the job status in Firestore and ensure it triggers an update."""
-#         job_ref = DB.collection("jobs").document(job_id)
-#         job_data = job_ref.get().to_dict() or {}
-
-#         current_status = job_data.get("status") 
-#         if current_status != new_status:
-#             job_ref.update({
-#                 "status": new_status,
-#                 "last_updated": firestore.SERVER_TIMESTAMP  # ✅ Forces Firestore to trigger snapshot
-#             })
-#             logger.log(f"Updated job {job_id} status to {new_status}")
-
-
-#     def on_snapshot(query_snapshot, changes, read_time):
-#         """Firestore listener that fetches `is_error` from results & updates status."""
-#         logger.log(f"Firestore snapshot detected {len(changes)} changes at {read_time}")
-
-#         for change in changes:
-#             doc_data = change.document.to_dict() or {}
-#             job_id = change.document.id
-#             logger.log(f"Change detected in job {job_id}: {change.type.name}")
-
-#             results = fetch_results_sync(job_id)
-#             new_status = determine_job_status(results)
-
-#             # Update Firestore job status if needed
-#             update_job_status(job_id, new_status)
-
-#             event_data = {
-#                 "jobId": job_id,
-#                 "status": new_status,  # Updated status
-#                 "results": results  # Only `is_error` values
-#             }
-
-#             # ✅ Ensure safe queue execution in event loop
-#             current_loop.call_soon_threadsafe(queue.put_nowait, event_data)
-#             logger.log(f"Firestore event pushed: {event_data}")
-
-#     async def stream_jobs():
-#         """Streams Firestore job updates via SSE."""
-#         query = DB.collection("jobs")
-#         unsubscribe = query.on_snapshot(on_snapshot)
-
-#         try:
-#             while True:
-#                 event = await queue.get()
-#                 yield f"data: {json.dumps(event)}\n\n"
-#         finally:
-#             unsubscribe()  # ✅ Correctly unsubscribing
-#             logger.log("Unsubscribed from Firestore snapshot.")
-
-#     return StreamingResponse(stream_jobs(), media_type="text/event-stream")
-
-# @router.get("/v1/job_context")
-# async def job_stream(logger: Logger = Depends(get_logger)):
-#     queue = asyncio.Queue()
-#     current_loop = asyncio.get_running_loop()
-
-#     def fetch_results_sync(job_id):
-#         """Fetch only the `is_error` field from the `results` sub-collection."""
-#         results_ref = DB.collection("jobs").document(job_id).collection("results")
-#         results_docs = results_ref.stream()
-#         return [{"is_error": result.to_dict().get("is_error", None)} for result in results_docs]
-
-#     def determine_job_status(results):
-#         """Determine job status based on `is_error` values."""
-#         if not results or all(result["is_error"] is None for result in results):
-#             return "RUNNING"  # No results means job is still running
-#         elif any(result["is_error"] for result in results if result["is_error"] is not None):
-#             return "FAILED"  # At least one `is_error` is True
-#         else:
-#             return "COMPLETED"  # All `is_error` values are False
-
-#     def update_job_status(job_id, new_status):
-#         """Update the job status in Firestore if it has changed."""
-#         job_ref = DB.collection("jobs").document(job_id)
-#         job_data = job_ref.get().to_dict() or {}
-
-#         current_status = job_data.get("status")
-#         if current_status != new_status:
-#             job_ref.update({
-#                 "status": new_status,
-#                 "last_updated": firestore.SERVER_TIMESTAMP  # ✅ Forces Firestore to trigger snapshot
-#             })
-#             logger.log(f"Updated job {job_id} status to {new_status}")
-
-#     def on_results_snapshot(job_id):
-#         """Creates a listener for a job's `results` subcollection changes."""
-#         def callback(query_snapshot, changes, read_time):
-#             logger.log(f"🔄 Detected results update for job {job_id} at {read_time}")
-
-#             results = fetch_results_sync(job_id)
-#             new_status = determine_job_status(results)
-
-#             update_job_status(job_id, new_status)
-
-#             event_data = {
-#                 "jobId": job_id,
-#                 "status": new_status,  # Updated status
-#                 "results": results  # Only `is_error` values
-#             }
-
-#             current_loop.call_soon_threadsafe(queue.put_nowait, event_data)
-#             logger.log(f"✅ Firestore event pushed: {event_data}")
-
-#         return callback
-
-#     job_watchers = {}
-
-#     def on_jobs_snapshot(query_snapshot, changes, read_time):
-#         """Firestore listener that watches for job document changes and attaches listeners to their results subcollections."""
-#         logger.log(f"📝 Detected {len(changes)} job changes at {read_time}")
-
-#         for change in changes:
-#             doc_data = change.document.to_dict() or {}
-#             job_id = change.document.id
-
-#             if change.type.name in ["ADDED", "MODIFIED"]:
-#                 logger.log(f"📌 Job {job_id} detected - Setting up listener for results")
-
-#                 # Ensure there's only one listener per job
-#                 if job_id not in job_watchers:
-#                     job_watchers[job_id] = DB.collection("jobs").document(job_id).collection("results").on_snapshot(
-#                         on_results_snapshot(job_id)
-#                     )
-
-#             elif change.type.name == "REMOVED":
-#                 logger.log(f"❌ Job {job_id} removed - Cleaning up listener")
-#                 if job_id in job_watchers:
-#                     job_watchers[job_id].unsubscribe()
-#                     del job_watchers[job_id]
-
-#     async def stream_jobs():
-#         """Streams Firestore job updates via SSE."""
-#         unsubscribe_jobs = DB.collection("jobs").on_snapshot(on_jobs_snapshot)
-
-#         try:
-#             while True:
-#                 event = await queue.get()
-#                 yield f"data: {json.dumps(event)}\n\n"
-#         finally:
-#             unsubscribe_jobs()
-#             logger.log("🛑 Unsubscribed from Firestore job snapshot.")
-#             for job_id, watcher in job_watchers.items():
-#                 watcher.unsubscribe()
-#             job_watchers.clear()
-
-#     return StreamingResponse(stream_jobs(), media_type="text/event-stream")
 
 
 @router.get("/v1/job_context")
-async def job_stream(logger: Logger = Depends(get_logger)):
+async def job_info(logger: Logger = Depends(get_logger)):
     queue = asyncio.Queue()
     current_loop = asyncio.get_running_loop()
+    top_jobs_ids = set()
+    node_cache = {}
 
-    def fetch_results_sync(job_id):
-        """Fetch only the `is_error` field from the `results` sub-collection."""
-        results_ref = DB.collection("jobs").document(job_id).collection("results")
-        results_docs = results_ref.stream()
-        return [{"is_error": result.to_dict().get("is_error", None)} for result in results_docs]
+    def determine_job_status(doc_data: dict, job_id: str) -> str:
+        now = datetime.now(timezone.utc)
+        num_inputs = doc_data.get("n_inputs")
+        started_at = doc_data.get("started_at")
 
-    def determine_job_status(results, n_inputs):
-        """Determine job status based on `is_error` values and number of results."""
-        num_results = len(results)
+        if started_at is not None and isinstance(started_at, (float, int)):
+            started_at = datetime.fromtimestamp(started_at, tz=timezone.utc)
 
-        # If there are no results, or all `is_error` values are None, it's still running
-        if not results or all(result["is_error"] is None for result in results):
-            return "RUNNING"
+        node_docs = DB.collection("nodes").where("current_job", "==", job_id).get()
+        node_working = bool(node_docs)
 
-        # If number of results is less than n_inputs:
-        if num_results < n_inputs:
-            if any(result["is_error"] for result in results if result["is_error"] is not None):
-                return "FAILED"  # At least one error detected
+        results_docs = DB.collection("jobs").document(job_id).collection("results").get()
+        num_results = len(results_docs)
+        any_error = any(doc.to_dict().get("is_error", False) for doc in results_docs)
+
+        if node_working:
+            computed_status = "RUNNING"
+        else:
+            if num_inputs and num_results == num_inputs:
+                computed_status = "COMPLETED" if not any_error else "FAILED"
+            elif started_at and (now - started_at).total_seconds() > 7.5:
+                computed_status = "FAILED"
             else:
-                return "RUNNING"  # No errors, but still processing
+                computed_status = "PENDING"
 
-        # If number of results matches n_inputs:
-        if num_results == n_inputs:
-            if any(result["is_error"] for result in results if result["is_error"] is not None):
-                return "FAILED"  # At least one error in a fully completed batch
-            else:
-                return "COMPLETED"  # All tasks completed successfully
+        logger.log(f"Job {job_id}: node_working: {node_working}, num_results: {num_results}, status: {computed_status}")
+        return computed_status
 
-        return "RUNNING"  # Default case (shouldn't reach here)
-
-    def update_job_status(job_id, new_status):
-        """Update the job status in Firestore if it has changed."""
-        job_ref = DB.collection("jobs").document(job_id)
-        job_data = job_ref.get().to_dict() or {}
-
-        current_status = job_data.get("status")
-        if current_status != new_status:
-            job_ref.update({
-                "status": new_status,
-                "last_updated": firestore.SERVER_TIMESTAMP  # ✅ Forces Firestore to trigger snapshot
-            })
-            logger.log(f"Updated job {job_id} status to {new_status}")
-
-    def on_results_snapshot(job_id):
-        """Creates a listener for a job's `results` subcollection changes."""
-        def callback(query_snapshot, changes, read_time):
-            logger.log(f"🔄 Detected results update for job {job_id} at {read_time}")
-
-            job_ref = DB.collection("jobs").document(job_id)
-            job_data = job_ref.get().to_dict() or {}
-
-            n_inputs = job_data.get("n_inputs", 0)  # Default to 0 if not present
-            user = job_data.get("user", "unknown")
-            started_at_raw = job_data.get("started_at", None)  # Get raw timestamp
-            started_at = started_at = started_at_raw if isinstance(started_at_raw, (int, float)) else None
-
-
-            results = fetch_results_sync(job_id)
-            new_status = determine_job_status(results, n_inputs) 
-            update_job_status(job_id, new_status)
-
+    def reassess_job(job_id: str):
+        if job_id not in top_jobs_ids:
+            return
+        job_doc = DB.collection("jobs").document(job_id).get()
+        if job_doc.exists:
+            doc_data = job_doc.to_dict() or {}
+            computed_status = determine_job_status(doc_data, job_id)
+            if doc_data.get("status") != computed_status:
+                DB.collection("jobs").document(job_id).update({"status": computed_status})
             event_data = {
                 "jobId": job_id,
-                "status": new_status, 
-                "results": results, 
-                "user": user,  
-                "started_at": started_at
-            } 
-
+                "status": computed_status,
+                "user": doc_data.get("user"),
+                "started_at": doc_data.get("started_at")
+            }
             current_loop.call_soon_threadsafe(queue.put_nowait, event_data)
-            logger.log(f"✅ Firestore event pushed: {event_data}")
 
-        return callback
+    async def job_stream():
+        nonlocal top_jobs_ids
 
-    job_watchers = {}
+        def on_jobs_snapshot(query_snapshot, changes, read_time):
+            nonlocal top_jobs_ids
+            top_jobs_ids = {doc.id for doc in query_snapshot}
+            for doc in query_snapshot:
+                reassess_job(doc.id)
 
-    def on_jobs_snapshot(query_snapshot, changes, read_time):
-        """Firestore listener that watches for job document changes and attaches listeners to their results subcollections."""
-        logger.log(f"📝 Detected {len(changes)} job changes at {read_time}")
+        def on_nodes_snapshot(col_snapshot, changes, read_time):
+            for change in changes:
+                doc = change.document
+                node_id = doc.id
+                new_data = doc.to_dict() or {}
 
-        for change in changes:
-            doc_data = change.document.to_dict() or {}
-            job_id = change.document.id
+                new_job = new_data.get("current_job")
+                old_job = node_cache.get(node_id)
+                node_cache[node_id] = new_job  # Update cache
 
-            if change.type.name in ["ADDED", "MODIFIED"]:
-                logger.log(f"📌 Job {job_id} detected - Setting up listener for results")
+                if old_job != new_job:
+                    logger.log(f"Node {node_id} current_job changed: {old_job} → {new_job}")
+                    if old_job:
+                        reassess_job(old_job)
+                    if new_job:
+                        reassess_job(new_job)
 
-                # Ensure there's only one listener per job
-                if job_id not in job_watchers:
-                    job_watchers[job_id] = DB.collection("jobs").document(job_id).collection("results").on_snapshot(
-                        on_results_snapshot(job_id)
-                    )
+        def on_results_snapshot(query_snapshot, changes, read_time):
+            for change in changes:
+                parent_ref = change.document.reference.parent.parent
+                if parent_ref:
+                    job_id = parent_ref.id
+                    reassess_job(job_id)
 
-            elif change.type.name == "REMOVED":
-                logger.log(f"❌ Job {job_id} removed - Cleaning up listener")
-                if job_id in job_watchers:
-                    job_watchers[job_id].unsubscribe()
-                    del job_watchers[job_id]
-
-    async def stream_jobs():
-        """Streams Firestore job updates via SSE."""
-        unsubscribe_jobs = DB.collection("jobs").on_snapshot(on_jobs_snapshot)
+        jobs_query = DB.collection("jobs").order_by("started_at", direction="DESCENDING").limit(10)
+        unsubscribe_jobs = jobs_query.on_snapshot(on_jobs_snapshot)
+        unsubscribe_nodes = DB.collection("nodes").on_snapshot(on_nodes_snapshot)
+        unsubscribe_results = DB.collection_group("results").on_snapshot(on_results_snapshot)
 
         try:
             while True:
@@ -436,10 +253,7 @@ async def job_stream(logger: Logger = Depends(get_logger)):
                 yield f"data: {json.dumps(event)}\n\n"
         finally:
             unsubscribe_jobs()
-            logger.log("🛑 Unsubscribed from Firestore job snapshot.")
-            for job_id, watcher in job_watchers.items():
-                watcher.unsubscribe()
-            job_watchers.clear()
+            unsubscribe_nodes()
+            unsubscribe_results()
 
-    return StreamingResponse(stream_jobs(), media_type="text/event-stream") 
-
+    return StreamingResponse(job_stream(), media_type="text/event-stream")

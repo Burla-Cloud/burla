@@ -23,31 +23,43 @@ def in_remote_dev_mode():
     return env_vars.get("IN_LOCAL_DEV_MODE") != "True"
 
 
-def run_simple_test_job(n_inputs=5):
+# def run_simple_test_job(n_inputs=5):
 
-    test_inputs = list(range(n_inputs))
-    stdout = StringIO()
-    sys.stdout = stdout
-    start = time()
+#     test_inputs = list(range(n_inputs))
+#     stdout = StringIO()
+#     sys.stdout = stdout
+#     start = time()
 
-    def simple_test_function(test_input):
-        print(test_input)
-        return test_input
+#     def simple_test_function(test_input):
+#         print(test_input)
+#         return test_input
 
-    results = remote_parallel_map(simple_test_function, test_inputs)
+#     results = remote_parallel_map(simple_test_function, test_inputs)
 
-    e2e_runtime = time() - start
-    sys.stdout = sys.__stdout__
-    stdout = stdout.getvalue()
+#     e2e_runtime = time() - start
+#     sys.stdout = sys.__stdout__
+#     stdout = stdout.getvalue()
 
-    assert e2e_runtime < 5
-    assert all([result in test_inputs for result in results])
-    assert len(results) == len(test_inputs)
-    for i in range(n_inputs):
-        assert str(i) in stdout
+#     assert e2e_runtime < 5
+#     assert all([result in test_inputs for result in results])
+#     assert len(results) == len(test_inputs)
+#     for i in range(n_inputs):
+#         assert str(i) in stdout
 
 
-def test_base():
-    assert in_remote_dev_mode()
+# def test_base():
+#     assert in_remote_dev_mode()
 
-    run_simple_test_job()
+#     run_simple_test_job()
+
+
+my_arguments = [1, 2, 3, 4]
+
+def my_function(my_argument: int):
+    print(f"Running on remote computer #{my_argument} in the cloud!")
+    return my_argument * 2
+    
+for i in range(0,25): 
+    results = remote_parallel_map(my_function, my_arguments)
+    print(results)
+

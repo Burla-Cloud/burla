@@ -206,13 +206,13 @@ def upload_inputs(job_id: str, nodes: list[dict], inputs: list, stop_event: Even
                 node["input_chunks"] = inputs_for_current_node
                 start = end
 
-            # for node in nodes:
-            #     print("--------------------------------")
-            #     print(node["input_chunks"])
-            #     print("---")
-            #     print(f"len(node['input_chunks']): {len(node['input_chunks'])}")
-            #     print(f"len(node['input_chunks'][0]): {len(node['input_chunks'][0])}")
-            #     print("--------------------------------")
+            for node in nodes:
+                print("--------------------------------")
+                #     print(node["input_chunks"])
+                #     print("---")
+                print(f"len(node['input_chunks']): {len(node['input_chunks'])}")
+                print(f"len(node['input_chunks'][0]): {len(node['input_chunks'][0])}")
+                print("--------------------------------")
             # cuncurrently, for each node, upload the n'th chunk of inputs
             nodes_with_input_chunks = [n for n in nodes if n["input_chunks"]]
 

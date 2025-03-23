@@ -26,7 +26,7 @@ from burla._helpers import (
     get_host,
 )
 
-MAX_PARALLELISM = 512
+MAX_PARALLELISM = 256
 
 # This MUST be set to the same value as `JOB_HEALTHCHECK_FREQUENCY_SEC` in the node service.
 # Nodes will restart themself if theydont get a new healthcheck from the client every X seconds.

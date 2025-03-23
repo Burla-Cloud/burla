@@ -61,6 +61,7 @@ def get_status():
 
     status_log += f"Status = {status}"
     SELF["WORKER_LOGS"].append(f"{status_log}\n{bar}")
+    LOGGER.log(status_log)
     return jsonify({"status": status})
 
 
@@ -72,6 +73,7 @@ def upload_inputs(job_id: str):
     total_data = len(inputs_pkl_with_idx)
     msg = f"Received {len(inputs_pkl_with_idx)} inputs for job {job_id} ({total_data} bytes)."
     SELF["WORKER_LOGS"].append(msg)
+    LOGGER.log(msg)
 
     for input_pkl_with_idx in inputs_pkl_with_idx:
         SELF["inputs_queue"].put(input_pkl_with_idx)
@@ -90,6 +92,7 @@ def start_job(job_id: str):
         function_pkl = function_pkl.read()
 
     SELF["WORKER_LOGS"].append(f"Executing job {job_id}.")
+    LOGGER.log(f"Executing job {job_id}.")
 
     # ThreadWithExc is a thread that catches and stores errors.
     # We need so we can save the error until the status of this service is checked.

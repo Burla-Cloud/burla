@@ -231,7 +231,6 @@ def reconcile(db: firestore.Client, logger: Logger, add_background_task: Callabl
     #     job_doc = job_ref.to_dict()
     #     job = Job(
     #         id=job_ref.id,
-    #         current_parallelism=job_doc["current_parallelism"],
     #         target_parallelism=job_doc["target_parallelism"],
     #     )
     #     nodes_assigned_to_job = [node for node in nodes if node.current_job == job.id]

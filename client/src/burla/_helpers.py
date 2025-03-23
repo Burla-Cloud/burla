@@ -4,12 +4,14 @@ import logging
 import requests
 from queue import Queue
 from threading import Event
+import asyncio
+import aiohttp
+import pickle
 
+import cloudpickle
 import google.auth
 from google.cloud import firestore
 from google.cloud.firestore import DocumentReference
-from google.api_core.retry import Retry, if_exception_type
-from google.api_core.exceptions import Unknown
 from google.auth.exceptions import DefaultCredentialsError
 
 from burla._auth import AuthException, get_gcs_credentials
@@ -29,8 +31,10 @@ class InputTooBig(Exception):
 
 class UnknownClusterError(Exception):
     def __init__(self):
-        msg = "An unknown error occurred inside your Burla cluster, "
-        msg += "this is not an error with your code."
+        msg = "\nAn unknown error occurred inside your Burla cluster, "
+        msg += "this is not an error with your code, but with the Burla.\n"
+        msg += "If this issue is urgent please don't hesitate to call me (Jake) directly"
+        msg += " at 508-320-8778, or email me at jake@burla.dev."
         super().__init__(msg)
 
 
@@ -52,14 +56,14 @@ def get_db(auth_headers: dict):
     else:
         api_url_according_to_user = os.environ.get("BURLA_API_URL")
 
-        if api_url_according_to_user and api_url_according_to_user != main_service_url():
-            raise Exception(
-                f"You are pointing to the main service at {api_url_according_to_user}.\n"
-                f"However, according to the current project set in gcloud, "
-                f"the main_service is currently running at {main_service_url()}.\n"
-                f"Please ensure your gcloud is pointing at the same project that your burla "
-                "api is deployed in."
-            )
+        # if api_url_according_to_user and api_url_according_to_user != main_service_url():
+        #     raise Exception(
+        #         f"You are pointing to the main service at {api_url_according_to_user}.\n"
+        #         f"However, according to the current project set in gcloud, "
+        #         f"the main_service is currently running at {main_service_url()}.\n"
+        #         f"Please ensure your gcloud is pointing at the same project that your burla "
+        #         "api is deployed in."
+        #     )
         try:
             credentials, project = google.auth.default()
             if project == "":
@@ -78,14 +82,17 @@ def get_db(auth_headers: dict):
 
 def healthcheck_job(job_id: str, auth_headers: dict):
     response = requests.get(f"{get_host()}/v1/jobs/{job_id}", headers=auth_headers)
-    if response.status_code == 401:
+
+    if response.status_code == 200:
+        return
+    elif response.status_code == 401:
         raise AuthException()
     elif response.status_code == 404:
         # this thread often runs for a bit after the job has ended, causing 404s
         # for now, just ignore these.
-        pass
+        return
     else:
-        UnknownClusterError()
+        raise UnknownClusterError()
 
 
 def print_logs_from_db(
@@ -121,51 +128,104 @@ def enqueue_results_from_db(job_doc_ref: DocumentReference, stop_event: Event, q
     query_watch.unsubscribe()
 
 
-def upload_inputs(DB: firestore.Client, inputs_id: str, inputs_pkl: list[bytes], stop_event: Event):
-    """
-    Uploads inputs into a separate collection not connected to the job
-    so that uploading can start before the job document is created.
-    """
-    batch_size = 100
-    inputs_parent_doc = DB.collection("inputs").document(inputs_id)
+def upload_inputs(job_id: str, nodes: list[dict], inputs: list, stop_event: Event):
 
-    firestore_commit_retry_policy = Retry(
-        initial=5.0,
-        maximum=120.0,
-        multiplier=2.0,
-        deadline=900.0,
-        predicate=if_exception_type(Unknown),
-        reraise=True,
-    )
+    def _chunk_inputs_by_size(
+        inputs_pkl_with_idx: list,
+        min_chunk_size: int = 1_048_576,  # 1MB
+        max_chunk_size: int = 1_048_576 * 256,  # 256MB
+    ):
+        chunks = []
+        current_chunk = []
+        current_chunk_size = 0
 
-    total_n_bytes_firestore_batch = 0
-    firestore_batch = DB.batch()
+        for input_pkl_with_idx in inputs_pkl_with_idx:
 
-    for batch_min_index in range(0, len(inputs_pkl), batch_size):
-        batch_max_index = batch_min_index + batch_size
-        input_batch = inputs_pkl[batch_min_index:batch_max_index]
-        subcollection = inputs_parent_doc.collection(f"{batch_min_index}-{batch_max_index}")
+            input_size = len(input_pkl_with_idx[1])
+            if input_size > max_chunk_size:
+                # This exists to prevent theoretical (never demonstrated) memory issues
+                raise InputTooBig(f"Input of size {input_size} exceeds maximum size of 1GB.")
 
-        for local_input_index, input_pkl in enumerate(input_batch):
-            input_index = local_input_index + batch_min_index
-            input_too_big = len(input_pkl) > 1_000_000  # 1MB size limit per firestore doc
+            next_chunk_too_small = current_chunk_size + input_size < min_chunk_size
+            next_chunk_too_big = current_chunk_size + input_size > max_chunk_size
+            next_chunk_size_is_acceptable = not next_chunk_too_small and not next_chunk_too_big
 
-            if stop_event.is_set():
-                return
+            if next_chunk_too_small:
+                # add input to the current chunk
+                current_chunk.append(input_pkl_with_idx)
+                current_chunk_size += input_size
+            elif next_chunk_size_is_acceptable:
+                # add input to the current chunk AND yield the chunk
+                current_chunk.append(input_pkl_with_idx)
+                chunks.append(current_chunk)
+                current_chunk = []
+                current_chunk_size = 0
+            elif next_chunk_too_big:
+                # yield the chunk, add current input to next chunk
+                chunks.append(current_chunk)
+                current_chunk = [input_pkl_with_idx]
+                current_chunk_size = input_size
 
-            # if batch will contain too much data (10MB), push it before adding input to next batch.
-            if total_n_bytes_firestore_batch + len(input_pkl) > 10_000_000:
-                firestore_batch.commit(retry=firestore_commit_retry_policy)
-                firestore_batch = DB.batch()
-                total_n_bytes_firestore_batch = 0
+        if chunks:
+            # print(f"num of >1MB chunks: {len(chunks)}")
+            return chunks
+        else:
+            # print(f"num of >1MB chunks: 1")
+            # print(f"total size of current chunk: {current_chunk_size}")
+            return [current_chunk]
 
-            if input_too_big:
-                msg = f"Input at index {input_index} is greater than 1MB in size.\n"
-                msg += "Individual inputs greater than 1MB in size are currently not supported."
-                raise InputTooBig(msg)
-            else:
-                doc_ref = subcollection.document(str(input_index))
-                firestore_batch.set(doc_ref, {"input": input_pkl, "claimed": False})
-                total_n_bytes_firestore_batch += len(input_pkl)
+    async def upload_input_chunk(session, url, inputs_chunk):
+        # When running the cluster locally the node service hostname is a container name.
+        # This hostname only works from inside the docker network, not from the host machine.
+        # If we detect this, swap to localhost.
+        if url.startswith("http://node_"):
+            url = f"http://localhost:{url.split(':')[-1]}"
 
-    firestore_batch.commit(retry=firestore_commit_retry_policy)
+        data = aiohttp.FormData()
+        data.add_field("inputs_pkl_with_idx", pickle.dumps(inputs_chunk))
+        async with session.post(f"{url}/jobs/{job_id}/inputs", data=data) as response:
+            response.raise_for_status()
+
+    async def upload_all():
+        async with aiohttp.ClientSession() as session:
+            # assume every node has the same target parallelism (number of workers/config)
+            # TODO: `nodes` contains the parallelism per node, which could be different!
+            # this algorithim should send less stuff to nodes with less parallelism / etc.
+
+            # attach original index to each input so we can tell user which input failed
+            inputs_pkl_with_idx = [(i, cloudpickle.dumps(input)) for i, input in enumerate(inputs)]
+
+            # Divide inputs into one chunk for each node.
+            # Within chunks assigned to a node, chunk further so we don't send too much data at once
+            size = len(inputs_pkl_with_idx) // len(nodes)
+            extra = len(inputs_pkl_with_idx) % len(nodes)
+            start = 0
+            for i, node in enumerate(nodes):
+                end = start + size + (1 if i < extra else 0)
+                inputs_for_current_node = _chunk_inputs_by_size(inputs_pkl_with_idx[start:end])
+                node["input_chunks"] = inputs_for_current_node
+                start = end
+
+            # for node in nodes:
+            #     print("--------------------------------")
+            #     print(node["input_chunks"])
+            #     print("---")
+            #     print(f"len(node['input_chunks']): {len(node['input_chunks'])}")
+            #     print(f"len(node['input_chunks'][0]): {len(node['input_chunks'][0])}")
+            #     print("--------------------------------")
+            # cuncurrently, for each node, upload the n'th chunk of inputs
+            nodes_with_input_chunks = [n for n in nodes if n["input_chunks"]]
+
+            while nodes_with_input_chunks:
+                tasks = []
+                for node in nodes_with_input_chunks:
+                    inputs_chunk = node["input_chunks"].pop(0)
+                    tasks.append(upload_input_chunk(session, node["host"], inputs_chunk))
+                await asyncio.gather(*tasks)  # <- wait for the n'th chunk of every node to upload.
+                nodes_with_input_chunks = [n for n in nodes if n["input_chunks"]]
+
+    try:
+        asyncio.run(upload_all())
+    except Exception as e:
+        stop_event.set()
+        raise Exception(f"Failed to upload inputs: {str(e)}") from e

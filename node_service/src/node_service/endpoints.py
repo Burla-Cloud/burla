@@ -90,6 +90,39 @@ def watch_job(job_id: str):
         logger.log(str(e), "ERROR", traceback=traceback_str)
 
 
+@router.post("/jobs/{job_id}/inputs")
+async def upload_inputs(
+    job_id: str = Path(...),
+    request_files: Optional[dict] = Depends(get_request_files),
+    logger: Logger = Depends(get_logger),
+):
+    if not job_id == SELF["current_job"]:
+        return Response("job not found", status_code=404)
+
+    inputs_pkl_with_idx = pickle.loads(request_files["inputs_pkl_with_idx"])
+    logger.log(f"Received {len(inputs_pkl_with_idx)} inputs for job {job_id}")
+
+    # separate into batches to be sent to each worker
+    input_batches = []
+    batch_size = len(inputs_pkl_with_idx) // len(SELF["workers"])
+    extra = len(inputs_pkl_with_idx) % len(SELF["workers"])
+    start = 0
+    for i, worker in enumerate(SELF["workers"]):
+        end = start + batch_size + (1 if i < extra else 0)
+        input_batches.append(inputs_pkl_with_idx[start:end])
+        start = end
+
+    # concurrently send to each worker
+    async with aiohttp.ClientSession() as session:
+        tasks = []
+        for worker, batch in zip(SELF["workers"], input_batches):
+            logger.log(f"Sending {len(batch)} inputs to {worker.url}")
+            data = aiohttp.FormData()
+            data.add_field("inputs_pkl_with_idx", pickle.dumps(batch))
+            tasks.append(session.post(f"{worker.url}/jobs/{job_id}/inputs", data=data))
+        await asyncio.gather(*tasks)
+
+
 @router.get("/jobs/{job_id}")
 def get_job_status(job_id: str = Path(...)):
     if not job_id == SELF["current_job"]:
@@ -110,7 +143,6 @@ def execute(
     job_id: str = Path(...),
     request_json: dict = Depends(get_request_json),
     request_files: Optional[dict] = Depends(get_request_files),
-    logger: Logger = Depends(get_logger),
     add_background_task: Callable = Depends(get_add_background_task_function),
 ):
     if SELF["RUNNING"]:
@@ -160,42 +192,23 @@ def execute(
         return Response(msg, status_code=409)
 
     # call workers concurrently
-    async def assign_worker(session, url, starting_index):
-        request_json = {
-            "inputs_id": job["inputs_id"],
-            "n_inputs": job["n_inputs"],
-            "starting_index": starting_index,
-            "planned_future_job_parallelism": job["planned_future_job_parallelism"],
-        }
-        data = {"function_pkl": function_pkl, "request_json": pickle.dumps(request_json)}
-        async with session.post(url, data=data) as response:
+    async def assign_worker(session, url):
+        async with session.post(url, data={"function_pkl": function_pkl}) as response:
             response.raise_for_status()
-        return starting_index
 
     async def assign_workers(workers):
         async with aiohttp.ClientSession() as session:
             tasks = []
-            for index, worker in enumerate(workers):
+            for worker in workers:
                 url = f"{worker.url}/jobs/{job_id}"
-                worker_starting_index = request_json["starting_index"] + index
-                tasks.append(assign_worker(session, url, worker_starting_index))
-                worker.id = worker_starting_index
-            return await asyncio.gather(*tasks)
+                tasks.append(assign_worker(session, url))
+            await asyncio.gather(*tasks)
 
-    assigned_starting_indicies = asyncio.run(assign_workers(workers_to_keep))
-
-    if not len(assigned_starting_indicies) == len(workers_to_keep):
-        desired_starting_indicies = list(range(starting_index, len(workers_to_keep)))
-        unassigned_indicies = set(desired_starting_indicies) - set(assigned_starting_indicies)
-        raise Exception(f"failed to assign workers to inputs at indicies: {unassigned_indicies}")
+    asyncio.run(assign_workers(workers_to_keep))
 
     SELF["workers"] = workers_to_keep
     remove_workers = lambda workers_to_remove: [w.remove() for w in workers_to_remove]
     add_background_task(remove_workers, workers_to_remove)
-
-    starting_index = request_json["starting_index"]
-    ending_index = starting_index + len(workers_to_keep)
-    add_background_task(logger.log, f"Assigned inputs: {starting_index} - {ending_index}")
 
 
 @router.post("/reboot")
@@ -274,8 +287,8 @@ def reboot_containers(
                     threads.append(Thread(target=stop_container, kwargs=stop_kwargs))
                     workers_marked_old.append(name)
 
-            logger.log(f'Marked {len(workers_marked_old)} workers as "OLD": {workers_marked_old}')
-            logger.log(f'Removed {len(old_workers_removed)} "OLD" workers: {old_workers_removed}')
+            # logger.log(f'Marked {len(workers_marked_old)} workers as "OLD": {workers_marked_old}')
+            # logger.log(f'Removed {len(old_workers_removed)} "OLD" workers: {old_workers_removed}')
         else:
             # remove all worker containers
             workers_removed = []
@@ -286,7 +299,7 @@ def reboot_containers(
                     threads.append(Thread(target=remove_container, kwargs=kwargs))
                     workers_removed.append(container["Names"][0])
 
-            logger.log(f"Removed {len(workers_removed)} workers: {workers_removed}")
+            # logger.log(f"Removed {len(workers_removed)} workers: {workers_removed}")
 
         [thread.start() for thread in threads]
         [thread.join() for thread in threads]
@@ -319,7 +332,7 @@ def reboot_containers(
 
         [thread.join() for thread in threads]
         worker_names = [w.container_name for w in SELF["workers"]]
-        logger.log(f'Started {len(SELF["workers"])} new workers: {worker_names}')
+        # logger.log(f'Started {len(SELF["workers"])} new workers: {worker_names}')
 
         # Sometimes on larger machines, some containers don't start, or get stuck in "CREATED" state
         # This has not been diagnosed, this check is performed to ensure all containers started.

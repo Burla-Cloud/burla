@@ -64,30 +64,36 @@ def get_status():
     return jsonify({"status": status})
 
 
+@BP.post("/jobs/<job_id>/inputs")
+def upload_inputs(job_id: str):
+    pickled_inputs_pkl_with_idx = request.files["inputs_pkl_with_idx"].read()
+    inputs_pkl_with_idx = pickle.loads(pickled_inputs_pkl_with_idx)
+
+    total_data = len(inputs_pkl_with_idx)
+    msg = f"Received {len(inputs_pkl_with_idx)} inputs for job {job_id} ({total_data} bytes)."
+    SELF["WORKER_LOGS"].append(msg)
+
+    for input_pkl_with_idx in inputs_pkl_with_idx:
+        SELF["inputs_queue"].put(input_pkl_with_idx)
+
+    return "Success"
+
+
 @BP.post("/jobs/<job_id>")
 def start_job(job_id: str):
     # only one job will ever be executed by this service
     if SELF["STARTED"]:
         return "STARTED", 409
 
-    request_json = pickle.loads(request.files["request_json"].read())
     function_pkl = request.files.get("function_pkl")
     if function_pkl:
         function_pkl = function_pkl.read()
 
     SELF["WORKER_LOGS"].append(f"Executing job {job_id}.")
-    SELF["WORKER_LOGS"].append(f"STARTING WORK AT INDEX #{request_json['starting_index']}")
 
     # ThreadWithExc is a thread that catches and stores errors.
     # We need so we can save the error until the status of this service is checked.
-    args = (
-        job_id,
-        request_json["inputs_id"],
-        request_json["n_inputs"],
-        request_json["starting_index"],
-        request_json["planned_future_job_parallelism"],
-        function_pkl,
-    )
+    args = (job_id, function_pkl)
     thread = ThreadWithExc(target=execute_job, args=args)
     thread.start()
 
@@ -95,6 +101,5 @@ def start_job(job_id: str):
     SELF["subjob_thread"] = thread
     SELF["STARTED"] = True
     SELF["started_at"] = time()
-    SELF["starting_index"] = request_json["starting_index"]
 
     return "Success"

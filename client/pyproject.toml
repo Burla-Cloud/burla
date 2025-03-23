@@ -16,6 +16,7 @@ tblib = "^3.0.0"
 tomli = "^2.0.1"
 ipython = "^7.0.0"
 google-cloud-firestore = "^2.20.1"
+aiohttp = "^3.11.14"
 
 [tool.poetry.scripts]
 burla = "burla.__init__:init_cli"

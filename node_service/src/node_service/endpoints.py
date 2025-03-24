@@ -37,7 +37,7 @@ def restart_on_client_disconnect():
             sleep(3)
             seconds_since_last_healthcheck = time() - SELF["last_healthcheck_timestamp"]
             logger.log(f"checking for restart: {seconds_since_last_healthcheck}")
-            client_disconnected = seconds_since_last_healthcheck > 10
+            client_disconnected = seconds_since_last_healthcheck > 20
 
             print(f"seconds_since_last_healthcheck: {seconds_since_last_healthcheck}")
             print(f"client_disconnected: {client_disconnected}")

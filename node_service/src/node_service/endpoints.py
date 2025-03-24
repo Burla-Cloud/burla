@@ -17,7 +17,6 @@ from node_service import (
     SELF,
     INSTANCE_N_CPUS,
     INSTANCE_NAME,
-    JOB_HEALTHCHECK_FREQUENCY_SEC,
     get_request_json,
     get_logger,
     get_request_files,
@@ -31,59 +30,21 @@ from node_service import IN_LOCAL_DEV_MODE
 router = APIRouter()
 
 
-def watch_job(job_id: str):
-    """Runs in an independent thread, restarts node when all workers are done or if any failed."""
+def restart_on_client_disconnect():
     logger = Logger()
-    UDF_error_thrown = Event()
-
-    def on_snapshot(collection_snapshot, changes, read_time):
-        for change in changes:
-            if change.type.name == "ADDED":
-                doc = change.document
-                if doc.get("is_error") is True:
-                    UDF_error_thrown.set()
-
-    # Watch for UDF errors from other nodes:
-    # restart if a udf error from any other node is detected.
-    job_doc = firestore.Client(database="burla").collection("jobs").document(job_id)
-    UDF_error_watcher = job_doc.collection("results").on_snapshot(on_snapshot)
-
     try:
         while True:
-
             sleep(2)
-            SELF["time_until_client_disconnect_shutdown"] -= 2
-            client_disconnected = SELF["time_until_client_disconnect_shutdown"] < 0
+            seconds_since_last_healthcheck = time() - SELF["last_healthcheck_timestamp"]
+            client_disconnected = seconds_since_last_healthcheck > 6
 
-            workers_status = [worker.status() for worker in SELF["workers"]]
-            any_failed = any([status == "FAILED" for status in workers_status])
-            all_done = all([status == "DONE" for status in workers_status])
-            logger.log(f"Got workers status: all_done={all_done}, any_failed={any_failed}")
-
-            if all_done:
-                logger.log("ENDING JOB: all workers are done.")
-                break
-            elif any_failed:
-                logger.log("ENDING JOB: at least one worker crashed!")
-                break
-            elif UDF_error_thrown.is_set():
-                logger.log("ENDING JOB: user function has thrown an exception!")
-                break
-            elif client_disconnected:
-                last_healthcheck = JOB_HEALTHCHECK_FREQUENCY_SEC + 6
-                msg = "ENDING JOB: "
-                msg += f"No healthcheck received from client in the last {last_healthcheck}s!"
+            if client_disconnected and not SELF["BOOTING"]:
+                msg = "No healthcheck received from client in the last "
+                msg += f"{seconds_since_last_healthcheck}s, REBOOTING NODE!"
                 logger.log(msg)
+                reboot_containers(logger=logger)
                 break
-
-        if not SELF["BOOTING"]:
-            logger.log("Rebooting node.")
-            reboot_containers(logger=logger)
-        else:
-            logger.log("NOT rebooting because node is ALREADY rebooting!")
-
     except Exception as e:
-        UDF_error_watcher.unsubscribe()
         exc_type, exc_value, exc_traceback = sys.exc_info()
         tb_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
         traceback_str = format_traceback(tb_details)
@@ -124,18 +85,10 @@ async def upload_inputs(
 
 
 @router.get("/jobs/{job_id}")
-def get_job_status(job_id: str = Path(...)):
+def healthcheck(job_id: str = Path(...)):
     if not job_id == SELF["current_job"]:
         return Response("job not found", status_code=404)
-
-    # reset because healtheck received
-    # no real reason I picked 6 here, except that 3 didn't work
-    SELF["time_until_client_disconnect_shutdown"] = JOB_HEALTHCHECK_FREQUENCY_SEC + 6
-
-    workers_status = [worker.status() for worker in SELF["workers"]]
-    any_failed = any([status == "FAILED" for status in workers_status])
-    all_done = all([status == "DONE" for status in workers_status])
-    return {"all_workers_done": all_done, "any_workers_failed": any_failed}
+    SELF["last_healthcheck_timestamp"] = time()
 
 
 @router.post("/jobs/{job_id}")
@@ -157,7 +110,7 @@ def execute(
     node_doc = db.collection("nodes").document(INSTANCE_NAME)
     node_doc.update({"status": "RUNNING", "current_job": job_id})
 
-    job_watcher_thread = Thread(target=watch_job, args=(job_id,))
+    job_watcher_thread = Thread(target=restart_on_client_disconnect)
     job_watcher_thread.start()
     SELF["job_watcher_thread"] = job_watcher_thread
 
@@ -209,6 +162,14 @@ def execute(
     SELF["workers"] = workers_to_keep
     remove_workers = lambda workers_to_remove: [w.remove() for w in workers_to_remove]
     add_background_task(remove_workers, workers_to_remove)
+
+
+@router.post("/background_reboot")
+def background_reboot(
+    logger: Logger = Depends(get_logger),
+    add_background_task: Callable = Depends(get_add_background_task_function),
+):
+    add_background_task(reboot_containers, logger=logger)
 
 
 @router.post("/reboot")
@@ -350,8 +311,7 @@ def reboot_containers(
         else:
             SELF["BOOTING"] = False
             SELF["current_job"] = None
-            # no real reason I picked 6 here, except that 3 didn't work
-            SELF["time_until_client_disconnect_shutdown"] = JOB_HEALTHCHECK_FREQUENCY_SEC + 6
+            SELF["last_healthcheck_timestamp"] = time()
             node_doc.update({"status": "READY"})
 
         SELF["job_watcher_thread"] = None

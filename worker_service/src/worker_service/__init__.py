@@ -28,7 +28,6 @@ SELF = {
     "job_id": None,
     "subjob_thread": None,
     "inputs_queue": Queue(),
-    "WORKER_LOGS": VerboseList() if IN_LOCAL_DEV_MODE else list(),
     "started_at": None,
 }
 LOGGER = logging.Client().logger("worker_service")

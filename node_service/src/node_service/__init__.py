@@ -30,19 +30,13 @@ INACTIVITY_SHUTDOWN_TIME_SEC = os.environ.get("INACTIVITY_SHUTDOWN_TIME_SEC")
 INSTANCE_N_CPUS = 2 if IN_LOCAL_DEV_MODE else os.cpu_count()
 GCL_CLIENT = logging.Client().logger("node_service", labels=dict(INSTANCE_NAME=INSTANCE_NAME))
 
-
-# This MUST be set to the same value as `JOB_HEALTHCHECK_FREQUENCY_SEC` in the client.
-# Nodes will restart themself if they dont get a new healthcheck from the client every X seconds.
-JOB_HEALTHCHECK_FREQUENCY_SEC = 3
-
-# no real reason I picked +6 for `time_until_client_disconnect_shutdown`, except that 3 didnt work
 SELF = {
     "workers": [],
     "job_watcher_thread": None,
     "current_job": None,
     "current_container_config": [],
     "time_until_inactivity_shutdown": None,
-    "time_until_client_disconnect_shutdown": JOB_HEALTHCHECK_FREQUENCY_SEC + 6,
+    "last_healthcheck_timestamp": time() - 10,
     "BOOTING": False,
     "RUNNING": False,
     "FAILED": False,

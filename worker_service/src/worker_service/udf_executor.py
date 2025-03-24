@@ -3,6 +3,7 @@ import base64
 import pickle
 import requests
 from queue import Empty
+from time import sleep
 
 import cloudpickle
 from tblib import Traceback
@@ -64,12 +65,9 @@ def execute_job(job_id: str, function_pkl: bytes):
     while True:
 
         try:
-            input_index, input_pkl = SELF["inputs_queue"].get(timeout=5)
-            # SELF["WORKER_LOGS"].append(f"Popped input from index {input_index}")
+            input_index, input_pkl = SELF["inputs_queue"].get()
         except Empty:
-            SELF["DONE"] = True
-            SELF["WORKER_LOGS"].append(f"Input queue empty for 5s.\nDone executing job: {job_id}.")
-            return
+            sleep(2)
 
         # run UDF:
         exec_info = None
@@ -101,4 +99,3 @@ def execute_job(job_id: str, function_pkl: bytes):
         }
         response = requests.patch(result_doc_url, headers=db_headers, json=data)
         response.raise_for_status()
-        # SELF["WORKER_LOGS"].append(f"Wrote result for input from index {input_index}")

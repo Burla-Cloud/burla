@@ -9,6 +9,8 @@ from typing import Callable, Optional, Union
 from time import sleep
 from queue import Queue
 from requests import Response
+import aiohttp
+import asyncio
 
 import cloudpickle
 from google.cloud import firestore
@@ -27,9 +29,6 @@ from burla._helpers import (
 )
 
 MAX_PARALLELISM = 256
-
-# This MUST be set to the same value as `JOB_HEALTHCHECK_FREQUENCY_SEC` in the node service.
-# Nodes will restart themself if theydont get a new healthcheck from the client every X seconds.
 JOB_HEALTHCHECK_FREQUENCY_SEC = 3
 
 
@@ -89,16 +88,24 @@ def _start_job(
     job_id = response_json["job_id"]
     nodes = response_json["nodes"]
 
+    # When running the cluster locally the node service hostname is a container name.
+    # This hostname only works from inside the docker network, not from the host machine.
+    # If we detect this, swap to localhost.
+    for node in nodes:
+        if node["host"].startswith("http://node_"):
+            node["host"] = f"http://localhost:{node['host'].split(':')[-1]}"
+
     # in separate thread start uploading inputs:
     args = (job_id, nodes, inputs, stop_event)
     input_uploader_thread = Thread(target=upload_inputs, args=args, daemon=True)
     input_uploader_thread.start()
 
-    return job_id
+    return job_id, nodes
 
 
 def _watch_job(
     job_id: str,
+    nodes: list,
     n_inputs: int,
     function_name: str,
     spinner: Union[bool, Spinner],
@@ -145,14 +152,20 @@ def _watch_job(
                 result = cloudpickle.loads(result_pkl)
                 n_results_received += len(result)
 
-                if n_results_received > 400000:
-                    print(f"({n_results_received}/{n_inputs}, batch={len(result)})")
-
                 msg = f"Running {n_inputs} inputs through `{function_name}` "
                 msg += f"({n_results_received}/{n_inputs} completed)"
                 spinner.text = msg
                 yield result
 
+    async def send_reboot_requests():
+        async with aiohttp.ClientSession() as session:
+            tasks = []
+            for node in nodes:
+                url = f"{node['host']}/background_reboot"
+                tasks.append(session.post(url, headers=auth_headers))
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    asyncio.run(send_reboot_requests())
     stop_event.set()
 
 
@@ -261,7 +274,7 @@ def _rpm(
 
     stop_event = Event()
     try:
-        job_id = _start_job(
+        job_id, nodes = _start_job(
             function_=function_wrapped,
             inputs=input_batches,
             func_cpu=func_cpu,
@@ -272,6 +285,7 @@ def _rpm(
         )
         output_batch_generator = _watch_job(
             job_id=job_id,
+            nodes=nodes,
             n_inputs=len(inputs),
             function_name=function_.__name__,
             spinner=spinner,

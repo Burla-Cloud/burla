@@ -137,5 +137,3 @@ def run_job_healthcheck(
     for node in nodes_with_job:
         response = requests.get(f"{node['host']}/jobs/{job_id}")
         response.raise_for_status()
-        if response.json()["any_workers_failed"]:
-            raise Exception(f"Worker failed. Check logs for node {node['instance_name']}")

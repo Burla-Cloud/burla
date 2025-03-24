@@ -175,12 +175,6 @@ def upload_inputs(job_id: str, nodes: list[dict], inputs: list, stop_event: Even
             return [current_chunk]
 
     async def upload_input_chunk(session, url, inputs_chunk):
-        # When running the cluster locally the node service hostname is a container name.
-        # This hostname only works from inside the docker network, not from the host machine.
-        # If we detect this, swap to localhost.
-        if url.startswith("http://node_"):
-            url = f"http://localhost:{url.split(':')[-1]}"
-
         data = aiohttp.FormData()
         data.add_field("inputs_pkl_with_idx", pickle.dumps(inputs_chunk))
         async with session.post(f"{url}/jobs/{job_id}/inputs", data=data) as response:

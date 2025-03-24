@@ -34,14 +34,22 @@ def restart_on_client_disconnect():
     logger = Logger()
     try:
         while True:
-            sleep(2)
+            sleep(3)
             seconds_since_last_healthcheck = time() - SELF["last_healthcheck_timestamp"]
-            client_disconnected = seconds_since_last_healthcheck > 6
+            logger.log(f"checking for restart: {seconds_since_last_healthcheck}")
+            client_disconnected = seconds_since_last_healthcheck > 10
+
+            print(f"seconds_since_last_healthcheck: {seconds_since_last_healthcheck}")
+            print(f"client_disconnected: {client_disconnected}")
 
             if client_disconnected and not SELF["BOOTING"]:
                 msg = "No healthcheck received from client in the last "
                 msg += f"{seconds_since_last_healthcheck}s, REBOOTING NODE!"
                 logger.log(msg)
+
+                print(msg)
+                # print(1 / 0)
+
                 reboot_containers(logger=logger)
                 break
     except Exception as e:
@@ -57,6 +65,7 @@ async def upload_inputs(
     request_files: Optional[dict] = Depends(get_request_files),
     logger: Logger = Depends(get_logger),
 ):
+    SELF["last_healthcheck_timestamp"] = time()
     if not job_id == SELF["current_job"]:
         return Response("job not found", status_code=404)
 
@@ -83,6 +92,8 @@ async def upload_inputs(
             tasks.append(session.post(f"{worker.url}/jobs/{job_id}/inputs", data=data))
         await asyncio.gather(*tasks)
 
+    SELF["last_healthcheck_timestamp"] = time()
+
 
 @router.get("/jobs/{job_id}")
 def healthcheck(job_id: str = Path(...)):
@@ -98,6 +109,8 @@ def execute(
     request_files: Optional[dict] = Depends(get_request_files),
     add_background_task: Callable = Depends(get_add_background_task_function),
 ):
+    SELF["last_healthcheck_timestamp"] = time()
+
     if SELF["RUNNING"]:
         return Response(f"Node in state `RUNNING`, unable to satisfy request", status_code=409)
     elif request_json["parallelism"] == 0:
@@ -162,6 +175,7 @@ def execute(
     SELF["workers"] = workers_to_keep
     remove_workers = lambda workers_to_remove: [w.remove() for w in workers_to_remove]
     add_background_task(remove_workers, workers_to_remove)
+    SELF["last_healthcheck_timestamp"] = time()
 
 
 @router.post("/background_reboot")

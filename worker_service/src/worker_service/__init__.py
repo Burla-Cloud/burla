@@ -30,7 +30,7 @@ SELF = {
     "inputs_queue": Queue(),
     "started_at": None,
 }
-LOGGER = logging.Client().logger("worker_service")
+LOGGER = logging.Client().logger(os.environ.get("WORKER_NAME", "unknown_worker"))
 
 from worker_service.endpoints import BP as endpoints_bp
 

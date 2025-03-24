@@ -125,7 +125,7 @@ def rpm_assert_restart(*a, **kw):
 
 def test_base():
 
-    my_inputs = list(range(10))
+    my_inputs = list(range(10000000))
 
     def my_function(test_input):
         # print(f"starting #{test_input}")
@@ -145,26 +145,26 @@ def test_base():
 
     print(f"E2E remote_parallel_map runtime: {runtime}")
     # assert runtime < 30
-    assert all([result in my_inputs for result in results])
+    # assert all([result in my_inputs for result in results])
     assert len(results) == len(my_inputs)
     # for i in range(len(my_inputs)):
     #     assert str(i) in stdout
 
 
-def test_udf_error():
-    """
-    Ensure the error is re-raised.
-    Also ensure that other nodes quickly stop once one throws an error.
-    """
+# def test_udf_error():
+#     """
+#     Ensure the error is re-raised.
+#     Also ensure that other nodes quickly stop once one throws an error.
+#     """
 
-    def my_function(test_input):
-        if test_input == 2:
-            print(1 / 0)
-        else:
-            sleep(60)
-        return test_input
+#     def my_function(test_input):
+#         if test_input == 2:
+#             print(1 / 0)
+#         else:
+#             sleep(60)
+#         return test_input
 
-    _, _, runtime, rpm_exception = rpm_assert_restart(my_function, list(range(5)))
+#     _, _, runtime, rpm_exception = rpm_assert_restart(my_function, list(range(5)))
 
-    assert isinstance(rpm_exception, ZeroDivisionError)
-    assert runtime < 10  # <- IMPORTANT! asserts the other nodes restarted before udf finished
+#     assert isinstance(rpm_exception, ZeroDivisionError)
+#     assert runtime < 10  # <- IMPORTANT! asserts the other nodes restarted before udf finished

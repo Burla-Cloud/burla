@@ -28,7 +28,7 @@ from burla._helpers import (
     get_host,
 )
 
-MAX_PARALLELISM = 256
+MAX_PARALLELISM = 1024
 JOB_HEALTHCHECK_FREQUENCY_SEC = 3
 
 

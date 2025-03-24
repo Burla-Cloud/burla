@@ -166,12 +166,13 @@ def upload_inputs(job_id: str, nodes: list[dict], inputs: list, stop_event: Even
                 current_chunk = [input_pkl_with_idx]
                 current_chunk_size = input_size
 
+        # Add the last chunk if it's not empty
+        if current_chunk:
+            chunks.append(current_chunk)
+
         if chunks:
-            # print(f"num of >1MB chunks: {len(chunks)}")
             return chunks
         else:
-            # print(f"num of >1MB chunks: 1")
-            # print(f"total size of current chunk: {current_chunk_size}")
             return [current_chunk]
 
     async def upload_input_chunk(session, url, inputs_chunk):
@@ -200,13 +201,6 @@ def upload_inputs(job_id: str, nodes: list[dict], inputs: list, stop_event: Even
                 node["input_chunks"] = inputs_for_current_node
                 start = end
 
-            for node in nodes:
-                print("--------------------------------")
-                #     print(node["input_chunks"])
-                #     print("---")
-                print(f"len(node['input_chunks']): {len(node['input_chunks'])}")
-                print(f"len(node['input_chunks'][0]): {len(node['input_chunks'][0])}")
-                print("--------------------------------")
             # cuncurrently, for each node, upload the n'th chunk of inputs
             nodes_with_input_chunks = [n for n in nodes if n["input_chunks"]]
 

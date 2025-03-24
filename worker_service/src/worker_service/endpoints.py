@@ -54,6 +54,7 @@ def upload_inputs(job_id: str):
     total_data = len(inputs_pkl_with_idx)
     msg = f"Received {len(inputs_pkl_with_idx)} inputs for job {job_id} ({total_data} bytes)."
     LOGGER.log(msg)
+    print(msg)
 
     for input_pkl_with_idx in inputs_pkl_with_idx:
         SELF["inputs_queue"].put(input_pkl_with_idx)
@@ -83,5 +84,8 @@ def start_job(job_id: str):
     SELF["subjob_thread"] = thread
     SELF["STARTED"] = True
     SELF["started_at"] = time()
+
+    print("HERE STARTED JOB")
+    LOGGER.log(f"Starting job {job_id}.")
 
     return "Success"

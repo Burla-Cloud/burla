@@ -74,6 +74,7 @@ class Worker:
                     environment={
                         "GOOGLE_CLOUD_PROJECT": PROJECT_ID,
                         "IN_LOCAL_DEV_MODE": IN_LOCAL_DEV_MODE,
+                        "WORKER_NAME": container_name,
                     },
                     detach=True,
                 )

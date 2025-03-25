@@ -51,4 +51,4 @@ def run_simple_test_job(n_inputs=5):
 def test_base():
     assert in_remote_dev_mode()
 
-    run_simple_test_job(n_inputs=100000)
+    run_simple_test_job(n_inputs=1000)

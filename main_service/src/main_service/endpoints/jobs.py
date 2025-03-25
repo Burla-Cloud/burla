@@ -100,7 +100,7 @@ def create_job(
             # Nodes returning errors here should be restarted.
             msg = f"Node {node['instance_name']} refused job with error: {e}"
             logger.log(msg, severity="WARNING")
-            return 0
+            return
 
         logger.log(f"Assigned node {node['instance_name']} to job {job_id}.")
         return {"host": node["host"], "n_workers": node["target_parallelism"]}

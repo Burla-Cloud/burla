@@ -99,6 +99,8 @@ async def upload_inputs(
 def healthcheck(job_id: str = Path(...)):
     if not job_id == SELF["current_job"]:
         return Response("job not found", status_code=404)
+
+    print("RECEIVED HEALTHCHECK")
     SELF["last_healthcheck_timestamp"] = time()
 
 

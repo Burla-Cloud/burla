@@ -88,6 +88,9 @@ def _start_job(
     job_id = response_json["job_id"]
     nodes = response_json["nodes"]
 
+    if not nodes:
+        raise Exception("Job refused by all available Nodes.")
+
     # When running the cluster locally the node service hostname is a container name.
     # This hostname only works from inside the docker network, not from the host machine.
     # If we detect this, swap to localhost.

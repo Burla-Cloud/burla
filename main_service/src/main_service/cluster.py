@@ -38,8 +38,9 @@ class GCEBurlaNode:
 
 def reboot_node(node_svc_host, node_containers):
     try:
-        response = requests.post(f"{node_svc_host}/reboot", json=node_containers)
-        response.raise_for_status()
+        # response = requests.post(f"{node_svc_host}/reboot", json=node_containers)
+        # sresponse.raise_for_status()
+        pass
     except Exception as e:
         # if node already rebooting, skip.
         if "409" not in str(e):
@@ -151,21 +152,21 @@ def reconcile(db: firestore.Client, logger: Logger, add_background_task: Callabl
                 node.delete()
                 db.collection("nodes").document(node.instance_name).update({"status": "DELETED"})
                 nodes.remove(node)
-        elif status == "RUNNING":
-            # job is still active?
-            job_doc_ref = db.collection("jobs").document(node.current_job)
-            job = job_doc_ref.get().to_dict()
-            n_results = job_doc_ref.collection("results").count().get()[0][0].value
-            job_ended = n_results == job["n_inputs"]
-            if job_ended:
-                msg = f"Rebooting node {node.instance_name}"
-                logger.log(msg + f"because it's job ({node.current_job}) has ended.")
-                add_background_task(node.reboot)
-        elif status == "FAILED":
-            # Delete node
-            logger.log(f"Deleting node: {node.instance_name} because it has FAILED")
-            node.delete()
-            nodes.remove(node)
+        # elif status == "RUNNING":
+        # # job is still active?
+        # job_doc_ref = db.collection("jobs").document(node.current_job)
+        # job = job_doc_ref.get().to_dict()
+        # n_results = job_doc_ref.collection("results").count().get()[0][0].value
+        # job_ended = n_results == job["n_inputs"]
+        # if job_ended:
+        #     msg = f"Rebooting node {node.instance_name}"
+        #     logger.log(msg + f"because it's job ({node.current_job}) has ended.")
+        #     add_background_task(node.reboot)
+        # elif status == "FAILED":
+        #     # Delete node
+        #     logger.log(f"Deleting node: {node.instance_name} because it has FAILED")
+        #     node.delete()
+        #     nodes.remove(node)
 
     #
     # This part is BROKEN and sometimes creates a runaway cluster scenario where it adds nodes

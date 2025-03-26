@@ -39,7 +39,6 @@ def restart_on_client_disconnect():
             logger.log(f"checking for restart: {seconds_since_last_healthcheck}")
             client_disconnected = seconds_since_last_healthcheck > 20
 
-            print(f"seconds_since_last_healthcheck: {seconds_since_last_healthcheck}")
             print(f"client_disconnected: {client_disconnected}")
 
             if client_disconnected and not SELF["BOOTING"]:

@@ -109,7 +109,7 @@ def create_job(
         nodes = list(executor.map(assign_node, nodes_to_assign))
 
     if len(nodes) == 0:
-        add_background_task(reboot_nodes_with_job, DB, job_id)
+        # add_background_task(reboot_nodes_with_job, DB, job_id)
         async_ensure_reconcile(DB, logger, add_background_task)
         content = {"error_type": "JobRefused", "message": "Job refused by all available nodes."}
         return JSONResponse(content=content, status_code=503)

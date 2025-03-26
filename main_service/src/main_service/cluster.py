@@ -38,9 +38,8 @@ class GCEBurlaNode:
 
 def reboot_node(node_svc_host, node_containers):
     try:
-        # response = requests.post(f"{node_svc_host}/reboot", json=node_containers)
-        # sresponse.raise_for_status()
-        pass
+        response = requests.post(f"{node_svc_host}/reboot", json=node_containers)
+        response.raise_for_status()
     except Exception as e:
         # if node already rebooting, skip.
         if "409" not in str(e):
@@ -132,41 +131,44 @@ def reconcile(db: firestore.Client, logger: Logger, add_background_task: Callabl
             except NotFound:
                 pass
 
-    # 2. Check that status of each node in db, ensure status makes sense, correct accordingly.
-    names_of_nodes_from_gce = [gce_node.name for gce_node in nodes_from_gce]
-    for node in nodes:
-        node_not_in_gce = node.instance_name not in names_of_nodes_from_gce
-        status = node.status()
+    # Commented this part out because it was calling `node.reboot` before jobs had finished,
+    # causing the job to never finish
 
-        if status in ["READY", "RUNNING"] and node_not_in_gce:
-            # node in database but not in compute engine?
-            db.collection("nodes").document(node.instance_name).update({"status": "DELETED"})
-        elif status == "BOOTING" and node_not_in_gce:
-            # been booting for too long ?
-            time_since_boot = time() - node.started_booting_at
-            gce_vm_should_exist_by_now = time_since_boot > 45
-            if gce_vm_should_exist_by_now:
-                msg = f"Deleting node {node.instance_name} because it is not in GCE yet "
-                msg += f"and it started booting {time_since_boot}s ago."
-                logger.log(msg)
-                node.delete()
-                db.collection("nodes").document(node.instance_name).update({"status": "DELETED"})
-                nodes.remove(node)
-        # elif status == "RUNNING":
-        # # job is still active?
-        # job_doc_ref = db.collection("jobs").document(node.current_job)
-        # job = job_doc_ref.get().to_dict()
-        # n_results = job_doc_ref.collection("results").count().get()[0][0].value
-        # job_ended = n_results == job["n_inputs"]
-        # if job_ended:
-        #     msg = f"Rebooting node {node.instance_name}"
-        #     logger.log(msg + f"because it's job ({node.current_job}) has ended.")
-        #     add_background_task(node.reboot)
-        # elif status == "FAILED":
-        #     # Delete node
-        #     logger.log(f"Deleting node: {node.instance_name} because it has FAILED")
-        #     node.delete()
-        #     nodes.remove(node)
+    # # 2. Check that status of each node in db, ensure status makes sense, correct accordingly.
+    # names_of_nodes_from_gce = [gce_node.name for gce_node in nodes_from_gce]
+    # for node in nodes:
+    #     node_not_in_gce = node.instance_name not in names_of_nodes_from_gce
+    #     status = node.status()
+
+    #     if status in ["READY", "RUNNING"] and node_not_in_gce:
+    #         # node in database but not in compute engine?
+    #         db.collection("nodes").document(node.instance_name).update({"status": "DELETED"})
+    #     elif status == "BOOTING" and node_not_in_gce:
+    #         # been booting for too long ?
+    #         time_since_boot = time() - node.started_booting_at
+    #         gce_vm_should_exist_by_now = time_since_boot > 45
+    #         if gce_vm_should_exist_by_now:
+    #             msg = f"Deleting node {node.instance_name} because it is not in GCE yet "
+    #             msg += f"and it started booting {time_since_boot}s ago."
+    #             logger.log(msg)
+    #             node.delete()
+    #             db.collection("nodes").document(node.instance_name).update({"status": "DELETED"})
+    #             nodes.remove(node)
+    #     elif status == "RUNNING":
+    #         # job is still active?
+    #         job_doc_ref = db.collection("jobs").document(node.current_job)
+    #         job = job_doc_ref.get().to_dict()
+    #         n_results = job_doc_ref.collection("results").count().get()[0][0].value
+    #         job_ended = n_results == job["n_inputs"]
+    #     if job_ended:
+    #         msg = f"Rebooting node {node.instance_name}"
+    #         logger.log(msg + f"because it's job ({node.current_job}) has ended.")
+    #         add_background_task(node.reboot)
+    #     elif status == "FAILED":
+    #         # Delete node
+    #         logger.log(f"Deleting node: {node.instance_name} because it has FAILED")
+    #         node.delete()
+    #         nodes.remove(node)
 
     #
     # This part is BROKEN and sometimes creates a runaway cluster scenario where it adds nodes

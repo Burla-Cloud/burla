@@ -197,9 +197,16 @@ def upload_inputs(job_id: str, nodes: list[dict], inputs: list, stop_event: Even
             start = 0
             for i, node in enumerate(nodes):
                 end = start + size + (1 if i < extra else 0)
+
                 inputs_for_current_node = _chunk_inputs_by_size(inputs_pkl_with_idx[start:end])
+
                 node["input_chunks"] = inputs_for_current_node
                 start = end
+
+            for node in nodes:
+                chunk_sizes = [len(chunk) for chunk in node["input_chunks"]]
+                n_chunks = len(node["input_chunks"])
+                print(f"uploading {n_chunks} chunks with sizes {chunk_sizes} to {node['host']}")
 
             # cuncurrently, for each node, upload the n'th chunk of inputs
             nodes_with_input_chunks = [n for n in nodes if n["input_chunks"]]

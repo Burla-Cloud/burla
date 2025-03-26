@@ -39,16 +39,10 @@ def restart_on_client_disconnect():
             logger.log(f"checking for restart: {seconds_since_last_healthcheck}")
             client_disconnected = seconds_since_last_healthcheck > 20
 
-            print(f"client_disconnected: {client_disconnected}")
-
             if client_disconnected and not SELF["BOOTING"]:
                 msg = "No healthcheck received from client in the last "
                 msg += f"{seconds_since_last_healthcheck}s, REBOOTING NODE!"
                 logger.log(msg)
-
-                print(msg)
-                # print(1 / 0)
-
                 reboot_containers(logger=logger)
                 break
     except Exception as e:
@@ -95,11 +89,10 @@ async def upload_inputs(
 
 
 @router.get("/jobs/{job_id}")
-def healthcheck(job_id: str = Path(...)):
+def healthcheck(job_id: str = Path(...), logger: Logger = Depends(get_logger)):
     if not job_id == SELF["current_job"]:
         return Response("job not found", status_code=404)
-
-    print("RECEIVED HEALTHCHECK")
+    logger.log("Received healthcheck")
     SELF["last_healthcheck_timestamp"] = time()
 
 

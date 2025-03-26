@@ -138,8 +138,6 @@ def _watch_job(
         time_since_last_healthcheck += 0.05
 
         if time_since_last_healthcheck > JOB_HEALTHCHECK_FREQUENCY_SEC:
-
-            print("SENDING HEALTHCHECK")
             healthcheck_job(job_id=job_id, auth_headers=auth_headers)
             time_since_last_healthcheck = 0
 

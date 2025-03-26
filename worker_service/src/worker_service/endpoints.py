@@ -54,7 +54,6 @@ def upload_inputs(job_id: str):
     total_data = len(inputs_pkl_with_idx)
     msg = f"Received {len(inputs_pkl_with_idx)} inputs for job {job_id} ({total_data} bytes)."
     LOGGER.log(msg)
-    print(msg)
 
     for input_pkl_with_idx in inputs_pkl_with_idx:
         SELF["inputs_queue"].put(input_pkl_with_idx)

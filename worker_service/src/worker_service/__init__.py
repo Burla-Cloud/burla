@@ -30,9 +30,10 @@ SELF = {
     "inputs_queue": Queue(),
     "started_at": None,
 }
-LOGGER = logging.Client().logger(os.environ.get("WORKER_NAME", "unknown_worker"))
+name = os.environ.get("WORKER_NAME", "unknown_worker")
+LOGGER = logging.Client().logger("worker_service", labels={"worker_name": name})
 
-from worker_service.endpoints import BP as endpoints_bp
+from worker_service.endpoints import BP as endpoints_bps
 
 app = Flask(__name__)
 app.register_blueprint(endpoints_bp)

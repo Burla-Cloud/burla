@@ -208,6 +208,7 @@ def reboot_containers(
         return Response("Node already BOOTING, unable to satisfy request.", status_code=409)
 
     try:
+        logger.log(f"REBOOTING NODE: {INSTANCE_NAME}")
         SELF["RUNNING"] = False
         SELF["BOOTING"] = True
         SELF["workers"] = []

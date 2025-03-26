@@ -28,7 +28,7 @@ from burla._helpers import (
     get_host,
 )
 
-MAX_PARALLELISM = 1024
+MAX_PARALLELISM = 512
 JOB_HEALTHCHECK_FREQUENCY_SEC = 10
 
 
@@ -95,7 +95,7 @@ def _start_job(
     # This hostname only works from inside the docker network, not from the host machine.
     # If we detect this, swap to localhost.
     for node in nodes:
-        if node["host"].startswith("http://node_"):
+        if node and node["host"].startswith("http://node_"):
             node["host"] = f"http://localhost:{node['host'].split(':')[-1]}"
 
     # in separate thread start uploading inputs:

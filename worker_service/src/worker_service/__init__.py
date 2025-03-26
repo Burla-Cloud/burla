@@ -53,11 +53,11 @@ def log_exception(exception):
     except:
         request_json = "Unable to serialize request."
 
-    if exception and IN_LOCAL_DEV_MODE:
-        print(traceback_str, file=sys.stderr)
-    elif exception:
-        log = {"severity": "ERROR", "exception": traceback_str, "request": request_json}
-        LOGGER.log_struct(log)
+    # if exception and IN_LOCAL_DEV_MODE:
+    #     print(traceback_str, file=sys.stderr)
+    # elif exception:
+    log = {"severity": "ERROR", "exception": traceback_str, "request": request_json}
+    LOGGER.log_struct(log)
 
     # Report errors back to Burla's cloud.
     try:

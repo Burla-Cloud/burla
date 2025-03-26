@@ -67,24 +67,30 @@ def start_job(job_id: str):
     if SELF["STARTED"]:
         return "STARTED", 409
 
-    function_pkl = request.files.get("function_pkl")
-    if function_pkl:
-        function_pkl = function_pkl.read()
+    try:
 
-    LOGGER.log(f"Executing job {job_id}.")
+        LOGGER.log(f"Assigned to job {job_id}.")
 
-    # ThreadWithExc is a thread that catches and stores errors.
-    # We need so we can save the error until the status of this service is checked.
-    args = (job_id, function_pkl)
-    thread = ThreadWithExc(target=execute_job, args=args)
-    thread.start()
+        function_pkl = request.files.get("function_pkl")
+        if function_pkl:
+            function_pkl = function_pkl.read()
 
-    SELF["current_job"] = job_id
-    SELF["subjob_thread"] = thread
-    SELF["STARTED"] = True
-    SELF["started_at"] = time()
+        LOGGER.log(f"Got function pickle.")
 
-    print("HERE STARTED JOB")
-    LOGGER.log(f"Starting job {job_id}.")
+        # ThreadWithExc is a thread that catches and stores errors.
+        # We need so we can save the error until the status of this service is checked.
+        args = (job_id, function_pkl)
+        thread = ThreadWithExc(target=execute_job, args=args)
+        thread.start()
 
-    return "Success"
+        LOGGER.log(f"Started `execute_job` thread.")
+
+        SELF["current_job"] = job_id
+        SELF["subjob_thread"] = thread
+        SELF["STARTED"] = True
+        SELF["started_at"] = time()
+
+        return "Success"
+    except Exception as e:
+        LOGGER.log(f"Error starting job {job_id}: {e}", severity="ERROR")
+        raise e

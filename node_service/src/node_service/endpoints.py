@@ -101,6 +101,7 @@ def execute(
     job_id: str = Path(...),
     request_json: dict = Depends(get_request_json),
     request_files: Optional[dict] = Depends(get_request_files),
+    logger: Logger = Depends(get_logger),
     add_background_task: Callable = Depends(get_add_background_task_function),
 ):
     if SELF["RUNNING"]:
@@ -148,7 +149,11 @@ def execute(
     # call workers concurrently
     async def assign_worker(session, url):
         async with session.post(url, data={"function_pkl": function_pkl}) as response:
-            response.raise_for_status()
+            if response.status == 200:
+                return url
+            else:
+                logger.log(f"Worker {url} returned error: {response.status}", severity="WARNING")
+                return None
 
     async def assign_workers(workers):
         async with aiohttp.ClientSession() as session:
@@ -156,9 +161,11 @@ def execute(
             for worker in workers:
                 url = f"{worker.url}/jobs/{job_id}"
                 tasks.append(assign_worker(session, url))
-            await asyncio.gather(*tasks)
+            results = await asyncio.gather(*tasks)
+            return [url for url in results if url]
 
-    asyncio.run(assign_workers(workers_to_keep))
+    successful_worker_urls = asyncio.run(assign_workers(workers_to_keep))
+    logger.log(f"Successfully assigned to {len(successful_worker_urls)} workers.")
 
     SELF["workers"] = workers_to_keep
     remove_workers = lambda workers_to_remove: [w.remove() for w in workers_to_remove]

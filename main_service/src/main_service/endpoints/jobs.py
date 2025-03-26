@@ -123,17 +123,17 @@ def run_job_healthcheck(
     logger: Logger = Depends(get_logger),
     add_background_task: Callable = Depends(get_add_background_task_function),
 ):
-    # if not already happening, modify current cluster state -> correct/optimal state:
     async_ensure_reconcile(DB, logger, add_background_task)
 
-    # get all nodes working on this job
     _filter = FieldFilter("current_job", "==", job_id)
     nodes_with_job = [n.to_dict() for n in DB.collection("nodes").where(filter=_filter).stream()]
-
     if not nodes_with_job:
         raise Exception(f"No nodes working on job {job_id}.")
 
     # check status of every node / worker working on this job
     for node in nodes_with_job:
-        response = requests.get(f"{node['host']}/jobs/{job_id}")
-        response.raise_for_status()
+        try:
+            response = requests.get(f"{node['host']}/jobs/{job_id}")
+            response.raise_for_status()
+        except Exception as e:
+            logger.log(f"Node {node['instance_name']} returned error: {e}", severity="WARNING")

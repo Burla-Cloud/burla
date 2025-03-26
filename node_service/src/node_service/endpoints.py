@@ -103,8 +103,6 @@ def execute(
     request_files: Optional[dict] = Depends(get_request_files),
     add_background_task: Callable = Depends(get_add_background_task_function),
 ):
-    SELF["last_healthcheck_timestamp"] = time()
-
     if SELF["RUNNING"]:
         return Response(f"Node in state `RUNNING`, unable to satisfy request", status_code=409)
     elif request_json["parallelism"] == 0:
@@ -116,10 +114,6 @@ def execute(
     db = firestore.Client(project=PROJECT_ID, database="burla")
     node_doc = db.collection("nodes").document(INSTANCE_NAME)
     node_doc.update({"status": "RUNNING", "current_job": job_id})
-
-    job_watcher_thread = Thread(target=restart_on_client_disconnect)
-    job_watcher_thread.start()
-    SELF["job_watcher_thread"] = job_watcher_thread
 
     job_ref = db.collection("jobs").document(job_id)
     job = job_ref.get().to_dict()
@@ -169,7 +163,11 @@ def execute(
     SELF["workers"] = workers_to_keep
     remove_workers = lambda workers_to_remove: [w.remove() for w in workers_to_remove]
     add_background_task(remove_workers, workers_to_remove)
+
     SELF["last_healthcheck_timestamp"] = time()
+    job_watcher_thread = Thread(target=restart_on_client_disconnect)
+    job_watcher_thread.start()
+    SELF["job_watcher_thread"] = job_watcher_thread
 
 
 @router.post("/background_reboot")

@@ -29,7 +29,7 @@ from burla._helpers import (
 )
 
 MAX_PARALLELISM = 1024
-JOB_HEALTHCHECK_FREQUENCY_SEC = 10
+JOB_HEALTHCHECK_FREQUENCY_SEC = 3
 
 
 class MainServiceError(Exception):

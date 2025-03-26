@@ -37,7 +37,7 @@ def restart_on_client_disconnect():
             sleep(3)
             seconds_since_last_healthcheck = time() - SELF["last_healthcheck_timestamp"]
             logger.log(f"checking for restart: {seconds_since_last_healthcheck}")
-            client_disconnected = seconds_since_last_healthcheck > 20
+            client_disconnected = seconds_since_last_healthcheck > 10
 
             if client_disconnected and not SELF["BOOTING"]:
                 msg = "No healthcheck received from client in the last "
@@ -45,6 +45,9 @@ def restart_on_client_disconnect():
                 logger.log(msg)
                 reboot_containers(logger=logger)
                 break
+            elif SELF["BOOTING"]:
+                break
+
     except Exception as e:
         exc_type, exc_value, exc_traceback = sys.exc_info()
         tb_details = traceback.format_exception(exc_type, exc_value, exc_traceback)

@@ -37,7 +37,7 @@ def restart_on_disconnect(stop_event: Event = None):
             sleep(3)
             seconds_since_last_healthcheck = time() - SELF["last_healthcheck_timestamp"]
             logger.log(f"checking for restart: {seconds_since_last_healthcheck}")
-            client_disconnected = seconds_since_last_healthcheck > 10
+            client_disconnected = seconds_since_last_healthcheck > 20
 
             if client_disconnected and not SELF["BOOTING"]:
                 msg = "No healthcheck received from client in the last "

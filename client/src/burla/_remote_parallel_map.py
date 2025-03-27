@@ -28,7 +28,7 @@ from burla._helpers import (
     get_host,
 )
 
-MAX_PARALLELISM = 1024  # If you increase this Burla will **probably** break.
+MAX_PARALLELISM = 1000  # If you increase this Burla will **probably** break.
 
 
 class MainServiceError(Exception):

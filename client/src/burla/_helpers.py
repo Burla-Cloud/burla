@@ -145,7 +145,7 @@ def upload_inputs(
 
     def _chunk_inputs_by_size(
         inputs_pkl_with_idx: list,
-        min_chunk_size: int = 1_048_576 * 1,  # 1MB
+        min_chunk_size: int = 1_048_576 * 500,  # 500MB
         max_chunk_size: int = 1_048_576 * 1000,  # 1GB
     ):
         chunks = []

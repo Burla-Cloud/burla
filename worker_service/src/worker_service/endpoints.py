@@ -15,14 +15,13 @@ ERROR_ALREADY_LOGGED = False
 @BP.get("/")
 def get_status():
     global ERROR_ALREADY_LOGGED
-    no_tb_msg = "UDF Executor thread is dead with no errors."
-    traceback_str = SELF["subjob_thread"].traceback_str if SELF["subjob_thread"] else no_tb_msg
+    traceback_str = SELF["subjob_thread"].traceback_str if SELF["subjob_thread"] else None
     thread_died = SELF["subjob_thread"] and (not SELF["subjob_thread"].is_alive())
 
     READY = not SELF["STARTED"]
     FAILED = traceback_str or thread_died
 
-    if FAILED and (not ERROR_ALREADY_LOGGED):
+    if FAILED and (not ERROR_ALREADY_LOGGED) and traceback_str:
         # Log all the logs that led up to this error:
         # We can't always log to GCL because so many workers are running at once it just breaks.
         # -> We only save the logs when there is an error (and pray they dont all error at once).

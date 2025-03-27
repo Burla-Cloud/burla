@@ -92,7 +92,7 @@ async def upload_inputs(
 
 
 @router.get("/jobs/{job_id}")
-def healthcheck(job_id: str = Path(...), logger: Logger = Depends(get_logger)):
+async def healthcheck(job_id: str = Path(...), logger: Logger = Depends(get_logger)):
     if not job_id == SELF["current_job"]:
         return Response("job not found", status_code=404)
     logger.log("Received healthcheck")

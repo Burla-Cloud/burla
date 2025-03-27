@@ -4,7 +4,7 @@ import traceback
 import logging as python_logging
 from time import time
 
-from worker_service import LOGGER
+# from worker_service import LOGGER
 
 
 class VerboseList(list):

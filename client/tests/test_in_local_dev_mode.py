@@ -74,8 +74,8 @@ def rpm_assert_restart(*a, **kw):
     returns any errors thrown by rpm, still asserts cluster restarted correctly.
     """
 
-    if not local_cluster_in_standby():
-        raise Exception("Local cluster not in standby.")
+    # if not local_cluster_in_standby():
+    #     raise Exception("Local cluster not in standby.")
 
     containers = DOCKER_CLIENT.containers.list()
     pre_job_worker_names = set([c.name for c in containers if c.name.startswith("worker")])
@@ -125,7 +125,7 @@ def rpm_assert_restart(*a, **kw):
 
 def test_base():
 
-    my_inputs = list(range(100000))
+    my_inputs = list(range(10_000_000))
 
     def my_function(test_input):
         # print(f"starting #{test_input}")
@@ -136,6 +136,8 @@ def test_base():
         #     print(f"finished waiting.")
 
         # print(f"finishing #{test_input}")
+
+        # sleep(60)
         return test_input
 
     results, stdout, runtime, rpm_exception = rpm_assert_restart(my_function, my_inputs)

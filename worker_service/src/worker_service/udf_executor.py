@@ -66,7 +66,9 @@ def execute_job(job_id: str, function_pkl: bytes):
 
         try:
             input_index, input_pkl = SELF["inputs_queue"].get()
+            SELF["logs"].append(f"Popped input #{input_index} from queue.")
         except Empty:
+            SELF["logs"].append("No inputs in queue. Sleeping for 2 seconds.")
             sleep(2)
 
         # run UDF:
@@ -77,7 +79,9 @@ def execute_job(job_id: str, function_pkl: bytes):
                     user_defined_function = cloudpickle.loads(function_pkl)
                 input_ = cloudpickle.loads(input_pkl)
                 return_value = user_defined_function(input_)
+                SELF["logs"].append(f"UDF succeded on input #{input_index}.")
             except Exception:
+                SELF["logs"].append(f"UDF raised an exception on input #{input_index}.")
                 exec_info = sys.exc_info()
 
         # serialize result:
@@ -99,3 +103,4 @@ def execute_job(job_id: str, function_pkl: bytes):
         }
         response = requests.patch(result_doc_url, headers=db_headers, json=data)
         response.raise_for_status()
+        SELF["logs"].append(f"Successfully wrote result for input #{input_index}.")

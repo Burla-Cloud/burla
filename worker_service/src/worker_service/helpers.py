@@ -2,6 +2,7 @@ import threading
 import sys
 import traceback
 import logging as python_logging
+from time import time
 
 
 class VerboseList(list):
@@ -11,13 +12,18 @@ class VerboseList(list):
     # the same time, python's logging module handles threads a lot better than print does.
 
     def __init__(self, *a, **kw):
+        self.start_time = None
         self.logger = python_logging.getLogger()
         self.logger.setLevel(python_logging.INFO)
         self.logger.addHandler(python_logging.StreamHandler(sys.stdout))
         super().__init__(*a, **kw)
 
     def append(self, item):
-        self.logger.info(item)
+        if self.start_time is None:
+            self.start_time = time()
+
+        time_since_start = time() - self.start_time
+        self.logger.info(f"T+{time_since_start:.2f}s: {item}")
         super().append(item)
 
 

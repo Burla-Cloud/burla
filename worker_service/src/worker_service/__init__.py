@@ -29,7 +29,9 @@ SELF = {
     "subjob_thread": None,
     "inputs_queue": Queue(),
     "started_at": None,
+    "logs": VerboseList() if IN_LOCAL_DEV_MODE else [],  # <- see `log_exception` for explaination
 }
+
 name = os.environ.get("WORKER_NAME", "unknown_worker")
 LOGGER = logging.Client().logger("worker_service", labels={"worker_name": name})
 
@@ -41,23 +43,23 @@ app.register_blueprint(endpoints_bp)
 
 @app.errorhandler(Exception)
 def log_exception(exception):
-    """
-    Logs any exceptions thrown inside a request.
-    """
     exc_type, exc_value, exc_traceback = sys.exc_info()
     traceback_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
     traceback_str = "".join(traceback_details)
+    print(traceback_str, file=sys.stderr)
 
     try:
         request_json = json.dumps(vars(request))
     except:
         request_json = "Unable to serialize request."
 
-    # if exception and IN_LOCAL_DEV_MODE:
-    #     print(traceback_str, file=sys.stderr)
-    # elif exception:
-    log = {"severity": "ERROR", "exception": traceback_str, "request": request_json}
-    LOGGER.log_struct(log)
+    # Log all the logs that led up to this error:
+    # We can't always log to GCL because so many workers are running at once it just breaks.
+    # Therefore we only save the logs when there is an error (and pray they dont all error at once)
+    if not IN_LOCAL_DEV_MODE:
+        for log in SELF["logs"]:
+            LOGGER.log(log)
+        LOGGER.log_struct(dict(severity="ERROR", exception=traceback_str, request=request_json))
 
     # Report errors back to Burla's cloud.
     try:

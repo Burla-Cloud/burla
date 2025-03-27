@@ -2,11 +2,12 @@ import os
 import io
 import logging
 import requests
-from queue import Queue
-from threading import Event
 import asyncio
 import aiohttp
 import pickle
+from time import time
+from queue import Queue
+from threading import Event
 
 import cloudpickle
 import google.auth
@@ -74,10 +75,15 @@ def get_db(auth_headers: dict):
             ) from e
 
 
-def send_healthchecks_from_thread(job_id: str, stop_event: Event, auth_headers: dict):
+def send_healthchecks_from_thread(
+    job_id: str, stop_event: Event, auth_headers: dict, log_msg_stdout: io.TextIOWrapper
+):
     while not stop_event.is_set():
         stop_event.wait(JOB_HEALTHCHECK_FREQUENCY_SEC)
+        log_msg_stdout.write("Sending healthcheck.")
+        start = time()
         response = requests.get(f"{get_host()}/v1/jobs/{job_id}", headers=auth_headers)
+        log_msg_stdout.write(f"Received healthcheck response ({time() - start:.2f}s)")
         if response.status_code != 200:
             return  # error raised in main thread when this thread returns
 
@@ -115,7 +121,13 @@ def enqueue_results_from_db(job_doc_ref: DocumentReference, stop_event: Event, q
     query_watch.unsubscribe()
 
 
-def upload_inputs(job_id: str, nodes: list[dict], inputs: list, stop_event: Event):
+def upload_inputs(
+    job_id: str,
+    nodes: list[dict],
+    inputs: list,
+    stop_event: Event,
+    log_msg_stdout: io.TextIOWrapper,
+):
 
     def _chunk_inputs_by_size(
         inputs_pkl_with_idx: list,
@@ -127,6 +139,14 @@ def upload_inputs(job_id: str, nodes: list[dict], inputs: list, stop_event: Even
         current_chunk_size = 0
 
         for input_pkl_with_idx in inputs_pkl_with_idx:
+
+            # # TEMPORARY FOR TESTING:
+            # if len(current_chunk) == 2:
+            #     current_chunk.append(input_pkl_with_idx)
+            #     chunks.append(current_chunk)
+            #     current_chunk = []
+            #     current_chunk_size = 0
+            #     continue
 
             input_size = len(input_pkl_with_idx[1])
             if input_size > max_chunk_size:
@@ -193,7 +213,8 @@ def upload_inputs(job_id: str, nodes: list[dict], inputs: list, stop_event: Even
             for node in nodes:
                 chunk_sizes = [len(chunk) for chunk in node["input_chunks"]]
                 n_chunks = len(node["input_chunks"])
-                print(f"uploading {n_chunks} chunks with sizes {chunk_sizes} to {node['host']}")
+                msg = f"Uploading {n_chunks} chunks with {chunk_sizes} inputs to {node['host']}"
+                log_msg_stdout.write(msg)
 
             # cuncurrently, for each node, upload the n'th chunk of inputs
             nodes_with_input_chunks = [n for n in nodes if n["input_chunks"]]

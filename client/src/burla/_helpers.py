@@ -21,21 +21,15 @@ from burla._install import main_service_url
 logging.getLogger("google.api_core.bidi").setLevel(logging.ERROR)
 
 
+JOB_HEALTHCHECK_FREQUENCY_SEC = 3
+
+
 class GoogleLoginError(Exception):
     pass
 
 
 class InputTooBig(Exception):
     pass
-
-
-class UnknownClusterError(Exception):
-    def __init__(self):
-        msg = "\nAn unknown error occurred inside your Burla cluster, "
-        msg += "this is not an error with your code, but with the Burla.\n"
-        msg += "If this issue is urgent please don't hesitate to call me (Jake) directly"
-        msg += " at 508-320-8778, or email me at jake@burla.dev."
-        super().__init__(msg)
 
 
 def get_host():
@@ -80,19 +74,12 @@ def get_db(auth_headers: dict):
             ) from e
 
 
-def healthcheck_job(job_id: str, auth_headers: dict):
-    response = requests.get(f"{get_host()}/v1/jobs/{job_id}", headers=auth_headers)
-
-    if response.status_code == 200:
-        return
-    elif response.status_code == 401:
-        raise AuthException()
-    elif response.status_code == 404:
-        # this thread often runs for a bit after the job has ended, causing 404s
-        # for now, just ignore these.
-        return
-    else:
-        raise UnknownClusterError()
+def send_healthchecks_from_thread(job_id: str, stop_event: Event, auth_headers: dict):
+    while not stop_event.is_set():
+        stop_event.wait(JOB_HEALTHCHECK_FREQUENCY_SEC)
+        response = requests.get(f"{get_host()}/v1/jobs/{job_id}", headers=auth_headers)
+        if response.status_code != 200:
+            return  # error raised in main thread when this thread returns
 
 
 def print_logs_from_db(

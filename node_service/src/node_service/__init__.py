@@ -7,6 +7,7 @@ from uuid import uuid4
 from time import time
 from typing import Callable
 from contextlib import asynccontextmanager
+from threading import Event
 
 import google.auth
 from google.auth.transport.requests import Request
@@ -32,8 +33,8 @@ GCL_CLIENT = logging.Client().logger("node_service", labels=dict(INSTANCE_NAME=I
 
 SELF = {
     "workers": [],
-    "job_watcher_thread": None,
     "current_job": None,
+    "job_watcher_stop_event": Event(),
     "current_container_config": [],
     "time_until_inactivity_shutdown": None,
     "last_healthcheck_timestamp": time() - 10,

@@ -23,13 +23,12 @@ from burla._helpers import (
     upload_inputs,
     print_logs_from_db,
     enqueue_results_from_db,
-    healthcheck_job,
+    send_healthchecks_from_thread,
     get_db,
     get_host,
 )
 
 MAX_PARALLELISM = 1024
-JOB_HEALTHCHECK_FREQUENCY_SEC = 3
 
 
 class MainServiceError(Exception):
@@ -41,6 +40,15 @@ class MainServiceError(Exception):
 
 class InputsTooBig(Exception):
     pass
+
+
+class UnknownClusterError(Exception):
+    def __init__(self):
+        msg = "\nAn unknown error occurred inside your Burla cluster, "
+        msg += "this is not an error with your code, but with the Burla.\n"
+        msg += "If this issue is urgent please don't hesitate to call me (Jake) directly"
+        msg += " at 508-320-8778, or email me at jake@burla.dev."
+        super().__init__(msg)
 
 
 def _start_job(
@@ -134,18 +142,21 @@ def _watch_job(
     result_thread = Thread(target=enqueue_results_from_db, args=args, daemon=True)
     result_thread.start()
 
-    time_since_last_healthcheck = 0
+    # Start sending healthchecks from a separate thread
+    args = (job_id, stop_event, auth_headers)
+    healthcheck_thread = Thread(target=send_healthchecks_from_thread, args=args, daemon=True)
+    healthcheck_thread.start()
+
     n_results_received = 0
     while n_results_received < n_inputs:
         sleep(0.05)
-        time_since_last_healthcheck += 0.05
-
-        if time_since_last_healthcheck > JOB_HEALTHCHECK_FREQUENCY_SEC:
-            healthcheck_job(job_id=job_id, auth_headers=auth_headers)
-            time_since_last_healthcheck = 0
 
         while not result_queue.empty():
             input_index, is_error, result_pkl = result_queue.get()
+
+            if not healthcheck_thread.is_alive():
+                stop_event.set()
+                raise UnknownClusterError()
 
             if is_error:
                 exc_info = pickle.loads(result_pkl)

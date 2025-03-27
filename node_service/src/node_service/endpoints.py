@@ -30,7 +30,7 @@ from node_service import IN_LOCAL_DEV_MODE
 router = APIRouter()
 
 
-def restart_on_client_disconnect():
+def restart_on_disconnect(stop_event: Event = None):
     logger = Logger()
     try:
         while True:
@@ -44,9 +44,9 @@ def restart_on_client_disconnect():
                 msg += f"{seconds_since_last_healthcheck}s, REBOOTING NODE!"
                 logger.log(msg)
                 reboot_containers(logger=logger)
-                break
-            elif SELF["BOOTING"]:
-                break
+                return
+            elif stop_event.is_set():
+                return
 
     except Exception as e:
         exc_type, exc_value, exc_traceback = sys.exc_info()
@@ -175,9 +175,10 @@ def execute(
     add_background_task(remove_workers, workers_to_remove)
 
     SELF["last_healthcheck_timestamp"] = time()
-    job_watcher_thread = Thread(target=restart_on_client_disconnect)
+    stop_event = Event()
+    job_watcher_thread = Thread(target=restart_on_disconnect, args=(stop_event,), daemon=True)
     job_watcher_thread.start()
-    SELF["job_watcher_thread"] = job_watcher_thread
+    SELF["job_watcher_stop_event"] = stop_event
 
 
 @router.post("/background_reboot")
@@ -209,6 +210,7 @@ def reboot_containers(
 
     try:
         logger.log(f"REBOOTING NODE: {INSTANCE_NAME}")
+        SELF["job_watcher_stop_event"].set()
         SELF["RUNNING"] = False
         SELF["BOOTING"] = True
         SELF["workers"] = []
@@ -330,8 +332,6 @@ def reboot_containers(
             SELF["current_job"] = None
             SELF["last_healthcheck_timestamp"] = time()
             node_doc.update({"status": "READY"})
-
-        SELF["job_watcher_thread"] = None
 
     except Exception as e:
         SELF["FAILED"] = True

@@ -39,8 +39,8 @@ LOCAL_DEV_CONFIG = {  # <- config used only in local dev mode
                     "python_version": "3.11",
                 },
             ],
-            "machine_type": "n4-standard-8",  # <- means nothing here, this is set in node __init__
-            "quantity": 1,
+            "machine_type": "n4-standard-2",  # <- means nothing here, this is set in node __init__
+            "quantity": 2,
             "inactivity_shutdown_time_sec": 60 * 10,
         }
     ]

@@ -139,7 +139,7 @@ def _execute_job(
     result_thread.start()
 
     # Start sending healthchecks from a separate thread
-    args = (job_id, stop_event, auth_headers, log_msg_stdout)
+    args = (job_id, stop_event, nodes, log_msg_stdout)
     healthcheck_thread = Thread(target=send_healthchecks_from_thread, args=args, daemon=True)
     healthcheck_thread.start()
 

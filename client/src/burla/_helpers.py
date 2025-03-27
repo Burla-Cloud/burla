@@ -76,16 +76,30 @@ def get_db(auth_headers: dict):
 
 
 def send_healthchecks_from_thread(
-    job_id: str, stop_event: Event, auth_headers: dict, log_msg_stdout: io.TextIOWrapper
+    job_id: str, stop_event: Event, nodes: list[dict], log_msg_stdout: io.TextIOWrapper
 ):
+    async def _healthcheck_single_node(session, node):
+        async with session.get(f"{node['host']}/jobs/{job_id}") as response:
+            return node, response.status
+
+    async def _healthcheck_all_nodes(nodes):
+        async with aiohttp.ClientSession() as session:
+            tasks = [_healthcheck_single_node(session, node) for node in nodes]
+            return await asyncio.gather(*tasks, return_exceptions=True)
+
     while not stop_event.is_set():
         stop_event.wait(JOB_HEALTHCHECK_FREQUENCY_SEC)
-        log_msg_stdout.write("Sending healthcheck.")
         start = time()
-        response = requests.get(f"{get_host()}/v1/jobs/{job_id}", headers=auth_headers)
-        log_msg_stdout.write(f"Received healthcheck response ({time() - start:.2f}s)")
-        if response.status_code != 200:
-            return  # error raised in main thread when this thread returns
+
+        log_msg_stdout.write("Sending healthchecks to all nodes...")
+        results = asyncio.run(_healthcheck_all_nodes(nodes))
+        log_msg_stdout.write(f"Received all healthcheck responses ({time() - start:.2f}s)")
+
+        # Check if any node returned a non-200 status
+        failed_nodes = [f"{node['host']}: {status}" for node, status in results if status != 200]
+        if failed_nodes:
+            log_msg_stdout.write(f"Healthcheck failed for nodes: {', '.join(failed_nodes)}")
+            return  # error raised in main thread if this thread ends before job is done
 
 
 def print_logs_from_db(
@@ -131,22 +145,14 @@ def upload_inputs(
 
     def _chunk_inputs_by_size(
         inputs_pkl_with_idx: list,
-        min_chunk_size: int = 1_048_576,  # 1MB
-        max_chunk_size: int = 1_048_576 * 30,
+        min_chunk_size: int = 1_048_576 * 1,  # 1MB
+        max_chunk_size: int = 1_048_576 * 1000,  # 1GB
     ):
         chunks = []
         current_chunk = []
         current_chunk_size = 0
 
         for input_pkl_with_idx in inputs_pkl_with_idx:
-
-            # # TEMPORARY FOR TESTING:
-            # if len(current_chunk) == 2:
-            #     current_chunk.append(input_pkl_with_idx)
-            #     chunks.append(current_chunk)
-            #     current_chunk = []
-            #     current_chunk_size = 0
-            #     continue
 
             input_size = len(input_pkl_with_idx[1])
             if input_size > max_chunk_size:

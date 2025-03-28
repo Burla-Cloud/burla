@@ -19,5 +19,15 @@ export interface BurlaJob {
     status: JobsStatus | null;
     user: string; // Added user field
     checked: boolean | false;
-    started_at?: number; // Renamed from submitted_date and ensured it's a timestamp
+    started_at?: Date; // Renamed from submitted_date and ensured it's a timestamp
 }
+
+
+export interface Settings {
+    containerImage: string;
+    pythonExecutable: string;
+    pythonVersion: string;
+    machineType: string;
+    machineQuantity: number;
+    users: string[];
+  }

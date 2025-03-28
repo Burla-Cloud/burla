@@ -227,8 +227,7 @@ def test_burla_job():
 
     def my_function(test_input):
         print(f"starting #{test_input}")
-        sleep(85)
-        ahhafaj
+        sleep(320)
         print(f"finishing #{test_input}")
         return test_input
 
@@ -254,6 +253,8 @@ def test_burla_job():
 
 
 
+test_burla_job()
+sleep(20)
 test_burla_job()
 sleep(20)
 test_burla_job()

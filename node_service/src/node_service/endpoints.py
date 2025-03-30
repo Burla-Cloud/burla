@@ -75,17 +75,25 @@ async def upload_inputs(
     start = 0
     for i, worker in enumerate(SELF["workers"]):
         end = start + batch_size + (1 if i < extra else 0)
-        input_batches.append(inputs_pkl_with_idx[start:end])
+        batch = inputs_pkl_with_idx[start:end]
+        if batch:
+            input_batches.append(batch)
         start = end
 
     # concurrently send to each worker
     async with aiohttp.ClientSession() as session:
         tasks = []
-        for worker, batch in zip(SELF["workers"], input_batches):
-            logger.log(f"Sending {len(batch)} inputs to {worker.url}")
+        for batch in input_batches:
+            current_worker_index = SELF["index_of_last_worker_given_inputs"] + 1
+            current_worker = SELF["workers"][current_worker_index]
+            msg = f"Sending {len(batch)} inputs to worker #{current_worker_index}:"
+            logger.log(f"{msg} {current_worker.container_name}")
+
             data = aiohttp.FormData()
             data.add_field("inputs_pkl_with_idx", pickle.dumps(batch))
-            tasks.append(session.post(f"{worker.url}/jobs/{job_id}/inputs", data=data))
+            tasks.append(session.post(f"{current_worker.url}/jobs/{job_id}/inputs", data=data))
+            SELF["index_of_last_worker_given_inputs"] += 1
+
         await asyncio.gather(*tasks)
 
     SELF["last_healthcheck_timestamp"] = time()

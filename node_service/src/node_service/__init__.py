@@ -38,6 +38,7 @@ SELF = {
     "current_container_config": [],
     "time_until_inactivity_shutdown": None,
     "last_healthcheck_timestamp": time() - 10,
+    "last_worker_index": 0,
     "BOOTING": False,
     "RUNNING": False,
     "FAILED": False,

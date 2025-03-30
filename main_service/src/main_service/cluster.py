@@ -14,20 +14,6 @@ from main_service.node import Node
 from main_service.helpers import Logger
 
 
-N_FOUR_STANDARD_CPU_TO_RAM = {2: 8, 4: 16, 8: 32, 16: 64, 32: 128, 48: 192, 64: 256, 80: 320}
-
-
-def parallelism_capacity(machine_type: str, func_cpu: int, func_ram: int):
-    """What is the maximum number of parallel subjobs this machine_type can run a job with the
-    following resource requirements at?
-    """
-    if machine_type.startswith("n4-standard") and machine_type.split("-")[-1].isdigit():
-        vm_cpu = int(machine_type.split("-")[-1])
-        vm_ram = N_FOUR_STANDARD_CPU_TO_RAM[vm_cpu]
-        return min(vm_cpu // func_cpu, vm_ram // func_ram)
-    raise ValueError(f"machine_type must be n4-standard-X")
-
-
 @dataclass
 class GCEBurlaNode:
     # Represents GCE VM Instance running as a node in a Burla cluster.

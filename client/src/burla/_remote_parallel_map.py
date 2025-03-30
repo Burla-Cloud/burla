@@ -1,45 +1,39 @@
 import sys
-import requests
 import pickle
 import json
 import inspect
-from six import reraise
-from threading import Thread, Event
-from typing import Callable, Optional, Union
-from time import sleep
-from queue import Queue
-from requests import Response
 import aiohttp
 import asyncio
+from time import sleep, time
+from queue import Queue
+from six import reraise
+from uuid import uuid4
+from threading import Thread, Event
+from typing import Callable, Optional, Union
 
 import cloudpickle
 from google.cloud import firestore
-from yaspin import yaspin, Spinner
+from google.cloud.firestore import FieldFilter
+from yaspin import Spinner
 from tblib import Traceback
 
 from burla import __version__
-from burla._auth import get_auth_headers, AuthException
-from burla._helpers import (
+from burla._auth import get_auth_headers
+from burla._background_threads import (
     upload_inputs,
     print_logs_from_db,
     enqueue_results_from_db,
-    send_healthchecks_from_thread,
+    send_job_healthchecks,
+)
+from burla._helpers import (
     get_db,
-    get_host,
+    prep_graceful_shutdown_with_spinner,
+    prep_graceful_shutdown,
+    parallelism_capacity,
+    ThreadWithExc,
 )
 
 MAX_PARALLELISM = 1000  # If you increase this Burla will **probably** break.
-
-
-class MainServiceError(Exception):
-    # Error from inside the main_service that should be passed back to the user.
-    def __init__(self, response: Response):
-        self.__class__.__name__ = response.json().get("error_type")
-        super().__init__(response.json().get("message"))
-
-
-class InputsTooBig(Exception):
-    pass
 
 
 class UnknownClusterError(Exception):
@@ -57,57 +51,84 @@ def _start_job(
     func_cpu: int,
     func_ram: int,
     max_parallelism: int,
-    stop_event: Event,
-    auth_headers: dict,
+    db: firestore.Client,
+    spinner: Union[bool, Spinner],
 ) -> str:
+    log_msg_stdout = spinner if spinner else sys.stdout
+    node_filter = FieldFilter("status", "==", "READY")
+    ready_nodes = [n.to_dict() for n in db.collection("nodes").where(filter=node_filter).stream()]
+    log_msg_stdout.write(f"Found {len(ready_nodes)} nodes with state `READY`.")
 
-    sig = inspect.signature(function_)
-    if len(sig.parameters) != 1:
-        msg = "Function must accept exactly one argument! (even if it does nothing)\n"
-        msg += "Email jake@burla.dev if this pisses you off and we will fix it! :)"
-        raise ValueError(msg)
+    if len(ready_nodes) == 0:
+        raise Exception("Found zero nodes with state `READY`, have you started the Cluster?")
 
-    payload = {
-        "n_inputs": n_inputs,
-        "func_cpu": func_cpu,
-        "func_ram": func_ram,
-        "max_parallelism": max_parallelism,
-        "python_version": f"3.{sys.version_info.minor}",
-        "burla_version": __version__,
-    }
-    url = f"{get_host()}/v1/jobs/"
-    files = {"function_pkl": cloudpickle.dumps(function_)}
-    data = dict(request_json=json.dumps(payload))
-
-    response = requests.post(url, files=files, data=data, headers=auth_headers)
-    response_is_json = response.headers.get("Content-Type") == "application/json"
-
-    if response.status_code == 401:
-        stop_event.set()
-        raise AuthException()
-    elif response.status_code != 200 and response_is_json and response.json().get("error_type"):
-        stop_event.set()
-        raise MainServiceError(response)
-
-    response.raise_for_status()
-    response_json = response.json()
-    job_id = response_json["job_id"]
-    nodes = response_json["nodes"]
-
-    if not nodes:
-        raise Exception("Job refused by all available Nodes.")
-
-    # When running the cluster locally the node service hostname is a container name.
-    # This hostname only works from inside the docker network, not from the host machine.
-    # If we detect this, swap to localhost.
-    for node in nodes:
-        if node and node["host"].startswith("http://node_"):
+    # When running locally the node service hostname is it's container name. This only works from
+    # inside the docker network, not from the host machine (here). If detected, swap to localhost.
+    for node in ready_nodes:
+        if node["host"].startswith("http://node_"):
             node["host"] = f"http://localhost:{node['host'].split(':')[-1]}"
 
-    return job_id, nodes
+    planned_future_job_parallelism = 0
+    nodes_to_assign = []
+    for node in ready_nodes:
+        parallelism_deficit = max_parallelism - planned_future_job_parallelism
+        max_node_parallelism = parallelism_capacity(node["machine_type"], func_cpu, func_ram)
+
+        if max_node_parallelism > 0 and parallelism_deficit > 0:
+            node_target_parallelism = min(parallelism_deficit, max_node_parallelism)
+            node["target_parallelism"] = node_target_parallelism
+            planned_future_job_parallelism += node_target_parallelism
+            nodes_to_assign.append(node)
+
+    if len(nodes_to_assign) == 0:
+        raise Exception("No compatible nodes available.")
+    log_msg_stdout.write(f"Assigning {len(nodes_to_assign)} nodes to job.")
+
+    job_id = str(uuid4())
+    job_ref = db.collection("jobs").document(job_id)
+    job_ref.set(
+        {
+            "n_inputs": n_inputs,
+            "func_cpu": func_cpu,
+            "func_ram": func_ram,
+            "burla_client_version": __version__,
+            "user_python_version": f"3.{sys.version_info.minor}",
+            "target_parallelism": max_parallelism,
+            "planned_future_job_parallelism": planned_future_job_parallelism,
+            "user": "TEMP-TEST",
+            "started_at": time(),
+        }
+    )
+
+    async def assign_node(node: dict, session: aiohttp.ClientSession):
+        data = aiohttp.FormData()
+        data.add_field("request_json", json.dumps({"parallelism": node["target_parallelism"]}))
+        data.add_field("function_pkl", cloudpickle.dumps(function_))
+        url = f"{node['host']}/jobs/{job_id}"
+
+        async with session.post(url, data=data, timeout=3) as response:
+            try:
+                response.raise_for_status()
+                return node
+            except Exception as e:
+                node_name = node["instance_name"]
+                log_msg_stdout.write(f"Failed to assign {node_name}! ignoring error: {e}")
+                return None
+
+    async def assign_all_nodes():
+        async with aiohttp.ClientSession() as session:
+            tasks = [assign_node(node, session) for node in nodes_to_assign]
+            results = await asyncio.gather(*tasks, return_exceptions=False)
+            return [node for node in results if node]
+
+    nodes = asyncio.run(assign_all_nodes())
+    if not nodes:
+        raise Exception("Job refused by all available Nodes!")
+    else:
+        return job_id, nodes
 
 
-def _execute_job(
+def _watch_job(
     job_id: str,
     nodes: list,
     input_batches: list[list],
@@ -123,8 +144,8 @@ def _execute_job(
 
     # In separate thread start uploading inputs:
     args = (job_id, nodes, input_batches, stop_event, log_msg_stdout)
-    input_uploader_thread = Thread(target=upload_inputs, args=args, daemon=True)
-    input_uploader_thread.start()
+    input_thread = ThreadWithExc(target=upload_inputs, args=args, daemon=True)
+    input_thread.start()
 
     # Start printing logs generated by this job from a separate thread.
     args = (job_doc_ref, stop_event, log_msg_stdout)
@@ -135,28 +156,27 @@ def _execute_job(
     # from a separate thread.
     result_queue = Queue()
     args = (job_doc_ref, stop_event, result_queue)
-    result_thread = Thread(target=enqueue_results_from_db, args=args, daemon=True)
+    result_thread = ThreadWithExc(target=enqueue_results_from_db, args=args, daemon=True)
     result_thread.start()
 
     # Start sending healthchecks from a separate thread
     args = (job_id, stop_event, nodes, log_msg_stdout)
-    healthcheck_thread = Thread(target=send_healthchecks_from_thread, args=args, daemon=True)
+    healthcheck_thread = ThreadWithExc(target=send_job_healthchecks, args=args, daemon=True)
     healthcheck_thread.start()
 
-    msg = f"Running {n_inputs} inputs through `{function_name}` (0/{n_inputs} completed)"
-    spinner.text = msg
+    if spinner:
+        msg = f"Running {n_inputs} inputs through `{function_name}` (0/{n_inputs} completed)"
+        spinner.text = msg
 
     n_results_received = 0
     while n_results_received < n_inputs:
-        sleep(0.05)
+        for thread in [healthcheck_thread, input_thread, result_thread]:
+            if thread.traceback_str:
+                name = thread._target.__name__
+                raise Exception(f"Error in background thread `{name}`: {thread.traceback_str}")
 
         while not result_queue.empty():
             input_index, is_error, result_pkl = result_queue.get()
-
-            if not healthcheck_thread.is_alive():
-                stop_event.set()
-                raise UnknownClusterError()
-
             if is_error:
                 exc_info = pickle.loads(result_pkl)
                 traceback = Traceback.from_dict(exc_info["traceback_dict"]).as_traceback()
@@ -164,21 +184,20 @@ def _execute_job(
             else:
                 result = cloudpickle.loads(result_pkl)
                 n_results_received += len(result)
-
-                msg = f"Running {n_inputs} inputs through `{function_name}` "
-                msg += f"({n_results_received}/{n_inputs} completed)"
-                spinner.text = msg
+                if spinner:
+                    msg = f"Running {n_inputs} inputs through `{function_name}` "
+                    msg += f"({n_results_received}/{n_inputs} completed)"
+                    spinner.text = msg
                 yield result
+        sleep(0.05)
 
-    async def send_reboot_requests():
+    async def _send_reboot_requests():
         async with aiohttp.ClientSession() as session:
-            tasks = []
-            for node in nodes:
-                url = f"{node['host']}/background_reboot"
-                tasks.append(session.post(url, headers=auth_headers))
+            urls = [f"{node['host']}/background_reboot" for node in nodes]
+            tasks = [session.post(url, headers=auth_headers) for url in urls]
             await asyncio.gather(*tasks, return_exceptions=True)
 
-    asyncio.run(send_reboot_requests())
+    asyncio.run(_send_reboot_requests())
     stop_event.set()
 
 
@@ -232,43 +251,19 @@ def remote_parallel_map(
         For more info see our overview: https://docs.burla.dev/overview
         or API-Reference: https://docs.burla.dev/api-reference
     """
+    sig = inspect.signature(function_)
+    if len(sig.parameters) != 1:
+        msg = "Function must accept exactly one argument! (even if it does nothing)\n"
+        msg += "Email jake@burla.dev if this is really annoying and we will fix it! :)"
+        raise ValueError(msg)
+
     max_parallelism = max_parallelism if max_parallelism else len(inputs)
     max_parallelism = max_parallelism if max_parallelism < MAX_PARALLELISM else MAX_PARALLELISM
-    kwargs = dict(
-        function_=function_,
-        inputs=inputs,
-        func_cpu=func_cpu,
-        func_ram=func_ram,
-        spinner=spinner,
-        generator=generator,
-        max_parallelism=max_parallelism,
-        api_key=api_key,
-    )
-    if spinner:
-        with yaspin() as spinner:
-            kwargs["spinner"] = spinner
-            spinner.text = f"Preparing to run {len(inputs)} inputs through `{function_.__name__}`"
-            return _rpm(**kwargs)
-    else:
-        return _rpm(**kwargs)
-
-
-# temp: something to wrap with the spinner, I seem to be forced to use with statements
-def _rpm(
-    function_: Callable,
-    inputs: list,
-    func_cpu: int = 1,
-    func_ram: int = 4,
-    spinner: Union[bool, Spinner] = True,
-    generator: bool = False,
-    max_parallelism: Optional[int] = None,
-    api_key: Optional[str] = None,
-):
-    auth_headers = get_auth_headers(api_key)
+    auth_headers = get_auth_headers(api_key) if api_key else get_auth_headers()
     db = get_db(auth_headers)
 
-    # wrap user function with a for loop because sending too many inputs causes firestore issues
-    # this is a temporary fix:
+    # TEMPORARY FIX --------------------------------------------------------------------------------
+    # wrap user function with a for loop because sending too many results causes firestore issues
     max_inputs = min(len(inputs), max_parallelism)
     batch_size = len(inputs) // max_inputs
     remainder = len(inputs) % max_inputs
@@ -282,10 +277,22 @@ def _rpm(
     def function_wrapped(input_batch):
         return [function_(input_) for input_ in input_batch]
 
-    #
-    #
+    # sanity check
+    sum_of_input_batches = sum([len(b) for b in input_batches])
+    assert sum_of_input_batches == len(inputs)
+    print(f"\nSum of batches:{sum_of_input_batches} == n_inputs:{len(inputs)}")
+    # ----------------------------------------------------------------------------------------------
 
     stop_event = Event()
+    # below functions setup handlers to set `stop_event` (or stop spinner) on os-signals
+    # (like when user hits ctrl+c), putting this stuff in a try-finally dosen't always work.
+    if spinner:
+        spinner = prep_graceful_shutdown_with_spinner(stop_event)
+        spinner.start()
+        spinner.text = f"Preparing to run {len(inputs)} inputs through `{function_.__name__}`"
+    else:
+        prep_graceful_shutdown(stop_event)
+
     try:
         job_id, nodes = _start_job(
             function_=function_wrapped,
@@ -293,10 +300,10 @@ def _rpm(
             func_cpu=func_cpu,
             func_ram=func_ram,
             max_parallelism=max_parallelism,
-            stop_event=stop_event,
-            auth_headers=auth_headers,
+            db=db,
+            spinner=spinner,
         )
-        output_batch_generator = _execute_job(
+        output_batch_generator = _watch_job(
             job_id=job_id,
             nodes=nodes,
             input_batches=input_batches,
@@ -309,12 +316,12 @@ def _rpm(
         )
 
         def _output_generator():
-            # yield from output_batch_generator
+            # yield from output_batch_generator  <- part of temp change from above, don't remove
             for output_batch in output_batch_generator:
                 yield from output_batch
 
         if not generator:
-            results = [item for item in _output_generator()]
+            results = list(_output_generator())
 
         if spinner:
             msg = f"Done! Ran {len(inputs)} inputs through `{function_.__name__}` "
@@ -322,10 +329,13 @@ def _rpm(
             spinner.text = msg
             spinner.ok("✔")
 
-        if generator:
-            return _output_generator()
-        else:
-            return results
+        return _output_generator() if generator else results
 
-    finally:
+    except Exception:
+        start = time()
         stop_event.set()
+        if spinner:
+            spinner.stop()
+
+        print("\n\n\n\nHERE!")
+        raise

@@ -1,36 +1,35 @@
 import os
-import io
-import logging
-import requests
-import asyncio
-import aiohttp
-import pickle
-from time import time
-from queue import Queue
-from threading import Event
+import sys
+import signal
+import traceback
+from threading import Thread, Event
 
-import cloudpickle
 import google.auth
 from google.cloud import firestore
-from google.cloud.firestore import DocumentReference
 from google.auth.exceptions import DefaultCredentialsError
+from yaspin import yaspin
 
-from burla._auth import AuthException, get_gcs_credentials
-from burla._install import main_service_url
-
-# throws some uncatchable, unimportant, warnings
-logging.getLogger("google.api_core.bidi").setLevel(logging.ERROR)
+from burla._auth import get_gcs_credentials
 
 
-JOB_HEALTHCHECK_FREQUENCY_SEC = 3
+N_FOUR_STANDARD_CPU_TO_RAM = {2: 8, 4: 16, 8: 32, 16: 64, 32: 128, 48: 192, 64: 256, 80: 320}
+POSIX_SIGNALS_TO_HANDLE = ["SIGINT", "SIGTERM", "SIGHUP", "SIGQUIT"]
+NT_SIGNALS_TO_HANDLE = ["SIGINT", "SIGBREAK"]
+_signal_names_to_handle = POSIX_SIGNALS_TO_HANDLE if os.name == "posix" else NT_SIGNALS_TO_HANDLE
+SIGNALS_TO_HANDLE = [getattr(signal, s) for s in _signal_names_to_handle]
 
 
 class GoogleLoginError(Exception):
     pass
 
 
-class InputTooBig(Exception):
-    pass
+def parallelism_capacity(machine_type: str, func_cpu: int, func_ram: int):
+    # Max number of workers this machine_type can run a job with the given resource requirements?
+    if machine_type.startswith("n4-standard") and machine_type.split("-")[-1].isdigit():
+        vm_cpu = int(machine_type.split("-")[-1])
+        vm_ram = N_FOUR_STANDARD_CPU_TO_RAM[vm_cpu]
+        return min(vm_cpu // func_cpu, vm_ram // func_ram)
+    raise ValueError(f"machine_type must be n4-standard-X")
 
 
 def get_host():
@@ -75,166 +74,35 @@ def get_db(auth_headers: dict):
             ) from e
 
 
-def send_healthchecks_from_thread(
-    job_id: str, stop_event: Event, nodes: list[dict], log_msg_stdout: io.TextIOWrapper
-):
-    async def _healthcheck_single_node(session, node):
-        async with session.get(f"{node['host']}/jobs/{job_id}") as response:
-            return node, response.status
-
-    async def _healthcheck_all_nodes(nodes):
-        async with aiohttp.ClientSession() as session:
-            tasks = [_healthcheck_single_node(session, node) for node in nodes]
-            return await asyncio.gather(*tasks, return_exceptions=True)
-
-    while not stop_event.is_set():
-        stop_event.wait(JOB_HEALTHCHECK_FREQUENCY_SEC)
-        start = time()
-
-        log_msg_stdout.write("Sending healthchecks to all nodes...")
-        results = asyncio.run(_healthcheck_all_nodes(nodes))
-        log_msg_stdout.write(f"Received all healthcheck responses ({time() - start:.2f}s)")
-
-        # Check if any node returned a non-200 status
-        failed_nodes = [f"{node['host']}: {status}" for node, status in results if status != 200]
-        if failed_nodes:
-            log_msg_stdout.write(f"Healthcheck failed for nodes: {', '.join(failed_nodes)}")
-            return  # error raised in main thread if this thread ends before job is done
-
-
-def print_logs_from_db(
-    job_doc_ref: DocumentReference, stop_event: Event, log_msg_stdout: io.TextIOWrapper
-):
-
-    def on_snapshot(collection_snapshot, changes, read_time):
-        for change in changes:
-            if change.type.name == "ADDED":
-                log_msg_stdout.write(change.document.to_dict()["msg"])
-
-    collection_ref = job_doc_ref.collection("logs")
-    query_watch = collection_ref.on_snapshot(on_snapshot)
-
-    while not stop_event.is_set():
-        stop_event.wait(0.5)  # this does not block the processing of new documents
-    query_watch.unsubscribe()
-
-
-def enqueue_results_from_db(job_doc_ref: DocumentReference, stop_event: Event, queue: Queue):
-    def on_snapshot(collection_snapshot, changes, read_time):
-        for change in changes:
-            if change.type.name == "ADDED":
-                result = change.document.to_dict()
-                result_tuple = (change.document.id, result["is_error"], result["result_pkl"])
-                queue.put(result_tuple)
-
-    collection_ref = job_doc_ref.collection("results")
-    query_watch = collection_ref.on_snapshot(on_snapshot)
-
-    while not stop_event.is_set():
-        stop_event.wait(0.5)  # this does not block the processing of new documents
-    query_watch.unsubscribe()
-
-
-def upload_inputs(
-    job_id: str,
-    nodes: list[dict],
-    inputs: list,
-    stop_event: Event,
-    log_msg_stdout: io.TextIOWrapper,
-):
-
-    def _chunk_inputs_by_size(
-        inputs_pkl_with_idx: list,
-        min_chunk_size: int = 1_048_576 * 500,  # 500MB
-        max_chunk_size: int = 1_048_576 * 1000,  # 1GB
-    ):
-        chunks = []
-        current_chunk = []
-        current_chunk_size = 0
-
-        for input_pkl_with_idx in inputs_pkl_with_idx:
-
-            input_size = len(input_pkl_with_idx[1])
-            if input_size > max_chunk_size:
-                # This exists to prevent theoretical (never demonstrated) memory issues
-                raise InputTooBig(f"Input of size {input_size} exceeds maximum size of 1GB.")
-
-            next_chunk_too_small = current_chunk_size + input_size < min_chunk_size
-            next_chunk_too_big = current_chunk_size + input_size > max_chunk_size
-            next_chunk_size_is_acceptable = not next_chunk_too_small and not next_chunk_too_big
-
-            if next_chunk_too_small:
-                # add input to the current chunk
-                current_chunk.append(input_pkl_with_idx)
-                current_chunk_size += input_size
-            elif next_chunk_size_is_acceptable:
-                # add input to the current chunk AND yield the chunk
-                current_chunk.append(input_pkl_with_idx)
-                chunks.append(current_chunk)
-                current_chunk = []
-                current_chunk_size = 0
-            elif next_chunk_too_big:
-                # yield the chunk, add current input to next chunk
-                chunks.append(current_chunk)
-                current_chunk = [input_pkl_with_idx]
-                current_chunk_size = input_size
-
-        # Add the last chunk if it's not empty
-        if current_chunk:
-            chunks.append(current_chunk)
-
-        if chunks:
-            return chunks
-        else:
-            return [current_chunk]
-
-    async def upload_input_chunk(session, url, inputs_chunk):
-        data = aiohttp.FormData()
-        data.add_field("inputs_pkl_with_idx", pickle.dumps(inputs_chunk))
-        async with session.post(f"{url}/jobs/{job_id}/inputs", data=data) as response:
-            response.raise_for_status()
-
-    async def upload_all():
-        async with aiohttp.ClientSession() as session:
-            # assume every node has the same target parallelism (number of workers/config)
-            # TODO: `nodes` contains the parallelism per node, which could be different!
-            # this algorithim should send less stuff to nodes with less parallelism / etc.
-
-            # attach original index to each input so we can tell user which input failed
-            inputs_pkl_with_idx = [(i, cloudpickle.dumps(input)) for i, input in enumerate(inputs)]
-
-            # Divide inputs into one chunk for each node.
-            # Within chunks assigned to a node, chunk further so we don't send too much data at once
-            size = len(inputs_pkl_with_idx) // len(nodes)
-            extra = len(inputs_pkl_with_idx) % len(nodes)
-            start = 0
-            for i, node in enumerate(nodes):
-                end = start + size + (1 if i < extra else 0)
-
-                inputs_for_current_node = _chunk_inputs_by_size(inputs_pkl_with_idx[start:end])
-
-                node["input_chunks"] = inputs_for_current_node
-                start = end
-
-            for node in nodes:
-                chunk_sizes = [len(chunk) for chunk in node["input_chunks"]]
-                n_chunks = len(node["input_chunks"])
-                msg = f"Uploading {n_chunks} chunks with {chunk_sizes} inputs to {node['host']}"
-                log_msg_stdout.write(msg)
-
-            # cuncurrently, for each node, upload the n'th chunk of inputs
-            nodes_with_input_chunks = [n for n in nodes if n["input_chunks"]]
-
-            while nodes_with_input_chunks:
-                tasks = []
-                for node in nodes_with_input_chunks:
-                    inputs_chunk = node["input_chunks"].pop(0)
-                    tasks.append(upload_input_chunk(session, node["host"], inputs_chunk))
-                await asyncio.gather(*tasks)  # <- wait for the n'th chunk of every node to upload.
-                nodes_with_input_chunks = [n for n in nodes if n["input_chunks"]]
-
-    try:
-        asyncio.run(upload_all())
-    except Exception as e:
+def prep_graceful_shutdown_with_spinner(stop_event: Event):
+    def _signal_handler(signum, frame, spinner):
+        spinner.stop()
         stop_event.set()
-        raise Exception(f"Failed to upload inputs: {str(e)}") from e
+        sys.exit(0)
+
+    return yaspin(sigmap={sig: _signal_handler for sig in SIGNALS_TO_HANDLE})
+
+
+def prep_graceful_shutdown(stop_event: Event):
+    def _signal_handler(signum, frame):
+        stop_event.set()
+        sys.exit(0)
+
+    for sig in SIGNALS_TO_HANDLE:
+        signal.signal(sig, _signal_handler)
+
+
+class ThreadWithExc(Thread):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.traceback_str = None
+
+    def run(self):
+        try:
+            if self._target:
+                self._target(*self._args, **self._kwargs)
+        except Exception:
+            exc_type, exc_value, exc_traceback = sys.exc_info()
+            traceback_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
+            traceback_str = "".join(traceback_details)
+            self.traceback_str = traceback_str

@@ -336,6 +336,4 @@ def remote_parallel_map(
         stop_event.set()
         if spinner:
             spinner.stop()
-
-        print("\n\n\n\nHERE!")
         raise

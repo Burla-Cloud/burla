@@ -73,18 +73,27 @@ async def upload_inputs(
     batch_size = len(inputs_pkl_with_idx) // len(SELF["workers"])
     extra = len(inputs_pkl_with_idx) % len(SELF["workers"])
     start = 0
-    for i, worker in enumerate(SELF["workers"]):
+    for i in range(len(SELF["workers"])):
         end = start + batch_size + (1 if i < extra else 0)
         batch = inputs_pkl_with_idx[start:end]
         if batch:
             input_batches.append(batch)
         start = end
 
+    assert sum(len(batch) for batch in input_batches) == len(inputs_pkl_with_idx)
+
     # concurrently send to each worker
     async with aiohttp.ClientSession() as session:
         tasks = []
         for batch in input_batches:
-            current_worker_index = SELF["index_of_last_worker_given_inputs"] + 1
+
+            if SELF["index_of_last_worker_given_inputs"] == len(SELF["workers"]) - 1:
+                SELF["index_of_last_worker_given_inputs"] = 0
+                current_worker_index = 0
+            else:
+                SELF["index_of_last_worker_given_inputs"] += 1
+                current_worker_index = SELF["index_of_last_worker_given_inputs"]
+
             current_worker = SELF["workers"][current_worker_index]
             msg = f"Sending {len(batch)} inputs to worker #{current_worker_index}:"
             logger.log(f"{msg} {current_worker.container_name}")
@@ -92,7 +101,6 @@ async def upload_inputs(
             data = aiohttp.FormData()
             data.add_field("inputs_pkl_with_idx", pickle.dumps(batch))
             tasks.append(session.post(f"{current_worker.url}/jobs/{job_id}/inputs", data=data))
-            SELF["index_of_last_worker_given_inputs"] += 1
 
         await asyncio.gather(*tasks)
 

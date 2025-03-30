@@ -102,7 +102,7 @@ async def upload_inputs(
             data.add_field("inputs_pkl_with_idx", pickle.dumps(batch))
             tasks.append(session.post(f"{current_worker.url}/jobs/{job_id}/inputs", data=data))
 
-        await asyncio.gather(*tasks)
+        await asyncio.gather(*tasks, return_exceptions=True)
 
     SELF["last_healthcheck_timestamp"] = time()
 

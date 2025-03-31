@@ -76,7 +76,7 @@ class Worker:
                         "GOOGLE_CLOUD_PROJECT": PROJECT_ID,
                         "IN_LOCAL_DEV_MODE": IN_LOCAL_DEV_MODE,
                         "WORKER_NAME": container_name,
-                        "SEND_LOGS_TO_GCL": "True" if send_logs_to_gcl else "False",
+                        "SEND_LOGS_TO_GCL": send_logs_to_gcl,
                     },
                     detach=True,
                 )

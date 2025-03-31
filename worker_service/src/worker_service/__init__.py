@@ -35,8 +35,7 @@ SELF = {
 
 name = os.environ.get("WORKER_NAME", "unknown_worker")
 LOGGER = logging.Client().logger("worker_service", labels={"worker_name": name})
-
-if SEND_LOGS_TO_GCL:
+if SEND_LOGS_TO_GCL and (not IN_LOCAL_DEV_MODE):
     LOGGER.log(f"Worker {name} has booted and will send all logs to GCL.")
 
 from worker_service.endpoints import BP as endpoints_bp
@@ -63,7 +62,9 @@ def log_exception(exception):
     if not IN_LOCAL_DEV_MODE:
         for log in SELF["logs"]:
             LOGGER.log(log)
+        LOGGER.log("HERE1")
         LOGGER.log_struct(dict(severity="ERROR", exception=traceback_str, request=request_json))
+    LOGGER.log("HERE2")
 
     # Report errors back to Burla's cloud.
     try:

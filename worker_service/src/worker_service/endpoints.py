@@ -69,6 +69,8 @@ def start_job(job_id: str):
         SELF["logs"].append(msg + f"assigned to job {SELF['job_id']}! Returning 409.")
         return "STARTED", 409
 
+    print(1 / 0)
+
     SELF["logs"].append(f"Assigned to job {job_id}.")
     function_pkl = request.files.get("function_pkl")
     function_pkl = function_pkl.read()

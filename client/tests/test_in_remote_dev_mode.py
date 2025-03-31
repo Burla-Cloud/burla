@@ -32,11 +32,9 @@ def run_simple_test_job(n_inputs=5):
 
     def simple_test_function(test_input):
         # print(test_input)
-        if test_input == 0:
-            print("STARTING input 0")
+        print(f"STARTING input #{test_input}")
         sleep(10)
-        if test_input == 0:
-            print("FINISHED input 0")
+        print(f"FINISHED input #{test_input}")
         return test_input * 2
 
     results = remote_parallel_map(simple_test_function, test_inputs)

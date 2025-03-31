@@ -96,8 +96,14 @@ def execute_job(job_id: str, function_pkl: bytes):
                     SELF["logs"].append("here4")
                     input_ = cloudpickle.loads(input_pkl)
                     SELF["logs"].append("here5")
+
+                    SELF["logs"].append(f"here!! #{input_}")
+
                     return_value = user_defined_function(input_)
-                    SELF["logs"].append("here6")
+
+                    SELF["logs"].append(f"DONE!! #{return_value}")
+                    SELF["logs"].append("here7")
+
                     result_pkl = cloudpickle.dumps(return_value)
                     SELF["logs"].append(f"UDF succeded on input #{input_index}.")
                 except Exception:

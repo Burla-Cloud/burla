@@ -89,8 +89,7 @@ def execute_job(job_id: str, function_pkl: bytes):
                     SELF["logs"].append(f"UDF raised an exception on input #{input_index}.")
                     exec_info = sys.exc_info()
 
-            if input_ == 0:
-                raise Exception("Test exception")
+            raise Exception("Test exception")
 
             # serialize result:
             result_pkl = (
@@ -116,6 +115,7 @@ def execute_job(job_id: str, function_pkl: bytes):
             SELF["logs"].append(f"Successfully wrote result for input #{input_index}.")
 
     except Exception as e:
+        LOGGER.log(str(e))
         from google.cloud import logging
         import traceback
 
@@ -123,6 +123,6 @@ def execute_job(job_id: str, function_pkl: bytes):
         traceback_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
         traceback_str = "".join(traceback_details)
 
-        # client = logging.Client()
-        # logger = client.logger("worker_service")
-        LOGGER.log_struct({"severity": "ERROR", "traceback": traceback_str})
+        client = logging.Client()
+        logger = client.logger("worker_service")
+        logger.log_struct({"severity": "ERROR", "traceback": traceback_str})

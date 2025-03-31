@@ -55,54 +55,74 @@ def _serialize_error(exc_info):
 
 
 def execute_job(job_id: str, function_pkl: bytes):
-    SELF["logs"].append(f"Starting job {job_id} with function of size {len(function_pkl)} bytes.")
+    try:
+        SELF["logs"].append(
+            f"Starting job {job_id} with function of size {len(function_pkl)} bytes."
+        )
 
-    CREDENTIALS.refresh(Request())
-    db_headers = {
-        "Authorization": f"Bearer {CREDENTIALS.token}",
-        "Content-Type": "application/json",
-    }
-
-    user_defined_function = None
-    while True:
-
-        try:
-            input_index, input_pkl = SELF["inputs_queue"].get()
-            SELF["logs"].append(f"Popped input #{input_index} from queue.")
-        except Empty:
-            SELF["logs"].append("No inputs in queue. Sleeping for 2 seconds.")
-            sleep(2)
-
-        # run UDF:
-        exec_info = None
-        with _FirestoreLogger(job_id, db_headers):
-            try:
-                if user_defined_function is None:
-                    user_defined_function = cloudpickle.loads(function_pkl)
-                input_ = cloudpickle.loads(input_pkl)
-                return_value = user_defined_function(input_)
-                SELF["logs"].append(f"UDF succeded on input #{input_index}.")
-            except Exception:
-                SELF["logs"].append(f"UDF raised an exception on input #{input_index}.")
-                exec_info = sys.exc_info()
-
-        # serialize result:
-        result_pkl = _serialize_error(exec_info) if exec_info else cloudpickle.dumps(return_value)
-        result_too_big = len(result_pkl) > 1_048_376
-        if result_too_big:
-            noun = "Error" if exec_info else "Return value"
-            msg = f"{noun} from input at index {input_index} is greater than 1MB in size."
-            raise Exception(f"{msg}\nUnable to store result.")
-
-        # write result:
-        result_doc_url = f"{DB_BASE_URL}/jobs/{job_id}/results/{input_index}"
-        encoded_result_pkl = base64.b64encode(result_pkl).decode("utf-8")
-        data = {
-            "fields": {
-                "is_error": {"booleanValue": bool(exec_info)},
-                "result_pkl": {"bytesValue": encoded_result_pkl},
-            }
+        CREDENTIALS.refresh(Request())
+        db_headers = {
+            "Authorization": f"Bearer {CREDENTIALS.token}",
+            "Content-Type": "application/json",
         }
-        response = requests.patch(result_doc_url, headers=db_headers, json=data)
-        response.raise_for_status()
-        SELF["logs"].append(f"Successfully wrote result for input #{input_index}.")
+
+        user_defined_function = None
+        while True:
+
+            try:
+                input_index, input_pkl = SELF["inputs_queue"].get()
+                SELF["logs"].append(f"Popped input #{input_index} from queue.")
+            except Empty:
+                SELF["logs"].append("No inputs in queue. Sleeping for 2 seconds.")
+                sleep(2)
+
+            # run UDF:
+            exec_info = None
+            with _FirestoreLogger(job_id, db_headers):
+                try:
+                    if user_defined_function is None:
+                        user_defined_function = cloudpickle.loads(function_pkl)
+                    input_ = cloudpickle.loads(input_pkl)
+                    return_value = user_defined_function(input_)
+                    SELF["logs"].append(f"UDF succeded on input #{input_index}.")
+                except Exception:
+                    SELF["logs"].append(f"UDF raised an exception on input #{input_index}.")
+                    exec_info = sys.exc_info()
+
+            if input_ == 0:
+                raise Exception("Test exception")
+
+            # serialize result:
+            result_pkl = (
+                _serialize_error(exec_info) if exec_info else cloudpickle.dumps(return_value)
+            )
+            result_too_big = len(result_pkl) > 1_048_376
+            if result_too_big:
+                noun = "Error" if exec_info else "Return value"
+                msg = f"{noun} from input at index {input_index} is greater than 1MB in size."
+                raise Exception(f"{msg}\nUnable to store result.")
+
+            # write result:
+            result_doc_url = f"{DB_BASE_URL}/jobs/{job_id}/results/{input_index}"
+            encoded_result_pkl = base64.b64encode(result_pkl).decode("utf-8")
+            data = {
+                "fields": {
+                    "is_error": {"booleanValue": bool(exec_info)},
+                    "result_pkl": {"bytesValue": encoded_result_pkl},
+                }
+            }
+            response = requests.patch(result_doc_url, headers=db_headers, json=data)
+            response.raise_for_status()
+            SELF["logs"].append(f"Successfully wrote result for input #{input_index}.")
+
+    except Exception as e:
+        from google.cloud import logging
+        import traceback
+
+        exc_type, exc_value, exc_traceback = sys.exc_info()
+        traceback_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
+        traceback_str = "".join(traceback_details)
+
+        client = logging.Client()
+        logger = client.logger("worker_service")
+        logger.log_struct({"severity": "ERROR", "traceback": traceback_str})

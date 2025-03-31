@@ -36,6 +36,9 @@ SELF = {
 name = os.environ.get("WORKER_NAME", "unknown_worker")
 LOGGER = logging.Client().logger("worker_service", labels={"worker_name": name})
 
+if SEND_LOGS_TO_GCL:
+    LOGGER.log(f"Worker {name} has booted and will send all logs to GCL.")
+
 from worker_service.endpoints import BP as endpoints_bp
 
 app = Flask(__name__)

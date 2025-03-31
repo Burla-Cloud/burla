@@ -320,12 +320,15 @@ def reboot_containers(
         # max num containers is 1024 due to some network/port related limit
         threads = []
         for container_spec in SELF["current_container_config"]:
-            for _ in range(INSTANCE_N_CPUS):
+            for i in range(INSTANCE_N_CPUS):
+                # have only one worker send logs to gcl, too many will break gcl
+                send_logs_to_gcl = i == 0
                 args = (
                     container_spec.python_version,
                     container_spec.python_executable,
                     container_spec.image,
                     docker_client,
+                    send_logs_to_gcl,
                 )
                 thread = Thread(target=create_worker, args=args)
                 threads.append(thread)

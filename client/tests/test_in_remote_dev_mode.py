@@ -5,7 +5,7 @@ The tests here assume the cluster is running in "remote-dev-mode".
 import os
 import sys
 from io import StringIO
-from time import time
+from time import time, sleep
 
 import docker
 
@@ -32,6 +32,11 @@ def run_simple_test_job(n_inputs=5):
 
     def simple_test_function(test_input):
         # print(test_input)
+        if test_input == 123:
+            print("STARTING 123")
+        sleep(10)
+        if test_input == 123:
+            print("FINISHED 123")
         return test_input * 2
 
     results = remote_parallel_map(simple_test_function, test_inputs)
@@ -51,4 +56,4 @@ def run_simple_test_job(n_inputs=5):
 def test_base():
     assert in_remote_dev_mode()
 
-    run_simple_test_job(n_inputs=10_000_000)
+    run_simple_test_job(n_inputs=100_000)

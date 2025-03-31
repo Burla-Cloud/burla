@@ -4,8 +4,6 @@ import traceback
 import logging as python_logging
 from time import time
 
-# from worker_service import LOGGER
-
 
 class VerboseList(list):
     # simply printing instead of using the python logger causes SEGFAULT errors
@@ -26,7 +24,6 @@ class VerboseList(list):
 
         time_since_start = time() - self.start_time
         self.logger.info(f"T+{time_since_start:.2f}s: {item}")
-        # LOGGER.log(f"T+{time_since_start:.2f}s: {item}")
         super().append(item)
 
 

@@ -15,7 +15,7 @@ from google.cloud.firestore import DocumentReference
 logging.getLogger("google.api_core.bidi").setLevel(logging.ERROR)
 
 
-JOB_HEALTHCHECK_FREQUENCY_SEC = 3
+JOB_HEALTHCHECK_FREQUENCY_SEC = 6
 
 
 class InputTooBig(Exception):
@@ -48,7 +48,8 @@ def send_job_healthchecks(
             failed_nodes = [f"{n['host']}: {status}" for n, status in results if status != 200]
             if failed_nodes:
                 log_msg_stdout.write(f"Healthcheck failed for nodes: {', '.join(failed_nodes)}")
-                return  # error raised in main thread if this thread ends before job is done
+                # TODO: if a node fails, check what results it returned and send remainder of inputs to other nodes
+                return
     except Exception:
         stop_event.set()
         raise

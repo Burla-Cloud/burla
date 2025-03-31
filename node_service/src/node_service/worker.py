@@ -25,6 +25,7 @@ class Worker:
         python_executable: str,
         image: str,
         docker_client: docker.APIClient,
+        send_logs_to_gcl: bool = False,
     ):
         self.container = None
         attempt = 0
@@ -75,6 +76,7 @@ class Worker:
                         "GOOGLE_CLOUD_PROJECT": PROJECT_ID,
                         "IN_LOCAL_DEV_MODE": IN_LOCAL_DEV_MODE,
                         "WORKER_NAME": container_name,
+                        "SEND_LOGS_TO_GCL": send_logs_to_gcl,
                     },
                     detach=True,
                 )

@@ -4,7 +4,7 @@ from time import time
 
 from flask import jsonify, Blueprint, request
 
-from worker_service import SELF, LOGGER, IN_LOCAL_DEV_MODE
+from worker_service import SELF, LOGGER, IN_LOCAL_DEV_MODE, SEND_LOGS_TO_GCL
 from worker_service.udf_executor import execute_job
 from worker_service.helpers import ThreadWithExc
 
@@ -20,6 +20,10 @@ def get_status():
 
     READY = not SELF["STARTED"]
     FAILED = traceback_str or thread_died
+
+    if SEND_LOGS_TO_GCL:
+        while not len(SELF["logs"]) == 0:
+            LOGGER.log(SELF["logs"].pop(0))
 
     if FAILED and (not ERROR_ALREADY_LOGGED) and traceback_str:
         # Log all the logs that led up to this error:

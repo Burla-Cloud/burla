@@ -85,6 +85,8 @@ def _start_job(
     log_msg_stdout.write(f"Assigning {len(nodes_to_assign)} nodes to job.")
 
     job_id = str(uuid4())
+    log_msg_stdout.write(f"Job ID: {job_id}")
+
     job_ref = db.collection("jobs").document(job_id)
     job_ref.set(
         {
@@ -106,7 +108,7 @@ def _start_job(
         data.add_field("function_pkl", cloudpickle.dumps(function_))
         url = f"{node['host']}/jobs/{job_id}"
 
-        async with session.post(url, data=data, timeout=3) as response:
+        async with session.post(url, data=data, timeout=5) as response:
             try:
                 response.raise_for_status()
                 return node
@@ -118,7 +120,7 @@ def _start_job(
     async def assign_all_nodes():
         async with aiohttp.ClientSession() as session:
             tasks = [assign_node(node, session) for node in nodes_to_assign]
-            results = await asyncio.gather(*tasks, return_exceptions=False)
+            results = await asyncio.gather(*tasks, return_exceptions=True)
             return [node for node in results if node]
 
     nodes = asyncio.run(assign_all_nodes())

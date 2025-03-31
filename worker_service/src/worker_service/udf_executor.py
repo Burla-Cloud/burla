@@ -55,6 +55,8 @@ def _serialize_error(exc_info):
 
 
 def execute_job(job_id: str, function_pkl: bytes):
+    SELF["logs"].append(f"Starting job {job_id} with function of size {len(function_pkl)} bytes.")
+
     CREDENTIALS.refresh(Request())
     db_headers = {
         "Authorization": f"Bearer {CREDENTIALS.token}",

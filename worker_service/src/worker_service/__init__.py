@@ -12,6 +12,7 @@ from google.cloud import logging
 
 # Defined before importing helpers/endpoints to prevent cyclic imports
 IN_LOCAL_DEV_MODE = os.environ.get("IN_LOCAL_DEV_MODE") == "True"
+SEND_LOGS_TO_GCL = os.environ.get("SEND_LOGS_TO_GCL") == "True"
 
 CREDENTIALS, PROJECT_ID = google.auth.default()  # need `CREDENTIALS` so token can be refreshed
 BURLA_BACKEND_URL = "https://backend.burla.dev"

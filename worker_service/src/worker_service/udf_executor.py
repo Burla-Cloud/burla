@@ -89,6 +89,7 @@ def execute_job(job_id: str, function_pkl: bytes):
                     SELF["logs"].append(f"UDF raised an exception on input #{input_index}.")
                     exec_info = sys.exc_info()
 
+            LOGGER.log(f"HERE #{input_}")
             raise Exception("Test exception")
 
             # serialize result:
@@ -125,4 +126,4 @@ def execute_job(job_id: str, function_pkl: bytes):
 
         client = logging.Client()
         logger = client.logger("worker_service")
-        logger.log_struct({"severity": "ERROR", "traceback": traceback_str})
+        logger.log_struct({"severity": "ERROR", "exception": traceback_str})

@@ -23,6 +23,7 @@ from worker_service.helpers import VerboseList  # <- same as a list but prints s
 # there are so many logs that logging them all causes issues and slowness.
 # By adding them to a list we can write the logs out if an an error occurs,
 # or simply do nothing with them when there is no error.
+verbose_list = VerboseList(log_on_append=SEND_LOGS_TO_GCL, print_on_append=IN_LOCAL_DEV_MODE)
 SELF = {
     "STARTED": False,
     "DONE": False,
@@ -30,7 +31,7 @@ SELF = {
     "subjob_thread": None,
     "inputs_queue": Queue(),
     "started_at": None,
-    "logs": VerboseList() if IN_LOCAL_DEV_MODE else [],  # <- see `log_exception` for explaination
+    "logs": verbose_list,
 }
 
 name = os.environ.get("WORKER_NAME", "unknown_worker")

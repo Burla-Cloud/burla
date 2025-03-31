@@ -21,21 +21,21 @@ def get_status():
     READY = not SELF["STARTED"]
     FAILED = traceback_str or thread_died
 
-    if SEND_LOGS_TO_GCL and (not IN_LOCAL_DEV_MODE):
-        while not len(SELF["logs"]) == 0:
-            LOGGER.log(SELF["logs"].pop(0))
+    # if SEND_LOGS_TO_GCL and (not IN_LOCAL_DEV_MODE):
+    #     while not len(SELF["logs"]) == 0:
+    #         LOGGER.log(SELF["logs"].pop(0))
 
-    if FAILED and (not ERROR_ALREADY_LOGGED) and traceback_str:
-        # Log all the logs that led up to this error:
-        # We can't always log to GCL because so many workers are running at once it just breaks.
-        # -> We only save the logs when there is an error (and pray they dont all error at once).
-        if not IN_LOCAL_DEV_MODE:
-            for log in SELF["logs"]:
-                LOGGER.log(log)
-            LOGGER.log_struct({"severity": "ERROR", "exception": traceback_str})
+    # if FAILED and (not ERROR_ALREADY_LOGGED) and traceback_str:
+    #     # Log all the logs that led up to this error:
+    #     # We can't always log to GCL because so many workers are running at once it just breaks.
+    #     # -> We only save the logs when there is an error (and pray they dont all error at once).
+    #     if not IN_LOCAL_DEV_MODE:
+    #         for log in SELF["logs"]:
+    #             LOGGER.log(log)
+    #         LOGGER.log_struct({"severity": "ERROR", "exception": traceback_str})
 
-        print(traceback_str, file=sys.stderr)
-        ERROR_ALREADY_LOGGED = True
+    #     print(traceback_str, file=sys.stderr)
+    #     ERROR_ALREADY_LOGGED = True
 
     if READY:
         return jsonify({"status": "READY"})
@@ -68,8 +68,6 @@ def start_job(job_id: str):
         msg = f"ERROR: Received request to start job {job_id}, but this worker was previously "
         SELF["logs"].append(msg + f"assigned to job {SELF['job_id']}! Returning 409.")
         return "STARTED", 409
-
-    print(1 / 0)
 
     SELF["logs"].append(f"Assigned to job {job_id}.")
     function_pkl = request.files.get("function_pkl")

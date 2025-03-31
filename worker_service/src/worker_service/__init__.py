@@ -62,9 +62,7 @@ def log_exception(exception):
     if not IN_LOCAL_DEV_MODE:
         for log in SELF["logs"]:
             LOGGER.log(log)
-        LOGGER.log("HERE1")
         LOGGER.log_struct(dict(severity="ERROR", exception=traceback_str, request=request_json))
-    LOGGER.log("HERE2")
 
     # Report errors back to Burla's cloud.
     try:

@@ -8,7 +8,7 @@ from time import sleep
 import cloudpickle
 from tblib import Traceback
 from google.auth.transport.requests import Request
-from worker_service import SELF, PROJECT_ID, CREDENTIALS
+from worker_service import SELF, PROJECT_ID, CREDENTIALS, LOGGER
 
 FIRESTORE_URL = "https://firestore.googleapis.com"
 DB_BASE_URL = f"{FIRESTORE_URL}/v1/projects/{PROJECT_ID}/databases/burla/documents"
@@ -123,6 +123,6 @@ def execute_job(job_id: str, function_pkl: bytes):
         traceback_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
         traceback_str = "".join(traceback_details)
 
-        client = logging.Client()
-        logger = client.logger("worker_service")
-        logger.log_struct({"severity": "ERROR", "traceback": traceback_str})
+        # client = logging.Client()
+        # logger = client.logger("worker_service")
+        LOGGER.log_struct({"severity": "ERROR", "traceback": traceback_str})

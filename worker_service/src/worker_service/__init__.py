@@ -17,7 +17,12 @@ SEND_LOGS_TO_GCL = os.environ.get("SEND_LOGS_TO_GCL") == "True"
 CREDENTIALS, PROJECT_ID = google.auth.default()  # need `CREDENTIALS` so token can be refreshed
 BURLA_BACKEND_URL = "https://backend.burla.dev"
 
-from worker_service.helpers import VerboseList  # <- same as a list but prints stuff you append.
+name = os.environ.get("WORKER_NAME", "unknown_worker")
+LOGGER = logging.Client().logger("worker_service", labels={"worker_name": name})
+if SEND_LOGS_TO_GCL and (not IN_LOCAL_DEV_MODE):
+    LOGGER.log(f"Worker {name} has booted and will send all logs to GCL.")
+
+from worker_service.helpers import VerboseList  # <- same as a list but prints/logs stuff you append
 
 # we append all logs to a list instead of sending them to google cloud logging because
 # there are so many logs that logging them all causes issues and slowness.
@@ -33,11 +38,6 @@ SELF = {
     "started_at": None,
     "logs": verbose_list,
 }
-
-name = os.environ.get("WORKER_NAME", "unknown_worker")
-LOGGER = logging.Client().logger("worker_service", labels={"worker_name": name})
-if SEND_LOGS_TO_GCL and (not IN_LOCAL_DEV_MODE):
-    LOGGER.log(f"Worker {name} has booted and will send all logs to GCL.")
 
 from worker_service.endpoints import BP as endpoints_bp
 

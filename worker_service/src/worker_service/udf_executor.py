@@ -56,6 +56,10 @@ def _serialize_error(exc_info):
 
 def execute_job(job_id: str, function_pkl: bytes):
     try:
+
+        LOGGER.log(f"HERE dkjnfldfkjghndf")
+        raise Exception("Test exception")
+
         SELF["logs"].append(
             f"Starting job {job_id} with function of size {len(function_pkl)} bytes."
         )
@@ -88,9 +92,6 @@ def execute_job(job_id: str, function_pkl: bytes):
                 except Exception:
                     SELF["logs"].append(f"UDF raised an exception on input #{input_index}.")
                     exec_info = sys.exc_info()
-
-            LOGGER.log(f"HERE #{input_}")
-            raise Exception("Test exception")
 
             # serialize result:
             result_pkl = (

@@ -83,19 +83,28 @@ def execute_job(job_id: str, function_pkl: bytes):
                 SELF["logs"].append("No inputs in queue. Sleeping for 2 seconds.")
                 sleep(2)
 
+            SELF["logs"].append("here")
+
             # run UDF:
             exec_info = None
             with _FirestoreLogger(job_id, db_headers):
+                SELF["logs"].append("here2")
                 try:
                     if user_defined_function is None:
+                        SELF["logs"].append("here3")
                         user_defined_function = cloudpickle.loads(function_pkl)
+                    SELF["logs"].append("here4")
                     input_ = cloudpickle.loads(input_pkl)
+                    SELF["logs"].append("here5")
                     return_value = user_defined_function(input_)
+                    SELF["logs"].append("here6")
                     result_pkl = cloudpickle.dumps(return_value)
                     SELF["logs"].append(f"UDF succeded on input #{input_index}.")
                 except Exception:
                     SELF["logs"].append(f"UDF raised an exception on input #{input_index}.")
                     exec_info = sys.exc_info()
+
+            SELF["logs"].append("here7")
 
             result_pkl = _serialize_error(exec_info) if exec_info else result_pkl
             result_too_big = len(result_pkl) > 1_048_376

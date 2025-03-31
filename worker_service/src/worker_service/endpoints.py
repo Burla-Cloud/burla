@@ -21,7 +21,7 @@ def get_status():
     READY = not SELF["STARTED"]
     FAILED = traceback_str or thread_died
 
-    if SEND_LOGS_TO_GCL:
+    if SEND_LOGS_TO_GCL and (not IN_LOCAL_DEV_MODE):
         while not len(SELF["logs"]) == 0:
             LOGGER.log(SELF["logs"].pop(0))
 

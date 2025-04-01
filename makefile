@@ -105,3 +105,7 @@ deploy-test:
 	$(MAKE) image; \
 	$(MAKE) deploy-test
 
+worker:
+	set -e; \
+	cd ./worker_service; \
+	$(MAKE) image_same_env

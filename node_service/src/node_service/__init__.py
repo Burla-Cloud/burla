@@ -7,6 +7,7 @@ from uuid import uuid4
 from time import time
 from queue import Queue
 from typing import Callable
+import logging as python_logging
 from contextlib import asynccontextmanager
 from threading import Event
 
@@ -53,6 +54,15 @@ class Container(BaseModel):
     image: str
     python_executable: str
     python_version: str
+
+
+# Silence logs coming from the /results endpoint, there are so many it slows stuff down.
+class ResultsEndpointFilter(python_logging.Filter):
+    def filter(self, record):
+        return not record.args[2].endswith("/results")
+
+
+python_logging.getLogger("uvicorn.access").addFilter(ResultsEndpointFilter())
 
 
 async def get_request_json(request: Request):

@@ -13,7 +13,7 @@ from google.cloud.firestore import DocumentReference
 
 # throws some uncatchable, unimportant, warnings
 logging.getLogger("google.api_core.bidi").setLevel(logging.ERROR)
-RESULT_CHECK_FREQUENCY_SEC = 0.3
+RESULT_CHECK_FREQUENCY_SEC = 0.25
 
 
 class InputTooBig(Exception):

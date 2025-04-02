@@ -55,7 +55,7 @@ def job_watcher(stop_event: Event = None):
     logger = Logger()
     try:
         while not stop_event.is_set():
-            sleep(0.5)
+            sleep(0.25)
 
             # gather results from workers
             results = asyncio.run(_result_check_all_workers(logger))

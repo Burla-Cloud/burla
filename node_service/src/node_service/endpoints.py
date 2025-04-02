@@ -357,7 +357,7 @@ def reboot_containers(
         for container_spec in SELF["current_container_config"]:
             for i in range(INSTANCE_N_CPUS):
                 # have only one worker send logs to gcl, too many will break gcl
-                send_logs_to_gcl = (i == 0) and (not IN_LOCAL_DEV_MODE)
+                send_logs_to_gcl = False  # (i == 0) and (not IN_LOCAL_DEV_MODE)
                 args = (
                     container_spec.python_version,
                     container_spec.python_executable,

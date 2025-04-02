@@ -69,7 +69,7 @@ def job_watcher(stop_event: Event = None):
 
             seconds_since_last_healthcheck = time() - SELF["last_healthcheck_timestamp"]
             # logger.log(f"checking for restart: {seconds_since_last_healthcheck}")
-            client_disconnected = seconds_since_last_healthcheck > 20
+            client_disconnected = seconds_since_last_healthcheck > 5
 
             if client_disconnected and not SELF["BOOTING"]:
                 msg = "No healthcheck received from client in the last "

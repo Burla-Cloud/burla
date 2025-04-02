@@ -3,8 +3,6 @@ import logging
 import asyncio
 import aiohttp
 import pickle
-from time import time
-from datetime import datetime
 from queue import Queue
 from threading import Event
 
@@ -13,7 +11,7 @@ from google.cloud.firestore import DocumentReference
 
 # throws some uncatchable, unimportant, warnings
 logging.getLogger("google.api_core.bidi").setLevel(logging.ERROR)
-RESULT_CHECK_FREQUENCY_SEC = 0.25
+RESULT_CHECK_FREQUENCY_SEC = 0.4
 
 
 class InputTooBig(Exception):
@@ -161,6 +159,8 @@ def upload_inputs(
             # assume every node has the same target parallelism (number of workers/config)
             # TODO: `nodes` contains the parallelism per node, which could be different!
             # this algorithim should send less stuff to nodes with less parallelism / etc.
+
+            # TODO: These functions are super slow, not the upload but the divisions!
 
             # attach original index to each input so we can tell user which input failed
             inputs_pkl_with_idx = [(i, cloudpickle.dumps(input)) for i, input in enumerate(inputs)]

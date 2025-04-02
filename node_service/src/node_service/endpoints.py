@@ -55,7 +55,7 @@ def job_watcher(stop_event: Event = None):
     logger = Logger()
     try:
         while not stop_event.is_set():
-            sleep(0.25)
+            sleep(0.4)
 
             # gather results from workers
             results = asyncio.run(_result_check_all_workers(logger))
@@ -69,7 +69,7 @@ def job_watcher(stop_event: Event = None):
 
             seconds_since_last_healthcheck = time() - SELF["last_healthcheck_timestamp"]
             # logger.log(f"checking for restart: {seconds_since_last_healthcheck}")
-            client_disconnected = seconds_since_last_healthcheck > 5
+            client_disconnected = seconds_since_last_healthcheck > 10
 
             if client_disconnected and not SELF["BOOTING"]:
                 msg = "No healthcheck received from client in the last "

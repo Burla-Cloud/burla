@@ -35,6 +35,7 @@ SELF = {
     "job_id": None,
     "subjob_thread": None,
     "inputs_queue": Queue(),
+    "result_queue": Queue(),
     "started_at": None,
     "logs": verbose_list,
 }

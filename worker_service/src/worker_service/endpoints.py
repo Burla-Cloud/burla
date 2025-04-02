@@ -1,10 +1,10 @@
-import sys
 import pickle
+from io import BytesIO
 from time import time
 
-from flask import jsonify, Blueprint, request
+from flask import jsonify, Blueprint, request, send_file
 
-from worker_service import SELF, LOGGER, IN_LOCAL_DEV_MODE, SEND_LOGS_TO_GCL
+from worker_service import SELF
 from worker_service.udf_executor import execute_job
 from worker_service.helpers import ThreadWithExc
 
@@ -21,28 +21,24 @@ def get_status():
     READY = not SELF["STARTED"]
     FAILED = traceback_str or thread_died
 
-    # if SEND_LOGS_TO_GCL and (not IN_LOCAL_DEV_MODE):
-    #     while not len(SELF["logs"]) == 0:
-    #         LOGGER.log(SELF["logs"].pop(0))
-
-    # if FAILED and (not ERROR_ALREADY_LOGGED) and traceback_str:
-    #     # Log all the logs that led up to this error:
-    #     # We can't always log to GCL because so many workers are running at once it just breaks.
-    #     # -> We only save the logs when there is an error (and pray they dont all error at once).
-    #     if not IN_LOCAL_DEV_MODE:
-    #         for log in SELF["logs"]:
-    #             LOGGER.log(log)
-    #         LOGGER.log_struct({"severity": "ERROR", "exception": traceback_str})
-
-    #     print(traceback_str, file=sys.stderr)
-    #     ERROR_ALREADY_LOGGED = True
-
     if READY:
         return jsonify({"status": "READY"})
     elif FAILED:
         return jsonify({"status": "FAILED"})
     else:
         return jsonify({"status": "BUSY"})
+
+
+@BP.get("/jobs/<job_id>/results")
+def get_results(job_id: str):
+    results = []
+    while not SELF["result_queue"].empty():
+        results.append(SELF["result_queue"].get())
+
+    data = BytesIO(pickle.dumps(results))
+    data.seek(0)  # <- ai told me to put this here idk why
+    mimetype = "application/octet-stream"
+    return send_file(data, mimetype=mimetype, as_attachment=True, download_name="results.pkl")
 
 
 @BP.post("/jobs/<job_id>/inputs")

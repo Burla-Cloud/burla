@@ -20,13 +20,15 @@ from worker_service import (
 
 FIRESTORE_URL = "https://firestore.googleapis.com"
 DB_BASE_URL = f"{FIRESTORE_URL}/v1/projects/{PROJECT_ID}/databases/burla/documents"
+CREDENTIALS.refresh(Request())
 
 
 class _FirestoreLogger:
 
-    def __init__(self, job_id: str, db_headers: dict):
+    def __init__(self, job_id: str):
         self.job_id = job_id
-        self.db_headers = db_headers
+        token = CREDENTIALS.token
+        self.db_headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
     def write(self, msg):
         if msg.strip() and (len(msg.encode("utf-8")) > 1_048_376):  # (1mb - est overhead):
@@ -67,15 +69,8 @@ def execute_job(job_id: str, function_pkl: bytes):
         msg = f"Starting job {job_id} with function of size {len(function_pkl)} bytes."
         SELF["logs"].append(msg)
 
-        CREDENTIALS.refresh(Request())
-        db_headers = {
-            "Authorization": f"Bearer {CREDENTIALS.token}",
-            "Content-Type": "application/json",
-        }
-
         user_defined_function = None
         while True:
-
             try:
                 input_index, input_pkl = SELF["inputs_queue"].get()
                 SELF["logs"].append(f"Popped input #{input_index} from queue.")
@@ -83,34 +78,19 @@ def execute_job(job_id: str, function_pkl: bytes):
                 SELF["logs"].append("No inputs in queue. Sleeping for 2 seconds.")
                 sleep(2)
 
-            SELF["logs"].append("here")
-
             # run UDF:
             exec_info = None
-            with _FirestoreLogger(job_id, db_headers):
-                SELF["logs"].append("here2")
+            with _FirestoreLogger(job_id):
                 try:
                     if user_defined_function is None:
-                        SELF["logs"].append("here3")
                         user_defined_function = cloudpickle.loads(function_pkl)
-                    SELF["logs"].append("here4")
                     input_ = cloudpickle.loads(input_pkl)
-                    SELF["logs"].append("here5")
-
-                    SELF["logs"].append(f"here!! #{input_}")
-
                     return_value = user_defined_function(input_)
-
-                    SELF["logs"].append(f"DONE!! #{return_value}")
-                    SELF["logs"].append("here7")
-
                     result_pkl = cloudpickle.dumps(return_value)
                     SELF["logs"].append(f"UDF succeded on input #{input_index}.")
                 except Exception:
                     SELF["logs"].append(f"UDF raised an exception on input #{input_index}.")
                     exec_info = sys.exc_info()
-
-            SELF["logs"].append("here7")
 
             result_pkl = _serialize_error(exec_info) if exec_info else result_pkl
             result_too_big = len(result_pkl) > 1_048_376
@@ -120,17 +100,9 @@ def execute_job(job_id: str, function_pkl: bytes):
                 raise Exception(f"{msg}\nUnable to store result.")
 
             # write result:
-            result_doc_url = f"{DB_BASE_URL}/jobs/{job_id}/results/{input_index}"
-            encoded_result_pkl = base64.b64encode(result_pkl).decode("utf-8")
-            data = {
-                "fields": {
-                    "is_error": {"booleanValue": bool(exec_info)},
-                    "result_pkl": {"bytesValue": encoded_result_pkl},
-                }
-            }
-            response = requests.patch(result_doc_url, headers=db_headers, json=data)
-            response.raise_for_status()
-            SELF["logs"].append(f"Successfully wrote result for input #{input_index}.")
+            result = (input_index, bool(exec_info), result_pkl)
+            SELF["result_queue"].put(result)
+            SELF["logs"].append(f"Successfully enqueued result for input #{input_index}.")
 
     except Exception:
         exc_type, exc_value, exc_traceback = sys.exc_info()

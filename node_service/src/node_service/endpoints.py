@@ -7,9 +7,11 @@ from typing import Optional, Callable
 import traceback
 import asyncio
 import aiohttp
+from io import BytesIO
 
 import docker
 from fastapi import APIRouter, Path, Depends, Response
+from fastapi.responses import StreamingResponse
 from google.cloud import firestore
 
 from node_service import (
@@ -30,11 +32,41 @@ from node_service import IN_LOCAL_DEV_MODE
 router = APIRouter()
 
 
-def restart_on_disconnect(stop_event: Event = None):
+async def _result_check_single_worker(session, worker, logger):
+    async with session.get(f"{worker.url}/jobs/{SELF['current_job']}/results") as response:
+        if response.status != 200:
+            return worker, response.status
+
+        results_pkl = b"".join([c async for c in response.content.iter_chunked(8192)])
+        results = pickle.loads(results_pkl)
+        msg = f"Received {len(results)} results from {worker.container_name} "
+        logger.log(msg + f"({len(results_pkl)} bytes)")
+        [SELF["result_queue"].put(result) for result in results]
+        return worker, response.status
+
+
+async def _result_check_all_workers(logger):
+    async with aiohttp.ClientSession() as session:
+        tasks = [_result_check_single_worker(session, w, logger) for w in SELF["workers"]]
+        return await asyncio.gather(*tasks, return_exceptions=True)
+
+
+def job_watcher(stop_event: Event = None):
     logger = Logger()
     try:
-        while True:
-            sleep(3)
+        while not stop_event.is_set():
+            sleep(0.5)
+
+            # gather results from workers
+            results = asyncio.run(_result_check_all_workers(logger))
+            failed_workers = [f"{w.container_name}: {s}" for w, s in results if s != 200]
+            if failed_workers:
+                logger.log(f"result-check failed for workers: {', '.join(failed_workers)}")
+                # TODO: if a worker fails, send its assigned unfinished inputs to other workers
+                logger.log("REBOOTING because a worker FAILED!")
+                reboot_containers(logger=logger)
+                return
+
             seconds_since_last_healthcheck = time() - SELF["last_healthcheck_timestamp"]
             logger.log(f"checking for restart: {seconds_since_last_healthcheck}")
             client_disconnected = seconds_since_last_healthcheck > 20
@@ -44,8 +76,6 @@ def restart_on_disconnect(stop_event: Event = None):
                 msg += f"{seconds_since_last_healthcheck}s, REBOOTING NODE!"
                 logger.log(msg)
                 reboot_containers(logger=logger)
-                return
-            elif stop_event.is_set():
                 return
 
     except Exception as e:
@@ -112,12 +142,20 @@ async def upload_inputs(
     SELF["last_healthcheck_timestamp"] = time()
 
 
-@router.get("/jobs/{job_id}")
-def healthcheck(job_id: str = Path(...), logger: Logger = Depends(get_logger)):
+@router.get("/jobs/{job_id}/results")
+def get_results(job_id: str = Path(...), logger: Logger = Depends(get_logger)):
     if not job_id == SELF["current_job"]:
         return Response("job not found", status_code=404)
     logger.log("Received healthcheck")
     SELF["last_healthcheck_timestamp"] = time()
+
+    results = []
+    while not SELF["result_queue"].empty():
+        results.append(SELF["result_queue"].get())
+
+    data = BytesIO(pickle.dumps(results))
+    headers = {"Content-Disposition": 'attachment; filename="results.pkl"'}
+    return StreamingResponse(data, media_type="application/octet-stream", headers=headers)
 
 
 @router.post("/jobs/{job_id}")
@@ -197,7 +235,7 @@ def execute(
 
     SELF["last_healthcheck_timestamp"] = time()
     stop_event = Event()
-    job_watcher_thread = Thread(target=restart_on_disconnect, args=(stop_event,), daemon=True)
+    job_watcher_thread = Thread(target=job_watcher, args=(stop_event,), daemon=True)
     job_watcher_thread.start()
     SELF["job_watcher_stop_event"] = stop_event
 
@@ -322,7 +360,7 @@ def reboot_containers(
         for container_spec in SELF["current_container_config"]:
             for i in range(INSTANCE_N_CPUS):
                 # have only one worker send logs to gcl, too many will break gcl
-                send_logs_to_gcl = i == 0
+                send_logs_to_gcl = (i == 0) and (not IN_LOCAL_DEV_MODE)
                 args = (
                     container_spec.python_version,
                     container_spec.python_executable,

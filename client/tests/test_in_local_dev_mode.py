@@ -125,7 +125,7 @@ def rpm_assert_restart(*a, **kw):
 
 def test_base():
 
-    my_inputs = list(range(1000))
+    my_inputs = list(range(1))
 
     def my_function(test_input):
         # print(f"starting #{test_input}")
@@ -137,8 +137,8 @@ def test_base():
 
         # print(f"finishing #{test_input}")
 
-        sleep(1)
-        return test_input
+        # sleep(1)
+        return test_input * 2
 
     results, stdout, runtime, rpm_exception = rpm_assert_restart(my_function, my_inputs)
 

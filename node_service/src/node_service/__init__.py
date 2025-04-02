@@ -5,6 +5,7 @@ import asyncio
 import traceback
 from uuid import uuid4
 from time import time
+from queue import Queue
 from typing import Callable
 from contextlib import asynccontextmanager
 from threading import Event
@@ -34,6 +35,7 @@ GCL_CLIENT = logging.Client().logger("node_service", labels=dict(INSTANCE_NAME=I
 SELF = {
     "workers": [],
     "current_job": None,
+    "result_queue": Queue(),
     "job_watcher_stop_event": Event(),
     "current_container_config": [],
     "time_until_inactivity_shutdown": None,

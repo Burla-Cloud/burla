@@ -13,46 +13,11 @@ from google.cloud.firestore import DocumentReference
 
 # throws some uncatchable, unimportant, warnings
 logging.getLogger("google.api_core.bidi").setLevel(logging.ERROR)
-
-
-JOB_HEALTHCHECK_FREQUENCY_SEC = 6
+RESULT_CHECK_FREQUENCY_SEC = 0.5
 
 
 class InputTooBig(Exception):
     pass
-
-
-def send_job_healthchecks(
-    job_id: str, stop_event: Event, nodes: list[dict], log_msg_stdout: io.TextIOWrapper
-):
-    async def _healthcheck_single_node(session, node):
-        async with session.get(f"{node['host']}/jobs/{job_id}") as response:
-            return node, response.status
-
-    async def _healthcheck_all_nodes(nodes):
-        async with aiohttp.ClientSession() as session:
-            tasks = [_healthcheck_single_node(session, node) for node in nodes]
-            return await asyncio.gather(*tasks, return_exceptions=True)
-
-    try:
-        while not stop_event.is_set():
-            stop_event.wait(JOB_HEALTHCHECK_FREQUENCY_SEC)
-            start = time()
-
-            time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-            log_msg_stdout.write(f"Sending healthchecks to all nodes... ({time_str} EDT)")
-            results = asyncio.run(_healthcheck_all_nodes(nodes))
-            log_msg_stdout.write(f"Received all healthcheck responses ({time() - start:.2f}s)")
-
-            # Check if any node returned a non-200 status
-            failed_nodes = [f"{n['host']}: {status}" for n, status in results if status != 200]
-            if failed_nodes:
-                log_msg_stdout.write(f"Healthcheck failed for nodes: {', '.join(failed_nodes)}")
-                # TODO: if a node fails, check what results it returned and send remainder of inputs to other nodes
-                return
-    except Exception:
-        stop_event.set()
-        raise
 
 
 def print_logs_from_db(
@@ -70,30 +35,55 @@ def print_logs_from_db(
             stop_event.wait(0.5)  # this does not block the processing of new documents
     except Exception as e:
         # Because logs are non-essential, don't kill the job if it breaks.
-        msg = f"ERROR: Logstream failed with {e}\nContinuing Job execution without logs..."
+        msg = f"ERROR: stdout-stream failed with {e}\nContinuing Job execution without stdout..."
         log_msg_stdout.write(msg)
     finally:
         query_watch.unsubscribe()
 
 
-def enqueue_results_from_db(job_doc_ref: DocumentReference, stop_event: Event, queue: Queue):
-    def _on_snapshot(collection_snapshot, changes, read_time):
-        for change in changes:
-            if change.type.name == "ADDED":
-                result = change.document.to_dict()
-                result_tuple = (change.document.id, result["is_error"], result["result_pkl"])
-                queue.put(result_tuple)
+def enqueue_results(
+    job_id: str,
+    stop_event: Event,
+    nodes: list[dict],
+    queue: Queue,
+    log_msg_stdout: io.TextIOWrapper,
+):
+    async def _result_check_single_node(session, node):
+        async with session.get(f"{node['host']}/jobs/{job_id}/results") as response:
+            if response.status != 200:
+                return node, response.status
+
+            results_pkl = b"".join([c async for c in response.content.iter_chunked(8192)])
+            results = pickle.loads(results_pkl)
+            msg = f"Received {len(results)} results from {node['instance_name']} "
+            log_msg_stdout.write(msg + f"({len(results_pkl)} bytes)")
+            [queue.put(result) for result in results]
+            return node, response.status
+
+    async def _result_check_all_nodes(nodes):
+        async with aiohttp.ClientSession() as session:
+            tasks = [_result_check_single_node(session, node) for node in nodes]
+            return await asyncio.gather(*tasks, return_exceptions=True)
 
     try:
-        collection_ref = job_doc_ref.collection("results")
-        query_watch = collection_ref.on_snapshot(_on_snapshot)
         while not stop_event.is_set():
-            stop_event.wait(0.5)  # this does not block the processing of new documents
+            stop_event.wait(RESULT_CHECK_FREQUENCY_SEC)
+
+            start = time()
+            time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+            log_msg_stdout.write(f"Checking results from all nodes... ({time_str} EDT)")
+            results = asyncio.run(_result_check_all_nodes(nodes))
+            log_msg_stdout.write(f"Received all result check responses ({time() - start:.2f}s)")
+
+            # Check if any node returned a non-200 status
+            failed_nodes = [f"{n['host']}: {status}" for n, status in results if status != 200]
+            if failed_nodes:
+                log_msg_stdout.write(f"result-check failed for nodes: {', '.join(failed_nodes)}")
+                # TODO: if a node fails, send its assigned unfinished inputs to other nodes
+                return
     except Exception:
         stop_event.set()
         raise
-    finally:
-        query_watch.unsubscribe()
 
 
 def upload_inputs(
@@ -171,14 +161,11 @@ def upload_inputs(
             start = 0
             for i, node in enumerate(nodes):
                 end = start + size + (1 if i < extra else 0)
-
                 inputs_for_current_node = _chunk_inputs_by_size(inputs_pkl_with_idx[start:end])
 
                 sum_of_chunk_of_chunks = sum([len(c) for c in inputs_for_current_node])
                 len_of_chunk = len(inputs_pkl_with_idx[start:end])
                 assert sum_of_chunk_of_chunks == len_of_chunk
-                msg = f"sum_of_chunk_of_chunks:{sum_of_chunk_of_chunks} == len_of_chunk:{len_of_chunk}"
-                log_msg_stdout.write(msg)
 
                 node["input_chunks"] = inputs_for_current_node
                 start = end

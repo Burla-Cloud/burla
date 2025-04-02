@@ -68,7 +68,7 @@ def job_watcher(stop_event: Event = None):
                 return
 
             seconds_since_last_healthcheck = time() - SELF["last_healthcheck_timestamp"]
-            logger.log(f"checking for restart: {seconds_since_last_healthcheck}")
+            # logger.log(f"checking for restart: {seconds_since_last_healthcheck}")
             client_disconnected = seconds_since_last_healthcheck > 20
 
             if client_disconnected and not SELF["BOOTING"]:
@@ -96,7 +96,7 @@ async def upload_inputs(
         return Response("job not found", status_code=404)
 
     inputs_pkl_with_idx = pickle.loads(request_files["inputs_pkl_with_idx"])
-    logger.log(f"Received {len(inputs_pkl_with_idx)} inputs for job {job_id}")
+    # logger.log(f"Received {len(inputs_pkl_with_idx)} inputs for job {job_id}")
 
     # separate into batches to be sent to each worker
     input_batches = []
@@ -132,8 +132,8 @@ async def upload_inputs(
 
             current_worker = SELF["workers"][current_worker_index]
             url = f"{current_worker.url}/jobs/{job_id}/inputs"
-            msg = f"Sending {len(batch)} inputs to worker #{current_worker_index}:"
-            logger.log(f"{msg} {current_worker.container_name}")
+            # msg = f"Sending {len(batch)} inputs to worker #{current_worker_index}:"
+            # logger.log(f"{msg} {current_worker.container_name}")
 
             tasks.append(_upload_to_single_worker(session, url, batch))
 
@@ -146,7 +146,7 @@ async def upload_inputs(
 def get_results(job_id: str = Path(...), logger: Logger = Depends(get_logger)):
     if not job_id == SELF["current_job"]:
         return Response("job not found", status_code=404)
-    logger.log("Received healthcheck")
+    # logger.log("Received healthcheck")
     SELF["last_healthcheck_timestamp"] = time()
 
     results = []

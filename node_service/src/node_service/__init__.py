@@ -226,7 +226,7 @@ async def log_and_time_requests__log_errors(request: Request, call_next):
     if not response_contains_background_tasks:
         response.background = BackgroundTasks()
 
-    if not IN_LOCAL_DEV_MODE:
+    if (not IN_LOCAL_DEV_MODE) and (not request.url.endswith("/results")):
         add_background_task = get_add_background_task_function(response.background, logger=logger)
         msg = f"Received {request.method} at {request.url}"
         add_background_task(logger.log, msg)

@@ -124,7 +124,7 @@ def _start_job(
     async def assign_all_nodes():
         async with aiohttp.ClientSession() as session:
             tasks = [assign_node(node, session) for node in nodes_to_assign]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
+            results = await asyncio.gather(*tasks)
             return [node for node in results if node]
 
     nodes = asyncio.run(assign_all_nodes())
@@ -142,7 +142,6 @@ def _watch_job(
     job_ref: firestore.DocumentReference,
     spinner: Union[bool, Spinner],
     stop_event: Event,
-    db: firestore.Client,
     auth_headers: dict,
 ):
     log_msg_stdout = spinner if spinner else sys.stdout
@@ -251,8 +250,7 @@ def remote_parallel_map(
         msg += "Email jake@burla.dev if this is really annoying and we will fix it! :)"
         raise ValueError(msg)
 
-    max_parallelism = max_parallelism if max_parallelism else len(inputs)
-    max_parallelism = max_parallelism if max_parallelism < MAX_PARALLELISM else MAX_PARALLELISM
+    max_parallelism = min(max_parallelism or len(inputs), MAX_PARALLELISM)
     auth_headers = get_auth_headers(api_key) if api_key else get_auth_headers()
     db = get_db(auth_headers)
 
@@ -284,7 +282,6 @@ def remote_parallel_map(
             job_ref=job_ref,
             spinner=spinner,
             stop_event=stop_event,
-            db=db,
             auth_headers=auth_headers,
         )
 

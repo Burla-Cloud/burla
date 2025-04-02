@@ -24,7 +24,7 @@ def reboot_nodes(nodes, auth_headers):
         async with aiohttp.ClientSession() as session:
             urls = [f"{node['host']}/background_reboot" for node in nodes]
             tasks = [session.post(url, headers=auth_headers, timeout=2) for url in urls]
-            await asyncio.gather(*tasks, return_exceptions=True)
+            await asyncio.gather(*tasks)
 
     asyncio.run(_send_reboot_requests())
 
@@ -72,7 +72,7 @@ def enqueue_results(
     async def _result_check_all_nodes(nodes):
         async with aiohttp.ClientSession() as session:
             tasks = [_result_check_single_node(session, node) for node in nodes]
-            return await asyncio.gather(*tasks, return_exceptions=True)
+            return await asyncio.gather(*tasks)
 
     try:
         while not stop_event.is_set():

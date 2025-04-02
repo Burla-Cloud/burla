@@ -48,7 +48,7 @@ async def _result_check_single_worker(session, worker, logger):
 async def _result_check_all_workers(logger):
     async with aiohttp.ClientSession() as session:
         tasks = [_result_check_single_worker(session, w, logger) for w in SELF["workers"]]
-        return await asyncio.gather(*tasks, return_exceptions=True)
+        return await asyncio.gather(*tasks)
 
 
 def job_watcher(stop_event: Event = None):
@@ -69,7 +69,7 @@ def job_watcher(stop_event: Event = None):
 
             seconds_since_last_healthcheck = time() - SELF["last_healthcheck_timestamp"]
             # logger.log(f"checking for restart: {seconds_since_last_healthcheck}")
-            client_disconnected = seconds_since_last_healthcheck > 10
+            client_disconnected = seconds_since_last_healthcheck > 20
 
             if client_disconnected and not SELF["BOOTING"]:
                 msg = "No healthcheck received from client in the last "
@@ -137,7 +137,7 @@ async def upload_inputs(
 
             tasks.append(_upload_to_single_worker(session, url, batch))
 
-        await asyncio.gather(*tasks, return_exceptions=True)
+        await asyncio.gather(*tasks)
 
     SELF["last_healthcheck_timestamp"] = time()
 

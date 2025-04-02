@@ -39,8 +39,8 @@ async def _result_check_single_worker(session, worker, logger):
 
         results_pkl = b"".join([c async for c in response.content.iter_chunked(8192)])
         results = pickle.loads(results_pkl)
-        msg = f"Received {len(results)} results from {worker.container_name} "
-        logger.log(msg + f"({len(results_pkl)} bytes)")
+        # msg = f"Received {len(results)} results from {worker.container_name} "
+        # logger.log(msg + f"({len(results_pkl)} bytes)")
         [SELF["result_queue"].put(result) for result in results]
         return worker, response.status
 

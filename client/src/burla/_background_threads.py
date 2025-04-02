@@ -66,8 +66,8 @@ def enqueue_results(
 
             results_pkl = b"".join([c async for c in response.content.iter_chunked(8192)])
             results = pickle.loads(results_pkl)
-            msg = f"Received {len(results)} results from {node['instance_name']} "
-            log_msg_stdout.write(msg + f"({len(results_pkl)} bytes)")
+            # msg = f"Received {len(results)} results from {node['instance_name']} "
+            # log_msg_stdout.write(msg + f"({len(results_pkl)} bytes)")
             [queue.put(result) for result in results]
             return node, response.status
 
@@ -188,7 +188,7 @@ def upload_inputs(
                 log_msg_stdout.write(msg)
 
             sum_of_inputs = sum(sum(len(chunk) for chunk in node["input_chunks"]) for node in nodes)
-            log_msg_stdout.write(f"Sum of chunks:{sum_of_inputs} == n_inputs:{len(inputs)}")
+            # log_msg_stdout.write(f"Sum of chunks:{sum_of_inputs} == n_inputs:{len(inputs)}")
             assert sum_of_inputs == len(inputs)
 
             # cuncurrently, for each node, upload the n'th chunk of inputs
@@ -204,6 +204,7 @@ def upload_inputs(
 
     try:
         asyncio.run(upload_all())
+        log_msg_stdout.write("Uploaded all inputs.")
     except Exception:
         stop_event.set()
         raise

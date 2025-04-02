@@ -8,7 +8,7 @@ import traceback
 import asyncio
 import aiohttp
 from io import BytesIO
-
+from queue import Queue
 import docker
 from fastapi import APIRouter, Path, Depends, Response
 from fastapi.responses import StreamingResponse
@@ -69,7 +69,7 @@ def job_watcher(stop_event: Event = None):
 
             seconds_since_last_healthcheck = time() - SELF["last_healthcheck_timestamp"]
             # logger.log(f"checking for restart: {seconds_since_last_healthcheck}")
-            client_disconnected = seconds_since_last_healthcheck > 20
+            client_disconnected = seconds_since_last_healthcheck > 60
 
             if client_disconnected and not SELF["BOOTING"]:
                 msg = "No healthcheck received from client in the last "
@@ -270,6 +270,7 @@ def reboot_containers(
         SELF["RUNNING"] = False
         SELF["BOOTING"] = True
         SELF["workers"] = []
+        SELF["result_queue"] = Queue()
         if new_container_config:
             SELF["current_container_config"] = new_container_config
 

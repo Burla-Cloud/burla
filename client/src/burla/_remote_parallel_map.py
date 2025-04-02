@@ -34,7 +34,7 @@ from burla._helpers import (
 )
 
 START_TIME = None
-MAX_PARALLELISM = 1000  # If you increase this Burla will **probably** break.
+MAX_PARALLELISM = 10000  # If you increase this Burla will **probably** break.
 
 
 class UnknownClusterError(Exception):

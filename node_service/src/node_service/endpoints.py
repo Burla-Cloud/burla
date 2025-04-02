@@ -178,14 +178,11 @@ def execute(
     node_doc = db.collection("nodes").document(INSTANCE_NAME)
     node_doc.update({"status": "RUNNING", "current_job": job_id})
 
-    job_ref = db.collection("jobs").document(job_id)
-    job = job_ref.get().to_dict()
-
     # determine which workers to call and which to remove
     workers_to_remove = []
     workers_to_keep = []
     future_parallelism = 0
-    user_python_version = job["user_python_version"]
+    user_python_version = request_json["user_python_version"]
     for worker in SELF["workers"]:
         correct_python_version = worker.python_version == user_python_version
         need_more_parallelism = future_parallelism < request_json["parallelism"]
@@ -373,7 +370,7 @@ def reboot_containers(
                 thread.start()
 
         [thread.join() for thread in threads]
-        worker_names = [w.container_name for w in SELF["workers"]]
+        # worker_names = [w.container_name for w in SELF["workers"]]
         # logger.log(f'Started {len(SELF["workers"])} new workers: {worker_names}')
 
         # Sometimes on larger machines, some containers don't start, or get stuck in "CREATED" state

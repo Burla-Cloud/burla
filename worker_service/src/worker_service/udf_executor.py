@@ -9,14 +9,7 @@ from time import sleep
 import cloudpickle
 from tblib import Traceback
 from google.auth.transport.requests import Request
-from worker_service import (
-    SELF,
-    PROJECT_ID,
-    CREDENTIALS,
-    LOGGER,
-    IN_LOCAL_DEV_MODE,
-    BURLA_BACKEND_URL,
-)
+from worker_service import SELF, PROJECT_ID, CREDENTIALS
 
 FIRESTORE_URL = "https://firestore.googleapis.com"
 DB_BASE_URL = f"{FIRESTORE_URL}/v1/projects/{PROJECT_ID}/databases/burla/documents"
@@ -25,8 +18,9 @@ CREDENTIALS.refresh(Request())
 
 class _FirestoreLogger:
 
-    def __init__(self, job_id: str):
+    def __init__(self, job_id: str, input_index: int):
         self.job_id = job_id
+        self.input_index = input_index
         token = CREDENTIALS.token
         self.db_headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
@@ -36,7 +30,12 @@ class _FirestoreLogger:
             msg = msg_truncated + "<too-long--remaining-msg-truncated-due-to-length>"
         if msg.strip():
             log_doc_url = f"{DB_BASE_URL}/jobs/{self.job_id}/logs"
-            data = {"fields": {"msg": {"stringValue": msg}}}
+            data = {
+                "fields": {
+                    "msg": {"stringValue": msg},
+                    "input_index": {"integerValue": self.input_index},
+                }
+            }
             response = requests.post(log_doc_url, headers=self.db_headers, json=data)
             response.raise_for_status()
 
@@ -65,59 +64,30 @@ def _serialize_error(exc_info):
 
 
 def execute_job(job_id: str, function_pkl: bytes):
-    try:
-        msg = f"Starting job {job_id} with function of size {len(function_pkl)} bytes."
-        SELF["logs"].append(msg)
+    SELF["logs"].append(f"Starting job {job_id} with func-size {len(function_pkl)} bytes.")
 
-        user_defined_function = None
-        while True:
-            try:
-                input_index, input_pkl = SELF["inputs_queue"].get()
-                SELF["logs"].append(f"Popped input #{input_index} from queue.")
-            except Empty:
-                SELF["logs"].append("No inputs in queue. Sleeping for 2 seconds.")
-                sleep(2)
-
-            # run UDF:
-            exec_info = None
-            with _FirestoreLogger(job_id):
-                try:
-                    if user_defined_function is None:
-                        user_defined_function = cloudpickle.loads(function_pkl)
-                    input_ = cloudpickle.loads(input_pkl)
-                    return_value = user_defined_function(input_)
-                    result_pkl = cloudpickle.dumps(return_value)
-                    SELF["logs"].append(f"UDF succeded on input #{input_index}.")
-                except Exception:
-                    SELF["logs"].append(f"UDF raised an exception on input #{input_index}.")
-                    exec_info = sys.exc_info()
-
-            result_pkl = _serialize_error(exec_info) if exec_info else result_pkl
-            result_too_big = len(result_pkl) > 1_048_376
-            if result_too_big:
-                noun = "Error" if exec_info else "Return value"
-                msg = f"{noun} from input at index {input_index} is greater than 1MB in size."
-                raise Exception(f"{msg}\nUnable to store result.")
-
-            # write result:
-            result = (input_index, bool(exec_info), result_pkl)
-            SELF["result_queue"].put(result)
-            SELF["logs"].append(f"Successfully enqueued result for input #{input_index}.")
-
-    except Exception:
-        exc_type, exc_value, exc_traceback = sys.exc_info()
-        traceback_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
-        traceback_str = "".join(traceback_details)
-        print(traceback_str, file=sys.stderr)
-
-        if not IN_LOCAL_DEV_MODE:
-            for log in SELF["logs"]:
-                LOGGER.log(log)
-            LOGGER.log_struct(dict(severity="ERROR", exception=traceback_str))
-
-        # Report error back to Burla's cloud.
+    user_defined_function = None
+    while True:
         try:
-            json = {"project_id": PROJECT_ID, "message": exc_type, "traceback": traceback_str}
-            requests.post(f"{BURLA_BACKEND_URL}/v1/telemetry/alert", json=json, timeout=1)
-        except Exception:
-            pass
+            input_index, input_pkl = SELF["inputs_queue"].get()
+            SELF["logs"].append(f"Popped input #{input_index} from queue.")
+        except Empty:
+            SELF["logs"].append("No inputs in queue. Sleeping for 2 seconds.")
+            sleep(2)
+
+        is_error = False
+        with _FirestoreLogger(job_id, input_index):
+            try:
+                if user_defined_function is None:
+                    user_defined_function = cloudpickle.loads(function_pkl)
+                input_ = cloudpickle.loads(input_pkl)
+                return_value = user_defined_function(input_)
+                result_pkl = cloudpickle.dumps(return_value)
+                SELF["logs"].append(f"UDF succeded on input #{input_index}.")
+            except Exception:
+                SELF["logs"].append(f"UDF raised an exception on input #{input_index}.")
+                result_pkl = _serialize_error(sys.exc_info())
+                is_error = True
+
+        SELF["result_queue"].put((input_index, is_error, result_pkl))
+        SELF["logs"].append(f"Successfully enqueued result for input #{input_index}.")

@@ -13,11 +13,22 @@ from google.cloud.firestore import DocumentReference
 
 # throws some uncatchable, unimportant, warnings
 logging.getLogger("google.api_core.bidi").setLevel(logging.ERROR)
-RESULT_CHECK_FREQUENCY_SEC = 0.5
+RESULT_CHECK_FREQUENCY_SEC = 0.3
 
 
 class InputTooBig(Exception):
     pass
+
+
+def reboot_nodes(nodes, auth_headers):
+
+    async def _send_reboot_requests():
+        async with aiohttp.ClientSession() as session:
+            urls = [f"{node['host']}/background_reboot" for node in nodes]
+            tasks = [session.post(url, headers=auth_headers, timeout=2) for url in urls]
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    asyncio.run(_send_reboot_requests())
 
 
 def print_logs_from_db(
@@ -69,16 +80,16 @@ def enqueue_results(
         while not stop_event.is_set():
             stop_event.wait(RESULT_CHECK_FREQUENCY_SEC)
 
-            start = time()
-            time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-            log_msg_stdout.write(f"Checking results from all nodes... ({time_str} EDT)")
+            # start = time()
+            # time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+            # log_msg_stdout.write(f"Checking results from all nodes... ({time_str} EDT)")
             results = asyncio.run(_result_check_all_nodes(nodes))
-            log_msg_stdout.write(f"Received all result check responses ({time() - start:.2f}s)")
+            # log_msg_stdout.write(f"Received all result check responses ({time() - start:.2f}s)")
 
             # Check if any node returned a non-200 status
             failed_nodes = [f"{n['host']}: {status}" for n, status in results if status != 200]
             if failed_nodes:
-                log_msg_stdout.write(f"result-check failed for nodes: {', '.join(failed_nodes)}")
+                # log_msg_stdout.write(f"result-check failed for nodes: {', '.join(failed_nodes)}")
                 # TODO: if a node fails, send its assigned unfinished inputs to other nodes
                 return
     except Exception:
@@ -96,7 +107,7 @@ def upload_inputs(
 
     def _chunk_inputs_by_size(
         inputs_pkl_with_idx: list,
-        min_chunk_size: int = 1_048_576 * 0.5,  # 0.5MB
+        min_chunk_size: int = 1_048_576 * 1,  # 1MB
         max_chunk_size: int = 1_048_576 * 1000,  # 1GB
     ):
         chunks = []

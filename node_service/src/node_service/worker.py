@@ -119,15 +119,6 @@ class Worker:
                     sleep(1)
                     container_info = docker_client.inspect_container(self.container.get("Id"))
 
-                if attempt > 1:
-                    LOGGER.log_struct(
-                        {
-                            "severity": "INFO",
-                            "message": f"CONTAINER STARTED! after {attempt+1} attempt(s)",
-                            "state": container_info["State"]["Status"],
-                            "name": container_info["Name"],
-                        }
-                    )
             attempt += 1
             if attempt == 10:
                 raise Exception("Unable to start container.")

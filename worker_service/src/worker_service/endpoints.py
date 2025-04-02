@@ -1,6 +1,5 @@
 import pickle
 from io import BytesIO
-from time import time
 
 from flask import jsonify, Blueprint, request, send_file
 
@@ -14,35 +13,45 @@ ERROR_ALREADY_LOGGED = False
 
 @BP.get("/")
 def get_status():
-    global ERROR_ALREADY_LOGGED
-    traceback_str = SELF["subjob_thread"].traceback_str if SELF["subjob_thread"] else None
-    thread_died = SELF["subjob_thread"] and (not SELF["subjob_thread"].is_alive())
-
-    READY = not SELF["STARTED"]
-    FAILED = traceback_str or thread_died
-
-    if READY:
+    if not SELF["STARTED"]:
         return jsonify({"status": "READY"})
-    elif FAILED:
-        return jsonify({"status": "FAILED"})
     else:
         return jsonify({"status": "BUSY"})
 
 
+def _check_udf_executor_thread():
+    if not SELF["subjob_thread"].is_alive():
+        traceback_str = getattr(SELF["subjob_thread"], "traceback_str", None)
+        if traceback_str:
+            raise Exception(f"UDF executor thread failed with traceback:\n{traceback_str}")
+        else:
+            raise Exception(f"UDF executor thread died with no errors")
+
+
+def _check_correct_job(job_id: str):
+    if SELF["current_job"] != job_id:
+        raise Exception(f"Job {job_id} is not the current job")
+
+
 @BP.get("/jobs/<job_id>/results")
 def get_results(job_id: str):
+    _check_udf_executor_thread()
+    _check_correct_job(job_id)
     results = []
     while not SELF["result_queue"].empty():
         results.append(SELF["result_queue"].get())
 
     data = BytesIO(pickle.dumps(results))
-    data.seek(0)  # <- ai told me to put this here idk why
+    data.seek(0)  # <- artificial intelligence told me to put this here idk why
     mimetype = "application/octet-stream"
     return send_file(data, mimetype=mimetype, as_attachment=True, download_name="results.pkl")
 
 
 @BP.post("/jobs/<job_id>/inputs")
 def upload_inputs(job_id: str):
+    _check_udf_executor_thread()
+    _check_correct_job(job_id)
+
     pickled_inputs_pkl_with_idx = request.files["inputs_pkl_with_idx"].read()
     inputs_pkl_with_idx = pickle.loads(pickled_inputs_pkl_with_idx)
 
@@ -70,8 +79,7 @@ def start_job(job_id: str):
     function_pkl = function_pkl.read()
     SELF["logs"].append("Successfully downloaded user function.")
 
-    # ThreadWithExc is a thread that catches and stores errors.
-    # We need so we can save the error until the status of this service is checked.
+    # ThreadWithExc is a thread wrapper that catches and stores errors.
     args = (job_id, function_pkl)
     thread = ThreadWithExc(target=execute_job, args=args)
     thread.start()
@@ -79,7 +87,6 @@ def start_job(job_id: str):
     SELF["current_job"] = job_id
     SELF["subjob_thread"] = thread
     SELF["STARTED"] = True
-    SELF["started_at"] = time()
 
     SELF["logs"].append(f"Successfully started job {job_id}.")
     return "Success"

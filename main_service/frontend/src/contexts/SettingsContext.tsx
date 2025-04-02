@@ -1,6 +1,6 @@
 // src/contexts/SettingsContext.tsx
 import React, { createContext, useContext, useEffect, useState } from "react";
-import { Settings as SettingsData } from "@/types/cluster";
+import { Settings as SettingsData } from "@/types/coreTypes";
 
 interface SettingsContextType {
   settings: SettingsData;
@@ -24,7 +24,14 @@ export const SettingsProvider = ({ children }: { children: React.ReactNode }) =>
   useEffect(() => {
     const fetchSettings = async () => {
       try {
-        const res = await fetch("/v1/settings");
+        const res = await fetch("/v1/settings", {
+            method: "GET",
+            headers: {
+              "Content-Type": "application/json",
+              "Email": "joe@burla.dev",
+            },
+            credentials: "include", // 👈 This line is crucial
+          });
         if (!res.ok) throw new Error("Failed to fetch settings");
         const data = await res.json();
 

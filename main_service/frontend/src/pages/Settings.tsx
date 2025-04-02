@@ -4,6 +4,9 @@ import { SettingsForm } from "@/components/SettingsForm";
 import { Button } from "@/components/ui/button";
 import { useSaveSettings } from "@/hooks/useSaveSettings";
 import { toast } from "@/components/ui/use-toast"; // Optional: if you want toast feedback
+import { ServiceAccounts } from "@/components/ServiceAccounts";
+import { ServiceAccountProvider } from "@/contexts/ServiceAccountContext"; // ✅ add this
+
 
 const SettingsPageContent = () => {
   const [isEditing, setIsEditing] = useState(false);
@@ -33,16 +36,19 @@ const SettingsPageContent = () => {
         </Button>
       </div>
       <SettingsForm isEditing={isEditing} />
+      <ServiceAccounts isEditing={isEditing}/> 
     </>
   );
 };
 
 const SettingsPage = () => (
-  <div className="flex-1 flex flex-col justify-start px-12 pt-0 max-w-6xl mx-auto w-full">
-    <SettingsProvider>
-      <SettingsPageContent />
-    </SettingsProvider>
-  </div>
-);
+    <div className="flex-1 flex flex-col justify-start px-12 pt-0 max-w-6xl mx-auto w-full">
+      <SettingsProvider>
+        <ServiceAccountProvider>
+          <SettingsPageContent />
+        </ServiceAccountProvider>
+      </SettingsProvider>
+    </div>
+  );
 
 export default SettingsPage;

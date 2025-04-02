@@ -1,6 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { Power, PowerOff, RefreshCw } from "lucide-react";
-import { ClusterStatus } from "@/types/cluster";
+import { ClusterStatus } from "@/types/coreTypes";
 
 interface ClusterControlsProps {
     status: ClusterStatus;

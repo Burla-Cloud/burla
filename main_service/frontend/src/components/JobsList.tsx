@@ -9,7 +9,7 @@ import {
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 import { Play, Square } from "lucide-react"; // Import icons
-import { BurlaJob } from "@/types/cluster";
+import { BurlaJob } from "@/types/coreTypes";
 
 interface JobsListProps {
     jobs: BurlaJob[];

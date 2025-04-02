@@ -31,3 +31,10 @@ export interface Settings {
     machineQuantity: number;
     users: string[];
   }
+
+  export interface ServiceAccount {
+    id: string;
+    name: string;
+    token: string;
+  }
+

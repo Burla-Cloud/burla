@@ -177,8 +177,9 @@ async def login__log_and_time_requests__log_errors(request: Request, call_next):
     requested_file = static_dir / url_path.relative_to("/")
     requesting_static_file = requested_file.exists() and requested_file.is_file()
 
-    public_endpoints = ["/", "/v1/cluster", "/v1/cluster/restart", "/v1/cluster/shutdown", "/v1/job_context", "/jobs", "/v1/settings"]
-    requesting_public_endpoint = str(url_path) in public_endpoints
+    public_endpoints = ["/", "/v1/cluster", "/v1/cluster/restart", "/v1/cluster/shutdown", "/v1/job_context", "/jobs", "/v1/service-accounts", "/v1/settings", "/v1/service-accounts/"]
+    requesting_public_endpoint = any(
+    str(url_path).startswith(endpoint) for endpoint in public_endpoints)
     request_requires_auth = not (requesting_public_endpoint or requesting_static_file)
 
     if request_requires_auth:

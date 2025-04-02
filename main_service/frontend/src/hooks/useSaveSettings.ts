@@ -1,5 +1,5 @@
 // src/hooks/useSaveSettings.ts
-import { Settings } from "@/types/cluster";
+import { Settings } from "@/types/coreTypes";
 
 export const useSaveSettings = () => {
   const saveSettings = async (settings: Settings) => {

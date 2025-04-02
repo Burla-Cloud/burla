@@ -9,7 +9,7 @@ import {
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 import { Cpu, Database } from "lucide-react";
-import { NodeStatus, BurlaNode } from "@/types/cluster";
+import { NodeStatus, BurlaNode } from "@/types/coreTypes";
 
 interface NodesListProps {
     nodes: BurlaNode[];

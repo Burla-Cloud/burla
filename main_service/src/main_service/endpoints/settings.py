@@ -1,6 +1,6 @@
 # src/main_service/endpoints/settings.py
 
-from fastapi import APIRouter, Depends, Request 
+from fastapi import APIRouter, Depends, Request, HTTPException
 from fastapi.responses import JSONResponse
 from google.api_core.exceptions import GoogleAPICallError
 from google.cloud import firestore
@@ -8,6 +8,9 @@ from google.cloud import firestore
 from main_service import DB, get_user_email, get_logger, get_request_json
 from main_service.helpers import Logger
 from typing import Dict
+import random 
+from uuid import uuid4
+import string 
 
 router = APIRouter()
 
@@ -119,4 +122,98 @@ async def update_settings(request: Request, logger: Logger = Depends(get_logger)
 
     except GoogleAPICallError as e:
         logger.log(f"Error updating cluster config: {e}", severity="ERROR")
+        return JSONResponse(status_code=500, content={"error": "Internal Server Error"})
+    
+
+
+SERVICE_ACCOUNTS_COLLECTION = "service_accounts"
+
+# Word banks for name generation
+animals = ["panther", "otter", "lynx", "dolphin", "eagle"]
+colors = ["blue", "scarlet", "ivory", "amber", "emerald"]
+adjectives = ["brave", "sneaky", "quiet", "curious", "mighty"]
+
+def pick(lst):
+    return random.choice(lst)
+
+def generate_name():
+    return f"{pick(animals)}-{pick(colors)}-{pick(adjectives)}"
+
+def generate_token():
+    return "-".join(
+        ''.join(random.choices(string.ascii_lowercase + string.digits, k=8)) for _ in range(5)
+    )
+
+@router.post("/v1/service-accounts")
+async def create_service_account(logger: Logger = Depends(get_logger)):
+    try:
+        # Generate unique ID, name, and token
+        service_id = str(uuid4())
+        name = generate_name()
+        token = generate_token()
+
+        # Create document in Firestore
+        doc_ref = DB.collection(SERVICE_ACCOUNTS_COLLECTION).document(service_id)
+        doc_ref.set({
+            "id": service_id,
+            "name": name,
+            "token": token,
+        })
+
+        return {
+            "id": service_id,
+            "name": name,
+            "token": token,
+        }
+
+    except Exception as e:
+        logger.log(f"Error creating service account: {e}", severity="ERROR")
+        return JSONResponse(status_code=500, content={"error": "Internal Server Error"})
+    
+
+
+@router.delete("/v1/service-accounts/{service_id}")
+async def delete_service_account(service_id: str, logger: Logger = Depends(get_logger)):
+    try:
+        doc_ref = DB.collection(SERVICE_ACCOUNTS_COLLECTION).document(service_id)
+        if not doc_ref.get().exists:
+            raise HTTPException(status_code=404, detail="Service account not found")
+
+        doc_ref.delete()
+        return {"message": f"Service account {service_id} deleted successfully"}
+
+    except Exception as e:
+        logger.log(f"Error deleting service account {service_id}: {e}", severity="ERROR")
+        return JSONResponse(status_code=500, content={"error": "Internal Server Error"})
+    
+
+@router.get("/v1/service-accounts")
+async def list_service_accounts(logger: Logger = Depends(get_logger)):
+    try:
+        docs = DB.collection(SERVICE_ACCOUNTS_COLLECTION).stream()
+        accounts = [doc.to_dict() for doc in docs]
+        return {"service_accounts": accounts}
+
+    except Exception as e:
+        logger.log(f"Error listing service accounts: {e}", severity="ERROR")
+        return JSONResponse(status_code=500, content={"error": "Internal Server Error"})
+    
+
+
+@router.post("/v1/service-accounts/{service_id}/refresh-token")
+async def refresh_service_account_token(service_id: str, logger: Logger = Depends(get_logger)):
+    try:
+        doc_ref = DB.collection(SERVICE_ACCOUNTS_COLLECTION).document(service_id)
+        doc = doc_ref.get()
+
+        if not doc.exists:
+            raise HTTPException(status_code=404, detail="Service account not found")
+
+        new_token = generate_token()
+        doc_ref.update({"token": new_token})
+
+        return {"token": new_token}
+
+    except Exception as e:
+        logger.log(f"Error refreshing token for {service_id}: {e}", severity="ERROR")
         return JSONResponse(status_code=500, content={"error": "Internal Server Error"})

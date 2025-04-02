@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState, useCallback } from "react";
-import { BurlaJob, JobsStatus } from "@/types/cluster";
+import { BurlaJob, JobsStatus } from "@/types/coreTypes";
 
 interface JobsContextType {
     jobs: BurlaJob[];

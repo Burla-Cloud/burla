@@ -37,6 +37,7 @@ SELF = {
     "workers": [],
     "current_job": None,
     "result_queue": Queue(),
+    "workers_have_all_inputs": False,
     "job_watcher_stop_event": Event(),
     "current_container_config": [],
     "time_until_inactivity_shutdown": None,

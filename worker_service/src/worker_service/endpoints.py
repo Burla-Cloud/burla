@@ -13,10 +13,11 @@ ERROR_ALREADY_LOGGED = False
 
 @BP.get("/")
 def get_status():
-    if not SELF["STARTED"]:
-        return jsonify({"status": "READY"})
-    else:
+    # A worker can also be "IDLE" but that is returned when checking for results (more efficient)
+    if SELF["STARTED"]:
         return jsonify({"status": "BUSY"})
+    else:
+        return jsonify({"status": "READY"})
 
 
 def _check_udf_executor_thread():
@@ -41,8 +42,9 @@ def get_results(job_id: str):
     while not SELF["result_queue"].empty():
         results.append(SELF["result_queue"].get())
 
-    data = BytesIO(pickle.dumps(results))
-    data.seek(0)  # <- artificial intelligence told me to put this here idk why
+    # `IDLE` is used to determine if job is done
+    data = BytesIO(pickle.dumps({"results": results, "is_idle": SELF["IDLE"]}))
+    data.seek(0)  # ensure file pointer is at the beginning of the file.
     mimetype = "application/octet-stream"
     return send_file(data, mimetype=mimetype, as_attachment=True, download_name="results.pkl")
 

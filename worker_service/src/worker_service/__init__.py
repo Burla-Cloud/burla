@@ -31,7 +31,7 @@ from worker_service.helpers import VerboseList  # <- same as a list but prints/l
 verbose_list = VerboseList(log_on_append=SEND_LOGS_TO_GCL, print_on_append=IN_LOCAL_DEV_MODE)
 SELF = {
     "STARTED": False,
-    "DONE": False,
+    "IDLE": False,
     "job_id": None,
     "subjob_thread": None,
     "inputs_queue": Queue(),

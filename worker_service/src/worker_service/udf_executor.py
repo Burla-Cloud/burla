@@ -70,10 +70,12 @@ def execute_job(job_id: str, function_pkl: bytes):
     while True:
         try:
             input_index, input_pkl = SELF["inputs_queue"].get()
+            SELF["IDLE"] = False
             SELF["logs"].append(f"Popped input #{input_index} from queue.")
         except Empty:
-            SELF["logs"].append("No inputs in queue. Sleeping for 2 seconds.")
-            sleep(2)
+            SELF["IDLE"] = True
+            SELF["logs"].append("No inputs in queue. Sleeping for .2 seconds.")
+            sleep(0.2)
 
         is_error = False
         with _FirestoreLogger(job_id, input_index):

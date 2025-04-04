@@ -13,6 +13,7 @@ import docker
 from fastapi import APIRouter, Path, Depends, Response
 from fastapi.responses import StreamingResponse
 from google.cloud import firestore
+from google.cloud.firestore import FieldFilter
 
 from node_service import (
     PROJECT_ID,
@@ -37,11 +38,12 @@ async def _result_check_single_worker(session, worker, logger):
         if response.status != 200:
             return worker, response.status
 
-        results_pkl = b"".join([c async for c in response.content.iter_chunked(8192)])
-        results = pickle.loads(results_pkl)
-        # msg = f"Received {len(results)} results from {worker.container_name} "
-        # logger.log(msg + f"({len(results_pkl)} bytes)")
-        [SELF["result_queue"].put(result) for result in results]
+        response_pkl = b"".join([c async for c in response.content.iter_chunked(8192)])
+        response = pickle.loads(response_pkl)
+        # msg = f"Received {len(response['results'])} results from {worker.container_name} "
+        # logger.log(msg + f"({len(response_pkl)} bytes)")
+        [SELF["result_queue"].put(result) for result in response["results"]]
+        worker.is_idle = response["is_idle"]
         return worker, response.status
 
 
@@ -54,35 +56,71 @@ async def _result_check_all_workers(logger):
 def job_watcher(stop_event: Event = None):
     logger = Logger()
     try:
+        all_workers_idle = False
         while not stop_event.is_set():
             sleep(0.4)
 
             # gather results from workers
-            results = asyncio.run(_result_check_all_workers(logger))
-            failed_workers = [f"{w.container_name}: {s}" for w, s in results if s != 200]
+            workers_info = asyncio.run(_result_check_all_workers(logger))
+            failed_workers = [f"{w.container_name}: {rs}" for w, rs in workers_info if rs != 200]
             if failed_workers:
                 logger.log(f"result-check failed for workers: {', '.join(failed_workers)}")
                 # TODO: if a worker fails, send its assigned unfinished inputs to other workers
                 logger.log("REBOOTING because a worker FAILED!")
-                reboot_containers(logger=logger)
-                return
+                break
 
+            # update current_node_parallelism
+            SELF["current_node_parallelism"] = sum([not w.is_idle for w in SELF["workers"]])
+
+            # are all the workers done ?
+            # workers must still be idle after checking twice to prevent race condition
+            all_workers_idle_twice = all_workers_idle and SELF["current_node_parallelism"] == 0
+            all_workers_idle = SELF["current_node_parallelism"] == 0
+
+            if SELF["workers_have_all_inputs"] and all_workers_idle_twice:
+                # Mark current node as done
+                db = firestore.Client(project=PROJECT_ID, database="burla")
+                job_doc = db.collection("jobs").document(SELF["current_job"])
+                job_nodes = job_doc.collection("assigned_nodes")
+                job_nodes.document(INSTANCE_NAME).set({"is_done": True})
+                logger.log(f"Node {INSTANCE_NAME} is DONE executing job {SELF['current_job']}")
+                # Check if all nodes are done, mark entire job as DONE if so
+                filter = FieldFilter("is_done", "==", False)
+                all_nodes_done = not list(job_nodes.where(filter=filter).limit(1).stream())
+                if all_nodes_done:
+                    logger.log(f"All nodes done, marking job {SELF['current_job']} as DONE")
+                    job_doc.update({"status": "COMPLETED"})
+                break
+
+            # Did the client disconnect?
             seconds_since_last_healthcheck = time() - SELF["last_healthcheck_timestamp"]
-            # logger.log(f"checking for restart: {seconds_since_last_healthcheck}")
-            client_disconnected = seconds_since_last_healthcheck > 60
-
+            client_disconnected = seconds_since_last_healthcheck > 30
             if client_disconnected and not SELF["BOOTING"]:
                 msg = "No healthcheck received from client in the last "
                 msg += f"{seconds_since_last_healthcheck}s, REBOOTING NODE!"
                 logger.log(msg)
-                reboot_containers(logger=logger)
-                return
+                db = firestore.Client(project=PROJECT_ID, database="burla")
+                job_doc = db.collection("jobs").document(SELF["current_job"])
+                job_doc.update({"status": "FAILED"})
+                break
+
+        reboot_containers(logger=logger)
 
     except Exception as e:
         exc_type, exc_value, exc_traceback = sys.exc_info()
         tb_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
         traceback_str = format_traceback(tb_details)
         logger.log(str(e), "ERROR", traceback=traceback_str)
+
+
+@router.post("/jobs/{job_id}/inputs/done")
+def all_inputs_forwarded(job_id: str = Path(...)):
+    if not job_id == SELF["current_job"]:
+        return Response("job not found", status_code=404)
+    # Tells node that no more inputs will be arriving.
+    # This is important because it allows the node to figure out when it can restart.
+    SELF["workers_have_all_inputs"] = True
+    SELF["last_healthcheck_timestamp"] = time()
 
 
 @router.post("/jobs/{job_id}/inputs")
@@ -153,7 +191,9 @@ def get_results(job_id: str = Path(...), logger: Logger = Depends(get_logger)):
     while not SELF["result_queue"].empty():
         results.append(SELF["result_queue"].get())
 
-    data = BytesIO(pickle.dumps(results))
+    response = {"results": results, "current_node_parallelism": SELF["current_node_parallelism"]}
+    data = BytesIO(pickle.dumps(response))
+    data.seek(0)  # ensure file pointer is at the beginning of the file.
     headers = {"Content-Disposition": 'attachment; filename="results.pkl"'}
     return StreamingResponse(data, media_type="application/octet-stream", headers=headers)
 
@@ -177,6 +217,11 @@ def execute(
     db = firestore.Client(project=PROJECT_ID, database="burla")
     node_doc = db.collection("nodes").document(INSTANCE_NAME)
     node_doc.update({"status": "RUNNING", "current_job": job_id})
+
+    # permanently associate this node to the job document (`current_job` is cleared later)
+    job_doc = db.collection("jobs").document(job_id)
+    job_node_doc = job_doc.collection("assigned_nodes").document(INSTANCE_NAME)
+    job_node_doc.set({"is_done": False})
 
     # determine which workers to call and which to remove
     workers_to_remove = []
@@ -271,6 +316,7 @@ def reboot_containers(
         SELF["BOOTING"] = True
         SELF["workers"] = []
         SELF["result_queue"] = Queue()
+        SELF["all_inputs_received"] = False
         if new_container_config:
             SELF["current_container_config"] = new_container_config
 
@@ -287,6 +333,7 @@ def reboot_containers(
                 "parallelism": None,
                 "target_parallelism": None,
                 "started_booting_at": started_booting_at,
+                "all_inputs_received": False,
             }
         )
 

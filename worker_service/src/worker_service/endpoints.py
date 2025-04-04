@@ -1,100 +1,94 @@
-import sys
 import pickle
+from io import BytesIO
 
-from flask import jsonify, Blueprint, request
+from flask import jsonify, Blueprint, request, send_file
 
-from worker_service import SELF, LOGGER, IN_LOCAL_DEV_MODE
+from worker_service import SELF
 from worker_service.udf_executor import execute_job
 from worker_service.helpers import ThreadWithExc
 
 BP = Blueprint("endpoints", __name__)
 ERROR_ALREADY_LOGGED = False
 
-from time import time
-
 
 @BP.get("/")
 def get_status():
-    """
-    There are four possible states:
-     1. “READY”: This service is ready to start processing a subjob.
-     2. “RUNNING”: This service is processing a subjob.
-     3. “FAILED”: This service had an internal error and failed to process the subjob.
-     4. “DONE”: This worker successfully processed the subjob.
-    """
-    global ERROR_ALREADY_LOGGED
-    bar = "----------------------------------"
-    status_log = f"{bar}\nReceived request to get worker status.\n"
+    # A worker can also be "IDLE" but that is returned when checking for results (more efficient)
+    if SELF["STARTED"]:
+        return jsonify({"status": "BUSY"})
+    else:
+        return jsonify({"status": "READY"})
 
-    thread_is_running = SELF["subjob_thread"] and SELF["subjob_thread"].is_alive()
-    thread_traceback_str = SELF["subjob_thread"].traceback_str if SELF["subjob_thread"] else None
-    thread_died = SELF["subjob_thread"] and (not SELF["subjob_thread"].is_alive())
 
-    READY = not SELF["STARTED"]
-    RUNNING = thread_is_running and (not thread_traceback_str) and (not SELF["DONE"])
-    FAILED = thread_traceback_str or (thread_died and not SELF["DONE"])
-    DONE = SELF["DONE"]
-
-    # print error if in development so I dont need to go to google cloud logging to see it
-    if IN_LOCAL_DEV_MODE and SELF["subjob_thread"] and SELF["subjob_thread"].traceback_str:
-        status_log += "ERROR DETECTED IN WORKER THREAD (printing in stderr).\n"
-        print(thread_traceback_str, file=sys.stderr)
-
-    if FAILED and not ERROR_ALREADY_LOGGED:
-        status_log += "ERROR DETECTED IN WORKER THREAD (logging in GCL).\n"
-        struct = {"severity": "ERROR", "worker_logs": SELF["WORKER_LOGS"]}
-        if thread_traceback_str:
-            struct.update({"traceback": thread_traceback_str})
+def _check_udf_executor_thread():
+    if not SELF["subjob_thread"].is_alive():
+        traceback_str = getattr(SELF["subjob_thread"], "traceback_str", None)
+        if traceback_str:
+            raise Exception(f"UDF executor thread failed with traceback:\n{traceback_str}")
         else:
-            struct.update({"message": "Subjob thread died without error!"})
-        LOGGER.log_struct(struct)
-        ERROR_ALREADY_LOGGED = True
+            raise Exception(f"UDF executor thread died with no errors")
 
-    if READY:
-        status = "READY"
-    elif RUNNING:
-        status = "RUNNING"
-    elif FAILED:
-        status = "FAILED"
-    elif DONE:
-        status = "DONE"
 
-    status_log += f"Status = {status}"
-    SELF["WORKER_LOGS"].append(f"{status_log}\n{bar}")
-    return jsonify({"status": status})
+def _check_correct_job(job_id: str):
+    if SELF["current_job"] != job_id:
+        raise Exception(f"Job {job_id} is not the current job")
+
+
+@BP.get("/jobs/<job_id>/results")
+def get_results(job_id: str):
+    _check_udf_executor_thread()
+    _check_correct_job(job_id)
+    results = []
+    while not SELF["result_queue"].empty():
+        results.append(SELF["result_queue"].get())
+
+    # `IDLE` is used to determine if job is done
+    data = BytesIO(pickle.dumps({"results": results, "is_idle": SELF["IDLE"]}))
+    data.seek(0)  # ensure file pointer is at the beginning of the file.
+    mimetype = "application/octet-stream"
+    return send_file(data, mimetype=mimetype, as_attachment=True, download_name="results.pkl")
+
+
+@BP.post("/jobs/<job_id>/inputs")
+def upload_inputs(job_id: str):
+    _check_udf_executor_thread()
+    _check_correct_job(job_id)
+
+    pickled_inputs_pkl_with_idx = request.files["inputs_pkl_with_idx"].read()
+    inputs_pkl_with_idx = pickle.loads(pickled_inputs_pkl_with_idx)
+
+    total_data = sum(len(input_pkl) for input_pkl in inputs_pkl_with_idx)
+    msg = f"Received {len(inputs_pkl_with_idx)} inputs for job {job_id} ({total_data} bytes)."
+    SELF["logs"].append(msg)
+
+    for input_pkl_with_idx in inputs_pkl_with_idx:
+        SELF["inputs_queue"].put(input_pkl_with_idx)
+
+    return "Success"
 
 
 @BP.post("/jobs/<job_id>")
 def start_job(job_id: str):
-    # only one job will ever be executed by this service
+    # only one job should ever be executed by this service
+    # then it should be restarted (to clear/reset the filesystem)
     if SELF["STARTED"]:
+        msg = f"ERROR: Received request to start job {job_id}, but this worker was previously "
+        SELF["logs"].append(msg + f"assigned to job {SELF['job_id']}! Returning 409.")
         return "STARTED", 409
 
-    request_json = pickle.loads(request.files["request_json"].read())
+    SELF["logs"].append(f"Assigned to job {job_id}.")
     function_pkl = request.files.get("function_pkl")
-    if function_pkl:
-        function_pkl = function_pkl.read()
+    function_pkl = function_pkl.read()
+    SELF["logs"].append("Successfully downloaded user function.")
 
-    SELF["WORKER_LOGS"].append(f"Executing job {job_id}.")
-    SELF["WORKER_LOGS"].append(f"STARTING WORK AT INDEX #{request_json['starting_index']}")
-
-    # ThreadWithExc is a thread that catches and stores errors.
-    # We need so we can save the error until the status of this service is checked.
-    args = (
-        job_id,
-        request_json["inputs_id"],
-        request_json["n_inputs"],
-        request_json["starting_index"],
-        request_json["planned_future_job_parallelism"],
-        function_pkl,
-    )
+    # ThreadWithExc is a thread wrapper that catches and stores errors.
+    args = (job_id, function_pkl)
     thread = ThreadWithExc(target=execute_job, args=args)
     thread.start()
 
     SELF["current_job"] = job_id
     SELF["subjob_thread"] = thread
     SELF["STARTED"] = True
-    SELF["started_at"] = time()
-    SELF["starting_index"] = request_json["starting_index"]
 
+    SELF["logs"].append(f"Successfully started job {job_id}.")
     return "Success"

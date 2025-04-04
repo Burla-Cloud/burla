@@ -68,6 +68,33 @@ image:
 	echo "$${TEST_IMAGE_NAME_LATEST}"; \
 	echo "";
 
+image_same_env:
+	set -e; \
+	printf "$$(date "+%Y-%m-%d %H:%M:%S")" > last_image_pushed_at.txt; \
+	PROJECT_ID=$$(gcloud config get-value project 2>/dev/null); \
+	TEST_IMAGE_BASE_NAME=$$( echo \
+		"us-docker.pkg.dev/$${PROJECT_ID}/$(ARTIFACT_REPO_NAME)/$(ARTIFACT_PKG_NAME)" \
+	); \
+	TEST_IMAGE_TAG=$$( \
+		gcloud artifacts tags list \
+			--package=$(ARTIFACT_PKG_NAME) \
+			--location=us \
+			--repository=$(ARTIFACT_REPO_NAME) \
+			--project $${PROJECT_ID} \
+			2>&1 | grep -Eo '^[0-9]+' | sort -n | tail -n 1 \
+	); \
+	NEW_TEST_IMAGE_TAG=$$(($${TEST_IMAGE_TAG} + 1)); \
+	TEST_IMAGE_NAME_SEQUENTIAL=$$( echo $${TEST_IMAGE_BASE_NAME}:$${NEW_TEST_IMAGE_TAG} ); \
+	TEST_IMAGE_NAME_LATEST=$$( echo $${TEST_IMAGE_BASE_NAME}:latest ); \
+	docker build --platform linux/amd64 -t $${TEST_IMAGE_NAME_SEQUENTIAL} -f Dockerfile_same_env .; \
+	docker push $${TEST_IMAGE_NAME_SEQUENTIAL}; \
+	docker tag $${TEST_IMAGE_NAME_SEQUENTIAL} $${TEST_IMAGE_NAME_LATEST}; \
+	docker push $${TEST_IMAGE_NAME_LATEST}; \
+	echo "Successfully built Docker Image:"; \
+	echo "$${TEST_IMAGE_NAME_SEQUENTIAL}"; \
+	echo "$${TEST_IMAGE_NAME_LATEST}"; \
+	echo "";
+
 container:
 	set -e; \
 	PROJECT_ID=$$(gcloud config get-value project 2>/dev/null); \

@@ -25,8 +25,15 @@ class Worker:
         python_executable: str,
         image: str,
         docker_client: docker.APIClient,
+        send_logs_to_gcl: bool = False,
     ):
+        self.is_idle = False
         self.container = None
+        self.container_name = None
+        self.url = None
+        self.docker_client = None
+        self.python_version = python_version
+
         attempt = 0
 
         image_stored_in_gcp = "docker.pkg.dev" in image or "gcr.io" in image
@@ -74,6 +81,8 @@ class Worker:
                     environment={
                         "GOOGLE_CLOUD_PROJECT": PROJECT_ID,
                         "IN_LOCAL_DEV_MODE": IN_LOCAL_DEV_MODE,
+                        "WORKER_NAME": container_name,
+                        "SEND_LOGS_TO_GCL": send_logs_to_gcl,
                     },
                     detach=True,
                 )
@@ -116,15 +125,6 @@ class Worker:
                     sleep(1)
                     container_info = docker_client.inspect_container(self.container.get("Id"))
 
-                if attempt > 1:
-                    LOGGER.log_struct(
-                        {
-                            "severity": "INFO",
-                            "message": f"CONTAINER STARTED! after {attempt+1} attempt(s)",
-                            "state": container_info["State"]["Status"],
-                            "name": container_info["Name"],
-                        }
-                    )
             attempt += 1
             if attempt == 10:
                 raise Exception("Unable to start container.")
@@ -178,10 +178,13 @@ class Worker:
             print(container_logs, file=sys.stderr)  # <- to make local debugging easier
 
     def status(self, attempt: int = 0):
+        # A worker can also be "IDLE" (waiting for inputs) but that is not returned by this endpoint
+        # "IDLE" is not a possible return value here because it is only returned/assigned to `self`
+        # when checking results (for efficiency reasons).
         try:
             response = requests.get(f"{self.url}/")
             response.raise_for_status()
-            status = response.json()["status"]  # will be one of: READY, RUNNING, FAILED, DONE
+            status = response.json()["status"]  # will be one of: READY, BUSY
         except requests.exceptions.ConnectionError:
             if attempt <= 30:
                 sleep(3)

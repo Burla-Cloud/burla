@@ -21,7 +21,6 @@ from main_service import (
     get_logger,
     get_add_background_task_function,
 )
-from main_service.cluster import reconcile
 from main_service.node import Container, Node
 from main_service.helpers import Logger
 
@@ -112,9 +111,6 @@ def restart_cluster(
             belongs_to_current_node = any([id in name for id in node_ids])
             if not (is_main_service or belongs_to_current_node):
                 docker_client.remove_container(container["Id"], force=True)
-
-    logger.log("Done restarting, reconciling ...")
-    add_background_task(reconcile, DB, logger, add_background_task)
 
     duration = time() - start
     logger.log(f"Restarted after {duration//60}m {duration%60}s")

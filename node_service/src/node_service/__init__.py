@@ -5,8 +5,11 @@ import asyncio
 import traceback
 from uuid import uuid4
 from time import time
+from queue import Queue
 from typing import Callable
+import logging as python_logging
 from contextlib import asynccontextmanager
+from threading import Event
 
 import google.auth
 from google.auth.transport.requests import Request
@@ -30,19 +33,16 @@ INACTIVITY_SHUTDOWN_TIME_SEC = os.environ.get("INACTIVITY_SHUTDOWN_TIME_SEC")
 INSTANCE_N_CPUS = 2 if IN_LOCAL_DEV_MODE else os.cpu_count()
 GCL_CLIENT = logging.Client().logger("node_service", labels=dict(INSTANCE_NAME=INSTANCE_NAME))
 
-
-# This MUST be set to the same value as `JOB_HEALTHCHECK_FREQUENCY_SEC` in the client.
-# Nodes will restart themself if they dont get a new healthcheck from the client every X seconds.
-JOB_HEALTHCHECK_FREQUENCY_SEC = 3
-
-# no real reason I picked +6 for `time_until_client_disconnect_shutdown`, except that 3 didnt work
 SELF = {
     "workers": [],
-    "job_watcher_thread": None,
     "current_job": None,
+    "result_queue": Queue(),
+    "workers_have_all_inputs": False,
+    "job_watcher_stop_event": Event(),
     "current_container_config": [],
     "time_until_inactivity_shutdown": None,
-    "time_until_client_disconnect_shutdown": JOB_HEALTHCHECK_FREQUENCY_SEC + 6,
+    "last_healthcheck_timestamp": time() - 10,
+    "index_of_last_worker_given_inputs": 0,
     "BOOTING": False,
     "RUNNING": False,
     "FAILED": False,
@@ -55,6 +55,15 @@ class Container(BaseModel):
     image: str
     python_executable: str
     python_version: str
+
+
+# Silence logs coming from the /results endpoint, there are so many it slows stuff down.
+class ResultsEndpointFilter(python_logging.Filter):
+    def filter(self, record):
+        return not record.args[2].endswith("/results")
+
+
+python_logging.getLogger("uvicorn.access").addFilter(ResultsEndpointFilter())
 
 
 async def get_request_json(request: Request):
@@ -228,7 +237,7 @@ async def log_and_time_requests__log_errors(request: Request, call_next):
     if not response_contains_background_tasks:
         response.background = BackgroundTasks()
 
-    if not IN_LOCAL_DEV_MODE:
+    if (not IN_LOCAL_DEV_MODE) and (not str(request.url).endswith("/results")):
         add_background_task = get_add_background_task_function(response.background, logger=logger)
         msg = f"Received {request.method} at {request.url}"
         add_background_task(logger.log, msg)

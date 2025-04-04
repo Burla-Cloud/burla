@@ -1,0 +1,7 @@
+FROM us-docker.pkg.dev/burla-test/burla-worker-service/burla-worker-service:latest
+
+ADD . /burla/worker_service
+# WORKDIR /burla/worker_service
+# RUN python3.11 -m pip install -e .
+
+ENTRYPOINT []

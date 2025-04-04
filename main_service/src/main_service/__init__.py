@@ -115,7 +115,6 @@ def get_add_background_task_function(
     return add_logged_background_task
 
 
-from main_service.endpoints.jobs import router as jobs_router
 from main_service.endpoints.cluster import router as cluster_router
 
 
@@ -144,7 +143,6 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None)
-app.include_router(jobs_router)
 app.include_router(cluster_router)
 app.add_middleware(SessionMiddleware, secret_key=uuid4().hex)
 

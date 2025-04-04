@@ -7,17 +7,19 @@ from typing import Optional, Callable
 import traceback
 import asyncio
 import aiohttp
-
+from io import BytesIO
+from queue import Queue
 import docker
 from fastapi import APIRouter, Path, Depends, Response
+from fastapi.responses import StreamingResponse
 from google.cloud import firestore
+from google.cloud.firestore import FieldFilter
 
 from node_service import (
     PROJECT_ID,
     SELF,
     INSTANCE_N_CPUS,
     INSTANCE_NAME,
-    JOB_HEALTHCHECK_FREQUENCY_SEC,
     get_request_json,
     get_logger,
     get_request_files,
@@ -31,78 +33,169 @@ from node_service import IN_LOCAL_DEV_MODE
 router = APIRouter()
 
 
-def watch_job(job_id: str):
-    """Runs in an independent thread, restarts node when all workers are done or if any failed."""
+async def _result_check_single_worker(session, worker, logger):
+    async with session.get(f"{worker.url}/jobs/{SELF['current_job']}/results") as response:
+        if response.status != 200:
+            return worker, response.status
+
+        response_pkl = b"".join([c async for c in response.content.iter_chunked(8192)])
+        response = pickle.loads(response_pkl)
+        # msg = f"Received {len(response['results'])} results from {worker.container_name} "
+        # logger.log(msg + f"({len(response_pkl)} bytes)")
+        [SELF["result_queue"].put(result) for result in response["results"]]
+        worker.is_idle = response["is_idle"]
+        return worker, response.status
+
+
+async def _result_check_all_workers(logger):
+    async with aiohttp.ClientSession() as session:
+        tasks = [_result_check_single_worker(session, w, logger) for w in SELF["workers"]]
+        return await asyncio.gather(*tasks)
+
+
+def job_watcher(stop_event: Event = None):
     logger = Logger()
-    UDF_error_thrown = Event()
-
-    def on_snapshot(collection_snapshot, changes, read_time):
-        for change in changes:
-            if change.type.name == "ADDED":
-                doc = change.document
-                if doc.get("is_error") is True:
-                    UDF_error_thrown.set()
-
-    # Watch for UDF errors from other nodes:
-    # restart if a udf error from any other node is detected.
-    job_doc = firestore.Client(database="burla").collection("jobs").document(job_id)
-    UDF_error_watcher = job_doc.collection("results").on_snapshot(on_snapshot)
-
     try:
-        while True:
+        all_workers_idle = False
+        while not stop_event.is_set():
+            sleep(0.4)
 
-            sleep(2)
-            SELF["time_until_client_disconnect_shutdown"] -= 2
-            client_disconnected = SELF["time_until_client_disconnect_shutdown"] < 0
+            # gather results from workers
+            workers_info = asyncio.run(_result_check_all_workers(logger))
+            failed_workers = [f"{w.container_name}: {rs}" for w, rs in workers_info if rs != 200]
+            if failed_workers:
+                logger.log(f"result-check failed for workers: {', '.join(failed_workers)}")
+                # TODO: if a worker fails, send its assigned unfinished inputs to other workers
+                logger.log("REBOOTING because a worker FAILED!")
+                break
 
-            workers_status = [worker.status() for worker in SELF["workers"]]
-            any_failed = any([status == "FAILED" for status in workers_status])
-            all_done = all([status == "DONE" for status in workers_status])
-            logger.log(f"Got workers status: all_done={all_done}, any_failed={any_failed}")
+            # update current_node_parallelism
+            SELF["current_node_parallelism"] = sum([not w.is_idle for w in SELF["workers"]])
 
-            if all_done:
-                logger.log("ENDING JOB: all workers are done.")
+            # are all the workers done ?
+            # workers must still be idle after checking twice to prevent race condition
+            all_workers_idle_twice = all_workers_idle and SELF["current_node_parallelism"] == 0
+            all_workers_idle = SELF["current_node_parallelism"] == 0
+
+            if SELF["workers_have_all_inputs"] and all_workers_idle_twice:
+                # Mark current node as done
+                db = firestore.Client(project=PROJECT_ID, database="burla")
+                job_doc = db.collection("jobs").document(SELF["current_job"])
+                job_nodes = job_doc.collection("assigned_nodes")
+                job_nodes.document(INSTANCE_NAME).set({"is_done": True})
+                logger.log(f"Node {INSTANCE_NAME} is DONE executing job {SELF['current_job']}")
+                # Check if all nodes are done, mark entire job as DONE if so
+                filter = FieldFilter("is_done", "==", False)
+                all_nodes_done = not list(job_nodes.where(filter=filter).limit(1).stream())
+                if all_nodes_done:
+                    logger.log(f"All nodes done, marking job {SELF['current_job']} as DONE")
+                    job_doc.update({"status": "COMPLETED"})
                 break
-            elif any_failed:
-                logger.log("ENDING JOB: at least one worker crashed!")
-                break
-            elif UDF_error_thrown.is_set():
-                logger.log("ENDING JOB: user function has thrown an exception!")
-                break
-            elif client_disconnected:
-                last_healthcheck = JOB_HEALTHCHECK_FREQUENCY_SEC + 6
-                msg = "ENDING JOB: "
-                msg += f"No healthcheck received from client in the last {last_healthcheck}s!"
+
+            # Did the client disconnect?
+            seconds_since_last_healthcheck = time() - SELF["last_healthcheck_timestamp"]
+            client_disconnected = seconds_since_last_healthcheck > 30
+            if client_disconnected and not SELF["BOOTING"]:
+                msg = "No healthcheck received from client in the last "
+                msg += f"{seconds_since_last_healthcheck}s, REBOOTING NODE!"
                 logger.log(msg)
+                db = firestore.Client(project=PROJECT_ID, database="burla")
+                job_doc = db.collection("jobs").document(SELF["current_job"])
+                job_doc.update({"status": "FAILED"})
                 break
 
-        if not SELF["BOOTING"]:
-            logger.log("Rebooting node.")
-            reboot_containers(logger=logger)
-        else:
-            logger.log("NOT rebooting because node is ALREADY rebooting!")
+        reboot_containers(logger=logger)
 
     except Exception as e:
-        UDF_error_watcher.unsubscribe()
         exc_type, exc_value, exc_traceback = sys.exc_info()
         tb_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
         traceback_str = format_traceback(tb_details)
         logger.log(str(e), "ERROR", traceback=traceback_str)
 
 
-@router.get("/jobs/{job_id}")
-def get_job_status(job_id: str = Path(...)):
+@router.post("/jobs/{job_id}/inputs/done")
+def all_inputs_forwarded(job_id: str = Path(...)):
+    if not job_id == SELF["current_job"]:
+        return Response("job not found", status_code=404)
+    # Tells node that no more inputs will be arriving.
+    # This is important because it allows the node to figure out when it can restart.
+    SELF["workers_have_all_inputs"] = True
+    SELF["last_healthcheck_timestamp"] = time()
+
+
+@router.post("/jobs/{job_id}/inputs")
+async def upload_inputs(
+    job_id: str = Path(...),
+    request_files: Optional[dict] = Depends(get_request_files),
+    logger: Logger = Depends(get_logger),
+):
+    SELF["last_healthcheck_timestamp"] = time()
     if not job_id == SELF["current_job"]:
         return Response("job not found", status_code=404)
 
-    # reset because healtheck received
-    # no real reason I picked 6 here, except that 3 didn't work
-    SELF["time_until_client_disconnect_shutdown"] = JOB_HEALTHCHECK_FREQUENCY_SEC + 6
+    inputs_pkl_with_idx = pickle.loads(request_files["inputs_pkl_with_idx"])
+    # logger.log(f"Received {len(inputs_pkl_with_idx)} inputs for job {job_id}")
 
-    workers_status = [worker.status() for worker in SELF["workers"]]
-    any_failed = any([status == "FAILED" for status in workers_status])
-    all_done = all([status == "DONE" for status in workers_status])
-    return {"all_workers_done": all_done, "any_workers_failed": any_failed}
+    # separate into batches to be sent to each worker
+    input_batches = []
+    batch_size = len(inputs_pkl_with_idx) // len(SELF["workers"])
+    extra = len(inputs_pkl_with_idx) % len(SELF["workers"])
+    start = 0
+    for i in range(len(SELF["workers"])):
+        end = start + batch_size + (1 if i < extra else 0)
+        batch = inputs_pkl_with_idx[start:end]
+        if batch:
+            input_batches.append(batch)
+        start = end
+
+    assert sum(len(batch) for batch in input_batches) == len(inputs_pkl_with_idx)
+
+    async def _upload_to_single_worker(session, url, batch):
+        data = aiohttp.FormData()
+        data.add_field("inputs_pkl_with_idx", pickle.dumps(batch))
+        async with session.post(url, data=data) as response:
+            response.raise_for_status()
+
+    # concurrently send to each worker
+    async with aiohttp.ClientSession() as session:
+        tasks = []
+        for batch in input_batches:
+
+            if SELF["index_of_last_worker_given_inputs"] == len(SELF["workers"]) - 1:
+                SELF["index_of_last_worker_given_inputs"] = 0
+                current_worker_index = 0
+            else:
+                SELF["index_of_last_worker_given_inputs"] += 1
+                current_worker_index = SELF["index_of_last_worker_given_inputs"]
+
+            current_worker = SELF["workers"][current_worker_index]
+            url = f"{current_worker.url}/jobs/{job_id}/inputs"
+            # msg = f"Sending {len(batch)} inputs to worker #{current_worker_index}:"
+            # logger.log(f"{msg} {current_worker.container_name}")
+
+            tasks.append(_upload_to_single_worker(session, url, batch))
+
+        await asyncio.gather(*tasks)
+
+    SELF["last_healthcheck_timestamp"] = time()
+
+
+@router.get("/jobs/{job_id}/results")
+def get_results(job_id: str = Path(...), logger: Logger = Depends(get_logger)):
+    if not job_id == SELF["current_job"]:
+        return Response("job not found", status_code=404)
+    # logger.log("Received healthcheck")
+    SELF["last_healthcheck_timestamp"] = time()
+
+    results = []
+    while not SELF["result_queue"].empty():
+        results.append(SELF["result_queue"].get())
+
+    response = {"results": results, "current_node_parallelism": SELF["current_node_parallelism"]}
+    data = BytesIO(pickle.dumps(response))
+    data.seek(0)  # ensure file pointer is at the beginning of the file.
+    headers = {"Content-Disposition": 'attachment; filename="results.pkl"'}
+    return StreamingResponse(data, media_type="application/octet-stream", headers=headers)
 
 
 @router.post("/jobs/{job_id}")
@@ -125,18 +218,16 @@ def execute(
     node_doc = db.collection("nodes").document(INSTANCE_NAME)
     node_doc.update({"status": "RUNNING", "current_job": job_id})
 
-    job_watcher_thread = Thread(target=watch_job, args=(job_id,))
-    job_watcher_thread.start()
-    SELF["job_watcher_thread"] = job_watcher_thread
-
-    job_ref = db.collection("jobs").document(job_id)
-    job = job_ref.get().to_dict()
+    # permanently associate this node to the job document (`current_job` is cleared later)
+    job_doc = db.collection("jobs").document(job_id)
+    job_node_doc = job_doc.collection("assigned_nodes").document(INSTANCE_NAME)
+    job_node_doc.set({"is_done": False})
 
     # determine which workers to call and which to remove
     workers_to_remove = []
     workers_to_keep = []
     future_parallelism = 0
-    user_python_version = job["user_python_version"]
+    user_python_version = request_json["user_python_version"]
     for worker in SELF["workers"]:
         correct_python_version = worker.python_version == user_python_version
         need_more_parallelism = future_parallelism < request_json["parallelism"]
@@ -160,42 +251,43 @@ def execute(
         return Response(msg, status_code=409)
 
     # call workers concurrently
-    async def assign_worker(session, url, starting_index):
-        request_json = {
-            "inputs_id": job["inputs_id"],
-            "n_inputs": job["n_inputs"],
-            "starting_index": starting_index,
-            "planned_future_job_parallelism": job["planned_future_job_parallelism"],
-        }
-        data = {"function_pkl": function_pkl, "request_json": pickle.dumps(request_json)}
-        async with session.post(url, data=data) as response:
-            response.raise_for_status()
-        return starting_index
+    async def assign_worker(session, url):
+        async with session.post(url, data={"function_pkl": function_pkl}) as response:
+            if response.status == 200:
+                return url
+            else:
+                logger.log(f"Worker {url} returned error: {response.status}", severity="WARNING")
+                return None
 
     async def assign_workers(workers):
         async with aiohttp.ClientSession() as session:
             tasks = []
-            for index, worker in enumerate(workers):
+            for worker in workers:
                 url = f"{worker.url}/jobs/{job_id}"
-                worker_starting_index = request_json["starting_index"] + index
-                tasks.append(assign_worker(session, url, worker_starting_index))
-                worker.id = worker_starting_index
-            return await asyncio.gather(*tasks)
+                tasks.append(assign_worker(session, url))
+            results = await asyncio.gather(*tasks)
+            return [url for url in results if url]
 
-    assigned_starting_indicies = asyncio.run(assign_workers(workers_to_keep))
-
-    if not len(assigned_starting_indicies) == len(workers_to_keep):
-        desired_starting_indicies = list(range(starting_index, len(workers_to_keep)))
-        unassigned_indicies = set(desired_starting_indicies) - set(assigned_starting_indicies)
-        raise Exception(f"failed to assign workers to inputs at indicies: {unassigned_indicies}")
+    successful_worker_urls = asyncio.run(assign_workers(workers_to_keep))
+    logger.log(f"Successfully assigned to {len(successful_worker_urls)} workers.")
 
     SELF["workers"] = workers_to_keep
     remove_workers = lambda workers_to_remove: [w.remove() for w in workers_to_remove]
     add_background_task(remove_workers, workers_to_remove)
 
-    starting_index = request_json["starting_index"]
-    ending_index = starting_index + len(workers_to_keep)
-    add_background_task(logger.log, f"Assigned inputs: {starting_index} - {ending_index}")
+    SELF["last_healthcheck_timestamp"] = time()
+    stop_event = Event()
+    job_watcher_thread = Thread(target=job_watcher, args=(stop_event,), daemon=True)
+    job_watcher_thread.start()
+    SELF["job_watcher_stop_event"] = stop_event
+
+
+@router.post("/background_reboot")
+def background_reboot(
+    logger: Logger = Depends(get_logger),
+    add_background_task: Callable = Depends(get_add_background_task_function),
+):
+    add_background_task(reboot_containers, logger=logger)
 
 
 @router.post("/reboot")
@@ -218,9 +310,13 @@ def reboot_containers(
         return Response("Node already BOOTING, unable to satisfy request.", status_code=409)
 
     try:
+        logger.log(f"REBOOTING NODE: {INSTANCE_NAME}")
+        SELF["job_watcher_stop_event"].set()
         SELF["RUNNING"] = False
         SELF["BOOTING"] = True
         SELF["workers"] = []
+        SELF["result_queue"] = Queue()
+        SELF["all_inputs_received"] = False
         if new_container_config:
             SELF["current_container_config"] = new_container_config
 
@@ -237,6 +333,7 @@ def reboot_containers(
                 "parallelism": None,
                 "target_parallelism": None,
                 "started_booting_at": started_booting_at,
+                "all_inputs_received": False,
             }
         )
 
@@ -274,8 +371,8 @@ def reboot_containers(
                     threads.append(Thread(target=stop_container, kwargs=stop_kwargs))
                     workers_marked_old.append(name)
 
-            logger.log(f'Marked {len(workers_marked_old)} workers as "OLD": {workers_marked_old}')
-            logger.log(f'Removed {len(old_workers_removed)} "OLD" workers: {old_workers_removed}')
+            # logger.log(f'Marked {len(workers_marked_old)} workers as "OLD": {workers_marked_old}')
+            # logger.log(f'Removed {len(old_workers_removed)} "OLD" workers: {old_workers_removed}')
         else:
             # remove all worker containers
             workers_removed = []
@@ -286,7 +383,7 @@ def reboot_containers(
                     threads.append(Thread(target=remove_container, kwargs=kwargs))
                     workers_removed.append(container["Names"][0])
 
-            logger.log(f"Removed {len(workers_removed)} workers: {workers_removed}")
+            # logger.log(f"Removed {len(workers_removed)} workers: {workers_removed}")
 
         [thread.start() for thread in threads]
         [thread.join() for thread in threads]
@@ -306,20 +403,23 @@ def reboot_containers(
         # max num containers is 1024 due to some network/port related limit
         threads = []
         for container_spec in SELF["current_container_config"]:
-            for _ in range(INSTANCE_N_CPUS):
+            for i in range(INSTANCE_N_CPUS):
+                # have only one worker send logs to gcl, too many will break gcl
+                send_logs_to_gcl = False  # (i == 0) and (not IN_LOCAL_DEV_MODE)
                 args = (
                     container_spec.python_version,
                     container_spec.python_executable,
                     container_spec.image,
                     docker_client,
+                    send_logs_to_gcl,
                 )
                 thread = Thread(target=create_worker, args=args)
                 threads.append(thread)
                 thread.start()
 
         [thread.join() for thread in threads]
-        worker_names = [w.container_name for w in SELF["workers"]]
-        logger.log(f'Started {len(SELF["workers"])} new workers: {worker_names}')
+        # worker_names = [w.container_name for w in SELF["workers"]]
+        # logger.log(f'Started {len(SELF["workers"])} new workers: {worker_names}')
 
         # Sometimes on larger machines, some containers don't start, or get stuck in "CREATED" state
         # This has not been diagnosed, this check is performed to ensure all containers started.
@@ -337,11 +437,8 @@ def reboot_containers(
         else:
             SELF["BOOTING"] = False
             SELF["current_job"] = None
-            # no real reason I picked 6 here, except that 3 didn't work
-            SELF["time_until_client_disconnect_shutdown"] = JOB_HEALTHCHECK_FREQUENCY_SEC + 6
+            SELF["last_healthcheck_timestamp"] = time()
             node_doc.update({"status": "READY"})
-
-        SELF["job_watcher_thread"] = None
 
     except Exception as e:
         SELF["FAILED"] = True

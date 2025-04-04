@@ -61,7 +61,8 @@ def format_traceback(traceback_details: list):
 class Logger:
 
     def __init__(self, request: Optional[Request] = None):
-        self.loggable_request = self.__loggable_request(request) if request else {}
+        self.request = request
+        self.loggable_request = None
 
     def __make_serializeable(self, obj):
         """
@@ -97,6 +98,9 @@ class Logger:
         return self.__make_serializeable(request_dict)
 
     def log(self, message: str, severity="INFO", **kw):
+        if (self.loggable_request is None) and self.request:
+            self.loggable_request = self.__loggable_request(self.request)
+
         if "traceback" in kw.keys():
             print(f"\nERROR: {message.strip()}\n{kw['traceback'].strip()}\n", file=sys.stderr)
         else:

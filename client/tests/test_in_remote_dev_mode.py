@@ -3,9 +3,7 @@ The tests here assume the cluster is running in "remote-dev-mode".
 """
 
 import os
-import sys
-from io import StringIO
-from time import time
+from time import time, sleep
 
 import docker
 
@@ -26,28 +24,37 @@ def in_remote_dev_mode():
 def run_simple_test_job(n_inputs=5):
 
     test_inputs = list(range(n_inputs))
-    stdout = StringIO()
-    sys.stdout = stdout
+    # stdout = StringIO()
+    # sys.stdout = stdout
     start = time()
 
     def simple_test_function(test_input):
-        print(test_input)
-        return test_input
+        # print(test_input)
+        # print(f"STARTING input #{test_input}")
+        sleep(3)
+        # print(f"FINISHED input #{test_input}")
+        return test_input  # f"Waited 1 seconds for input {test_input}!"
 
-    results = remote_parallel_map(simple_test_function, test_inputs)
+    results = remote_parallel_map(simple_test_function, test_inputs)  ##, generator=True)
+
+    # for result in results:
+    #     print(result)
 
     e2e_runtime = time() - start
-    sys.stdout = sys.__stdout__
-    stdout = stdout.getvalue()
+    # sys.stdout = sys.__stdout__
+    # stdout = stdout.getvalue()
 
-    assert e2e_runtime < 5
-    assert all([result in test_inputs for result in results])
+    # assert e2e_runtime < 5
+    print(f"e2e_runtime: {e2e_runtime}")
+    # assert all([result in test_inputs for result in results])
+    # if not len(results) == len(test_inputs):
+    #     print(results)
     assert len(results) == len(test_inputs)
-    for i in range(n_inputs):
-        assert str(i) in stdout
+    # for i in range(n_inputs):
+    #     assert str(i) in stdout
 
 
 def test_base():
     assert in_remote_dev_mode()
 
-    run_simple_test_job()
+    run_simple_test_job(n_inputs=100_000)

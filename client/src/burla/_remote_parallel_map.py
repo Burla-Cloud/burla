@@ -173,12 +173,11 @@ def _watch_job(
     job_ref: firestore.DocumentReference,
     spinner: Union[bool, Spinner],
     stop_event: Event,
-    gcs_bucket_name: str,
 ):
     log_msg_stdout = spinner if spinner else sys.stdout
 
     # In separate thread start uploading inputs:
-    args = (job_id, nodes, inputs, stop_event, log_msg_stdout, gcs_bucket_name)
+    args = (job_id, nodes, inputs, stop_event, log_msg_stdout)
     input_thread = ThreadWithExc(target=upload_inputs, args=args, daemon=True)
     input_thread.start()
 
@@ -283,7 +282,6 @@ def remote_parallel_map(
     max_parallelism = max_parallelism if max_parallelism else len(inputs)
     auth_headers = get_auth_headers(api_key) if api_key else get_auth_headers()
     db, project_id = get_db_and_project_id(auth_headers)
-    gcs_bucket_name = f"burla-jobs--{project_id}"
 
     try:
         stop_event = Event()
@@ -314,7 +312,6 @@ def remote_parallel_map(
             job_ref=job_ref,
             spinner=spinner,
             stop_event=stop_event,
-            gcs_bucket_name=gcs_bucket_name,
         )
 
         def _output_generator():

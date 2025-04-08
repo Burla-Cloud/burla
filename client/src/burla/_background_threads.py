@@ -145,12 +145,6 @@ def upload_inputs(
         async with session.post(f"{url}/jobs/{job_id}/inputs/done") as response:
             response.raise_for_status()
 
-    async def _upload_backup_input_chunk(bucket, chunk):
-        first_idx = chunk[0][0]
-        last_idx = chunk[-1][0]
-        blob = bucket.blob(f"jobs/{job_id}/inputs/{first_idx}-{last_idx}.pkl")
-        blob.upload_from_string(pickle.dumps(chunk))
-
     async def upload_all():
         async with aiohttp.ClientSession() as session:
             # attach original index to each input so we can tell user which input failed
@@ -185,15 +179,9 @@ def upload_inputs(
             node_tasks = [_upload_inputs_single_node(session, node) for node in nodes]
             await asyncio.gather(*node_tasks)
 
-            # after sending directly to nodes, upload again to gcs as backup if nodes fail
-            bucket = storage.Client().get_bucket(gcs_bucket_name)
-            all_chunks = [chunk for node in nodes for chunk in node["input_chunks"]]
-            tasks = [_upload_backup_input_chunk(bucket, chunk) for chunk in all_chunks]
-            await asyncio.gather(*tasks)
-
     try:
         asyncio.run(upload_all())
-        log_msg_stdout.write("Uploaded all inputs and created GCS backups.")
+        log_msg_stdout.write("Uploaded all inputs.")
     except Exception:
         stop_event.set()
         raise

@@ -96,7 +96,6 @@ def _install(spinner):
     _run_command("gcloud services enable run.googleapis.com")
     _run_command("gcloud services enable firestore.googleapis.com")
     _run_command("gcloud services enable cloudresourcemanager.googleapis.com")
-    _run_command("gcloud services enable storage.googleapis.com")
     spinner.text = "Enabling required services...Done."
     spinner.ok("✓")
 
@@ -138,22 +137,6 @@ def _install(spinner):
         raise VerboseCalledProcessError(cmd, result.stderr)
     else:
         spinner.text = "Creating Firestore database ... Done."
-        spinner.ok("✓")
-
-    # Create GCS bucket
-    spinner.text = f"Creating GCS bucket ... "
-    spinner.start()
-    bucket_name = f"burla-jobs--{PROJECT_ID}"
-    cmd = f"gcloud storage buckets create gs://{bucket_name} --location=us-central1"
-    result = _run_command(cmd, raise_error=False)
-    if result.returncode != 0 and "already exists" in result.stderr.decode():
-        spinner.text = f"Creating GCS bucket ... Bucket {bucket_name} already exists."
-        spinner.ok("✓")
-    elif result.returncode != 0:
-        spinner.fail("✗")
-        raise VerboseCalledProcessError(cmd, result.stderr)
-    else:
-        spinner.text = f"Creating GCS bucket ... Created bucket {bucket_name}."
         spinner.ok("✓")
 
     # Deploy cloud run service

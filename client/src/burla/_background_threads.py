@@ -6,9 +6,9 @@ import pickle
 from queue import Queue
 from threading import Event
 
+import psutil
 import cloudpickle
 from google.cloud.firestore import DocumentReference
-from google.cloud import storage
 
 # throws some uncatchable, unimportant, warnings
 logging.getLogger("google.api_core.bidi").setLevel(logging.ERROR)
@@ -91,7 +91,6 @@ def upload_inputs(
     inputs: list,
     stop_event: Event,
     log_msg_stdout: io.TextIOWrapper,
-    gcs_bucket_name: str,
 ):
 
     def _chunk_inputs_by_size(
@@ -176,8 +175,13 @@ def upload_inputs(
             sum_of_inputs = sum(sum(len(chunk) for chunk in node["input_chunks"]) for node in nodes)
             assert sum_of_inputs == len(inputs)
 
+            before = psutil.net_io_counters().bytes_sent
+
             node_tasks = [_upload_inputs_single_node(session, node) for node in nodes]
             await asyncio.gather(*node_tasks)
+
+            after = psutil.net_io_counters().bytes_sent
+            log_msg_stdout.write("Upload MB/s:", (after - before) / 1e6)
 
     try:
         asyncio.run(upload_all())

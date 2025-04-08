@@ -472,8 +472,8 @@ async def shutdown_node(request: Request, logger: Logger = Depends(get_logger)):
     # Only allow shutdown requests from localhost (inside the shutdown script)
     if request.client.host != "127.0.0.1":
         return Response("Shutdown endpoint can only be called from localhost", status_code=403)
-    logger.log(f"Received shutdown request for node {INSTANCE_NAME}.")
 
+    logger.log(f"Received shutdown request for node {INSTANCE_NAME}.")
     url = "http://metadata.google.internal/computeMetadata/v1/instance/preempted"
     async with aiohttp.ClientSession(headers={"Metadata-Flavor": "Google"}) as session:
         async with session.get(url, timeout=2) as response:
@@ -484,20 +484,23 @@ async def shutdown_node(request: Request, logger: Logger = Depends(get_logger)):
     node_doc = db.collection("nodes").document(INSTANCE_NAME)
     node_doc.update({"status": "DELETED", "preempted": preempted})
 
-    if not SELF["current_job"]:
-        return
+    if SELF["current_job"]:
+        # send remaining inputs to another node
+        running_filter = FieldFilter("status", "==", "RUNNING")
+        job_match_filter = FieldFilter("current_job", "==", SELF["current_job"])
+        query = db.collection("nodes").where(filter=running_filter & job_match_filter).limit(1)
+        for node in query.stream():
 
-    running_filter = FieldFilter("status", "==", "RUNNING")
-    job_match_filter = FieldFilter("current_job", "==", SELF["current_job"])
-    query = db.collection("nodes").where(filter=running_filter & job_match_filter).limit(1)
-    for node in query.stream():
+            async def transfer_worker_inputs(worker: Worker, session: aiohttp.ClientSession):
+                transfer_url = f"{worker.url}/jobs/{SELF['current_job']}/transfer_inputs"
+                json = {"target_node_url": node["host"]}
+                async with session.post(transfer_url, json=json) as response:
+                    response.raise_for_status()
 
-        async def transfer_worker_inputs(worker: Worker, session: aiohttp.ClientSession):
-            transfer_url = f"{worker.url}/jobs/{SELF['current_job']}/transfer_inputs"
-            json = {"target_node_url": node["host"]}
-            async with session.post(transfer_url, json=json) as response:
-                response.raise_for_status()
+            async with aiohttp.ClientSession() as session:
+                tasks = [transfer_worker_inputs(w, session) for w in SELF["workers"]]
+                await asyncio.gather(*tasks)
 
-        async with aiohttp.ClientSession() as session:
-            tasks = [transfer_worker_inputs(w, session) for w in SELF["workers"]]
-            await asyncio.gather(*tasks)
+            break
+
+        logger.log(f"Successfully transferred remaining inputs to node {node['host']}")

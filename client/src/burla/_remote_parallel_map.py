@@ -6,7 +6,6 @@ import aiohttp
 import asyncio
 import requests
 import traceback
-import subprocess
 from time import sleep, time
 from queue import Queue
 from six import reraise
@@ -28,7 +27,7 @@ from burla._background_threads import (
     enqueue_results,
 )
 from burla._helpers import (
-    get_db,
+    get_db_and_project_id,
     prep_graceful_shutdown_with_spinner,
     prep_graceful_shutdown,
     parallelism_capacity,
@@ -174,11 +173,12 @@ def _watch_job(
     job_ref: firestore.DocumentReference,
     spinner: Union[bool, Spinner],
     stop_event: Event,
+    gcs_bucket_name: str,
 ):
     log_msg_stdout = spinner if spinner else sys.stdout
 
     # In separate thread start uploading inputs:
-    args = (job_id, nodes, inputs, stop_event, log_msg_stdout)
+    args = (job_id, nodes, inputs, stop_event, log_msg_stdout, gcs_bucket_name)
     input_thread = ThreadWithExc(target=upload_inputs, args=args, daemon=True)
     input_thread.start()
 
@@ -274,17 +274,18 @@ def remote_parallel_map(
         For more info see our overview: https://docs.burla.dev/overview
         or API-Reference: https://docs.burla.dev/api-reference
     """
+    sig = inspect.signature(function_)
+    if len(sig.parameters) != 1:
+        msg = "Function must accept exactly one argument! (even if it does nothing)\n"
+        msg += "Email jake@burla.dev if this is really annoying and we will fix it! :)"
+        raise ValueError(msg)
+
+    max_parallelism = max_parallelism if max_parallelism else len(inputs)
+    auth_headers = get_auth_headers(api_key) if api_key else get_auth_headers()
+    db, project_id = get_db_and_project_id(auth_headers)
+    gcs_bucket_name = f"burla-jobs--{project_id}"
+
     try:
-        sig = inspect.signature(function_)
-        if len(sig.parameters) != 1:
-            msg = "Function must accept exactly one argument! (even if it does nothing)\n"
-            msg += "Email jake@burla.dev if this is really annoying and we will fix it! :)"
-            raise ValueError(msg)
-
-        max_parallelism = max_parallelism if max_parallelism else len(inputs)
-        auth_headers = get_auth_headers(api_key) if api_key else get_auth_headers()
-        db = get_db(auth_headers)
-
         stop_event = Event()
         # below functions setup handlers to set `stop_event` (or stop spinner) on os-signals
         # (like when user hits ctrl+c), putting this stuff in a try-finally dosen't always work.
@@ -313,6 +314,7 @@ def remote_parallel_map(
             job_ref=job_ref,
             spinner=spinner,
             stop_event=stop_event,
+            gcs_bucket_name=gcs_bucket_name,
         )
 
         def _output_generator():
@@ -334,18 +336,12 @@ def remote_parallel_map(
         if spinner:
             spinner.stop()
 
-        try:
-            cmd = ["gcloud", "config", "get-value", "project"]
-            PROJECT_ID = subprocess.check_output(cmd, text=True).strip()
-        except Exception:
-            PROJECT_ID = None
-
         # Report errors back to Burla's cloud.
         try:
             exc_type, exc_value, exc_traceback = sys.exc_info()
             traceback_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
             traceback_str = "".join(traceback_details)
-            json = {"project_id": PROJECT_ID, "message": exc_type, "traceback": traceback_str}
+            json = {"project_id": project_id, "message": exc_type, "traceback": traceback_str}
             requests.post(f"{BURLA_BACKEND_URL}/v1/telemetry/alert", json=json, timeout=1)
         except Exception:
             pass

@@ -43,13 +43,13 @@ def using_demo_cluster():
     return not bool(os.environ.get("BURLA_API_URL"))
 
 
-def get_db(auth_headers: dict):
+def get_db_and_project_id(auth_headers: dict):
     if using_demo_cluster():
         credentials = get_gcs_credentials(auth_headers)
-        return firestore.Client(credentials=credentials, project="burla-prod", database="burla")
+        db = firestore.Client(credentials=credentials, project="burla-prod", database="burla")
+        return db, "burla-prod"
     else:
-        api_url_according_to_user = os.environ.get("BURLA_API_URL")
-
+        # api_url_according_to_user = os.environ.get("BURLA_API_URL")
         # if api_url_according_to_user and api_url_according_to_user != main_service_url():
         #     raise Exception(
         #         f"You are pointing to the main service at {api_url_according_to_user}.\n"
@@ -59,14 +59,15 @@ def get_db(auth_headers: dict):
         #         "api is deployed in."
         #     )
         try:
-            credentials, project = google.auth.default()
-            if project == "":
+            credentials, project_id = google.auth.default()
+            if project_id == "":
                 raise GoogleLoginError(
                     "No google cloud project found, please sign in to the google cloud CLI:\n"
                     "  1. gcloud config set project <your-project-id>\n"
                     "  2. gcloud auth application-default login\n"
                 )
-            return firestore.Client(credentials=credentials, project=project, database="burla")
+            db = firestore.Client(credentials=credentials, project=project_id, database="burla")
+            return db, project_id
         except DefaultCredentialsError as e:
             raise Exception(
                 "No Google Application Default Credentials found. "

@@ -334,36 +334,8 @@ class Node:
         """
 
     def __get_shutdown_script(self):
-        firestore_base_url = "https://firestore.googleapis.com"
-        firestore_db_url = f"{firestore_base_url}/v1/projects/{PROJECT_ID}/databases/burla"
-        firestore_document_url = f"{firestore_db_url}/documents/nodes/{self.instance_name}"
         return f"""
         #! /bin/bash
-        # This script marks the node as "DELETED" in the database when the vm instance is shutdown.
-        # This is necessary due to situations where instances are preempted,
-        # otherwise the `main_service` doesn't know which vm's are still running when starting a job,
-        # checking if they are still running is too slow, increasing latency.
-
-        # record environment variable indicating whether this instance was preempted.
-        preempted_instances_matching_filter=$( \
-            gcloud compute operations list \
-            --filter="operationType=compute.instances.preempted AND targetLink:instances/{self.instance_name}" \
-        )
-        # Set PREEMPTED to true if the output is non-empty, otherwise false
-        export PREEMPTED=$([ -n "$preempted_instances_matching_filter" ] && echo true || echo false)
-
-        curl -X PATCH \
-        -H "Authorization: Bearer $(gcloud auth print-access-token)" \
-        -H "Content-Type: application/json" \
-        -d '{{
-            "fields": {{
-                "status": {{
-                    "stringValue": "DELETED"
-                }},
-                "preempted": {{
-                    "booleanValue": '"$PREEMPTED"'
-                }}
-            }}
-        }}' \
-        "{firestore_document_url}?updateMask.fieldPaths=status&updateMask.fieldPaths=preempted"
+        # Tell the node_service this VM is being shutdown so it can reassign inputs and stuff.
+        curl -X POST "http://localhost:{self.port}/shutdown"
         """

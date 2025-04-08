@@ -10,10 +10,11 @@ import aiohttp
 from io import BytesIO
 from queue import Queue
 import docker
-from fastapi import APIRouter, Path, Depends, Response
+from fastapi import APIRouter, Path, Depends, Response, Request
 from fastapi.responses import StreamingResponse
 from google.cloud import firestore
 from google.cloud.firestore import FieldFilter
+import requests
 
 from node_service import (
     PROJECT_ID,
@@ -42,7 +43,10 @@ async def _result_check_single_worker(session, worker, logger):
         response = pickle.loads(response_pkl)
         # msg = f"Received {len(response['results'])} results from {worker.container_name} "
         # logger.log(msg + f"({len(response_pkl)} bytes)")
-        [SELF["result_queue"].put(result) for result in response["results"]]
+
+        for result in response["results"]:
+            SELF["result_queue"].put(result)
+
         worker.is_idle = response["is_idle"]
         return worker, response.status
 
@@ -76,7 +80,6 @@ def job_watcher(stop_event: Event = None):
             # workers must still be idle after checking twice to prevent race condition
             all_workers_idle_twice = all_workers_idle and SELF["current_node_parallelism"] == 0
             all_workers_idle = SELF["current_node_parallelism"] == 0
-
             if SELF["workers_have_all_inputs"] and all_workers_idle_twice:
                 # Mark current node as done
                 db = firestore.Client(project=PROJECT_ID, database="burla")
@@ -114,13 +117,30 @@ def job_watcher(stop_event: Event = None):
 
 
 @router.post("/jobs/{job_id}/inputs/done")
-def all_inputs_forwarded(job_id: str = Path(...)):
+def notify_all_inputs_forwarded(job_id: str = Path(...)):
     if not job_id == SELF["current_job"]:
         return Response("job not found", status_code=404)
     # Tells node that no more inputs will be arriving.
     # This is important because it allows the node to figure out when it can restart.
     SELF["workers_have_all_inputs"] = True
     SELF["last_healthcheck_timestamp"] = time()
+
+
+@router.get("/jobs/{job_id}/inputs")
+def get_inputs(job_id: str = Path(...), logger: Logger = Depends(get_logger)):
+    if not job_id == SELF["current_job"]:
+        return Response("job not found", status_code=404)
+    SELF["last_healthcheck_timestamp"] = time()
+
+    inputs = []  # gather half of the inputs from the queue
+    for _ in range(SELF["result_queue"].qsize() // 2):
+        if not SELF["result_queue"].empty():
+            inputs.append(SELF["result_queue"].get())
+
+    data = BytesIO(pickle.dumps(inputs))
+    data.seek(0)  # ensure file pointer is at the beginning of the file.
+    headers = {"Content-Disposition": 'attachment; filename="results.pkl"'}
+    return StreamingResponse(data, media_type="application/octet-stream", headers=headers)
 
 
 @router.post("/jobs/{job_id}/inputs")
@@ -134,7 +154,7 @@ async def upload_inputs(
         return Response("job not found", status_code=404)
 
     inputs_pkl_with_idx = pickle.loads(request_files["inputs_pkl_with_idx"])
-    # logger.log(f"Received {len(inputs_pkl_with_idx)} inputs for job {job_id}")
+    # logger.log(f"Received inputs {first_idx}-{last_idx} for job {job_id}")
 
     # separate into batches to be sent to each worker
     input_batches = []
@@ -445,3 +465,39 @@ def reboot_containers(
         raise e
 
     logger.log(f"Done Rebooting.\n{INSTANCE_NAME} is READY!")
+
+
+@router.post("/shutdown")
+async def shutdown_node(request: Request, logger: Logger = Depends(get_logger)):
+    # Only allow shutdown requests from localhost (inside the shutdown script)
+    if request.client.host != "127.0.0.1":
+        return Response("Shutdown endpoint can only be called from localhost", status_code=403)
+    logger.log(f"Received shutdown request for node {INSTANCE_NAME}.")
+
+    url = "http://metadata.google.internal/computeMetadata/v1/instance/preempted"
+    async with aiohttp.ClientSession(headers={"Metadata-Flavor": "Google"}) as session:
+        async with session.get(url, timeout=2) as response:
+            response.raise_for_status()
+            preempted = await response.text().strip() == "TRUE"
+
+    db = firestore.Client(project=PROJECT_ID, database="burla")
+    node_doc = db.collection("nodes").document(INSTANCE_NAME)
+    node_doc.update({"status": "DELETED", "preempted": preempted})
+
+    if not SELF["current_job"]:
+        return
+
+    running_filter = FieldFilter("status", "==", "RUNNING")
+    job_match_filter = FieldFilter("current_job", "==", SELF["current_job"])
+    query = db.collection("nodes").where(filter=running_filter & job_match_filter).limit(1)
+    for node in query.stream():
+
+        async def transfer_worker_inputs(worker: Worker, session: aiohttp.ClientSession):
+            transfer_url = f"{worker.url}/jobs/{SELF['current_job']}/transfer_inputs"
+            json = {"target_node_url": node["host"]}
+            async with session.post(transfer_url, json=json) as response:
+                response.raise_for_status()
+
+        async with aiohttp.ClientSession() as session:
+            tasks = [transfer_worker_inputs(w, session) for w in SELF["workers"]]
+            await asyncio.gather(*tasks)

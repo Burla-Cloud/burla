@@ -1,7 +1,8 @@
 import pickle
 from io import BytesIO
+import requests
 
-from flask import jsonify, Blueprint, request, send_file
+from flask import jsonify, Blueprint, request, send_file, Response
 
 from worker_service import SELF
 from worker_service.udf_executor import execute_job
@@ -38,6 +39,7 @@ def _check_correct_job(job_id: str):
 def get_results(job_id: str):
     _check_udf_executor_thread()
     _check_correct_job(job_id)
+
     results = []
     while not SELF["result_queue"].empty():
         results.append(SELF["result_queue"].get())
@@ -83,7 +85,7 @@ def start_job(job_id: str):
 
     # ThreadWithExc is a thread wrapper that catches and stores errors.
     args = (job_id, function_pkl)
-    thread = ThreadWithExc(target=execute_job, args=args)
+    thread = ThreadWithExc(target=execute_job, args=args, daemon=True)
     thread.start()
 
     SELF["current_job"] = job_id
@@ -92,3 +94,61 @@ def start_job(job_id: str):
 
     SELF["logs"].append(f"Successfully started job {job_id}.")
     return "Success"
+
+
+@BP.post("/jobs/<job_id>/transfer_inputs")
+def transfer_inputs(job_id: str):
+    """
+    Stops processing the current job and transfers remaining inputs
+    from the queue to another node.
+    """
+    _check_correct_job(job_id)
+    SELF["logs"].append(f"Received request to transfer remaining inputs for job {job_id}.")
+
+    # 1. Signal the processing thread to stop
+    SELF["STOP_PROCESSING_EVENT"].set()
+    SELF["logs"].append("Signaled UDF executor thread to stop.")
+
+    # 2. Wait briefly for the thread to potentially finish its current item
+    #    and check the stop event. Adjust sleep time if needed.
+    sleep(0.5)
+
+    # 3. Gather remaining inputs
+    remaining_inputs = []
+    while not SELF["inputs_queue"].empty():
+        try:
+            remaining_inputs.append(SELF["inputs_queue"].get_nowait())
+        except Empty:
+            break
+    SELF["logs"].append(f"Gathered {len(remaining_inputs)} remaining inputs from queue.")
+
+    # 4. Get target node URL from request
+    target_node_url = request.json.get("target_node_url")
+    if not target_node_url:
+        SELF["logs"].append("No target_node_url provided in request. Cannot transfer inputs.")
+        # Return success even if no transfer happens, as processing was stopped.
+        return "Processing stopped, no target URL provided for transfer.", 200
+
+    if not remaining_inputs:
+        SELF["logs"].append("No remaining inputs to transfer.")
+        return "Processing stopped, no inputs remaining to transfer.", 200
+
+    # 5. Send inputs to the target node
+    transfer_url = f"{target_node_url}/jobs/{job_id}/inputs"
+    try:
+        files = {"inputs_pkl_with_idx": pickle.dumps(remaining_inputs)}
+        response = requests.post(transfer_url, files=files, timeout=60)  # Add timeout
+        response.raise_for_status()
+        SELF["logs"].append(
+            f"Successfully transferred {len(remaining_inputs)} inputs to {target_node_url}."
+        )
+        return "Inputs transferred successfully.", 200
+    except requests.exceptions.RequestException as e:
+        SELF["logs"].append(f"ERROR: Failed to transfer inputs to {target_node_url}: {e}")
+        # Even if transfer fails, the worker has stopped processing.
+        # Consider putting inputs back in the queue? Or just log the error.
+        # For now, just report the failure.
+        return f"Processing stopped, but failed to transfer inputs: {e}", 500
+    except Exception as e:
+        SELF["logs"].append(f"ERROR: Unexpected error during input transfer: {e}")
+        return f"Processing stopped, but unexpected error during transfer: {e}", 500

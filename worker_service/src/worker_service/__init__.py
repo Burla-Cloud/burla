@@ -3,6 +3,7 @@ import sys
 import requests
 import traceback
 from queue import Queue
+from threading import Event
 
 
 from flask import Flask, request, abort
@@ -38,6 +39,7 @@ SELF = {
     "result_queue": Queue(),
     "started_at": None,
     "logs": verbose_list,
+    "STOP_PROCESSING_EVENT": Event(),
 }
 
 from worker_service.endpoints import BP as endpoints_bp

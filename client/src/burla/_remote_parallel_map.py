@@ -19,7 +19,7 @@ from google.cloud.firestore import FieldFilter
 from yaspin import Spinner
 from tblib import Traceback
 
-from burla import __version__, BURLA_BACKEND_URL
+from burla import __version__, _BURLA_BACKEND_URL
 from burla._auth import get_auth_headers
 from burla._background_threads import (
     upload_inputs,
@@ -352,7 +352,7 @@ def remote_parallel_map(
             traceback_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
             traceback_str = "".join(traceback_details)
             json = {"project_id": project_id, "message": exc_type, "traceback": traceback_str}
-            requests.post(f"{BURLA_BACKEND_URL}/v1/telemetry/alert", json=json, timeout=1)
+            requests.post(f"{_BURLA_BACKEND_URL}/v1/telemetry/alert", json=json, timeout=1)
         except Exception:
             pass
 

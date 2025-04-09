@@ -5,6 +5,7 @@ import aiohttp
 import pickle
 from queue import Queue
 from threading import Event
+from time import time
 
 import psutil
 import cloudpickle
@@ -12,11 +13,16 @@ from google.cloud.firestore import DocumentReference
 
 # throws some uncatchable, unimportant, warnings
 logging.getLogger("google.api_core.bidi").setLevel(logging.ERROR)
-RESULT_CHECK_FREQUENCY_SEC = 0.4
 
 
 class InputTooBig(Exception):
     pass
+
+
+def send_alive_pings(job_doc_ref: DocumentReference, stop_event: Event):
+    while not stop_event.is_set():
+        stop_event.wait(2)
+        job_doc_ref.update({"last_ping_from_client": time()})
 
 
 def print_logs_from_db(
@@ -31,7 +37,7 @@ def print_logs_from_db(
         collection_ref = job_doc_ref.collection("logs")
         query_watch = collection_ref.on_snapshot(_on_snapshot)
         while not stop_event.is_set():
-            stop_event.wait(0.5)  # this does not block the processing of new documents
+            stop_event.wait(0.3)  # this does not block the processing of new documents
     except Exception as e:
         # Because logs are non-essential, don't kill the job if it breaks.
         msg = f"ERROR: stdout-stream failed with {e}\nContinuing Job execution without stdout..."
@@ -67,7 +73,7 @@ def enqueue_results(
 
     try:
         while not stop_event.is_set():
-            stop_event.wait(RESULT_CHECK_FREQUENCY_SEC)
+            stop_event.wait(0.4)
 
             # start = time()
             # log_msg_stdout.write(f"Checking results from all nodes...")
@@ -79,7 +85,7 @@ def enqueue_results(
             if failed_nodes:
                 # log_msg_stdout.write(f"result-check failed for nodes: {', '.join(failed_nodes)}")
                 # TODO: if a node fails, send its assigned unfinished inputs to other nodes
-                return
+                raise Exception(f"Result-check failed for nodes: {', '.join(failed_nodes)}")
     except Exception:
         stop_event.set()
         raise
@@ -148,6 +154,7 @@ def upload_inputs(
         async with aiohttp.ClientSession() as session:
             # attach original index to each input so we can tell user which input failed
             inputs_pkl_with_idx = [(i, cloudpickle.dumps(input)) for i, input in enumerate(inputs)]
+            n_inputs = len(inputs_pkl_with_idx)
 
             # TODO: This section is super slow! (the dividing not the uploading)
             # Divide inputs into one chunk for each node.
@@ -175,17 +182,16 @@ def upload_inputs(
             sum_of_inputs = sum(sum(len(chunk) for chunk in node["input_chunks"]) for node in nodes)
             assert sum_of_inputs == len(inputs)
 
-            before = psutil.net_io_counters().bytes_sent
+            bytes_sent_before = psutil.net_io_counters().bytes_sent
+            await asyncio.gather(*[_upload_inputs_single_node(session, node) for node in nodes])
+            bytes_sent_after = psutil.net_io_counters().bytes_sent
 
-            node_tasks = [_upload_inputs_single_node(session, node) for node in nodes]
-            await asyncio.gather(*node_tasks)
-
-            after = psutil.net_io_counters().bytes_sent
-            log_msg_stdout.write("Upload MB/s:", (after - before) / 1e6)
+            MB_sent = (bytes_sent_after - bytes_sent_before) / (1024 * 1024)
+            msg = f"Uploaded {n_inputs} inputs ({MB_sent:.2f} MB) at {(MB_sent * 8):.2f} Mbps"
+            log_msg_stdout.write(msg)
 
     try:
         asyncio.run(upload_all())
-        log_msg_stdout.write("Uploaded all inputs.")
     except Exception:
         stop_event.set()
         raise

@@ -43,13 +43,18 @@ def next_free_port():
     The "correct" way to do this is to bind to port 0 which tells the os to return a random free
     port. This was attempted first, but it kept returning already-in-use ports?
     """
-    index = random.randint(0, len(PRIVATE_PORT_QUEUE) - 1)
-    port = PRIVATE_PORT_QUEUE.pop(index)
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        if s.connect_ex(("localhost", port)) != 0:
-            return port
-        else:
-            return next_free_port()
+    while PRIVATE_PORT_QUEUE:
+        index = random.randint(0, len(PRIVATE_PORT_QUEUE) - 1)
+        port = PRIVATE_PORT_QUEUE.pop(index)
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(0.1)  # prevent long hangs
+                if s.connect_ex(("localhost", port)) != 0:
+                    return port
+        except socket.timeout:
+            continue  # Port check timed out, try another
+
+    raise RuntimeError("Failed to find a free port.")
 
 
 def format_traceback(traceback_details: list):

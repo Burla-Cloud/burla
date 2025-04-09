@@ -36,6 +36,7 @@ SELF = {
     "job_id": None,
     "subjob_thread": None,
     "inputs_queue": Queue(),
+    "in_progress_input": None,  # needed so we can send ALL inputs elsewhere on shutdown
     "result_queue": Queue(),
     "started_at": None,
     "logs": verbose_list,

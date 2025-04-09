@@ -69,6 +69,7 @@ def execute_job(job_id: str, function_pkl: bytes):
         try:
             input_index, input_pkl = SELF["inputs_queue"].get()
             SELF["IDLE"] = False
+            SELF["current_in_progress_input"] = input_pkl
             SELF["logs"].append(f"Popped input #{input_index} from queue.")
         except Empty:
             SELF["IDLE"] = True
@@ -89,5 +90,11 @@ def execute_job(job_id: str, function_pkl: bytes):
                 result_pkl = _serialize_error(sys.exc_info())
                 is_error = True
 
-        SELF["result_queue"].put((input_index, is_error, result_pkl))
-        SELF["logs"].append(f"Successfully enqueued result for input #{input_index}.")
+        # we REALLY want to be sure we dont add this result if the stop event got set during the udf
+        # because that means the worker is shutting down and the client probably cant get it in time
+        #
+        # by not adding it to results we gaurentee the client dosent get it, and can send it along
+        # with the inputs sitting in the queue to another worker, becore this node shuts down.
+        if not SELF["STOP_PROCESSING_EVENT"].is_set():
+            SELF["result_queue"].put((input_index, is_error, result_pkl))
+            SELF["logs"].append(f"Successfully enqueued result for input #{input_index}.")

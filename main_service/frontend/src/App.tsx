@@ -3,6 +3,7 @@ import Sidebar from "@/components/Sidebar";
 import Dashboard from "@/pages/Index";
 import Jobs from "@/pages/Jobs";
 import Settings from "@/pages/Settings";
+import JobDetails from "@/pages/JobDetails";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { NodesProvider } from "@/contexts/NodesContext";
@@ -23,11 +24,12 @@ const App = () => (
                                 <div className="flex min-h-screen bg-gray-50">
                                     <Sidebar />
                                     <div className="flex-1 py-10 px-12 flex items-start">
-                                        <Routes>
-                                            <Route path="/" element={<Dashboard />} />
-                                            <Route path="/jobs" element={<Jobs />} />
-                                            <Route path="/settings" element={<Settings />} />
-                                        </Routes>
+                                    <Routes>
+                                        <Route path="/" element={<Dashboard />} />
+                                        <Route path="/jobs" element={<Jobs />} />
+                                        <Route path="/jobs/:jobId" element={<JobDetails />} />
+                                        <Route path="/settings" element={<Settings />} />
+                                    </Routes>
                                     </div>
                                 </div>
                             </Router>

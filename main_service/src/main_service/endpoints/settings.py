@@ -132,8 +132,8 @@ SERVICE_ACCOUNTS_COLLECTION = "service_accounts"
 animals = ["panther", "otter", "lynx", "dolphin", "eagle"]
 colors = ["blue", "scarlet", "ivory", "amber", "emerald"]
 adjectives = ["brave", "sneaky", "quiet", "curious", "mighty"]
-
-def pick(lst):
+ 
+def pick(lst): 
     return random.choice(lst)
 
 def generate_name():
@@ -146,7 +146,7 @@ def generate_token():
 
 @router.post("/v1/service-accounts")
 async def create_service_account(logger: Logger = Depends(get_logger)):
-    try:
+    try: 
         # Generate unique ID, name, and token
         service_id = str(uuid4())
         name = generate_name()

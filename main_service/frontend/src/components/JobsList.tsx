@@ -10,6 +10,7 @@ import {
 import { cn } from "@/lib/utils";
 import { Play, Square } from "lucide-react"; // Import icons
 import { BurlaJob } from "@/types/coreTypes";
+import { Link } from "react-router-dom";
 
 interface JobsListProps {
     jobs: BurlaJob[];
@@ -67,7 +68,7 @@ export const JobsList = ({ jobs, setJobs }: JobsListProps) => {
                                         />
                                     </TableHead>
                                     <TableHead>Status</TableHead>
-                                    <TableHead>Job</TableHead>
+                                    <TableHead>Job ID</TableHead>
                                     <TableHead>User</TableHead>
                                     <TableHead>Started At</TableHead>
                                     <TableHead>
@@ -104,7 +105,12 @@ export const JobsList = ({ jobs, setJobs }: JobsListProps) => {
                                                 <span className="text-sm capitalize">{job.status.replace("_", " ")}</span>
                                             </div>
                                         </TableCell>
-                                        <TableCell>{job.id}</TableCell>
+                                        <TableCell>
+                                            <Link to={`/jobs/${job.id}`}
+                                            className="text-black underline underline-offset-2 decoration-[0.5px] hover:text-[#1a1a1a] hover:decoration-[1px] transition-all">
+                                                {job.id}
+                                            </Link>
+                                        </TableCell>
                                         <TableCell>{job.user}</TableCell>
                                         <TableCell>
                                         {job.started_at 

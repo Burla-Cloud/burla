@@ -4,6 +4,7 @@ import asyncio
 from threading import Timer 
 from datetime import datetime, timezone 
 from time import time, sleep
+from queue import Queue
 from uuid import uuid4
 from typing import Optional, Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -204,6 +205,7 @@ async def job_info(logger: Logger = Depends(get_logger)):
             event_data = {
                 "jobId": job_id,
                 "status": computed_status,
+                "n_inputs": doc_data.get("n_inputs"),
                 "user": doc_data.get("user"),
                 "started_at": doc_data.get("started_at")
             }
@@ -257,3 +259,36 @@ async def job_info(logger: Logger = Depends(get_logger)):
             unsubscribe_results()
 
     return StreamingResponse(job_stream(), media_type="text/event-stream")
+
+
+@router.get("/v1/job_logs/{job_id}")
+def job_logs_stream(job_id: str):
+    def event_stream():
+        queue = Queue()
+
+        def on_snapshot(col_snapshot, changes, read_time):
+            for change in changes:
+                doc = change.document
+                data = doc.to_dict()
+                msg = data.get("msg")
+                create_time = doc.create_time
+
+                if msg and create_time:
+                    log_entry = {
+                        "time": create_time.isoformat(),  # ✅ Send UTC ISO string
+                        "message": msg,
+                    }
+                    queue.put(log_entry)
+
+        logs_ref = DB.collection("jobs").document(job_id).collection("logs")
+        unsubscribe = logs_ref.on_snapshot(on_snapshot)
+
+        try:
+            while True:
+                event = queue.get()
+                yield f"data: {json.dumps(event)}\n\n"
+        finally:
+            unsubscribe()
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
+

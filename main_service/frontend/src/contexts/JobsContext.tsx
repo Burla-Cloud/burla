@@ -104,16 +104,16 @@ export const JobsProvider = ({ children }: { children: React.ReactNode }) => {
     return <JobsContext.Provider value={{ jobs, setJobs }}>{children}</JobsContext.Provider>;
 };
 
-/** ✅ Helper function to format job data */
 const createNewJob = (data: any): BurlaJob => ({
     id: data.jobId,
     status: data.status as JobsStatus,
-    user: data.user || "Unknown", // ✅ Add user field
+    user: data.user || "Unknown",
     checked: data.checked ?? false,
+    n_inputs: typeof data.n_inputs === "number" ? data.n_inputs : 0, // ✅ add this
     started_at: typeof data.started_at === "number"
-        ? new Date(data.started_at * 1000) // ✅ Convert UNIX timestamp (seconds) to Date
-        : undefined,
-});
+      ? new Date(data.started_at * 1000)
+      : undefined,
+  });
 
 export const useJobs = () => useContext(JobsContext);
 

@@ -1,5 +1,6 @@
 import { useParams, useNavigate } from "react-router-dom";
 import { useJobs } from "@/contexts/JobsContext";
+import JobLogs from "@/components/JobLogs";
 
 const JobDetails = () => {
   const { jobId } = useParams<{ jobId: string }>();
@@ -59,6 +60,7 @@ const JobDetails = () => {
             }) || "N/A"}
           </div>
         </div>
+        <JobLogs jobId={job.id} />
       </div>
     </div>
   );

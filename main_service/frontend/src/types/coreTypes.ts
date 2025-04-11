@@ -19,6 +19,7 @@ export interface BurlaJob {
     status: JobsStatus | null;
     user: string; // Added user field
     checked: boolean | false;
+    n_inputs: number;
     started_at?: Date; // Renamed from submitted_date and ensured it's a timestamp
 }
 
@@ -38,3 +39,7 @@ export interface Settings {
     token: string;
   }
 
+  export interface LogEntry {
+    time: string;
+    message: string; 
+  }

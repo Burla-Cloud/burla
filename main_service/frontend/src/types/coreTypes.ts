@@ -15,13 +15,14 @@ export interface BurlaNode {
 }
 
 export interface BurlaJob {
-    id: string;
-    status: JobsStatus | null;
-    user: string; // Added user field
-    checked: boolean | false;
-    n_inputs: number;
-    started_at?: Date; // Renamed from submitted_date and ensured it's a timestamp
+  id: string;
+  status: JobsStatus | null;
+  user: string;
+  checked: boolean;
+  n_inputs: number;
+  started_at?: Date; // parsed from UNIX timestamp in jobContext & jobs_paginated
 }
+
 
 
 export interface Settings {
@@ -40,6 +41,7 @@ export interface Settings {
   }
 
   export interface LogEntry {
-    time: string;
-    message: string; 
+    created_at: number;
+    message: string;
+    id?: string;
   }

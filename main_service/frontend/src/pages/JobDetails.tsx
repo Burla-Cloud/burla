@@ -7,22 +7,26 @@ const JobDetails = () => {
   const { jobs } = useJobs();
   const navigate = useNavigate();
 
+  if (!jobId) {
+    return (
+      <div className="flex-1 flex flex-col items-center justify-center px-12 pt-10">
+        <h1 className="text-2xl font-semibold text-red-600">Missing job ID</h1>
+        <button
+          onClick={() => navigate("/jobs")}
+          className="mt-4 text-[#3b5a64] underline underline-offset-2"
+        >
+          Back to Jobs
+        </button>
+      </div>
+    );
+  }
+
   const job = jobs.find((j) => j.id === jobId);
 
   if (!job) {
     return (
-      <div className="flex-1 flex flex-col justify-start px-12 pt-0">
-        <div className="max-w-6xl mx-auto w-full">
-          <h1 className="text-3xl font-bold mt-[-4px] mb-4 text-red-600">
-            Job not found
-          </h1>
-          <button
-            onClick={() => navigate("/jobs")}
-            className="text-[#3b5a64] hover:underline decoration-[0.5px] underline-offset-2 transition"
-          >
-            Back to Jobs
-          </button>
-        </div>
+      <div className="flex-1 flex flex-col items-center justify-center px-12 pt-10">
+        <h1 className="text-2xl font-semibold text-gray-500">Loading job...</h1>
       </div>
     );
   }
@@ -30,11 +34,11 @@ const JobDetails = () => {
   return (
     <div className="flex-1 flex flex-col justify-start px-12 pt-0">
       <div className="max-w-6xl mx-auto w-full">
-        {/* Header with breadcrumb + job ID */}
+        {/* Breadcrumb */}
         <h1 className="text-3xl font-bold mt-[-4px] mb-6" style={{ color: "#3b5a64" }}>
           <button
             onClick={() => navigate("/jobs")}
-            className="hover:underline decoration-[0.5px] underline-offset-2 transition text-inherit"
+            className="hover:underline underline-offset-2 decoration-[0.5px] transition text-inherit"
           >
             Jobs
           </button>
@@ -42,10 +46,10 @@ const JobDetails = () => {
           <span className="text-inherit">{job.id}</span>
         </h1>
 
-        {/* Status and Started At side-by-side */}
+        {/* Metadata row */}
         <div className="flex flex-row items-center text-sm text-gray-600 mb-6 space-x-8">
           <div>
-            <strong>Status:</strong> {job.status}
+            <strong>Status:</strong> {job.status?.toUpperCase() || "UNKNOWN"}
           </div>
           <div>
             <strong>Started At:</strong>{" "}
@@ -60,6 +64,8 @@ const JobDetails = () => {
             }) || "N/A"}
           </div>
         </div>
+
+        {/* Logs */}
         <JobLogs jobId={job.id} />
       </div>
     </div>

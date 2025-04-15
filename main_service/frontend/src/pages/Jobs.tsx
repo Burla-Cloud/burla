@@ -11,7 +11,7 @@ const Jobs = () => {
                     Jobs
                 </h1>
                 <div className="space-y-6">
-                    <JobsList jobs={jobs} setJobs={setJobs} /> {/* Pass setJobs */}
+                    <JobsList /> {/* Pass setJobs */}
                 </div>
             </div>
         </div>

@@ -1,8 +1,9 @@
 import json
 import requests
+import random
 import asyncio
 from threading import Timer 
-from datetime import datetime, timezone 
+from datetime import datetime, timezone, timedelta
 from time import time, sleep
 from queue import Queue
 from uuid import uuid4
@@ -10,11 +11,12 @@ from typing import Optional, Callable
 from concurrent.futures import ThreadPoolExecutor
 import logging 
 
-from fastapi import APIRouter, Path, Depends
+from fastapi import APIRouter, Path, Depends, Query, Request 
 from fastapi.responses import JSONResponse
 from starlette.responses import StreamingResponse
-from google.cloud import firestore 
+from google.cloud import firestore
 from google.cloud.firestore import FieldFilter, Increment
+from google.protobuf.timestamp_pb2 import Timestamp  
 from google.api_core.exceptions import GoogleAPICallError, NotFound
 
 
@@ -158,137 +160,124 @@ def run_job_healthcheck(
             raise Exception(f"Worker failed. Check logs for node {node['instance_name']}")
 
 
-@router.get("/v1/job_context")
-async def job_info(logger: Logger = Depends(get_logger)):
-    queue = asyncio.Queue()
-    current_loop = asyncio.get_running_loop()
-    top_jobs_ids = set()
-    node_cache = {}
 
-    def determine_job_status(doc_data: dict, job_id: str) -> str:
-        now = datetime.now(timezone.utc)
-        num_inputs = doc_data.get("n_inputs")
-        started_at = doc_data.get("started_at")
+@router.get("/v1/jobs_paginated")
+async def get_recent_jobs(request: Request, page: int = 0, stream: bool = False):
+    limit = 15
+    offset = page * limit
 
-        if started_at is not None and isinstance(started_at, (float, int)):
-            started_at = datetime.fromtimestamp(started_at, tz=timezone.utc)
-
-        node_docs = DB.collection("nodes").where("current_job", "==", job_id).get()
-        node_working = bool(node_docs)
-
-        results_docs = DB.collection("jobs").document(job_id).collection("results").get()
-        num_results = len(results_docs)
-        any_error = any(doc.to_dict().get("is_error", False) for doc in results_docs)
-
-        if node_working:
-            computed_status = "RUNNING"
-        else:
-            if num_inputs and num_results == num_inputs:
-                computed_status = "COMPLETED" if not any_error else "FAILED"
-            elif started_at and (now - started_at).total_seconds() > 7.5:
-                computed_status = "FAILED"
-            else:
-                computed_status = "PENDING"
-
-        logger.log(f"Job {job_id}: node_working: {node_working}, num_results: {num_results}, status: {computed_status}")
-        return computed_status
-
-    def reassess_job(job_id: str):
-        if job_id not in top_jobs_ids:
-            return
-        job_doc = DB.collection("jobs").document(job_id).get()
-        if job_doc.exists:
-            doc_data = job_doc.to_dict() or {}
-            computed_status = determine_job_status(doc_data, job_id)
-            if doc_data.get("status") != computed_status:
-                DB.collection("jobs").document(job_id).update({"status": computed_status})
-            event_data = {
-                "jobId": job_id,
-                "status": computed_status,
-                "n_inputs": doc_data.get("n_inputs"),
-                "user": doc_data.get("user"),
-                "started_at": doc_data.get("started_at")
-            }
-            current_loop.call_soon_threadsafe(queue.put_nowait, event_data)
-
-    async def job_stream():
-        nonlocal top_jobs_ids
-
-        def on_jobs_snapshot(query_snapshot, changes, read_time):
-            nonlocal top_jobs_ids
-            top_jobs_ids = {doc.id for doc in query_snapshot}
-            for doc in query_snapshot:
-                reassess_job(doc.id)
-
-        def on_nodes_snapshot(col_snapshot, changes, read_time):
-            for change in changes:
-                doc = change.document
-                node_id = doc.id
-                new_data = doc.to_dict() or {}
-
-                new_job = new_data.get("current_job")
-                old_job = node_cache.get(node_id)
-                node_cache[node_id] = new_job  # Update cache
-
-                if old_job != new_job:
-                    logger.log(f"Node {node_id} current_job changed: {old_job} → {new_job}")
-                    if old_job:
-                        reassess_job(old_job)
-                    if new_job:
-                        reassess_job(new_job)
-
-        def on_results_snapshot(query_snapshot, changes, read_time):
-            for change in changes:
-                parent_ref = change.document.reference.parent.parent
-                if parent_ref:
-                    job_id = parent_ref.id
-                    reassess_job(job_id)
-
-        jobs_query = DB.collection("jobs").order_by("started_at", direction="DESCENDING").limit(10)
-        unsubscribe_jobs = jobs_query.on_snapshot(on_jobs_snapshot)
-        unsubscribe_nodes = DB.collection("nodes").on_snapshot(on_nodes_snapshot)
-        unsubscribe_results = DB.collection_group("results").on_snapshot(on_results_snapshot)
-
-        try:
-            while True:
-                event = await queue.get()
-                yield f"data: {json.dumps(event)}\n\n"
-        finally:
-            unsubscribe_jobs()
-            unsubscribe_nodes()
-            unsubscribe_results()
-
-    return StreamingResponse(job_stream(), media_type="text/event-stream")
-
-
-@router.get("/v1/job_logs/{job_id}")
-def job_logs_stream(job_id: str):
-    def event_stream():
-        queue = Queue()
+    # If `stream=true` or `Accept: text/event-stream`, serve SSE
+    if stream or request.headers.get("accept") == "text/event-stream":
+        queue = asyncio.Queue()
+        current_loop = asyncio.get_running_loop()
 
         def on_snapshot(col_snapshot, changes, read_time):
             for change in changes:
                 doc = change.document
-                data = doc.to_dict()
-                msg = data.get("msg")
-                create_time = doc.create_time
+                doc_data = doc.to_dict() or {}
 
-                if msg and create_time:
-                    log_entry = {
-                        "time": create_time.isoformat(),  # ✅ Send UTC ISO string
-                        "message": msg,
-                    }
-                    queue.put(log_entry)
+                event_data = {
+                    "jobId": doc.id,
+                    "status": doc_data.get("status"),
+                    "user": doc_data.get("user", "Unknown"),
+                    "n_inputs": doc_data.get("n_inputs", 0),
+                    "started_at": doc_data.get("started_at"),
+                    "deleted": change.type.name == "REMOVED"
+                }
 
-        logs_ref = DB.collection("jobs").document(job_id).collection("logs")
-        unsubscribe = logs_ref.on_snapshot(on_snapshot)
+                current_loop.call_soon_threadsafe(queue.put_nowait, event_data)
 
-        try:
-            while True:
-                event = queue.get()
-                yield f"data: {json.dumps(event)}\n\n"
-        finally:
-            unsubscribe()
+        jobs_query = DB.collection("jobs").order_by("started_at", direction="DESCENDING")
+        unsubscribe = jobs_query.on_snapshot(on_snapshot)
 
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+        async def event_stream():
+            try:
+                while True:
+                    event = await queue.get()
+                    yield f"data: {json.dumps(event)}\n\n"
+            finally:
+                unsubscribe.unsubscribe()
 
+        return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+    # Otherwise return paginated JSON
+    jobs_query = (
+        DB.collection("jobs")
+        .order_by("started_at", direction="DESCENDING")
+        .offset(offset)
+        .limit(limit)
+    )
+
+    jobs = []
+    for doc in jobs_query.stream():
+        data = doc.to_dict()
+        jobs.append({
+            "jobId": doc.id,
+            "status": data.get("status"),
+            "n_inputs": data.get("n_inputs", 0),
+            "user": data.get("user", "Unknown"),
+            "started_at": data.get("started_at"),
+        })
+
+    total = len([doc.id for doc in DB.collection("jobs").stream()])
+
+    return JSONResponse({
+        "jobs": jobs,
+        "page": page,
+        "limit": limit,
+        "total": total
+    })
+
+
+@router.get("/v1/job_logs/{job_id}/paginated")
+def get_paginated_logs(
+    job_id: str,
+    limit: int = Query(10, ge=1, le=250),
+    start_after_time: Optional[float] = Query(None),
+    start_after_id: Optional[str] = Query(None),
+):
+    logs_ref = (
+        DB.collection("jobs")
+        .document(job_id)
+        .collection("logs")
+        .order_by("created_at", direction=firestore.Query.DESCENDING)
+        .order_by("__name__", direction=firestore.Query.DESCENDING)
+    )
+
+    if start_after_time is not None and start_after_id:
+        ts = datetime.fromtimestamp(start_after_time, tz=timezone.utc)
+        logs_ref = logs_ref.start_after({"created_at": ts, "__name__": start_after_id})
+
+    docs = list(logs_ref.limit(limit).stream())
+
+    logs = []
+    for doc in docs:
+        data = doc.to_dict()
+        created_at = data.get("created_at")
+        if isinstance(created_at, float):
+            created_at = datetime.fromtimestamp(created_at, tz=timezone.utc)
+        logs.append({
+            "id": doc.id,
+            "msg": data.get("msg"),
+            "time": created_at.timestamp() if created_at else None,
+        })
+
+    next_cursor = None
+    if len(docs) == limit:
+        last = docs[-1]
+        last_data = last.to_dict()
+        last_created_at = last_data.get("created_at")
+        if isinstance(last_created_at, float):
+            last_created_at = datetime.fromtimestamp(last_created_at, tz=timezone.utc)
+        if last_created_at:
+            next_cursor = {
+                "start_after_time": last_created_at.timestamp(),
+                "start_after_id": last.id,
+            }
+
+    return {
+        "logs": logs,
+        "limit": limit,
+        "job_id": job_id,
+        "nextCursor": next_cursor,
+    }

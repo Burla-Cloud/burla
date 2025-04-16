@@ -66,7 +66,7 @@ const JobDetails = () => {
         </div>
 
         {/* Logs */}
-        <JobLogs jobId={job.id} />
+        <JobLogs jobId={job.id}  jobStatus={job.status}/>
       </div>
     </div>
   );

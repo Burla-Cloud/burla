@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState } from "react";
-import { BurlaNode, NodeStatus } from "@/types/cluster";
+import { BurlaNode, NodeStatus } from "@/types/coreTypes";
 
 interface NodesContextType {
     nodes: BurlaNode[];

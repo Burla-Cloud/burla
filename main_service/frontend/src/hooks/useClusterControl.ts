@@ -8,38 +8,30 @@ export const useClusterControl = () => {
     // There is no difference between starting and rebooting.
     // the backend will realise there is nothing to stop/turn off, then start the cluster.
 
-    const rebootCluster = async () => {
-        try {
-            if (clusterStatus === "ON") {
-                setClusterStatus("REBOOTING");
-            } else {
-                setClusterStatus("BOOTING");
-            }
+const rebootCluster = async () => {
+    try {
+        console.log("Calling /v1/cluster/restart...");
 
-            const response = await fetch("/v1/cluster/restart", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-            });
+        const response = await fetch("/v1/cluster/restart", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+        });
 
-            if (!response.ok) {
-                setClusterStatus(null); // Reset to calculated status
-                throw new Error("Failed to start the cluster");
-            }
+        console.log("Response:", response);
 
-            toast({
-                title: "Success",
-                description: "Cluster has been started successfully",
-            });
-            return true;
-        } catch (error) {
-            toast({
-                variant: "destructive",
-                title: "Error",
-                description: "Failed to start the cluster. Please try again.",
-            });
-            return false;
+        if (!response.ok) {
+            console.log("this failed")
+            throw new Error("Failed to start the cluster");
         }
-    };
+
+        console.log("Cluster restarted successfully");
+        return true;
+    } catch (error) {
+        console.error("Error restarting cluster:", error);
+        return false;
+    }
+};
+
 
     const stopCluster = async () => {
         try {

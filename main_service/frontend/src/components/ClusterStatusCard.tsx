@@ -1,5 +1,5 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { ClusterStatus } from "@/types/cluster";
+import { ClusterStatus } from "@/types/coreTypes";
 import { cn } from "@/lib/utils";
 
 interface ClusterStatusCardProps {

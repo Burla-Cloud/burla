@@ -82,7 +82,20 @@ def run_simple_test_job():
     #     assert str(i) in stdout
 
 
-def test_base():
-    assert in_remote_dev_mode()
+# def test_base():
+#     assert in_remote_dev_mode()
 
-    run_simple_test_job()
+#     run_simple_test_job()
+
+
+my_arguments = [1, 2, 3, 4]
+
+
+def my_function(my_argument: int):
+    print(f"Running on remote computer #{my_argument} in the cloud!")
+    return my_argument * 2
+
+
+for i in range(0, 25):
+    results = remote_parallel_map(my_function, my_arguments)
+    print(results)

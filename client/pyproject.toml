@@ -24,7 +24,6 @@ burla = "burla.__init__:init_cli"
 [tool.poetry.group.dev.dependencies]
 black = "^23.3.0"
 pytest = "^7.4.2"
-docker = "^7.1.0"
 jupyterlab = "^4.3.1"
 
 [build-system]

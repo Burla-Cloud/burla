@@ -40,3 +40,9 @@
 .read-the-docs {
   color: #888;
 }
+
+
+/* Hide scrollbars globally where needed */
+::-webkit-scrollbar {
+  display: none;
+}

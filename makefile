@@ -8,7 +8,7 @@ MAIN_SVC_IMAGE_NAME := us-docker.pkg.dev/$(PROJECT_ID)/burla-main-service/burla-
 
 
 test-local:
-	poetry -C ./client run pytest ./client/tests/test_in_local_dev_mode.py -s -x --disable-warnings
+	poetry -C ./client run pytest ./tests/test_in_local_dev_mode.py -s -x --disable-warnings
 
 test-local-base:
 	poetry -C ./client run pytest ./client/tests/test_in_local_dev_mode.py::test_base -s -x --disable-warnings

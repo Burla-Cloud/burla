@@ -157,7 +157,7 @@ def test_base():
     def my_function(sleep_time):
 
         print(f"sleeping for {sleep_time} seconds")
-        sleep(sleep_time * 0.5)
+        sleep(sleep_time)
 
         return sleep_time * 2
 

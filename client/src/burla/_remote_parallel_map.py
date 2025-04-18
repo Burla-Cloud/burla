@@ -231,7 +231,7 @@ def _watch_job(
                 result = cloudpickle.loads(result_pkl)
                 n_results_received += 1
                 if spinner:
-                    current_parallelism = sum([n["current_parallelism"] for n in nodes])
+                    current_parallelism = sum([n.get("current_parallelism", 0) for n in nodes])
                     msg = f"Running {len(inputs)} inputs through `{function_name}`"
                     msg += f" ({n_results_received}/{len(inputs)} completed)"
                     msg += f" ({current_parallelism} function instances running)"

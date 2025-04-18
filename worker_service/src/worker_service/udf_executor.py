@@ -34,8 +34,11 @@ class _FirestoreLogger:
                     "input_index": {"integerValue": self.input_index},
                 }
             }
-            response = requests.post(log_doc_url, headers=self.db_headers, json=data)
-            response.raise_for_status()
+            try:
+                response = requests.post(log_doc_url, headers=self.db_headers, json=data, timeout=1)
+                response.raise_for_status()
+            except Exception as e:
+                SELF["logs"].append(f"Error writing log to firestore: {e}")
 
     def flush(self):
         self.original_stdout.flush()

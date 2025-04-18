@@ -124,7 +124,7 @@ def _job_watcher(is_background_job: bool, logger: Logger):
         we_have_all_inputs = SELF["all_inputs_uploaded"]
         client_has_all_results = SELF["results_queue"].empty() and not is_background_job
         node_is_done = we_have_all_inputs and all_workers_idle_twice and client_has_all_results
-        neighbor_is_done = (not neighboring_node) or (seconds_neighbor_had_no_inputs > 6)
+        neighbor_is_done = (not neighboring_node) or (seconds_neighbor_had_no_inputs > 10)
 
         if node_is_done and neighbor_is_done:
             logger.log(f"Node {INSTANCE_NAME} is DONE executing job {SELF['current_job']}")

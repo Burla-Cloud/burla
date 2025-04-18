@@ -52,7 +52,7 @@ class Tee:
 
 def _normally_distributed_random_numbers(quantity):
 
-    def clamp(x, lower=0, upper=30):
+    def clamp(x, lower=0, upper=60):
         return max(lower, min(x, upper))
 
     def box_muller():
@@ -61,8 +61,8 @@ def _normally_distributed_random_numbers(quantity):
         z = math.sqrt(-2 * math.log(u1)) * math.cos(2 * math.pi * u2)
         return z
 
-    mean = 1
-    std_dev = 6
+    mean = -30
+    std_dev = 20
     samples = []
 
     for _ in range(quantity):
@@ -150,14 +150,14 @@ def rpm_assert_restart(*a, **kw):
 def test_base():
 
     # my_inputs = list(range(1000))
-    my_inputs = _normally_distributed_random_numbers(50)
+    my_inputs = _normally_distributed_random_numbers(1000)
     print(f"\nsum of all sleeps: {sum(my_inputs)}")
-    print(f"lowest possible runtime: {sum(my_inputs) / 5}\n")
+    print(f"lowest possible runtime: {sum(my_inputs) / 10}\n")
 
     def my_function(sleep_time):
 
         print(f"sleeping for {sleep_time} seconds")
-        sleep(sleep_time)
+        sleep(sleep_time * 0.5)
 
         return sleep_time * 2
 

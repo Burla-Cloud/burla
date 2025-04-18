@@ -35,12 +35,16 @@ async def get_half_inputs(
         return Response("job not found", status_code=404)
 
     async def _get_half_inputs_from_worker(session, worker, job_id):
-        async with session.get(f"{worker.url}/jobs/{job_id}/inputs") as response:
-            if response.status == 204:
+        async with session.get(f"{worker.url}/jobs/{job_id}/inputs", timeout=3) as response:
+            if response.status == 200:
+                return pickle.loads(await response.read())
+            elif response.status == 204:
                 return []
             else:
-                response.raise_for_status()
-                return pickle.loads(await response.read())
+                msg = f"Worker {worker.container_name} returned error: {response.status}"
+                msg += f" when transferring inputs for job {job_id}"
+                logger.log(msg, severity="WARNING")
+                return []
 
     inputs = []
     async with aiohttp.ClientSession() as session:
@@ -116,7 +120,7 @@ async def shutdown_node(request: Request, logger: Logger = Depends(get_logger)):
     async with aiohttp.ClientSession(headers={"Metadata-Flavor": "Google"}) as session:
         async with session.get(url, timeout=2) as response:
             response.raise_for_status()
-            preempted = await response.text().strip() == "TRUE"
+            preempted = (await response.text()).strip() == "TRUE"
 
     db = firestore.Client(project=PROJECT_ID, database="burla")
     node_doc = db.collection("nodes").document(INSTANCE_NAME)

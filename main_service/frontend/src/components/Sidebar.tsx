@@ -6,7 +6,9 @@ const Sidebar = () => {
         <div className="w-64 min-h-screen bg-gray-100 border-r p-4 flex flex-col">
             {/* Logo Container (Lowered a bit using `mt-2`) */}
             <div className="flex justify-left mt-5 mb-4">
-                <img src={clusterImage} className="w-28 h-auto" />
+                <Link to="/">
+                    <img src={clusterImage} className="w-28 h-auto" />
+                </Link>
             </div>
 
             {/* Horizontal Divider */}

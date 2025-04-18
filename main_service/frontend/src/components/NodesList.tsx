@@ -97,39 +97,44 @@ export const NodesList = ({ nodes }: NodesListProps) => {
                     </CardTitle>
                 </CardHeader>
                 <CardContent>
-                    <Table>
-                        <TableHeader>
-                            <TableRow>
-                                <TableHead>Status</TableHead>
-                                <TableHead>Name</TableHead>
-                                <TableHead>Type</TableHead>
-                                <TableHead>CPUs</TableHead>
-                            </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                            {nodes.map((node) => (
-                                <TableRow key={node.id}>
-                                    <TableCell>
-                                        <div className="flex items-center space-x-2">
-                                            <div className={getStatusClass(node.status)} />
-                                            <span className={cn("text-sm capitalize", node.status)}>
-                                                {node.status}
-                                            </span>
-                                        </div>
-                                    </TableCell>
-                                    <TableCell>{node.name}</TableCell>
-                                    <TableCell>{node.type}</TableCell>
-                                    <TableCell>
-                                        <div className="flex items-center space-x-1">
-                                            <Cpu className="h-4 w-4" />
-                                            <span>
-                                                {node.cpus ?? extractCpuCount(node.type) ?? "?"}
-                                            </span>
-                                        </div>
-                                    </TableCell>
-                                </TableRow>
-                            ))}
-                        </TableBody>
+                    <Table className="table-fixed w-full">
+                    {/* Define four columns with equal widths */}
+                    <colgroup>
+                        <col className="w-1/4" />
+                        <col className="w-1/4" />
+                        <col className="w-1/4" />
+                        <col className="w-1/4" />
+                    </colgroup>
+                    <TableHeader>
+                        <TableRow>
+                        <TableHead className="px-4 py-2">Status</TableHead>
+                        <TableHead className="px-4 py-2">Name</TableHead>
+                        <TableHead className="px-4 py-2">Type</TableHead>
+                        <TableHead className="px-4 py-2 text-center">CPUs</TableHead>
+                        </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                        {nodes.map((node) => (
+                        <TableRow key={node.id}>
+                            <TableCell className="px-4 py-2">
+                            <div className="flex items-center space-x-2">
+                                <div className={getStatusClass(node.status)} />
+                                <span className={cn("text-sm capitalize", node.status)}>
+                                {node.status}
+                                </span>
+                            </div>
+                            </TableCell>
+                            <TableCell className="px-4 py-2">{node.name}</TableCell>
+                            <TableCell className="px-4 py-2">{node.type}</TableCell>
+                            <TableCell className="px-4 py-2 text-center">
+                            <div className="inline-flex items-center space-x-1 justify-center">
+                                <Cpu className="h-4 w-4" />
+                                <span>{node.cpus ?? extractCpuCount(node.type) ?? "?"}</span>
+                            </div>
+                            </TableCell>
+                        </TableRow>
+                        ))}
+                    </TableBody>
                     </Table>
                 </CardContent>
             </Card>

@@ -6,6 +6,8 @@ import os
 import sys
 from io import StringIO
 from time import time, sleep
+import random
+import math
 
 import docker
 from google.cloud import firestore
@@ -46,6 +48,28 @@ class Tee:
 
     def isatty(self):
         return self.stdout.isatty()
+
+
+def _normally_distributed_random_numbers(quantity):
+
+    def clamp(x, lower=0, upper=30):
+        return max(lower, min(x, upper))
+
+    def box_muller():
+        u1 = random.random()
+        u2 = random.random()
+        z = math.sqrt(-2 * math.log(u1)) * math.cos(2 * math.pi * u2)
+        return z
+
+    mean = 1
+    std_dev = 6
+    samples = []
+
+    for _ in range(quantity):
+        val = clamp(mean + box_muller() * std_dev)
+        samples.append(val)
+
+    return samples
 
 
 def local_cluster_in_standby():
@@ -125,20 +149,17 @@ def rpm_assert_restart(*a, **kw):
 
 def test_base():
 
-    my_inputs = list(range(1_000))
+    # my_inputs = list(range(1000))
+    my_inputs = _normally_distributed_random_numbers(50)
+    print(f"\nsum of all sleeps: {sum(my_inputs)}")
+    print(f"lowest possible runtime: {sum(my_inputs) / 5}\n")
 
-    def my_function(test_input):
-        # print(f"starting #{test_input}")
+    def my_function(sleep_time):
 
-        # if test_input == 43219:
-        #     print("waiting ...")
-        #     sleep(30)
-        #     print(f"finished waiting.")
+        print(f"sleeping for {sleep_time} seconds")
+        sleep(sleep_time)
 
-        # print(f"finishing #{test_input}")
-
-        # sleep(1)
-        return test_input * 2
+        return sleep_time * 2
 
     results, stdout, runtime, rpm_exception = rpm_assert_restart(my_function, my_inputs)
 

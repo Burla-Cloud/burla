@@ -65,16 +65,20 @@ def execute_job(job_id: str, function_pkl: bytes):
     SELF["logs"].append(f"Starting job {job_id} with func-size {len(function_pkl)} bytes.")
 
     user_defined_function = None
+    logged_idle = False
     while not SELF["STOP_PROCESSING_EVENT"].is_set():
         try:
-            input_index, input_pkl = SELF["inputs_queue"].get()
+            input_index, input_pkl = SELF["inputs_queue"].get_nowait()
             SELF["IDLE"] = False
             SELF["current_in_progress_input"] = input_pkl
             SELF["logs"].append(f"Popped input #{input_index} from queue.")
         except Empty:
             SELF["IDLE"] = True
-            SELF["logs"].append("No inputs in queue. Sleeping for .2 seconds.")
-            sleep(0.2)
+            if not logged_idle:
+                SELF["logs"].append("Input queue empty, waiting for more inputs ...")
+                logged_idle = True
+            sleep(0.05)
+            continue
 
         is_error = False
         with _FirestoreLogger(job_id, input_index):
@@ -98,3 +102,5 @@ def execute_job(job_id: str, function_pkl: bytes):
         if not SELF["STOP_PROCESSING_EVENT"].is_set():
             SELF["result_queue"].put((input_index, is_error, result_pkl))
             SELF["logs"].append(f"Successfully enqueued result for input #{input_index}.")
+
+    SELF["logs"].append(f"STOP_PROCESSING_EVENT has been set!")

@@ -21,7 +21,7 @@ class InputTooBig(Exception):
 
 def send_alive_pings(job_doc_ref: DocumentReference, stop_event: Event):
     while not stop_event.is_set():
-        stop_event.wait(2)
+        stop_event.wait(1)
         job_doc_ref.update({"last_ping_from_client": time()})
 
 
@@ -55,15 +55,11 @@ def enqueue_results(
 ):
     async def _result_check_single_node(session, node):
         async with session.get(f"{node['host']}/jobs/{job_id}/results") as response:
-            if response.status != 200:
-                return node, response.status
-
-            response_pkl = b"".join([c async for c in response.content.iter_chunked(8192)])
-            response = pickle.loads(response_pkl)
-            # msg = f"Received {len(response['results'])} results from {node['instance_name']} "
-            # log_msg_stdout.write(msg + f"({len(response_pkl)} bytes)")
-            [queue.put(result) for result in response["results"]]
-            node["current_parallelism"] = response["current_node_parallelism"]
+            if response.status == 200:
+                job_results_pkl = b"".join([c async for c in response.content.iter_chunked(8192)])
+                job_results = pickle.loads(job_results_pkl)
+                [queue.put(result) for result in job_results["results"]]
+                node["current_parallelism"] = job_results["current_parallelism"]
             return node, response.status
 
     async def _result_check_all_nodes(nodes):
@@ -72,20 +68,26 @@ def enqueue_results(
             return await asyncio.gather(*tasks)
 
     try:
+        start = time()
         while not stop_event.is_set():
-            stop_event.wait(0.4)
+            elapsed_seconds = time() - start
+            if elapsed_seconds < 5:
+                stop_event.wait(0.1)
+            elif elapsed_seconds < 30:
+                stop_event.wait(1)
 
             # start = time()
             # log_msg_stdout.write(f"Checking results from all nodes...")
             results = asyncio.run(_result_check_all_nodes(nodes))
             # log_msg_stdout.write(f"Received all result check responses ({time() - start:.2f}s)")
 
-            # Check if any node returned a non-200 status
-            failed_nodes = [f"{n['host']}: {status}" for n, status in results if status != 200]
-            if failed_nodes:
-                # log_msg_stdout.write(f"result-check failed for nodes: {', '.join(failed_nodes)}")
-                # TODO: if a node fails, send its assigned unfinished inputs to other nodes
-                raise Exception(f"Result-check failed for nodes: {', '.join(failed_nodes)}")
+            for node, status in results:
+                if status == 404:
+                    nodes.remove(node)  # this is the only place where nodes can be removed.
+                elif status != 200:
+                    # TODO: if a node fails, send its assigned unfinished inputs to other nodes
+                    raise Exception(f"Result-check failed for node: {node['instance_name']}")
+
     except Exception:
         stop_event.set()
         raise
@@ -104,7 +106,6 @@ def upload_inputs(
         min_chunk_size: int = 1_048_576 * 1,  # 1MB
         max_chunk_size: int = 1_048_576 * 1000,  # 1GB
     ):
-        chunks = []
         current_chunk = []
         current_chunk_size = 0
 
@@ -125,28 +126,26 @@ def upload_inputs(
             elif next_chunk_size_is_acceptable:
                 # add input to the current chunk AND yield the chunk
                 current_chunk.append(input_pkl_with_idx)
-                chunks.append(current_chunk)
+                yield current_chunk
                 current_chunk = []
                 current_chunk_size = 0
             elif next_chunk_too_big:
                 # yield the chunk, add current input to next chunk
-                chunks.append(current_chunk)
+                yield current_chunk
                 current_chunk = [input_pkl_with_idx]
                 current_chunk_size = input_size
-        # Add the last chunk if it's not empty
+        # yield the last chunk if it's not empty
         if current_chunk:
-            chunks.append(current_chunk)
-        return chunks
+            yield current_chunk
 
     async def _upload_inputs_single_node(session, node):
         url = node["host"]
-        while len(node["input_chunks"]) > 0:
-            input_chunk = node["input_chunks"].pop(0)
+        for input_chunk in node["input_chunks"]:
             data = aiohttp.FormData()
             data.add_field("inputs_pkl_with_idx", pickle.dumps(input_chunk))
             async with session.post(f"{url}/jobs/{job_id}/inputs", data=data) as response:
                 response.raise_for_status()
-        # tell node all the inputs have been uploaded:
+
         async with session.post(f"{url}/jobs/{job_id}/inputs/done") as response:
             response.raise_for_status()
 
@@ -156,31 +155,17 @@ def upload_inputs(
             inputs_pkl_with_idx = [(i, cloudpickle.dumps(input)) for i, input in enumerate(inputs)]
             n_inputs = len(inputs_pkl_with_idx)
 
-            # TODO: This section is super slow! (the dividing not the uploading)
-            # Divide inputs into one chunk for each node.
+            # Divide inputs into even chunks for each node (even #inputs not #bytes).
             # Within chunks assigned to a node, chunk further so we don't send too much data at once
+            # ( ^ chunk by #bytes not by #inputs).
             size = len(inputs_pkl_with_idx) // len(nodes)
             extra = len(inputs_pkl_with_idx) % len(nodes)
             start = 0
             for i, node in enumerate(nodes):
                 end = start + size + (1 if i < extra else 0)
                 inputs_for_current_node = _chunk_inputs_by_size(inputs_pkl_with_idx[start:end])
-
-                sum_of_chunk_of_chunks = sum([len(c) for c in inputs_for_current_node])
-                len_of_chunk = len(inputs_pkl_with_idx[start:end])
-                assert sum_of_chunk_of_chunks == len_of_chunk
-
                 node["input_chunks"] = inputs_for_current_node
                 start = end
-
-            for node in nodes:
-                chunk_sizes = [len(chunk) for chunk in node["input_chunks"]]
-                n_chunks = len(node["input_chunks"])
-                msg = f"Uploading {n_chunks} chunks with {chunk_sizes} inputs to {node['host']}"
-                log_msg_stdout.write(msg)
-
-            sum_of_inputs = sum(sum(len(chunk) for chunk in node["input_chunks"]) for node in nodes)
-            assert sum_of_inputs == len(inputs)
 
             bytes_sent_before = psutil.net_io_counters().bytes_sent
             await asyncio.gather(*[_upload_inputs_single_node(session, node) for node in nodes])

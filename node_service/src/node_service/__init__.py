@@ -28,32 +28,31 @@ BURLA_BACKEND_URL = "https://backend.burla.dev"
 IN_LOCAL_DEV_MODE = os.environ.get("IN_LOCAL_DEV_MODE") == "True"  # Cluster running locally
 
 INSTANCE_NAME = os.environ["INSTANCE_NAME"]
-INACTIVITY_SHUTDOWN_TIME_SEC = os.environ.get("INACTIVITY_SHUTDOWN_TIME_SEC")
-INSTANCE_N_CPUS = 2 if IN_LOCAL_DEV_MODE else os.cpu_count()
+INACTIVITY_SHUTDOWN_TIME_SEC = int(os.environ.get("INACTIVITY_SHUTDOWN_TIME_SEC"))
+INSTANCE_N_CPUS = 1 if IN_LOCAL_DEV_MODE else os.cpu_count()
 GCL_CLIENT = logging.Client().logger("node_service", labels=dict(INSTANCE_NAME=INSTANCE_NAME))
 
 
-def INIT_SELF():
-    SELF = {
-        "workers": [],
-        "index_of_last_worker_given_inputs": 0,
-        "workers_have_all_inputs": False,
-        "results_queue": Queue(),
-        "current_job": None,
-        "current_parallelism": 0,
-        "job_watcher_stop_event": Event(),
-        "BOOTING": False,
-        "RUNNING": False,
-        "FAILED": False,
-        "last_activity_timestamp": time(),
-        "current_container_config": [],
-    }
-    # needs to be default set so that it definitely dies on reboot
-    SELF["job_watcher_stop_event"].set()
-    return SELF
+# SELF = state of this current instance of the node service
+def REINIT_SELF(SELF):
+    SELF["workers"] = []
+    SELF["index_of_last_worker_given_inputs"] = 0
+    SELF["results_queue"] = Queue()
+    SELF["current_job"] = None
+    SELF["current_parallelism"] = 0
+    SELF["job_watcher_stop_event"] = Event()
+    SELF["BOOTING"] = False
+    SELF["RUNNING"] = False
+    SELF["FAILED"] = False
+    SELF["SHUTTING_DOWN"] = False
+    SELF["last_activity_timestamp"] = time()
+    SELF["current_container_config"] = []
+    SELF["job_watcher_stop_event"].set()  # needs to be default set so it definitely dies on reboot
+    SELF["all_inputs_uploaded"] = False
 
 
-SELF = INIT_SELF()
+SELF = {}
+REINIT_SELF(SELF)
 from node_service.helpers import Logger
 
 
@@ -70,6 +69,7 @@ class ResultsEndpointFilter(python_logging.Filter):
 
 
 python_logging.getLogger("uvicorn.access").addFilter(ResultsEndpointFilter())
+# python_logging.getLogger("uvicorn.access").setLevel(python_logging.CRITICAL + 1)
 
 
 async def get_request_json(request: Request):
@@ -121,16 +121,14 @@ def get_add_background_task_function(
 
 
 from node_service.helpers import Logger, format_traceback
-from node_service.src.node_service.job_endpoints import router as job_endpoints_router
-from node_service.src.node_service.reboot_endpoints import (
-    reboot_containers,
-    router as reboot_endpoints_router,
-)
+from node_service.job_endpoints import router as job_endpoints_router
+from node_service.reboot_endpoints import reboot_containers, router as reboot_endpoints_router
 
 
-async def shutdown_if_idle_for_too_long(time_since_last_activity=0):
-    """WARNING: Errors/stdout from this function are completely hidden!"""
+async def shutdown_if_idle_for_too_long(logger: Logger):
+    """WARNING: Errors from this function are completely hidden!"""
 
+    time_since_last_activity = 0
     while time_since_last_activity < INACTIVITY_SHUTDOWN_TIME_SEC:
         await asyncio.sleep(5)
         time_since_last_activity = time() - SELF["last_activity_timestamp"]
@@ -148,6 +146,8 @@ async def shutdown_if_idle_for_too_long(time_since_last_activity=0):
         if vm:
             zone = vm.zone.split("/")[-1]
             instance_client.delete(project=PROJECT_ID, zone=zone, instance=INSTANCE_NAME)
+    else:
+        logger.log(f"Would have deleted vm due to inactivity here! {INSTANCE_NAME}")
 
 
 @asynccontextmanager
@@ -164,10 +164,9 @@ async def lifespan(app: FastAPI):
         # boot containers before accepting any requests.
         containers = [Container(**c) for c in json.loads(os.environ["CONTAINERS"])]
         await run_in_threadpool(reboot_containers, new_container_config=containers, logger=logger)
-        asyncio.create_task(shutdown_if_idle_for_too_long())
 
         if INACTIVITY_SHUTDOWN_TIME_SEC:
-            asyncio.create_task(shutdown_if_idle_for_too_long())
+            asyncio.create_task(shutdown_if_idle_for_too_long(logger=logger))
             logger.log(f"Set to shutdown if idle for {INACTIVITY_SHUTDOWN_TIME_SEC} sec.")
 
     except Exception as e:
@@ -207,13 +206,8 @@ async def log_and_time_requests__log_errors(request: Request, call_next):
     start = time()
     request.state.uuid = uuid4().hex
     logger = Logger(request)  # Yes this is a duplicate logger, it's ok because init is really fast.
-    is_job_activity = str(SELF["current_job"]) in str(request.url)
     not_requesting_udf_results = not str(request.url).endswith("/results")  # too many to log
-
-    # validate correct job if job
-    if "jobs" in str(request.url) and str(SELF["current_job"]) not in str(request.url):
-        logger.log("non-200 status response: 404: job not found", "WARNING")
-        return Response("job not found", status_code=404)
+    not_requesting_udf_results = True if IN_LOCAL_DEV_MODE else not_requesting_udf_results
 
     try:
         # Important to note that HTTP exceptions do not raise errors here!
@@ -223,27 +217,33 @@ async def log_and_time_requests__log_errors(request: Request, call_next):
         exc_type, exc_value, exc_traceback = sys.exc_info()
         tb_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
         traceback_str = format_traceback(tb_details)
+        logger.log(str(exception), "ERROR", traceback=traceback_str)
+
+    # ensure background tasks are availabe:
+    has_background_tasks = getattr(response, "background") is not None
+    response.background = response.background if has_background_tasks else BackgroundTasks()
+    add_background_task = get_add_background_task_function(response.background, logger=logger)
 
     # Log response
-    if response.status_code == 500:
-        logger.log(str(exception), "ERROR", traceback=traceback_str)
-    elif response.status_code != 200 and hasattr(response, "body"):
+    if response.status_code != 200 and hasattr(response, "body"):
         response_text = response.body.decode("utf-8", errors="ignore")
         logger.log(f"non-200 status response: {response.status_code}: {response_text}", "WARNING")
     elif response.status_code != 200 and hasattr(response, "body_iterator"):
         body = b"".join([chunk async for chunk in response.body_iterator])
         response_text = body.decode("utf-8", errors="ignore")
         logger.log(f"non-200 status response: {response.status_code}: {response_text}", "WARNING")
-        response.body_iterator = None
-        response.body = body
+
+        async def body_stream():  # it has to be like this :(
+            yield body
+
+        response.body_iterator = body_stream()
     elif response.status_code == 200 and not_requesting_udf_results and not IN_LOCAL_DEV_MODE:
         latency = time() - start
         msg = f"{request.method} to {request.url} returned 200 after {latency}s."
-        has_background_tasks = getattr(response, "background") is not None
-        response.background = response.background if has_background_tasks else BackgroundTasks()
-        add_background_task = get_add_background_task_function(response.background, logger=logger)
         add_background_task(logger.log, msg, latency=latency)
 
+    if response.status_code == 500:
+        add_background_task(reboot_containers, logger=logger)
     if response.status_code == 200:
         SELF["last_activity_timestamp"] = time()
 

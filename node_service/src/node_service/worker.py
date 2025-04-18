@@ -51,24 +51,26 @@ class Worker:
             msg = f"Image {image} not found after pulling!\nDid vm run out of disk space?"
             raise Exception(msg)
 
-        # create cmd
-        internal_bind_address = f"0.0.0.0:{WORKER_INTERNAL_PORT}"
-        gunicorn_cmd = ["gunicorn", "-t", "60", "-b", internal_bind_address, "worker_service:app"]
-        cmd = [python_executable, "-m", *gunicorn_cmd]
+        # setup host_config
+        host_arg = ["--host", "0.0.0.0"]
+        port_arg = ["--port", str(WORKER_INTERNAL_PORT)]
+        workers_arg = ["--workers", "1"]
+        timeout_arg = ["--timeout-keep-alive", "30"]
+        uvicorn_cmd_args = [*host_arg, *port_arg, *workers_arg, *timeout_arg]
+        cmd = [python_executable, "-m", "uvicorn", "worker_service:app", *uvicorn_cmd_args]
         if IN_LOCAL_DEV_MODE:
-            cmd.insert(-1, "--reload")
-
-        # Create host config
-        port_bindings = {WORKER_INTERNAL_PORT: None}
-        host_config = self.docker_client.create_host_config(port_bindings=port_bindings)
-        if IN_LOCAL_DEV_MODE:
-            # mount gcloud and worker_service dir's into container, use docker network
-            local_gcloud_dir = f"{os.environ['HOST_HOME_DIR']}/.config/gcloud"
-            gcloud_dir_binding = f"{local_gcloud_dir}:/root/.config/gcloud:rw"
-            local_worker_service_dir = f"{os.environ['HOST_PWD']}/worker_service"
-            worker_service_dir_binding = f"{local_worker_service_dir}:/burla/worker_service:rw"
-            binds = [gcloud_dir_binding, worker_service_dir_binding]
-            host_config.update({"NetworkMode": "local-burla-cluster", "Binds": binds})
+            cmd.append("--reload")
+            host_config = docker_client.create_host_config(
+                port_bindings={WORKER_INTERNAL_PORT: ("127.0.0.1", None)},
+                network_mode="local-burla-cluster",
+                binds={
+                    f"{os.environ['HOST_HOME_DIR']}/.config/gcloud": "/root/.config/gcloud",
+                    f"{os.environ['HOST_PWD']}/worker_service": "/burla/worker_service",
+                },
+            )
+        else:
+            port_bindings = {WORKER_INTERNAL_PORT: ("127.0.0.1", None)}
+            host_config = docker_client.create_host_config(port_bindings=port_bindings)
 
         # start container
         self.container = docker_client.create_container(
@@ -88,22 +90,23 @@ class Worker:
         self.container_id = self.container.get("Id")
         docker_client.start(container=self.container_id)
 
-        # get port that was assigned to the container
-        inspection = docker_client.inspect_container(self.container_id)
-        ports_info = inspection["NetworkSettings"]["Ports"]
-        host_port_info = ports_info.get(f"{WORKER_INTERNAL_PORT}/tcp")
-        if not host_port_info or not host_port_info[0].get("HostPort"):
-            docker_client.remove_container(self.container_id, force=True)
-            raise RuntimeError(f"Failed to get port for container {self.container_name}")
-        else:
-            self.host_port = int(host_port_info[0]["HostPort"])
+        # wait for port to be assigned to the container
+        def _get_host_port(attempt: int = 0):
+            info = docker_client.inspect_container(self.container_id)
+            host_port_info = info["NetworkSettings"]["Ports"].get(f"{WORKER_INTERNAL_PORT}/tcp")
+            if host_port_info:
+                return int(host_port_info[0]["HostPort"])
+            elif attempt > 20:
+                raise RuntimeError(f"Failed to get port for container {self.container_name} in 10s")
+            sleep(0.5)
+            return _get_host_port(attempt + 1)
+
+        self.url = f"http://127.0.0.1:{_get_host_port()}"
+        if IN_LOCAL_DEV_MODE:
+            self.url = f"http://{self.container_name}:{WORKER_INTERNAL_PORT}"
 
         # wait until READY
-        domain_name = self.container_name if IN_LOCAL_DEV_MODE else "127.0.0.1"
-        self.url = f"http://{domain_name}:{self.host_port}"
         if self.status() != "READY":
-            self.log_debug_info()
-            self.remove()
             raise Exception(f"Worker {self.container_name} failed to become READY.")
 
     def exists(self):
@@ -121,6 +124,7 @@ class Worker:
         raise Exception("This worker no longer exists.")
 
     def remove(self):
+        pass
         if self.exists():
             try:
                 self.docker_client.remove_container(self.container_id, force=True)
@@ -146,8 +150,8 @@ class Worker:
             response = requests.get(f"{self.url}/")
             response.raise_for_status()
             status = response.json()["status"]  # will be one of: READY, BUSY
-        except requests.exceptions.ConnectionError:
-            if attempt <= 30:
+        except requests.exceptions.ConnectionError as e:
+            if attempt < 10:
                 sleep(3)
                 return self.status(attempt + 1)
             else:

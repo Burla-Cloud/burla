@@ -1,15 +1,16 @@
 import os
 import sys
+import json
 import requests
 import traceback
 from queue import Queue
 from threading import Event
+import logging as python_logging
 
-
-from flask import Flask, request, abort
 import google.auth
 from google.cloud import logging
-
+from fastapi import FastAPI, Request, Response
+from starlette.datastructures import UploadFile
 
 # Defined before importing helpers/endpoints to prevent cyclic imports
 IN_LOCAL_DEV_MODE = os.environ.get("IN_LOCAL_DEV_MODE") == "True"
@@ -34,7 +35,7 @@ SELF = {
     "STARTED": False,
     "IDLE": False,
     "job_id": None,
-    "subjob_thread": None,
+    "udf_executor_thread": None,
     "inputs_queue": Queue(),
     "in_progress_input": None,  # needed so we can send ALL inputs elsewhere on shutdown
     "result_queue": Queue(),
@@ -43,37 +44,73 @@ SELF = {
     "STOP_PROCESSING_EVENT": Event(),
 }
 
-from worker_service.endpoints import BP as endpoints_bp
 
-app = Flask(__name__)
-app.register_blueprint(endpoints_bp)
+# Silence fastapi logs coming from the /results endpoint, there are so many it slows stuff down.
+class ResultsEndpointFilter(python_logging.Filter):
+    def filter(self, record):
+        return not record.args[2].endswith("/results")
 
 
-@app.errorhandler(Exception)
-def log_exception(exception):
-    exc_type, exc_value, exc_traceback = sys.exc_info()
-    traceback_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
-    traceback_str = "".join(traceback_details)
-    print(traceback_str, file=sys.stderr)
+python_logging.getLogger("uvicorn.access").addFilter(ResultsEndpointFilter())
 
+
+async def get_request_json(request: Request):
     try:
-        request_json = json.dumps(vars(request))
+        return await request.json()
     except:
-        request_json = "Unable to serialize request."
+        form_data = await request.form()
+        return json.loads(form_data["request_json"])
 
-    # Log all the logs that led up to this error:
-    # We can't always log to GCL because so many workers are running at once it just breaks.
-    # Therefore we only save the logs when there is an error (and pray they dont all error at once)
-    if not IN_LOCAL_DEV_MODE:
-        for log in SELF["logs"]:
-            LOGGER.log(log)
-        LOGGER.log_struct(dict(severity="ERROR", exception=traceback_str, request=request_json))
 
-    # Report errors back to Burla's cloud.
+async def get_request_files(request: Request):
+    """
+    If request is multipart/form data load all files and returns as dict of {filename: bytes}
+    """
+    form_data = await request.form()
+    files = {}
+    for key, value in form_data.items():
+        if isinstance(value, UploadFile):
+            files.update({key: await value.read()})
+    if files:
+        return files
+
+
+from worker_service.endpoints import router as endpoints_router
+
+app = FastAPI(docs_url=None, redoc_url=None)
+app.include_router(endpoints_router)
+
+
+@app.middleware("http")
+async def log_and_time_requests__log_errors(request: Request, call_next):
+    """
+    Fastapi `@app.exception_handler` will completely hide errors if middleware is used.
+    Catching errors in a `Depends` function will not distinguish http errors
+        originating here vs from other services.
+    """
     try:
-        json = {"project_id": PROJECT_ID, "message": exc_type, "traceback": traceback_str}
-        requests.post(f"{BURLA_BACKEND_URL}/v1/telemetry/alert", json=json, timeout=1)
+        # Important to note that HTTP exceptions do not raise errors here!
+        response = await call_next(request)
     except Exception:
-        pass
+        response = Response(status_code=500, content="Internal server error.")
+        exc_type, exc_value, exc_traceback = sys.exc_info()
+        traceback_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
+        traceback_str = "".join(traceback_details)
+        print(traceback_str, file=sys.stderr)
 
-    abort(500)
+        # Log all the logs that led up to this error:
+        # We can't always log to GCL because so many workers are running at once it just breaks.
+        # Therefore we only save the logs when error (and pray they dont all error at once)
+        if not IN_LOCAL_DEV_MODE:
+            for log in SELF["logs"]:
+                LOGGER.log(log)
+            LOGGER.log_struct(dict(severity="ERROR", exception=traceback_str))
+
+        # Report errors back to Burla's cloud.
+        try:
+            json = {"project_id": PROJECT_ID, "message": exc_type, "traceback": traceback_str}
+            requests.post(f"{BURLA_BACKEND_URL}/v1/telemetry/alert", json=json, timeout=1)
+        except Exception:
+            pass
+
+    return response

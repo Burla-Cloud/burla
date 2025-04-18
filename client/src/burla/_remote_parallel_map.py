@@ -40,6 +40,10 @@ class NoNodes(Exception):
     pass
 
 
+class AllNodesBusy(Exception):
+    pass
+
+
 class NoCompatibleNodes(Exception):
     pass
 
@@ -69,7 +73,7 @@ def _wait_for_nodes_to_boot(db: firestore.Client, spinner: Union[bool, Spinner])
     while n_booting_nodes != 0:
         msg = f"{len(ready_nodes)} Nodes are ready, "
         spinner.text = msg + f"waiting for remaining {n_booting_nodes} to boot before starting ..."
-        sleep(0.2)
+        sleep(0.1)
         n_booting_nodes = _num_booting_nodes(db)
         ready_nodes = _get_ready_nodes(db)
     return ready_nodes
@@ -90,10 +94,15 @@ def _start_job(
     ready_nodes = _get_ready_nodes(db)
     log_msg_stdout.write(f"Found {len(ready_nodes)} nodes with state `READY`.")
 
-    if len(ready_nodes) == 0 and _num_booting_nodes(db) == 0:
+    if len(ready_nodes) == 0 and _num_booting_nodes(db) != 0:
         ready_nodes = _wait_for_nodes_to_boot(db, spinner)
     elif len(ready_nodes) == 0:
-        raise NoNodes("Didn't find any nodes, has the Cluster been turned on?")
+        filter = FieldFilter("status", "==", "RUNNING")
+        running_nodes = [n.to_dict() for n in db.collection("nodes").where(filter=filter).stream()]
+        if running_nodes:
+            raise AllNodesBusy("All nodes are busy, please try again later.")
+        else:
+            raise NoNodes("Didn't find any nodes, has the Cluster been turned on?")
 
     # When running locally the node service hostname is it's container name. This only works from
     # inside the docker network, not from the host machine (here). If detected, swap to localhost.
@@ -145,9 +154,8 @@ def _start_job(
         data = aiohttp.FormData()
         data.add_field("request_json", json.dumps(request_json))
         data.add_field("function_pkl", cloudpickle.dumps(function_))
-        url = f"{node['host']}/jobs/{job_id}"
 
-        async with session.post(url, data=data, timeout=5) as response:
+        async with session.post(f"{node['host']}/jobs/{job_id}", data=data) as response:
             try:
                 response.raise_for_status()
                 return node
@@ -166,6 +174,7 @@ def _start_job(
     if not nodes:
         raise Exception("Job refused by all available Nodes!")
     else:
+        log_msg_stdout.write(f"Successfully assigned {len(nodes)} nodes to job.")
         return job_id, job_ref, nodes
 
 
@@ -206,6 +215,7 @@ def _watch_job(
         spinner.text = msg
 
     n_results_received = 0
+    current_parallelism = None
     while n_results_received < len(inputs):
         for t in [input_thread, result_thread]:
             if t.traceback_str:
@@ -224,9 +234,14 @@ def _watch_job(
                     current_parallelism = sum([n["current_parallelism"] for n in nodes])
                     msg = f"Running {len(inputs)} inputs through `{function_name}`"
                     msg += f" ({n_results_received}/{len(inputs)} completed)"
-                    msg += f" ({current_parallelism} parallel instances running)"
+                    msg += f" ({current_parallelism} function instances running)"
                     spinner.text = msg
                 yield result
+
+        # nodes are removed as they finish work in the results background thread.
+        if len(nodes) == 0 and result_queue.empty():
+            raise Exception("Zero nodes are working on job and we have not received all results!")
+
         sleep(0.1)
     stop_event.set()
 

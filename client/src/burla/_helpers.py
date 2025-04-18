@@ -2,7 +2,6 @@ import os
 import sys
 import signal
 import traceback
-from time import sleep
 from threading import Thread, Event
 
 import google.auth
@@ -13,7 +12,7 @@ from yaspin import yaspin
 from burla._auth import get_gcs_credentials
 
 
-N_FOUR_STANDARD_CPU_TO_RAM = {2: 8, 4: 16, 8: 32, 16: 64, 32: 128, 48: 192, 64: 256, 80: 320}
+N_FOUR_STANDARD_CPU_TO_RAM = {1: 4, 2: 8, 4: 16, 8: 32, 16: 64, 32: 128, 48: 192, 64: 256, 80: 320}
 POSIX_SIGNALS_TO_HANDLE = ["SIGINT", "SIGTERM", "SIGHUP", "SIGQUIT"]
 NT_SIGNALS_TO_HANDLE = ["SIGINT", "SIGBREAK"]
 _signal_names_to_handle = POSIX_SIGNALS_TO_HANDLE if os.name == "posix" else NT_SIGNALS_TO_HANDLE

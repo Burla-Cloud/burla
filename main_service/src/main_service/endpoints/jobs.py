@@ -232,7 +232,7 @@ async def get_recent_jobs(request: Request, page: int = 0, stream: bool = False)
 @router.get("/v1/job_logs/{job_id}/paginated")
 def get_paginated_logs(
     job_id: str,
-    limit: int = Query(10, ge=1, le=250),
+    limit: int = Query(10, ge=1, le=1000),
     start_after_time: Optional[float] = Query(None),
     start_after_id: Optional[str] = Query(None),
 ):
@@ -283,8 +283,9 @@ def get_paginated_logs(
     }
 
 
+
 @router.post("/v1/logs/generate-6200")
-def generate_job_2500():
+def generate_job_800():
     job_id = str(uuid4())
     job_ref = DB.collection("jobs").document(job_id)
     logs_ref = job_ref.collection("logs")
@@ -295,8 +296,8 @@ def generate_job_2500():
     # Job metadata (started_at as UNIX timestamp)
     job_metadata = {
         "user": "joe@burla.dev",
-        "n_inputs": 11500,
-        "results": 11500,
+        "n_inputs": 800,
+        "results": 800,
         "status": "RUNNING",
         "started_at": base_time.timestamp(),  # ✅ UNIX timestamp here
         "func_cpu": 1,
@@ -310,7 +311,7 @@ def generate_job_2500():
     }
     job_ref.set(job_metadata)
 
-    for i in range(11500):
+    for i in range(800):
         log_time = base_time + timedelta(milliseconds=i * 5)
 
         log_entry = {

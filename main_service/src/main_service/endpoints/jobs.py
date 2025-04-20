@@ -1,8 +1,7 @@
 import json
 import requests
 import asyncio
-from datetime import datetime, timezone, timedelta
-from uuid import uuid4
+from datetime import datetime, timezone
 from typing import Optional, Callable
 
 from fastapi import APIRouter, Path, Depends, Query, Request
@@ -154,42 +153,3 @@ def get_paginated_logs(
         "job_id": job_id,
         "nextCursor": next_cursor,
     }
-
-
-@router.post("/v1/logs/generate-6200")
-def generate_job_105k():
-    job_id = str(uuid4())
-    job_ref = DB.collection("jobs").document(job_id)
-    logs_ref = job_ref.collection("logs")
-
-    # UTC time for consistent behavior (displays as EDT in Firestore)
-    base_time = datetime.now(timezone.utc)
-
-    # Job metadata (started_at as UNIX timestamp)
-    job_metadata = {
-        "user": "joe@burla.dev",
-        "n_inputs": 105000,
-        "results": 105000,
-        "status": "RUNNING",
-        "started_at": base_time.timestamp(),  # ✅ UNIX timestamp here
-        "func_cpu": 1,
-        "func_ram": 256,
-        "current_parallelism": 100,
-        "target_parallelism": 100,
-        "planned_future_job_parallelism": 10,
-        "user_python_version": "3.10",
-        "burla_client_version": "1.0.0",
-        "inputs_id": "dummy_input_id",
-    }
-    job_ref.set(job_metadata)
-
-    for i in range(105000):
-        log_time = base_time + timedelta(milliseconds=i * 1)
-
-        log_entry = {
-            "created_at": log_time,  # ✅ Firestore-native timestamp
-            "msg": f"Dummy log line {i + 1}: Skipped",
-        }
-        logs_ref.document(f"log_{i}").set(log_entry)
-
-    return {"job_id": job_id, "message": "Created 1 job with 6,200 logs using proper timestamps."}

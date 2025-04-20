@@ -49,6 +49,7 @@ def REINIT_SELF(SELF):
     SELF["current_container_config"] = []
     SELF["job_watcher_stop_event"].set()  # needs to be default set so it definitely dies on reboot
     SELF["all_inputs_uploaded"] = False
+    SELF["num_results_received"] = 0
 
 
 SELF = {}

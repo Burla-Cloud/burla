@@ -55,13 +55,9 @@ def get_half_inputs(job_id: str = Path(...)):
     if SELF["current_job"] != job_id:
         return Response("job not found", status_code=404)
 
-    SELF["logs"].append("HERE1")
-
     # gather half of the inputs from the queue
     inputs = []
     qsize = SELF["inputs_queue"].qsize()
-
-    SELF["logs"].append("HERE2")
 
     n_inputs_to_send = qsize if qsize <= 1 else int(qsize // 1.5)  # <- actually takes more like 2/3
     for _ in range(n_inputs_to_send):
@@ -70,14 +66,10 @@ def get_half_inputs(job_id: str = Path(...)):
         except Empty:
             break
 
-    SELF["logs"].append("HERE3")
-
     if not inputs:
         return Response(status_code=204)
     else:
         SELF["logs"].append(f"queue had size {qsize} sending {len(inputs)} inputs to another node")
-
-    SELF["logs"].append("HERE4")
 
     data = BytesIO(pickle.dumps(inputs))
     data.seek(0)  # ensure file pointer is at the beginning of the file.

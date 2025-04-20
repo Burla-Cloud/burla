@@ -149,8 +149,12 @@ def _start_job(
     )
 
     async def assign_node(node: dict, session: aiohttp.ClientSession):
-        request_json = {"parallelism": node["target_parallelism"], "is_background_job": background}
-        request_json.update({"user_python_version": f"3.{sys.version_info.minor}"})
+        request_json = {
+            "parallelism": node["target_parallelism"],
+            "is_background_job": background,
+            "user_python_version": f"3.{sys.version_info.minor}",
+            "n_inputs": n_inputs,
+        }
         data = aiohttp.FormData()
         data.add_field("request_json", json.dumps(request_json))
         data.add_field("function_pkl", cloudpickle.dumps(function_))

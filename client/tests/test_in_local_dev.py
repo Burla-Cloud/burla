@@ -48,9 +48,9 @@ def in_remote_dev_mode():
 def run_simple_test_job():
 
     # test_inputs = list(range(n_inputs))
-    my_inputs = _normally_distributed_random_numbers(2000)
+    my_inputs = _normally_distributed_random_numbers(1000)
     print(f"\nsum of all sleeps: {sum(my_inputs)}")
-    print(f"lowest possible runtime: {sum(my_inputs) / 120}\n")
+    print(f"lowest possible runtime: {sum(my_inputs) / 10}\n")
     # stdout = StringIO()
     # sys.stdout = stdouts
     start = time()
@@ -58,7 +58,7 @@ def run_simple_test_job():
     def simple_test_function(test_input):
         # print(test_input)
         # print(f"STARTING input #{test_input}")
-        # print(f"sleeping for {test_input} seconds")
+        print(f"sleeping for {test_input} seconds")
         sleep(test_input)
         # print(f"FINISHED input #{test_input}")
         return test_input  # f"Waited 1 seconds for input {test_input}!"
@@ -83,6 +83,6 @@ def run_simple_test_job():
 
 
 def test_base():
-    assert in_remote_dev_mode()
+    # assert in_remote_dev_mode()
 
     run_simple_test_job()

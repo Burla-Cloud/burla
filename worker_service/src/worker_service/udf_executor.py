@@ -1,7 +1,7 @@
 import sys
 import pickle
 import requests
-from datetime import datetime
+from datetime import datetime, timezone
 from queue import Empty
 from time import sleep
 
@@ -29,11 +29,12 @@ class _FirestoreLogger:
             msg = msg_truncated + "<too-long--remaining-msg-truncated-due-to-length>"
         if msg.strip():
             log_doc_url = f"{DB_BASE_URL}/jobs/{self.job_id}/logs"
+            timestamp_str = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
             data = {
                 "fields": {
                     "msg": {"stringValue": msg},
                     "input_index": {"integerValue": self.input_index},
-                    "created_at": {"timestampValue": datetime.now().isoformat()},
+                    "created_at": {"timestampValue": timestamp_str},
                 }
             }
             try:

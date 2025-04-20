@@ -9,6 +9,7 @@ from time import time, sleep
 from google.cloud import firestore
 from google.cloud.firestore import FieldFilter, And
 from google.cloud.firestore_v1.field_path import FieldPath
+from google.cloud.firestore_v1.aggregation import AggregationQuery
 
 from node_service import PROJECT_ID, SELF, INSTANCE_NAME
 from node_service.reboot_endpoints import reboot_containers
@@ -26,6 +27,7 @@ async def _result_check_single_worker(session, worker, logger):
         # logger.log(msg + f"({len(response_pkl)} bytes)")
 
         for result in response["results"]:
+            SELF["num_results_received"] += 1
             SELF["results_queue"].put(result)
 
         worker.is_idle = response["is_idle"]
@@ -54,9 +56,15 @@ def _get_neighboring_node(db, job_id):
         return neighboring_node
 
 
-def _job_watcher(is_background_job: bool, logger: Logger):
+def _job_watcher(n_inputs: int, is_background_job: bool, logger: Logger):
     db = firestore.Client(project=PROJECT_ID, database="burla")
     job_doc = db.collection("jobs").document(SELF["current_job"])
+    node_doc = db.collection("nodes").document(INSTANCE_NAME)
+    node_doc.update({"status": "RUNNING", "current_job": SELF["current_job"]})
+    node_docs_collection = job_doc.collection("assigned_nodes")
+    node_doc = node_docs_collection.document(INSTANCE_NAME)
+    node_doc.set({"current_num_results": 0})
+
     LAST_CLIENT_PING_TIMESTAMP = time()
     neighboring_node = None
     neighbor_had_no_inputs_at = None
@@ -73,13 +81,13 @@ def _job_watcher(is_background_job: bool, logger: Logger):
     all_workers_idle = False
     start = time()
     while not SELF["job_watcher_stop_event"].is_set():
-        # elapsed_seconds = time() - start
-        # if elapsed_seconds > 5:
-        #     sleep(0.2)
-        # elif elapsed_seconds > 30:
-        #     sleep(1)
+        elapsed_seconds = time() - start
+        if elapsed_seconds > 5:
+            sleep(0.2)
+        elif elapsed_seconds > 30:
+            sleep(1)
 
-        sleep(0.5)
+        node_doc.update({"current_num_results": SELF["num_results_received"]})
 
         # enqueue results from workers
         workers_info = asyncio.run(_result_check_all_workers(logger))
@@ -120,29 +128,29 @@ def _job_watcher(is_background_job: bool, logger: Logger):
             else:
                 logger.log("No neighbors to ask for more inputs ... I am the only node.")
 
-        # has the entire job ended ?
+        # job ended ?
+        job_is_done = False
         we_have_all_inputs = SELF["all_inputs_uploaded"]
         client_has_all_results = SELF["results_queue"].empty() and not is_background_job
         node_is_done = we_have_all_inputs and all_workers_idle_twice and client_has_all_results
-        neighbor_is_done = (not neighboring_node) or (seconds_neighbor_had_no_inputs > 10)
-
+        neighbor_is_done = (not neighboring_node) or (seconds_neighbor_had_no_inputs > 2)
         if node_is_done and neighbor_is_done:
-            logger.log(f"Node {INSTANCE_NAME} is DONE executing job {SELF['current_job']}")
-            # Mark self as done, use separate node doc because OG node doc is cleared on reboot.
-            job_nodes = job_doc.collection("assigned_nodes")
-            job_nodes.document(INSTANCE_NAME).set({"is_done": True})
-            # Check if all nodes are done, mark entire job as DONE if so
-            filter = FieldFilter("is_done", "==", False)
-            all_nodes_done = not list(job_nodes.where(filter=filter).limit(1).stream())
-            if all_nodes_done:
-                logger.log(f"All nodes done, marking job {SELF['current_job']} as DONE")
+            agg_query = node_docs_collection.sum("current_num_results")
+            total_results = agg_query.get()[0][0].value
+            job_is_done = total_results == n_inputs
+
+        if job_is_done:
+            try:
                 job_doc.update({"status": "COMPLETED"})
-            break
+                break
+            except Exception:
+                pass
 
         # client still listening? (if this is NOT a background job)
         seconds_since_last_ping = time() - LAST_CLIENT_PING_TIMESTAMP
-        client_disconnected = seconds_since_last_ping > 3
+        client_disconnected = seconds_since_last_ping > 4
         if not is_background_job and client_disconnected:
+            job_doc.update({"status": "FAILED"})
             logger.log(f"No client ping in the last {seconds_since_last_ping}s, REBOOTING")
             break
 
@@ -157,10 +165,10 @@ def _job_watcher(is_background_job: bool, logger: Logger):
     # reproduced it consistently with both disabled.
 
 
-def job_watcher_logged(is_background_job: bool):
+def job_watcher_logged(*a, **kw):
     logger = Logger()
     try:
-        _job_watcher(is_background_job, logger)
+        _job_watcher(*a, **kw, logger=logger)
     except Exception as e:
         exc_type, exc_value, exc_traceback = sys.exc_info()
         tb_details = traceback.format_exception(exc_type, exc_value, exc_traceback)

@@ -180,15 +180,6 @@ def execute(
 
     SELF["current_job"] = job_id
     SELF["RUNNING"] = True
-    function_pkl = request_files["function_pkl"]
-    db = firestore.Client(project=PROJECT_ID, database="burla")
-    node_doc = db.collection("nodes").document(INSTANCE_NAME)
-    node_doc.update({"status": "RUNNING", "current_job": job_id})
-
-    # permanently associate this node to the job document (`current_job` is cleared later)
-    job_doc = db.collection("jobs").document(job_id)
-    job_node_doc = job_doc.collection("assigned_nodes").document(INSTANCE_NAME)
-    job_node_doc.set({"is_done": False})
 
     # determine which workers to call and which to remove
     workers_to_remove = []
@@ -221,7 +212,7 @@ def execute(
     # call workers concurrently
     async def assign_worker(session, worker):
         data = aiohttp.FormData()
-        data.add_field("function_pkl", function_pkl)
+        data.add_field("function_pkl", request_files["function_pkl"])
         async with session.post(f"{worker.url}/jobs/{job_id}", data=data) as response:
             if response.status == 200:
                 return worker
@@ -247,5 +238,6 @@ def execute(
     add_background_task(remove_workers, workers_to_remove)
 
     SELF["job_watcher_stop_event"].clear()  # is initalized as set by default
-    SELF["job_watcher_thread"] = Thread(target=job_watcher_logged, args=(is_background_job,))
+    args = (request_json["n_inputs"], is_background_job)
+    SELF["job_watcher_thread"] = Thread(target=job_watcher_logged, args=args)
     SELF["job_watcher_thread"].start()

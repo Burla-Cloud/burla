@@ -21,7 +21,7 @@ class InputTooBig(Exception):
 
 def send_alive_pings(job_doc_ref: DocumentReference, stop_event: Event):
     while not stop_event.is_set():
-        stop_event.wait(1)
+        stop_event.wait(2)
         job_doc_ref.update({"last_ping_from_client": time()})
 
 

@@ -48,7 +48,7 @@ def in_remote_dev_mode():
 def run_simple_test_job():
 
     # test_inputs = list(range(n_inputs))
-    my_inputs = _normally_distributed_random_numbers(13000)
+    my_inputs = _normally_distributed_random_numbers(2000)
     print(f"\nsum of all sleeps: {sum(my_inputs)}")
     print(f"lowest possible runtime: {sum(my_inputs) / 120}\n")
     # stdout = StringIO()
@@ -82,20 +82,7 @@ def run_simple_test_job():
     #     assert str(i) in stdout
 
 
-# def test_base():
-#     assert in_remote_dev_mode()
+def test_base():
+    assert in_remote_dev_mode()
 
-#     run_simple_test_job()
-
-
-my_arguments = [1, 2, 3, 4]
-
-
-def my_function(my_argument: int):
-    print(f"Running on remote computer #{my_argument} in the cloud!")
-    return my_argument * 2
-
-
-for i in range(0, 25):
-    results = remote_parallel_map(my_function, my_arguments)
-    print(results)
+    run_simple_test_job()

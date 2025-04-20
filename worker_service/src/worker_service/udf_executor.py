@@ -1,6 +1,7 @@
 import sys
 import pickle
 import requests
+from datetime import datetime
 from queue import Empty
 from time import sleep
 
@@ -32,6 +33,7 @@ class _FirestoreLogger:
                 "fields": {
                     "msg": {"stringValue": msg},
                     "input_index": {"integerValue": self.input_index},
+                    "created_at": {"timestampValue": datetime.now().isoformat()},
                 }
             }
             try:

@@ -1,41 +1,38 @@
 import json
 import requests
-import random
 import asyncio
-from threading import Timer
 from datetime import datetime, timezone, timedelta
-from time import time, sleep
-from queue import Queue
 from uuid import uuid4
 from typing import Optional, Callable
-from concurrent.futures import ThreadPoolExecutor
-import logging
 
 from fastapi import APIRouter, Path, Depends, Query, Request
 from fastapi.responses import JSONResponse
 from starlette.responses import StreamingResponse
 from google.cloud import firestore
-from google.cloud.firestore import FieldFilter, Increment
-from google.protobuf.timestamp_pb2 import Timestamp
-from google.api_core.exceptions import GoogleAPICallError, NotFound
+from google.cloud.firestore import FieldFilter
 
-
-from main_service import (
-    DB,
-    get_user_email,
-    get_logger,
-    get_request_json,
-    get_request_files,
-    get_add_background_task_function,
-)
-from main_service.cluster import (
-    parallelism_capacity,
-    reboot_nodes_with_job,
-    async_ensure_reconcile,
-)
-from main_service.helpers import validate_create_job_request, Logger
+from main_service import DB, get_logger, get_add_background_task_function
+from main_service.helpers import Logger
 
 router = APIRouter()
+
+
+@router.get("/v1/jobs/{job_id}")
+def run_job_healthcheck(
+    job_id: str = Path(...),
+    logger: Logger = Depends(get_logger),
+    add_background_task: Callable = Depends(get_add_background_task_function),
+):
+    # get all nodes working on this job
+    _filter = FieldFilter("current_job", "==", job_id)
+    nodes_with_job = [n.to_dict() for n in DB.collection("nodes").where(filter=_filter).stream()]
+
+    # check status of every node / worker working on this job
+    for node in nodes_with_job:
+        response = requests.get(f"{node['host']}/jobs/{job_id}")
+        response.raise_for_status()
+        if response.json()["any_workers_failed"]:
+            raise Exception(f"Worker failed. Check logs for node {node['instance_name']}")
 
 
 @router.get("/v1/jobs_paginated")

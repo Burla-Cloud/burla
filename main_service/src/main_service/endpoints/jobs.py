@@ -39,62 +39,67 @@ async def get_recent_jobs(request: Request, page: int = 0, stream: bool = False)
     limit = 15
     offset = page * limit
 
-    # If `stream=true` or `Accept: text/event-stream`, serve SSE
-    if stream or request.headers.get("accept") == "text/event-stream":
+    accept = request.headers.get("accept", "")
+    if stream or "text/event-stream" in accept:
         queue = asyncio.Queue()
-        current_loop = asyncio.get_running_loop()
+        loop = asyncio.get_running_loop()
 
         def on_snapshot(col_snapshot, changes, read_time):
             for change in changes:
                 doc = change.document
-                doc_data = doc.to_dict() or {}
+                data = doc.to_dict() or {}
 
-                event_data = {
+                # coerce Firestore Timestamp to float seconds
+                ts = data.get("started_at")
+                if hasattr(ts, "timestamp"):
+                    ts = ts.timestamp()
+
+                event = {
                     "jobId": doc.id,
-                    "status": doc_data.get("status"),
-                    "user": doc_data.get("user", "Unknown"),
-                    "n_inputs": doc_data.get("n_inputs", 0),
-                    "started_at": doc_data.get("started_at"),
+                    "status": data.get("status"),
+                    "user": data.get("user", "Unknown"),
+                    "n_inputs": data.get("n_inputs", 0),
+                    "started_at": ts,
                     "deleted": change.type.name == "REMOVED",
                 }
+                loop.call_soon_threadsafe(queue.put_nowait, event)
 
-                current_loop.call_soon_threadsafe(queue.put_nowait, event_data)
-
-        jobs_query = DB.collection("jobs").order_by("started_at", direction="DESCENDING")
-        unsubscribe = jobs_query.on_snapshot(on_snapshot)
+        query = DB.collection("jobs").order_by("started_at", direction=firestore.Query.DESCENDING)
+        unsubscribe = query.on_snapshot(on_snapshot)
 
         async def event_stream():
             try:
                 while True:
-                    event = await queue.get()
-                    yield f"data: {json.dumps(event)}\n\n"
+                    evt = await queue.get()
+                    yield f"data: {json.dumps(evt)}\n\n"
             finally:
                 unsubscribe.unsubscribe()
 
         return StreamingResponse(event_stream(), media_type="text/event-stream")
 
-    # Otherwise return paginated JSON
-    jobs_query = (
+    # --- paginated JSON fallback ---
+    docs = (
         DB.collection("jobs")
-        .order_by("started_at", direction="DESCENDING")
-        .offset(offset)
-        .limit(limit)
+          .order_by("started_at", direction=firestore.Query.DESCENDING)
+          .offset(offset)
+          .limit(limit)
+          .stream()
     )
-
     jobs = []
-    for doc in jobs_query.stream():
-        data = doc.to_dict()
-        jobs.append(
-            {
-                "jobId": doc.id,
-                "status": data.get("status"),
-                "n_inputs": data.get("n_inputs", 0),
-                "user": data.get("user", "Unknown"),
-                "started_at": data.get("started_at"),
-            }
-        )
+    for doc in docs:
+        d = doc.to_dict() or {}
+        ts = d.get("started_at")
+        if hasattr(ts, "timestamp"):
+            ts = ts.timestamp()
+        jobs.append({
+            "jobId": doc.id,
+            "status": d.get("status"),
+            "n_inputs": d.get("n_inputs", 0),
+            "user": d.get("user", "Unknown"),
+            "started_at": ts,
+        })
 
-    total = len([doc.id for doc in DB.collection("jobs").stream()])
+    total = len([_ for _ in DB.collection("jobs").stream()])
 
     return JSONResponse({"jobs": jobs, "page": page, "limit": limit, "total": total})
 
@@ -153,3 +158,4 @@ def get_paginated_logs(
         "job_id": job_id,
         "nextCursor": next_cursor,
     }
+

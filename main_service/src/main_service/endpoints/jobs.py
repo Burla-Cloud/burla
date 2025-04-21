@@ -1,8 +1,9 @@
 import json
 import requests
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional, Callable
+from uuid import uuid4
 
 from fastapi import APIRouter, Path, Depends, Query, Request
 from fastapi.responses import JSONResponse
@@ -158,4 +159,3 @@ def get_paginated_logs(
         "job_id": job_id,
         "nextCursor": next_cursor,
     }
-

@@ -130,46 +130,46 @@ async def shutdown_node(request: Request, logger: Logger = Depends(get_logger)):
     node_doc = db.collection("nodes").document(INSTANCE_NAME)
     node_doc.update({"status": "DELETED", "preempted": preempted})
 
-    # before transferring inputs, wait for curent batch to finish uploading:
-    # It's really important the client and node-service are on the same page.
-    # which is why we don't just stop it and take the inputs that are there.
-    if SELF["current_input_batch_forwarded"] == False:
-        start_time = time()
-        while not SELF["current_input_batch_forwarded"]:
-            if time() - start_time > 10:
-                raise Exception("Timeout waiting for input batch to be forwarded (>10 seconds)")
-            sleep(0.1)
+    # # before transferring inputs, wait for curent batch to finish uploading:
+    # # It's really important the client and node-service are on the same page.
+    # # which is why we don't just stop it and take the inputs that are there.
+    # if SELF["current_input_batch_forwarded"] == False:
+    #     start_time = time()
+    #     while not SELF["current_input_batch_forwarded"]:
+    #         if time() - start_time > 10:
+    #             raise Exception("Timeout waiting for input batch to be forwarded (>10 seconds)")
+    #         sleep(0.1)
 
-    if SELF["current_job"]:
-        # send remaining inputs to another node
-        status_filter = FieldFilter("status", "==", "RUNNING")
-        job_filter = FieldFilter("current_job", "==", SELF["current_job"])
-        query = db.collection("nodes").where(filter=And([status_filter, job_filter]))
+    # if SELF["current_job"]:
+    #     # send remaining inputs to another node
+    #     status_filter = FieldFilter("status", "==", "RUNNING")
+    #     job_filter = FieldFilter("current_job", "==", SELF["current_job"])
+    #     query = db.collection("nodes").where(filter=And([status_filter, job_filter]))
 
-        async def transfer_inputs(worker: Worker, node_url: str, session: aiohttp.ClientSession):
-            worker_url = f"{worker.url}/jobs/{SELF['current_job']}/transfer_inputs"
-            json = {"target_node_url": node_url}
-            async with session.post(worker_url, json=json) as response:
-                response.raise_for_status()
+    #     async def transfer_inputs(worker: Worker, node_url: str, session: aiohttp.ClientSession):
+    #         worker_url = f"{worker.url}/jobs/{SELF['current_job']}/transfer_inputs"
+    #         json = {"target_node_url": node_url}
+    #         async with session.post(worker_url, json=json) as response:
+    #             response.raise_for_status()
 
-        async with aiohttp.ClientSession() as session:
-            success = False
-            for node in query.stream():
-                try:
-                    host = node.get("host")
-                    tasks = [transfer_inputs(w, host, session) for w in SELF["workers"]]
-                    await asyncio.gather(*tasks)
-                    done_url = f"{host}/jobs/{SELF['current_job']}/inputs/done"
-                    async with session.post(done_url) as response:
-                        response.raise_for_status()
-                    success = True
-                    break
-                except Exception as e:
-                    msg = f"Failed to transfer inputs to node {host}: {e}"
-                    logger.log(msg, severity="WARNING")
-            if not success:
-                raise e
-        logger.log(f"Successfully transferred remaining inputs to node {node.get('instance_name')}")
+    #     async with aiohttp.ClientSession() as session:
+    #         success = False
+    #         for node in query.stream():
+    #             try:
+    #                 host = node.get("host")
+    #                 tasks = [transfer_inputs(w, host, session) for w in SELF["workers"]]
+    #                 await asyncio.gather(*tasks)
+    #                 done_url = f"{host}/jobs/{SELF['current_job']}/inputs/done"
+    #                 async with session.post(done_url) as response:
+    #                     response.raise_for_status()
+    #                 success = True
+    #                 break
+    #             except Exception as e:
+    #                 msg = f"Failed to transfer inputs to node {host}: {e}"
+    #                 logger.log(msg, severity="WARNING")
+    #         if not success:
+    #             raise e
+    #     logger.log(f"Successfully transferred remaining inputs to node {node.get('instance_name')}")
 
 
 @router.post("/jobs/{job_id}")

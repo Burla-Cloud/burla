@@ -8,7 +8,7 @@ from io import BytesIO
 from fastapi import APIRouter, Path, Depends, Response, Request
 from fastapi.responses import StreamingResponse
 from google.cloud import firestore
-from google.cloud.firestore import FieldFilter
+from google.cloud.firestore import FieldFilter, And
 
 from node_service import (
     PROJECT_ID,
@@ -110,17 +110,21 @@ def get_results(job_id: str = Path(...), logger: Logger = Depends(get_logger)):
 @router.post("/shutdown")
 async def shutdown_node(request: Request, logger: Logger = Depends(get_logger)):
     # Only allow shutdown requests from localhost (inside the shutdown script defined in main_svc)
-    if request.client.host != "127.0.0.1":
-        return Response("Shutdown endpoint can only be called from localhost", status_code=403)
+    # if request.client.host != "127.0.0.1":
+    #     return Response("Shutdown endpoint can only be called from localhost", status_code=403)
 
     SELF["SHUTTING_DOWN"] = True
     logger.log(f"Received shutdown request for node {INSTANCE_NAME}.")
 
-    url = "http://metadata.google.internal/computeMetadata/v1/instance/preempted"
-    async with aiohttp.ClientSession(headers={"Metadata-Flavor": "Google"}) as session:
-        async with session.get(url, timeout=2) as response:
-            response.raise_for_status()
-            preempted = (await response.text()).strip() == "TRUE"
+    try:
+        url = "http://metadata.google.internal/computeMetadata/v1/instance/preempted"
+        async with aiohttp.ClientSession(headers={"Metadata-Flavor": "Google"}) as session:
+            async with session.get(url, timeout=2) as response:
+                response.raise_for_status()
+                preempted = (await response.text()).strip() == "TRUE"
+    except Exception as e:
+        logger.log(f"Error checking if node {INSTANCE_NAME} was preempted: {e}", severity="WARNING")
+        preempted = False
 
     db = firestore.Client(project=PROJECT_ID, database="burla")
     node_doc = db.collection("nodes").document(INSTANCE_NAME)
@@ -140,7 +144,7 @@ async def shutdown_node(request: Request, logger: Logger = Depends(get_logger)):
         # send remaining inputs to another node
         status_filter = FieldFilter("status", "==", "RUNNING")
         job_filter = FieldFilter("current_job", "==", SELF["current_job"])
-        query = db.collection("nodes").where(filter=status_filter & job_filter)
+        query = db.collection("nodes").where(filter=And([status_filter, job_filter]))
 
         async def transfer_inputs(worker: Worker, node_url: str, session: aiohttp.ClientSession):
             worker_url = f"{worker.url}/jobs/{SELF['current_job']}/transfer_inputs"
@@ -152,19 +156,20 @@ async def shutdown_node(request: Request, logger: Logger = Depends(get_logger)):
             success = False
             for node in query.stream():
                 try:
-                    tasks = [transfer_inputs(w, node["host"], session) for w in SELF["workers"]]
+                    host = node.get("host")
+                    tasks = [transfer_inputs(w, host, session) for w in SELF["workers"]]
                     await asyncio.gather(*tasks)
-                    done_url = f"{node.get('host')}/jobs/{SELF['current_job']}/inputs/done"
+                    done_url = f"{host}/jobs/{SELF['current_job']}/inputs/done"
                     async with session.post(done_url) as response:
                         response.raise_for_status()
                     success = True
                     break
                 except Exception as e:
-                    msg = f"Failed to transfer inputs to node {node['host']}: {e}"
+                    msg = f"Failed to transfer inputs to node {host}: {e}"
                     logger.log(msg, severity="WARNING")
             if not success:
                 raise e
-        logger.log(f"Successfully transferred remaining inputs to node {node['instance_name']}")
+        logger.log(f"Successfully transferred remaining inputs to node {node.get('instance_name')}")
 
 
 @router.post("/jobs/{job_id}")

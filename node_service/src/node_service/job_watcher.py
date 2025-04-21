@@ -9,7 +9,6 @@ from time import time, sleep
 from google.cloud import firestore
 from google.cloud.firestore import FieldFilter, And
 from google.cloud.firestore_v1.field_path import FieldPath
-from google.cloud.firestore_v1.aggregation import AggregationQuery
 
 from node_service import PROJECT_ID, SELF, INSTANCE_NAME
 from node_service.reboot_endpoints import reboot_containers

@@ -145,6 +145,7 @@ def _start_job(
             "started_at": time(),
             "last_ping_from_client": time(),
             "is_background_job": background,
+            "client_has_all_results": False,
         }
     )
 
@@ -248,6 +249,7 @@ def _watch_job(
 
         sleep(0.1)
     stop_event.set()
+    job_ref.update({"client_has_all_results": True})
 
 
 def remote_parallel_map(

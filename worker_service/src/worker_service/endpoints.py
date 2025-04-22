@@ -42,13 +42,8 @@ def get_results(job_id: str = Path(...)):
         except Empty:
             break
 
-    worker_is_empty = (
-        SELF["result_queue"].empty()
-        and SELF["inputs_queue"].empty()
-        and SELF["in_progress_input"] is None
-    )
     # `IDLE` is used to determine if job is done
-    response_json = {"results": results, "is_idle": SELF["IDLE"], "is_empty": worker_is_empty}
+    response_json = {"results": results, "is_idle": SELF["IDLE"]}
     data = BytesIO(pickle.dumps(response_json))
     data.seek(0)  # ensure file pointer is at the beginning of the file.
     headers = {"Content-Disposition": 'attachment; filename="results.pkl"'}

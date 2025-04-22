@@ -31,7 +31,6 @@ async def _result_check_single_worker(session, worker, logger):
             SELF["num_results_received"] += 1
 
         worker.is_idle = response["is_idle"]
-        worker.is_empty = response["is_empty"]
         return worker, http_response.status
 
 
@@ -139,15 +138,14 @@ def _job_watcher(n_inputs: int, is_background_job: bool, logger: Logger):
         #  job ended ?
         job_is_done = False
         we_have_all_inputs = SELF["all_inputs_uploaded"]
-        all_workers_empty = all([w.is_empty for w in SELF["workers"]])
-        client_has_all_results = SELF["results_queue"].empty() and all_workers_empty
-        client_has_all_results = client_has_all_results or is_background_job
+        client_has_all_results = SELF["results_queue"].empty() or is_background_job
         node_is_done = we_have_all_inputs and all_workers_idle_twice and client_has_all_results
 
         # neighbor_is_done = (not neighboring_node) or (seconds_neighbor_had_no_inputs > 2)
         if node_is_done:  # and neighbor_is_done:
             total_results = node_docs_collection.sum("current_num_results").get()[0][0].value
-            job_is_done = total_results == n_inputs
+            client_has_all_results = job_doc.get(["client_has_all_results"]) or is_background_job
+            job_is_done = total_results == n_inputs and client_has_all_results
 
         if job_is_done:
             logger.log("Job is done, updating job status and rebooting ...")

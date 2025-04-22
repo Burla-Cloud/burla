@@ -227,15 +227,16 @@ async def log_and_time_requests__log_errors(request: Request, call_next):
     add_background_task = get_add_background_task_function(response.background, logger=logger)
 
     # Log response
-    if response.status_code != 200 and hasattr(response, "body"):
+    is_non_2xx_response = response.status_code < 200 or response.status_code >= 300
+    if is_non_2xx_response and hasattr(response, "body"):
         response_text = response.body.decode("utf-8", errors="ignore")
-        logger.log(f"non-200 status response: {response.status_code}: {response_text}", "WARNING")
-    elif response.status_code != 200 and hasattr(response, "body_iterator"):
+        logger.log(f"non-2xx status response: {response.status_code}: {response_text}", "WARNING")
+    elif is_non_2xx_response and hasattr(response, "body_iterator"):
         body = b"".join([chunk async for chunk in response.body_iterator])
         response_text = body.decode("utf-8", errors="ignore")
-        logger.log(f"non-200 status response: {response.status_code}: {response_text}", "WARNING")
+        logger.log(f"non-2xx status response: {response.status_code}: {response_text}", "WARNING")
 
-        async def body_stream():  # it has to be like this :(
+        async def body_stream():  # it has to be ugly like this :(
             yield body
 
         response.body_iterator = body_stream()

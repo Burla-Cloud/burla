@@ -106,41 +106,41 @@ def _job_watcher(n_inputs: int, is_background_job: bool, logger: Logger):
         all_workers_idle = SELF["current_parallelism"] == 0
         finished_all_assigned_inputs = all_workers_idle_twice and SELF["all_inputs_uploaded"]
 
-        if finished_all_assigned_inputs:
-            logger.log("Finished all inputs.")
-            neighboring_node = _get_neighboring_node(db, SELF["current_job"])
-            neighboring_node_host = neighboring_node.get("host") if neighboring_node else None
+        # if finished_all_assigned_inputs:
+        #     logger.log("Finished all inputs.")
+        #     neighboring_node = _get_neighboring_node(db, SELF["current_job"])
+        #     neighboring_node_host = neighboring_node.get("host") if neighboring_node else None
 
-            if neighboring_node and not SELF["SHUTTING_DOWN"]:
-                url = f"{neighboring_node_host}/jobs/{SELF['current_job']}/inputs"
-                response = requests.get(url, timeout=1)  # <- must be close to SHUTTING_DOWN check
-                logger.log("Asked neighboring node for more inputs ...")  # <- must log after get ^
-                neighbor_has_no_inputs = response.status_code in [204, 404]
+        #     if neighboring_node and not SELF["SHUTTING_DOWN"]:
+        #         url = f"{neighboring_node_host}/jobs/{SELF['current_job']}/inputs"
+        #         response = requests.get(url, timeout=1)  # <- must be close to SHUTTING_DOWN check
+        #         logger.log("Asked neighboring node for more inputs ...")  # <- must log after get ^
+        #         neighbor_has_no_inputs = response.status_code in [204, 404]
 
-                if neighbor_has_no_inputs:
-                    neighbor_had_no_inputs_at = neighbor_had_no_inputs_at or time()
-                    seconds_neighbor_had_no_inputs = time() - neighbor_had_no_inputs_at
-                    logger.log(f"{neighboring_node.id} doesn't have any extra inputs to give.")
-                else:
-                    try:
-                        response.raise_for_status()
-                        neighbor_had_no_inputs_at = None
-                        seconds_neighbor_had_no_inputs = 0
-                        new_inputs = pickle.loads(response.content)
-                        asyncio.run(send_inputs_to_workers(new_inputs))
-                        logger.log(f"Got {len(new_inputs)} more inputs from {neighboring_node.id}")
-                    except Exception as e:
-                        logger.log(f"Error getting inputs from {neighboring_node.id}: {e}", "ERROR")
-            else:
-                logger.log("No neighbors to ask for more inputs ... I am the only node.")
+        #         if neighbor_has_no_inputs:
+        #             neighbor_had_no_inputs_at = neighbor_had_no_inputs_at or time()
+        #             seconds_neighbor_had_no_inputs = time() - neighbor_had_no_inputs_at
+        #             logger.log(f"{neighboring_node.id} doesn't have any extra inputs to give.")
+        #         else:
+        #             try:
+        #                 response.raise_for_status()
+        #                 neighbor_had_no_inputs_at = None
+        #                 seconds_neighbor_had_no_inputs = 0
+        #                 new_inputs = pickle.loads(response.content)
+        #                 asyncio.run(send_inputs_to_workers(new_inputs))
+        #                 logger.log(f"Got {len(new_inputs)} more inputs from {neighboring_node.id}")
+        #             except Exception as e:
+        #                 logger.log(f"Error getting inputs from {neighboring_node.id}: {e}", "ERROR")
+        #     else:
+        #         logger.log("No neighbors to ask for more inputs ... I am the only node.")
 
         # job ended ?
         job_is_done = False
         we_have_all_inputs = SELF["all_inputs_uploaded"]
         client_has_all_results = SELF["results_queue"].empty() and not is_background_job
         node_is_done = we_have_all_inputs and all_workers_idle_twice and client_has_all_results
-        neighbor_is_done = (not neighboring_node) or (seconds_neighbor_had_no_inputs > 2)
-        if node_is_done and neighbor_is_done:
+        # neighbor_is_done = (not neighboring_node) or (seconds_neighbor_had_no_inputs > 2)
+        if node_is_done:  # and neighbor_is_done:
             agg_query = node_docs_collection.sum("current_num_results")
             total_results = agg_query.get()[0][0].value
             job_is_done = total_results == n_inputs

@@ -313,6 +313,7 @@ def remote_parallel_map(
     max_parallelism = max_parallelism if max_parallelism else len(inputs)
     auth_headers = get_auth_headers(api_key) if api_key else get_auth_headers()
     db, project_id = get_db_and_project_id(auth_headers)
+    job_id = None
 
     try:
         stop_event = Event()
@@ -364,6 +365,11 @@ def remote_parallel_map(
         stop_event.set()
         if spinner:
             spinner.stop()
+
+        try:
+            db.collection("jobs").document(job_id).update({"status": "FAILED"})
+        except Exception:
+            pass
 
         # Report errors back to Burla's cloud.
         try:

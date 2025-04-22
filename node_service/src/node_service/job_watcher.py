@@ -8,6 +8,7 @@ from time import time, sleep
 
 from google.cloud import firestore
 from google.cloud.firestore import FieldFilter, And
+from google.cloud.firestore_v1 import aggregation
 from google.cloud.firestore_v1.field_path import FieldPath
 
 from node_service import PROJECT_ID, SELF, INSTANCE_NAME
@@ -62,7 +63,7 @@ def _job_watcher(n_inputs: int, is_background_job: bool, logger: Logger):
     node_doc.update({"status": "RUNNING", "current_job": SELF["current_job"]})
     node_docs_collection = job_doc.collection("assigned_nodes")
     node_doc = node_docs_collection.document(INSTANCE_NAME)
-    node_doc.set({"current_num_results": 0})
+    node_doc.set({"current_num_results": 0, "is_not_done": True})
 
     LAST_CLIENT_PING_TIMESTAMP = time()
     neighboring_node = None
@@ -134,22 +135,27 @@ def _job_watcher(n_inputs: int, is_background_job: bool, logger: Logger):
         #     else:
         #         logger.log("No neighbors to ask for more inputs ... I am the only node.")
 
-        # job ended ?
+        #  job ended ?
         job_is_done = False
         we_have_all_inputs = SELF["all_inputs_uploaded"]
         client_has_all_results = SELF["results_queue"].empty() and not is_background_job
         node_is_done = we_have_all_inputs and all_workers_idle_twice and client_has_all_results
+        if client_has_all_results and is_background_job:
+            node_doc.update({"is_not_done": False})  # <- not positive this entire flag is needed
+        else:
+            node_doc.update({"is_not_done": True})
         # neighbor_is_done = (not neighboring_node) or (seconds_neighbor_had_no_inputs > 2)
         if node_is_done:  # and neighbor_is_done:
-            agg_query = node_docs_collection.sum("current_num_results")
-            total_results = agg_query.get()[0][0].value
-            job_is_done = total_results == n_inputs
-
+            total_results = node_docs_collection.sum("current_num_results").get()[0][0].value
+            all_nodes_done = node_docs_collection.sum("is_not_done").get()[0][0].value == 0
+            job_is_done = total_results == n_inputs and all_nodes_done
         if job_is_done:
             try:
                 job_doc.update({"status": "COMPLETED"})
                 break
             except Exception:
+                # ignore because this can get hit by like 100's of nodes at once
+                # one of them will succeed and the others will throw errors we can ignore.
                 pass
 
         # client still listening? (if this is NOT a background job)

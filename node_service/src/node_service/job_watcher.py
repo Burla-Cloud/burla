@@ -141,11 +141,9 @@ def _job_watcher(n_inputs: int, is_background_job: bool, logger: Logger):
 
         # neighbor_is_done = (not neighboring_node) or (seconds_neighbor_had_no_inputs > 2)
         if node_is_done:  # and neighbor_is_done:
+            logger.log("Node is probably done, checking if job is done ...")
             total_results = node_docs_collection.sum("current_num_results").get()[0][0].value
             client_has_all_results = job_doc.get().to_dict()["client_has_all_results"]
-
-            print(f"client_has_all_results: {client_has_all_results}")
-
             client_has_all_results = client_has_all_results or is_background_job
             job_is_done = total_results == n_inputs and client_has_all_results
 

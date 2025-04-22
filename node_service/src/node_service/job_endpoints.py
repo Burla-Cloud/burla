@@ -100,9 +100,10 @@ def get_results(job_id: str = Path(...), logger: Logger = Depends(get_logger)):
         return Response("job not found", status_code=404)
 
     results = []
-    while not SELF["results_queue"].empty():
+    n_results_gathered = 0
+    while not SELF["results_queue"].empty() or n_results_gathered < 10000:
         results.append(SELF["results_queue"].get())
-
+        n_results_gathered += 1
     response = {"results": results, "current_parallelism": SELF["current_parallelism"]}
     data = BytesIO(pickle.dumps(response))
     data.seek(0)  # ensure file pointer is at the beginning of the file.

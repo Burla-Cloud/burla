@@ -58,8 +58,12 @@ def enqueue_results(
             if response.status == 200:
                 job_results_pkl = b"".join([c async for c in response.content.iter_chunked(8192)])
                 job_results = pickle.loads(job_results_pkl)
+                log_msg_stdout.write(f"received {len(job_results['results'])} results")
                 [queue.put(result) for result in job_results["results"]]
                 node["current_parallelism"] = job_results["current_parallelism"]
+            else:
+                msg = f"result-check failed for: {node['instance_name']} status: {response.status}"
+                log_msg_stdout.write(msg)
             return node, response.status
 
     async def _result_check_all_nodes(nodes):
@@ -70,11 +74,11 @@ def enqueue_results(
     try:
         start = time()
         while not stop_event.is_set():
-            # elapsed_seconds = time() - start
-            # if elapsed_seconds < 5:
-            #     stop_event.wait(0.1)
-            # elif elapsed_seconds < 30:
-            #     stop_event.wait(1)
+            elapsed_seconds = time() - start
+            if elapsed_seconds < 5:
+                stop_event.wait(0.1)
+            elif elapsed_seconds < 30:
+                stop_event.wait(1)
 
             # start = time()
             # log_msg_stdout.write(f"Checking results from all nodes...")

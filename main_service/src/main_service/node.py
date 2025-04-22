@@ -185,7 +185,7 @@ class Node:
             self.instance_client.delete(**kwargs)
         except (NotFound, ValueError):
             pass  # these errors mean it was already deleted.
-        self.node_ref.update({"status": "DELETED"})
+        self.node_ref.delete()  # Delete the document instead of marking as deleted
 
     def status(self):
         """Returns one of: `BOOTING`, `RUNNING`, `READY`, `FAILED`"""

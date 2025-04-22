@@ -132,7 +132,8 @@ async def shutdown_node(request: Request, logger: Logger = Depends(get_logger)):
 
     db = firestore.Client(project=PROJECT_ID, database="burla")
     node_doc = db.collection("nodes").document(INSTANCE_NAME)
-    node_doc.update({"status": "DELETED", "preempted": preempted})
+    node_doc.update({"preempted": preempted})
+    node_doc.delete()
 
     # # before transferring inputs, wait for curent batch to finish uploading:
     # # It's really important the client and node-service are on the same page.

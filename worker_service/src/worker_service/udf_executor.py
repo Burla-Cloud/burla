@@ -76,7 +76,7 @@ def execute_job(job_id: str, function_pkl: bytes):
         try:
             input_index, input_pkl = SELF["inputs_queue"].get_nowait()
             SELF["IDLE"] = False
-            SELF["current_in_progress_input"] = input_pkl
+            SELF["in_progress_input"] = input_pkl
             SELF["logs"].append(f"Popped input #{input_index} from queue.")
         except Empty:
             SELF["IDLE"] = True
@@ -107,7 +107,7 @@ def execute_job(job_id: str, function_pkl: bytes):
         # with the inputs sitting in the queue to another worker, becore this node shuts down.
         if not SELF["STOP_PROCESSING_EVENT"].is_set():
             SELF["result_queue"].put((input_index, is_error, result_pkl))
-            SELF["current_in_progress_input"] = None
+            SELF["in_progress_input"] = None
             SELF["logs"].append(f"Successfully enqueued result for input #{input_index}.")
 
     SELF["logs"].append(f"STOP_PROCESSING_EVENT has been set!")

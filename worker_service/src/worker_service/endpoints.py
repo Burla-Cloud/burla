@@ -45,7 +45,7 @@ def get_results(job_id: str = Path(...)):
     worker_is_empty = (
         SELF["result_queue"].empty()
         and SELF["inputs_queue"].empty()
-        and SELF["current_in_progress_input"] is None
+        and SELF["in_progress_input"] is None
     )
     # `IDLE` is used to determine if job is done
     response_json = {"results": results, "is_idle": SELF["IDLE"], "is_empty": worker_is_empty}
@@ -143,8 +143,8 @@ def transfer_inputs(
     while not SELF["inputs_queue"].empty():
         remaining_inputs.append(SELF["inputs_queue"].get())
 
-    if SELF["current_in_progress_input"]:
-        remaining_inputs.append(SELF["current_in_progress_input"])
+    if SELF["in_progress_input"]:
+        remaining_inputs.append(SELF["in_progress_input"])
 
     files = {"inputs_pkl_with_idx": pickle.dumps(remaining_inputs)}
     response = requests.post(f"{target_node_url}/jobs/{job_id}/inputs", files=files)

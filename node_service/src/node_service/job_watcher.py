@@ -27,10 +27,11 @@ async def _result_check_single_worker(session, worker, logger):
         # logger.log(msg + f"({len(response_pkl)} bytes)")
 
         for result in response["results"]:
-            SELF["num_results_received"] += 1
             SELF["results_queue"].put(result)
+            SELF["num_results_received"] += 1
 
         worker.is_idle = response["is_idle"]
+        worker.is_empty = response["is_empty"]
         return worker, http_response.status
 
 
@@ -63,8 +64,7 @@ def _job_watcher(n_inputs: int, is_background_job: bool, logger: Logger):
     node_doc.update({"status": "RUNNING", "current_job": SELF["current_job"]})
     node_docs_collection = job_doc.collection("assigned_nodes")
     node_doc = node_docs_collection.document(INSTANCE_NAME)
-    node_doc.set({"current_num_results": 0, "is_not_done": True})
-    # not positive the "is_not_done" is necessary at all ^
+    node_doc.set({"current_num_results": 0})
 
     LAST_CLIENT_PING_TIMESTAMP = time()
     neighboring_node = None
@@ -139,27 +139,25 @@ def _job_watcher(n_inputs: int, is_background_job: bool, logger: Logger):
         #  job ended ?
         job_is_done = False
         we_have_all_inputs = SELF["all_inputs_uploaded"]
-        client_has_all_results = SELF["results_queue"].empty() and not is_background_job
+        all_workers_empty = all([w.is_empty for w in SELF["workers"]])
+        client_has_all_results = SELF["results_queue"].empty() and all_workers_empty
+        client_has_all_results = client_has_all_results or is_background_job
         node_is_done = we_have_all_inputs and all_workers_idle_twice and client_has_all_results
-        if client_has_all_results:
-            node_doc.update({"is_not_done": False})
-        else:
-            node_doc.update({"is_not_done": True})
 
         # neighbor_is_done = (not neighboring_node) or (seconds_neighbor_had_no_inputs > 2)
         if node_is_done:  # and neighbor_is_done:
             total_results = node_docs_collection.sum("current_num_results").get()[0][0].value
-            all_nodes_done = node_docs_collection.sum("is_not_done").get()[0][0].value == 0
-            job_is_done = total_results == n_inputs and all_nodes_done
+            job_is_done = total_results == n_inputs
 
         if job_is_done:
+            logger.log("Job is done, updating job status and rebooting ...")
             try:
                 job_doc.update({"status": "COMPLETED"})
-                break
             except Exception:
                 # ignore because this can get hit by like 100's of nodes at once
                 # one of them will succeed and the others will throw errors we can ignore.
                 pass
+            break
 
         # client still listening? (if this is NOT a background job)
         seconds_since_last_ping = time() - LAST_CLIENT_PING_TIMESTAMP

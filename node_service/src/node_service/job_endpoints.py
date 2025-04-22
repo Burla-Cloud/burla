@@ -33,18 +33,21 @@ async def get_half_inputs(
 ):
     if job_id != SELF["current_job"]:
         return Response("job not found", status_code=404)
+    elif SELF["SHUTTING_DOWN"]:
+        return Response("Node is shutting down, can't give inputs.", status_code=409)
 
     async def _get_half_inputs_from_worker(session, worker, job_id):
-        async with session.get(f"{worker.url}/jobs/{job_id}/inputs", timeout=3) as response:
-            if response.status == 200:
-                return pickle.loads(await response.read())
-            elif response.status == 204:
-                return []
-            else:
-                msg = f"Worker {worker.container_name} returned error: {response.status}"
-                msg += f" when transferring inputs for job {job_id}"
-                logger.log(msg, severity="WARNING")
-                return []
+        try:
+            async with session.get(f"{worker.url}/jobs/{job_id}/inputs", timeout=1) as response:
+                response.raise_for_status()
+                if response.status == 200:
+                    return pickle.loads(await response.read())
+                elif response.status == 204:
+                    return []
+        except Exception as e:
+            msg = f"Failed to get inputs from worker {worker.container_name} for job {job_id}: {e}"
+            logger.log(msg, severity="WARNING")
+            return []
 
     inputs = []
     async with aiohttp.ClientSession() as session:
@@ -114,12 +117,13 @@ async def shutdown_node(request: Request, logger: Logger = Depends(get_logger)):
     #     return Response("Shutdown endpoint can only be called from localhost", status_code=403)
 
     SELF["SHUTTING_DOWN"] = True
+    SELF["job_watcher_stop_event"].set()
     logger.log(f"Received shutdown request for node {INSTANCE_NAME}.")
 
     try:
         url = "http://metadata.google.internal/computeMetadata/v1/instance/preempted"
         async with aiohttp.ClientSession(headers={"Metadata-Flavor": "Google"}) as session:
-            async with session.get(url, timeout=2) as response:
+            async with session.get(url, timeout=1) as response:
                 response.raise_for_status()
                 preempted = (await response.text()).strip() == "TRUE"
     except Exception as e:

@@ -88,6 +88,9 @@ def _job_watcher(n_inputs: int, is_background_job: bool, logger: Logger):
 
         node_doc.update({"current_num_results": SELF["num_results_received"]})
 
+        if SELF["SHUTTING_DOWN"]:
+            break
+
         # enqueue results from workers
         workers_info = asyncio.run(_result_check_all_workers(logger))
         SELF["current_parallelism"] = sum([not w.is_idle for w in SELF["workers"]])
@@ -106,11 +109,12 @@ def _job_watcher(n_inputs: int, is_background_job: bool, logger: Logger):
         if finished_all_assigned_inputs:
             logger.log("Finished all inputs.")
             neighboring_node = _get_neighboring_node(db, SELF["current_job"])
+            neighboring_node_host = neighboring_node.get("host") if neighboring_node else None
 
-            if neighboring_node:
-                logger.log("Asking neighboring node for more inputs ...")
-                url = f"{neighboring_node.get('host')}/jobs/{SELF['current_job']}/inputs"
-                response = requests.get(url)
+            if neighboring_node and not SELF["SHUTTING_DOWN"]:
+                url = f"{neighboring_node_host}/jobs/{SELF['current_job']}/inputs"
+                response = requests.get(url, timeout=1)  # <- must be close to SHUTTING_DOWN check
+                logger.log("Asked neighboring node for more inputs ...")  # <- must log after get ^
                 neighbor_has_no_inputs = response.status_code in [204, 404]
 
                 if neighbor_has_no_inputs:
@@ -118,12 +122,15 @@ def _job_watcher(n_inputs: int, is_background_job: bool, logger: Logger):
                     seconds_neighbor_had_no_inputs = time() - neighbor_had_no_inputs_at
                     logger.log(f"{neighboring_node.id} doesn't have any extra inputs to give.")
                 else:
-                    response.raise_for_status()
-                    neighbor_had_no_inputs_at = None
-                    seconds_neighbor_had_no_inputs = 0
-                    new_inputs = pickle.loads(response.content)
-                    asyncio.run(send_inputs_to_workers(new_inputs))
-                    logger.log(f"Got {len(new_inputs)} more inputs from {neighboring_node.id}")
+                    try:
+                        response.raise_for_status()
+                        neighbor_had_no_inputs_at = None
+                        seconds_neighbor_had_no_inputs = 0
+                        new_inputs = pickle.loads(response.content)
+                        asyncio.run(send_inputs_to_workers(new_inputs))
+                        logger.log(f"Got {len(new_inputs)} more inputs from {neighboring_node.id}")
+                    except Exception as e:
+                        logger.log(f"Error getting inputs from {neighboring_node.id}: {e}", "ERROR")
             else:
                 logger.log("No neighbors to ask for more inputs ... I am the only node.")
 
@@ -156,7 +163,8 @@ def _job_watcher(n_inputs: int, is_background_job: bool, logger: Logger):
     if not is_background_job:
         job_watch.unsubscribe()
 
-    reboot_containers(logger=logger)
+    if not SELF["SHUTTING_DOWN"]:
+        reboot_containers(logger=logger)
 
     # I can't seeem to get this thread to exit gracefully. FastAPI always prints "Background thread
     # did not exit" in the console because of this thread.

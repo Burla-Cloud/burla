@@ -167,13 +167,13 @@ def upload_inputs(
                 node["input_chunks"] = inputs_for_current_node
                 start = end
 
-            bytes_sent_before = psutil.net_io_counters().bytes_sent
+            # bytes_sent_before = psutil.net_io_counters().bytes_sent
             await asyncio.gather(*[_upload_inputs_single_node(session, node) for node in nodes])
-            bytes_sent_after = psutil.net_io_counters().bytes_sent
+            # bytes_sent_after = psutil.net_io_counters().bytes_sent
 
-            MB_sent = (bytes_sent_after - bytes_sent_before) / (1024 * 1024)
-            msg = f"Uploaded {n_inputs} inputs ({MB_sent:.2f} MB) at {(MB_sent * 8):.2f} Mbps"
-            log_msg_stdout.write(msg)
+            # MB_sent = (bytes_sent_after - bytes_sent_before) / (1024 * 1024)
+            # msg = f"Uploaded {n_inputs} inputs ({MB_sent:.2f} MB) at {(MB_sent * 8):.2f} Mbps"
+            # log_msg_stdout.write(msg)
 
     try:
         asyncio.run(upload_all())

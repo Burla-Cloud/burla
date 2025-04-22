@@ -92,7 +92,7 @@ def _start_job(
 ) -> str:
     log_msg_stdout = spinner if spinner else sys.stdout
     ready_nodes = _get_ready_nodes(db)
-    log_msg_stdout.write(f"Found {len(ready_nodes)} nodes with state `READY`.")
+    # log_msg_stdout.write(f"Found {len(ready_nodes)} nodes with state `READY`.")
 
     if len(ready_nodes) == 0 and _num_booting_nodes(db) != 0:
         ready_nodes = _wait_for_nodes_to_boot(db, spinner)
@@ -127,9 +127,9 @@ def _start_job(
         msg += "your `func_cpu` and `func_ram` arguments?"
         raise NoCompatibleNodes(msg)
 
-    log_msg_stdout.write(f"Assigning {len(nodes_to_assign)} nodes to job.")
+    # log_msg_stdout.write(f"Assigning {len(nodes_to_assign)} nodes to job.")
     job_id = str(uuid4())
-    log_msg_stdout.write(f"Job ID: {job_id}")
+    # log_msg_stdout.write(f"Job ID: {job_id}")
     job_ref = db.collection("jobs").document(job_id)
     job_ref.set(
         {
@@ -178,7 +178,7 @@ def _start_job(
     if not nodes:
         raise Exception("Job refused by all available Nodes!")
     else:
-        log_msg_stdout.write(f"Successfully assigned {len(nodes)} nodes to job.")
+        # log_msg_stdout.write(f"Successfully assigned {len(nodes)} nodes to job.")
         return job_id, job_ref, nodes
 
 

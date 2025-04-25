@@ -18,7 +18,7 @@ os.environ["BURLA_API_URL"] = "http://localhost:5001"
 
 def _normally_distributed_random_numbers(quantity):
 
-    def clamp(x, lower=0, upper=60):
+    def clamp(x, lower=0, upper=2):
         return max(lower, min(x, upper))
 
     def box_muller():
@@ -48,7 +48,7 @@ def in_remote_dev_mode():
 def run_simple_test_job():
 
     # test_inputs = list(range(n_inputs))
-    my_inputs = _normally_distributed_random_numbers(1000)
+    my_inputs = _normally_distributed_random_numbers(100_000)
     print(f"\nsum of all sleeps: {sum(my_inputs)}")
     print(f"lowest possible runtime: {sum(my_inputs) / 10}\n")
     # stdout = StringIO()
@@ -59,7 +59,7 @@ def run_simple_test_job():
         # print(test_input)
         # print(f"STARTING input #{test_input}")
         print(f"sleeping for {test_input} seconds")
-        sleep(test_input)
+        # sleep(test_input)
         # print(f"FINISHED input #{test_input}")
         return test_input  # f"Waited 1 seconds for input {test_input}!"
 

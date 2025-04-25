@@ -28,6 +28,7 @@ python-multipart = "^0.0.9"
 aiohttp = "^3.10.3"
 google-cloud-compute = "^1.19.2"
 pytz = "^2024.2"
+yappi = "^1.6.10"
 
 [build-system]
 requires = ["poetry-core"]

@@ -36,18 +36,26 @@ def get_results(job_id: str = Path(...)):
         return Response("job not found", status_code=404)
 
     results = []
-    while not SELF["result_queue"].empty():
+    total_bytes = 0
+    while not SELF["results_queue"].empty() and (total_bytes < (1_048_576 * 0.1)):
         try:
-            results.append(SELF["result_queue"].get_nowait())
+            result = SELF["results_queue"].get_nowait()
+            results.append(result)
+            total_bytes += len(result[2])
         except Empty:
             break
 
     # `IDLE` is used to determine if job is done
     response_json = {"results": results, "is_idle": SELF["IDLE"]}
-    data = BytesIO(pickle.dumps(response_json))
-    data.seek(0)  # ensure file pointer is at the beginning of the file.
+
+    data = pickle.dumps(response_json)
     headers = {"Content-Disposition": 'attachment; filename="results.pkl"'}
-    return StreamingResponse(data, media_type="application/octet-stream", headers=headers)
+    return Response(content=data, media_type="application/octet-stream", headers=headers)
+
+    # data = BytesIO(pickle.dumps(response_json))
+    # data.seek(0)  # ensure file pointer is at the beginning of the file.
+    # headers = {"Content-Disposition": 'attachment; filename="results.pkl"'}
+    # return StreamingResponse(data, media_type="application/octet-stream", headers=headers)
 
 
 @router.get("/jobs/{job_id}/inputs")

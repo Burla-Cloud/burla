@@ -77,11 +77,11 @@ def execute_job(job_id: str, function_pkl: bytes):
             input_index, input_pkl = SELF["inputs_queue"].get_nowait()
             SELF["IDLE"] = False
             SELF["in_progress_input"] = input_pkl
-            SELF["logs"].append(f"Popped input #{input_index} from queue.")
+            # SELF["logs"].append(f"Popped input #{input_index} from queue.")
         except Empty:
             SELF["IDLE"] = True
             if not logged_idle:
-                SELF["logs"].append("Input queue empty, waiting for more inputs ...")
+                # SELF["logs"].append("Input queue empty, waiting for more inputs ...")
                 logged_idle = True
             sleep(0.05)
             continue
@@ -94,9 +94,9 @@ def execute_job(job_id: str, function_pkl: bytes):
                 input_ = cloudpickle.loads(input_pkl)
                 return_value = user_defined_function(input_)
                 result_pkl = cloudpickle.dumps(return_value)
-                SELF["logs"].append(f"UDF succeded on input #{input_index}.")
+                # SELF["logs"].append(f"UDF succeded on input #{input_index}.")
             except Exception:
-                SELF["logs"].append(f"UDF raised an exception on input #{input_index}.")
+                # SELF["logs"].append(f"UDF raised an exception on input #{input_index}.")
                 result_pkl = _serialize_error(sys.exc_info())
                 is_error = True
 
@@ -106,8 +106,8 @@ def execute_job(job_id: str, function_pkl: bytes):
         # by not adding it to results we gaurentee the client dosent get it, and can send it along
         # with the inputs sitting in the queue to another worker, becore this node shuts down.
         if not SELF["STOP_PROCESSING_EVENT"].is_set():
-            SELF["result_queue"].put((input_index, is_error, result_pkl))
+            SELF["results_queue"].put((input_index, is_error, result_pkl))
             SELF["in_progress_input"] = None
-            SELF["logs"].append(f"Successfully enqueued result for input #{input_index}.")
+            # SELF["logs"].append(f"Successfully enqueued result for input #{input_index}.")
 
     SELF["logs"].append(f"STOP_PROCESSING_EVENT has been set!")

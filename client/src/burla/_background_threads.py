@@ -54,11 +54,16 @@ def enqueue_results(
     log_msg_stdout: io.TextIOWrapper,
 ):
     async def _result_check_single_node(session, node):
+        start = time()
+
         async with session.get(f"{node['host']}/jobs/{job_id}/results") as response:
             if response.status == 200:
                 job_results_pkl = b"".join([c async for c in response.content.iter_chunked(8192)])
                 job_results = pickle.loads(job_results_pkl)
-                log_msg_stdout.write(f"received {len(job_results['results'])} results")
+
+                msg = f"received {len(job_results['results'])} results in {time() - start:.2f}s"
+                log_msg_stdout.write(msg + f" from {node['instance_name']}")
+
                 [queue.put(result) for result in job_results["results"]]
                 node["current_parallelism"] = job_results["current_parallelism"]
             else:
@@ -66,35 +71,29 @@ def enqueue_results(
                 log_msg_stdout.write(msg)
             return node, response.status
 
-    async def _result_check_all_nodes(nodes):
+    async def _main_loop():
         async with aiohttp.ClientSession() as session:
-            tasks = [_result_check_single_node(session, node) for node in nodes]
-            return await asyncio.gather(*tasks)
+            while not stop_event.is_set():
+                await asyncio.sleep(2)
+
+                tasks = [_result_check_single_node(session, node) for node in nodes]
+                results = await asyncio.gather(*tasks)
+
+                for node, status in results:
+                    if status == 404:
+                        nodes.remove(node)
+                    elif status != 200:
+                        raise Exception(f"Result-check failed for node: {node['instance_name']}")
 
     try:
-        start = time()
-        while not stop_event.is_set():
-            elapsed_seconds = time() - start
-            if elapsed_seconds < 5:
-                stop_event.wait(0.1)
-            elif elapsed_seconds < 30:
-                stop_event.wait(1)
-
-            # start = time()
-            # log_msg_stdout.write(f"Checking results from all nodes...")
-            results = asyncio.run(_result_check_all_nodes(nodes))
-            # log_msg_stdout.write(f"Received all result check responses ({time() - start:.2f}s)")
-
-            for node, status in results:
-                if status == 404:
-                    nodes.remove(node)  # this is the only place where nodes can be removed.
-                elif status != 200:
-                    # TODO: if a node fails, send its assigned unfinished inputs to other nodes
-                    raise Exception(f"Result-check failed for node: {node['instance_name']}")
-
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(_main_loop())
     except Exception:
         stop_event.set()
         raise
+    finally:
+        loop.close()
 
 
 def upload_inputs(

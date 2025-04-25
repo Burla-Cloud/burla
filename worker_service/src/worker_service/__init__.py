@@ -38,7 +38,7 @@ SELF = {
     "udf_executor_thread": None,
     "inputs_queue": Queue(),
     "in_progress_input": None,  # needed so we can send ALL inputs elsewhere on shutdown
-    "result_queue": Queue(),
+    "results_queue": Queue(),
     "started_at": None,
     "logs": verbose_list,
     "STOP_PROCESSING_EVENT": Event(),

@@ -58,25 +58,18 @@ def get_more_inputs_from_neighboring_node(neighboring_node, logger: Logger):
 
 async def result_check_all_workers(session: aiohttp.ClientSession, logger: Logger):
     async def _result_check_single_worker(worker):
-        start = time()
         url = f"{worker.url}/jobs/{SELF['current_job']}/results"
         async with session.get(url) as http_response:
             if http_response.status != 200:
                 return worker, http_response.status
 
-            # response_pkl = b"".join([c async for c in http_response.content.iter_chunked(8192)])
-            # response = pickle.loads(response_pkl)
-
-            # msg = f"Received {len(response['results'])} results from {worker.container_name} "
-            # logger.log(msg + f"after {time() - start}s")
-
             response = pickle.loads(await http_response.content.read())
-
             for result in response["results"]:
                 SELF["results_queue"].put(result)
                 SELF["num_results_received"] += 1
 
             worker.is_idle = response["is_idle"]
+            worker.is_empty = response["is_empty"]
             return worker, http_response.status
 
     tasks = [_result_check_single_worker(w) for w in SELF["workers"]]
@@ -105,14 +98,13 @@ async def job_watcher_async(n_inputs: int, is_background_job: bool, logger: Logg
         # Client intentionally updates the job doc every 2sec to signal that it's still listening.
         job_watch = job_doc.on_snapshot(_on_job_snapshot)
 
-    start = time()
     all_workers_idle = False
+    all_workers_empty = False
     async with aiohttp.ClientSession() as session:
         while not SELF["job_watcher_stop_event"].is_set():
-            elapsed = time() - start
-            # await asyncio.sleep(0.2 if elapsed > 5 else 0.05)
-            await asyncio.sleep(4)
             node_doc.update({"current_num_results": SELF["num_results_received"]})
+            if all_workers_empty:
+                await asyncio.sleep(0.2)
 
             if SELF["SHUTTING_DOWN"]:
                 break
@@ -121,11 +113,13 @@ async def job_watcher_async(n_inputs: int, is_background_job: bool, logger: Logg
             thing = time()
             workers_info = await result_check_all_workers(session, logger)
             SELF["current_parallelism"] = sum(not w.is_idle for w in SELF["workers"])
+            all_workers_empty = all(w.is_empty for w in SELF["workers"])
             failed = [f"{w.container_name}:{status}" for w, status in workers_info if status != 200]
             if failed:
                 logger.log(f"workers failed: {', '.join(failed)}", severity="ERROR")
                 break
             logger.log(f"result_check_all_workers took {time() - thing:.2f}s")
+
             # has this node finished all it's inputs ?
             all_workers_idle_twice = all_workers_idle and SELF["current_parallelism"] == 0
             all_workers_idle = SELF["current_parallelism"] == 0
@@ -166,13 +160,13 @@ async def job_watcher_async(n_inputs: int, is_background_job: bool, logger: Logg
                     pass
                 break
 
-            # # client still listening? (if this is NOT a background job)
-            # seconds_since_last_ping = time() - LAST_CLIENT_PING_TIMESTAMP
-            # client_disconnected = seconds_since_last_ping > 4
-            # if not is_background_job and client_disconnected:
-            #     job_doc.update({"status": "FAILED"})
-            #     logger.log(f"No client ping in the last {seconds_since_last_ping}s, REBOOTING")
-            #     break
+            # client still listening? (if this is NOT a background job)
+            seconds_since_last_ping = time() - LAST_CLIENT_PING_TIMESTAMP
+            client_disconnected = seconds_since_last_ping > 4
+            if not is_background_job and client_disconnected:
+                job_doc.update({"status": "FAILED"})
+                logger.log(f"No client ping in the last {seconds_since_last_ping}s, REBOOTING")
+                break
 
     if not is_background_job:
         job_watch.unsubscribe()

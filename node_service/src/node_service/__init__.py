@@ -33,17 +33,6 @@ INSTANCE_N_CPUS = 1 if IN_LOCAL_DEV_MODE else os.cpu_count()
 GCL_CLIENT = logging.Client().logger("node_service", labels=dict(INSTANCE_NAME=INSTANCE_NAME))
 
 
-import yappi
-
-yappi.set_clock_type("wall")
-
-# Enable at startup
-yappi.start()
-
-# Periodically dump stats
-yappi.get_func_stats().print_all()
-
-
 # SELF = state of this current instance of the node service
 def REINIT_SELF(SELF):
     SELF["workers"] = []

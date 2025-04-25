@@ -58,26 +58,28 @@ def enqueue_results(
 
         async with session.get(f"{node['host']}/jobs/{job_id}/results") as response:
             if response.status == 200:
-                job_results_pkl = b"".join([c async for c in response.content.iter_chunked(8192)])
-                job_results = pickle.loads(job_results_pkl)
-
-                msg = f"received {len(job_results['results'])} results in {time() - start:.2f}s"
-                log_msg_stdout.write(msg + f" from {node['instance_name']}")
+                job_results = pickle.loads(await response.content.read())
+                # msg = f"received {len(job_results['results'])} results in {time() - start:.2f}s"
+                # log_msg_stdout.write(msg + f" from {node['instance_name']}")
 
                 [queue.put(result) for result in job_results["results"]]
                 node["current_parallelism"] = job_results["current_parallelism"]
+                node["is_empty"] = job_results["is_empty"]
             else:
                 msg = f"result-check failed for: {node['instance_name']} status: {response.status}"
                 log_msg_stdout.write(msg)
             return node, response.status
 
     async def _main_loop():
+        all_nodes_empty = False
         async with aiohttp.ClientSession() as session:
             while not stop_event.is_set():
-                await asyncio.sleep(2)
+                if all_nodes_empty:
+                    await asyncio.sleep(0.3)
 
                 tasks = [_result_check_single_node(session, node) for node in nodes]
                 results = await asyncio.gather(*tasks)
+                all_nodes_empty = all(node["is_empty"] for node in nodes)
 
                 for node, status in results:
                     if status == 404:

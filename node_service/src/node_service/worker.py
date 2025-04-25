@@ -27,6 +27,7 @@ class Worker:
         send_logs_to_gcl: bool = False,
     ):
         self.is_idle = False
+        self.is_empty = False
         self.container = None
         self.container_id = None
         self.container_name = f"worker_{uuid4().hex[:8]}--node_{INSTANCE_NAME[11:]}"

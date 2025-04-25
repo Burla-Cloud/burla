@@ -100,10 +100,7 @@ def get_results(job_id: str = Path(...), logger: Logger = Depends(get_logger)):
     if job_id != SELF["current_job"]:
         return Response("job not found", status_code=404)
 
-    logger.log(f"results queue size is {SELF['results_queue'].qsize()}")
-
     start = time()
-
     results = []
     total_bytes = 0
     while (not SELF["results_queue"].empty()) and (total_bytes < (1_048_576 * 0.2)):
@@ -115,12 +112,14 @@ def get_results(job_id: str = Path(...), logger: Logger = Depends(get_logger)):
             break
 
     logger.log(f"returning {len(results)} results after {time() - start:.2f}s")
-
-    response = {"results": results, "current_parallelism": SELF["current_parallelism"]}
-    data = BytesIO(pickle.dumps(response))
-    data.seek(0)  # ensure file pointer is at the beginning of the file.
+    response_json = {
+        "results": results,
+        "current_parallelism": SELF["current_parallelism"],
+        "is_empty": SELF["results_queue"].empty(),
+    }
+    data = pickle.dumps(response_json)
     headers = {"Content-Disposition": 'attachment; filename="results.pkl"'}
-    return StreamingResponse(data, media_type="application/octet-stream", headers=headers)
+    return Response(content=data, media_type="application/octet-stream", headers=headers)
 
 
 @router.post("/shutdown")

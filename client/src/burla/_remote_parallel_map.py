@@ -236,11 +236,12 @@ def _watch_job(
                 result = cloudpickle.loads(result_pkl)
                 n_results_received += 1
                 if spinner:
-                    current_parallelism = sum([n.get("current_parallelism", 0) for n in nodes])
-                    msg = f"Running {len(inputs)} inputs through `{function_name}`"
-                    msg += f" ({n_results_received}/{len(inputs)} completed)"
-                    msg += f" ({current_parallelism} function instances running)"
-                    spinner.text = msg
+                    current_parallelism = sum(n.get("current_parallelism", 0) for n in nodes)
+                    spinner.text = (
+                        f"Running {len(inputs)} inputs through `{function_name}` "
+                        f"({n_results_received}/{len(inputs)} completed) "
+                        f"({current_parallelism} function instances running)"
+                    )
                 yield result
 
         # nodes are removed as they finish work in the results background thread.

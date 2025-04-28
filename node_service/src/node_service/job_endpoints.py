@@ -130,7 +130,6 @@ async def shutdown_node(request: Request, logger: Logger = Depends(get_logger)):
 
     SELF["SHUTTING_DOWN"] = True
     SELF["job_watcher_stop_event"].set()
-    logger.log(f"Received shutdown request for node {INSTANCE_NAME}.")
 
     try:
         url = "http://metadata.google.internal/computeMetadata/v1/instance/preempted"
@@ -142,10 +141,16 @@ async def shutdown_node(request: Request, logger: Logger = Depends(get_logger)):
         logger.log(f"Error checking if node {INSTANCE_NAME} was preempted: {e}", severity="WARNING")
         preempted = False
 
-    db = firestore.Client(project=PROJECT_ID, database="burla")
-    node_doc = db.collection("nodes").document(INSTANCE_NAME)
-    node_doc.update({"preempted": preempted})
-    node_doc.delete()
+    if preempted:
+        logger.log(f"Node {INSTANCE_NAME} was preempted!")
+    else:
+        logger.log(f"Received shutdown request for node {INSTANCE_NAME}.")
+
+    try:
+        db = firestore.Client(project=PROJECT_ID, database="burla")
+        db.collection("nodes").document(INSTANCE_NAME).delete()
+    except Exception as e:
+        logger.log(f"Error deleting node {INSTANCE_NAME} from firestore: {e}", severity="WARNING")
 
     # # before transferring inputs, wait for curent batch to finish uploading:
     # # It's really important the client and node-service are on the same page.

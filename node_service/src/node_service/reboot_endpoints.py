@@ -94,7 +94,11 @@ def reboot_containers(
                     futures.append(executor.submit(docker_client.remove_container, **kwargs))
 
         # Wait until all workers have been removed/marked old before starting new ones.
-        [future.result() for future in futures]
+        try:
+            [future.result() for future in futures]
+        except docker.errors.APIError as e:
+            if "already in progress" not in str(e):
+                raise e
 
         # start new workers.
         futures = []

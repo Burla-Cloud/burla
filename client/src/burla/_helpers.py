@@ -9,7 +9,7 @@ from google.cloud.firestore_v1.async_client import AsyncClient
 from google.auth.exceptions import DefaultCredentialsError
 from yaspin import yaspin
 
-from burla._auth import get_gcs_credentials, get_auth_headers
+from burla._auth import get_gcs_credentials
 
 
 N_FOUR_STANDARD_CPU_TO_RAM = {1: 4, 2: 8, 4: 16, 8: 32, 16: 64, 32: 128, 48: 192, 64: 256, 80: 320}

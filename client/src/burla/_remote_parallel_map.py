@@ -1,3 +1,4 @@
+import os
 import sys
 import pickle
 import json
@@ -15,8 +16,8 @@ from contextlib import AsyncExitStack
 
 import cloudpickle
 from tblib import Traceback
+import google.auth
 from google.cloud.firestore import FieldFilter
-from google.cloud import firestore
 from google.cloud.firestore_v1.async_client import AsyncClient
 from yaspin import Spinner
 
@@ -30,6 +31,7 @@ from burla._helpers import (
     get_db_clients,
     spinner_with_signal_handlers,
     parallelism_capacity,
+    using_demo_cluster,
 )
 
 
@@ -185,13 +187,13 @@ async def _execute_job(
         for change in changes:
             log_msg_stdout.write(change.document.to_dict()["msg"])
 
-    ping_task = create_task(send_alive_pings(job_ref, log_msg_stdout))
-
     async with AsyncExitStack() as stack:
         session = await stack.enter_async_context(aiohttp.ClientSession())
         logs_collection = sync_db.collection("jobs").document(job_id).collection("logs")
         log_stream = logs_collection.on_snapshot(_on_new_log_message)
         stack.callback(log_stream.unsubscribe)
+
+        ping_task = create_task(send_alive_pings(job_ref))
 
         results = await asyncio.gather(*[assign_node(node, session) for node in nodes_to_assign])
         nodes = [node for node in results if node]
@@ -360,9 +362,13 @@ def remote_parallel_map(
             spinner.stop()
 
         try:
-            auth_headers = get_auth_headers(api_key) if api_key else get_auth_headers()
-            db, project_id = get_db_and_project_id(auth_headers)
-            db.collection("jobs").document(job_id).update({"status": "FAILED"})
+            sync_db, _ = get_db_clients(api_key)
+            sync_db.collection("jobs").document(job_id).update({"status": "FAILED"})
+
+            if using_demo_cluster():
+                project_id = "burla-prod"
+            else:
+                _, project_id = google.auth.default()
 
             # Report errors back to Burla's cloud.
             exc_type, exc_value, exc_traceback = sys.exc_info()

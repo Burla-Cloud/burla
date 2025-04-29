@@ -69,6 +69,7 @@ export const JobsProvider = ({ children }: { children: React.ReactNode }) => {
           user: data.user || "Unknown",
           checked: false,
           n_inputs: typeof data.n_inputs === "number" ? data.n_inputs : 0,
+          n_results: typeof data.n_results === "number" ? data.n_results : 0,
           started_at:
             typeof data.started_at === "number"
               ? new Date(data.started_at * 1000)
@@ -124,6 +125,7 @@ const createNewJob = (data: any): BurlaJob => ({
   user: data.user || "Unknown",
   checked: false,
   n_inputs: typeof data.n_inputs === "number" ? data.n_inputs : 0,
+  n_results: typeof data.n_results === "number" ? data.n_results : 0,
   started_at:
     typeof data.started_at === "number"
       ? new Date(data.started_at * 1000)

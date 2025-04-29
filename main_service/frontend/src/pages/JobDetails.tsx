@@ -1,3 +1,4 @@
+// import { useEffect } from "react";
 // import { useParams, useNavigate } from "react-router-dom";
 // import { useJobs } from "@/contexts/JobsContext";
 // import JobLogs from "@/components/JobLogs";
@@ -6,6 +7,14 @@
 //   const { jobId } = useParams<{ jobId: string }>();
 //   const { jobs } = useJobs();
 //   const navigate = useNavigate();
+
+//   // ✅ Lock body scroll only while on this page
+//   useEffect(() => {
+//     document.body.style.overflow = "hidden";
+//     return () => {
+//       document.body.style.overflow = "";
+//     };
+//   }, []);
 
 //   if (!jobId) {
 //     return (
@@ -66,7 +75,7 @@
 //         </div>
 
 //         {/* Logs */}
-//         <JobLogs jobId={job.id}  jobStatus={job.status}/>
+//         <JobLogs jobId={job.id} jobStatus={job.status} />
 //       </div>
 //     </div>
 //   );
@@ -85,13 +94,8 @@ const JobDetails = () => {
   const { jobs } = useJobs();
   const navigate = useNavigate();
 
-  // ✅ Lock body scroll only while on this page
-  useEffect(() => {
-    document.body.style.overflow = "hidden";
-    return () => {
-      document.body.style.overflow = "";
-    };
-  }, []);
+  // ❌ REMOVE body scroll lock — it causes double scrollbars
+  // (we don't want it)
 
   if (!jobId) {
     return (
@@ -118,8 +122,8 @@ const JobDetails = () => {
   }
 
   return (
-    <div className="flex-1 flex flex-col justify-start px-12 pt-0">
-      <div className="max-w-6xl mx-auto w-full">
+    <div className="flex flex-col flex-1 px-12 pt-0">
+      <div className="max-w-6xl mx-auto w-full flex flex-col">
         {/* Breadcrumb */}
         <h1 className="text-3xl font-bold mt-[-4px] mb-6" style={{ color: "#3b5a64" }}>
           <button
@@ -151,8 +155,10 @@ const JobDetails = () => {
           </div>
         </div>
 
-        {/* Logs */}
-        <JobLogs jobId={job.id} jobStatus={job.status} />
+        {/* Logs Section */}
+        <div className="flex-1 flex flex-col">
+          <JobLogs jobId={job.id} jobStatus={job.status} />
+        </div>
       </div>
     </div>
   );

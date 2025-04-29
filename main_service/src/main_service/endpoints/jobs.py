@@ -105,6 +105,101 @@ async def get_recent_jobs(request: Request, page: int = 0, stream: bool = False)
     return JSONResponse({"jobs": jobs, "page": page, "limit": limit, "total": total})
 
 
+# @router.get("/v1/jobs_paginated")
+# async def get_recent_jobs(request: Request, page: int = 0, stream: bool = False):
+#     limit = 15
+#     offset = page * limit
+
+#     accept = request.headers.get("accept", "")
+#     if stream or "text/event-stream" in accept:
+#         queue = asyncio.Queue()
+#         loop = asyncio.get_running_loop()
+
+#         def on_snapshot(col_snapshot, changes, read_time):
+#             async def handle_change(change):
+#                 doc = change.document
+#                 data = doc.to_dict() or {}
+
+#                 # Firestore Timestamp to float seconds
+#                 ts = data.get("started_at")
+#                 if hasattr(ts, "timestamp"):
+#                     ts = ts.timestamp()
+
+#                 # Sum total_results from assigned_nodes
+#                 total_results = 0
+#                 assigned_nodes_ref = DB.collection("jobs").document(doc.id).collection("assigned_nodes")
+#                 assigned_nodes_docs = assigned_nodes_ref.stream()
+#                 for node_doc in assigned_nodes_docs:
+#                     node_data = node_doc.to_dict()
+#                     if node_data:
+#                         total_results += node_data.get("current_num_results", 0)
+
+#                 event = {
+#                     "jobId": doc.id,
+#                     "status": data.get("status"),
+#                     "user": data.get("user", "Unknown"),
+#                     "n_inputs": data.get("n_inputs", 0),
+#                     "n_results": total_results,
+#                     "started_at": ts,
+#                     "deleted": change.type.name == "REMOVED",
+#                 }
+#                 loop.call_soon_threadsafe(queue.put_nowait, event)
+
+#             for change in changes:
+#                 loop.create_task(handle_change(change))
+
+#         query = DB.collection("jobs").order_by("started_at", direction=firestore.Query.DESCENDING)
+#         unsubscribe = query.on_snapshot(on_snapshot)
+
+#         async def event_stream():
+#             try:
+#                 while True:
+#                     event = await queue.get()
+#                     yield f"data: {json.dumps(event)}\n\n"
+#             finally:
+#                 unsubscribe.unsubscribe()
+
+#         return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+#     # -------- JSON fallback (no stream) ----------
+#     docs = (
+#         DB.collection("jobs")
+#           .order_by("started_at", direction=firestore.Query.DESCENDING)
+#           .offset(offset)
+#           .limit(limit)
+#           .stream()
+#     )
+
+#     jobs = []
+#     for doc in docs:
+#         d = doc.to_dict() or {}
+#         ts = d.get("started_at")
+#         if hasattr(ts, "timestamp"):
+#             ts = ts.timestamp()
+
+#         # Sum total_results from assigned_nodes
+#         total_results = 0
+#         assigned_nodes_ref = DB.collection("jobs").document(doc.id).collection("assigned_nodes")
+#         assigned_nodes_docs = assigned_nodes_ref.stream()
+#         for node_doc in assigned_nodes_docs:
+#             node_data = node_doc.to_dict()
+#             if node_data:
+#                 total_results += node_data.get("current_num_results", 0)
+
+#         jobs.append({
+#             "jobId": doc.id,
+#             "status": d.get("status"),
+#             "user": d.get("user", "Unknown"),
+#             "n_inputs": d.get("n_inputs", 0),
+#             "n_results": total_results,
+#             "started_at": ts,
+#         })
+
+#     total = len([_ for _ in DB.collection("jobs").stream()])
+
+#     return JSONResponse({"jobs": jobs, "page": page, "limit": limit, "total": total})
+
+
 @router.get("/v1/job_logs/{job_id}/paginated")
 def get_paginated_logs(
     job_id: str,

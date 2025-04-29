@@ -64,7 +64,7 @@ export const JobsList = () => {
                     </TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead>Job ID</TableHead>
-                    <TableHead>Inputs</TableHead>
+                    <TableHead>Results</TableHead>
                     <TableHead>User</TableHead>
                     <TableHead>Started At</TableHead>
                     <TableHead className="w-[5px] text-right" />
@@ -97,7 +97,22 @@ export const JobsList = () => {
                           {job.id}
                         </Link>
                       </TableCell>
-                      <TableCell>{job.n_inputs.toLocaleString()}</TableCell>
+                      <TableCell>
+  <div className="flex flex-col space-y-1 min-w-[100px]">
+    {/* Numbers */}
+    <div>
+      {job.n_results.toLocaleString()} / {job.n_inputs.toLocaleString()}
+    </div>
+
+    {/* Progress bar */}
+    <div className="w-full bg-gray-200 rounded h-1.5 overflow-hidden">
+      <div
+        className="bg-[#3b5a64] h-1.5 transition-all"
+        style={{ width: `${Math.min(100, (job.n_inputs ? (job.n_results / job.n_inputs) * 100 : 0))}%` }}
+      />
+    </div>
+  </div>
+</TableCell>
                       <TableCell>{job.user}</TableCell>
                       <TableCell>
                         {job.started_at

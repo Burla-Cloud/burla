@@ -1,15 +1,15 @@
 import os
 import sys
 import signal
-import traceback
-from threading import Thread, Event
+from typing import Optional
 
 import google.auth
-from google.cloud import firestore
+from google.cloud.firestore import Client
+from google.cloud.firestore_v1.async_client import AsyncClient
 from google.auth.exceptions import DefaultCredentialsError
 from yaspin import yaspin
 
-from burla._auth import get_gcs_credentials
+from burla._auth import get_gcs_credentials, get_auth_headers
 
 
 N_FOUR_STANDARD_CPU_TO_RAM = {1: 4, 2: 8, 4: 16, 8: 32, 16: 64, 32: 128, 48: 192, 64: 256, 80: 320}
@@ -43,21 +43,13 @@ def using_demo_cluster():
     return not bool(os.environ.get("BURLA_API_URL"))
 
 
-def get_db_and_project_id(auth_headers: dict):
+def get_db_clients(api_key: Optional[str]):
     if using_demo_cluster():
-        credentials = get_gcs_credentials(auth_headers)
-        db = firestore.Client(credentials=credentials, project="burla-prod", database="burla")
-        return db, "burla-prod"
+        credentials = get_gcs_credentials(api_key)
+        async_db = AsyncClient(project="burla-prod", credentials=credentials, database="burla")
+        sync_db = Client(project="burla-prod", credentials=credentials, database="burla")
+        return sync_db, async_db
     else:
-        # api_url_according_to_user = os.environ.get("BURLA_API_URL")
-        # if api_url_according_to_user and api_url_according_to_user != main_service_url():
-        #     raise Exception(
-        #         f"You are pointing to the main service at {api_url_according_to_user}.\n"
-        #         f"However, according to the current project set in gcloud, "
-        #         f"the main_service is currently running at {main_service_url()}.\n"
-        #         f"Please ensure your gcloud is pointing at the same project that your burla "
-        #         "api is deployed in."
-        #     )
         try:
             credentials, project_id = google.auth.default()
             if project_id == "":
@@ -66,8 +58,9 @@ def get_db_and_project_id(auth_headers: dict):
                     "  1. gcloud config set project <your-project-id>\n"
                     "  2. gcloud auth application-default login\n"
                 )
-            db = firestore.Client(credentials=credentials, project=project_id, database="burla")
-            return db, project_id
+            async_db = AsyncClient(project=project_id, credentials=credentials, database="burla")
+            sync_db = Client(project=project_id, credentials=credentials, database="burla")
+            return sync_db, async_db
         except DefaultCredentialsError as e:
             raise Exception(
                 "No Google Application Default Credentials found. "
@@ -75,35 +68,9 @@ def get_db_and_project_id(auth_headers: dict):
             ) from e
 
 
-def prep_graceful_shutdown_with_spinner(stop_event: Event):
+def spinner_with_signal_handlers():
     def _signal_handler(signum, frame, spinner):
         spinner.stop()
-        stop_event.set()
         sys.exit(0)
 
     return yaspin(sigmap={sig: _signal_handler for sig in SIGNALS_TO_HANDLE})
-
-
-def prep_graceful_shutdown(stop_event: Event):
-    def _signal_handler(signum, frame):
-        stop_event.set()
-        sys.exit(0)
-
-    for sig in SIGNALS_TO_HANDLE:
-        signal.signal(sig, _signal_handler)
-
-
-class ThreadWithExc(Thread):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.traceback_str = None
-
-    def run(self):
-        try:
-            if self._target:
-                self._target(*self._args, **self._kwargs)
-        except Exception:
-            exc_type, exc_value, exc_traceback = sys.exc_info()
-            traceback_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
-            traceback_str = "".join(traceback_details)
-            self.traceback_str = traceback_str

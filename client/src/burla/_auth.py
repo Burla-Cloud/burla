@@ -30,9 +30,10 @@ class AuthException(Exception):
         )
 
 
-def get_gcs_credentials(burla_auth_headers: dict):
+def get_gcs_credentials(api_key: Optional[str] = None):
+    auth_headers = get_auth_headers(api_key)
     url = f"{_BURLA_BACKEND_URL}/v1/private/svc_account"
-    response = requests.get(url, headers=burla_auth_headers)
+    response = requests.get(url, headers=auth_headers)
     response.raise_for_status()
     service_account_info = json.loads(response.json())
     credentials = service_account.Credentials.from_service_account_info(service_account_info)

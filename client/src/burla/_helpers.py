@@ -1,6 +1,8 @@
 import os
 import sys
 import signal
+import ast
+import inspect
 from typing import Optional
 
 import google.auth
@@ -21,6 +23,22 @@ SIGNALS_TO_HANDLE = [getattr(signal, s) for s in _signal_names_to_handle]
 
 class GoogleLoginError(Exception):
     pass
+
+
+def has_explicit_return(fn):
+    src = inspect.getsource(fn)
+    tree = ast.parse(src)
+
+    class ReturnVisitor(ast.NodeVisitor):
+        def __init__(self):
+            self.found = False
+
+        def visit_Return(self, node):
+            self.found = True
+
+    visitor = ReturnVisitor()
+    visitor.visit(tree)
+    return visitor.found
 
 
 def parallelism_capacity(machine_type: str, func_cpu: int, func_ram: int):

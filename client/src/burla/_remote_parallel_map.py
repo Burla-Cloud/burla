@@ -9,7 +9,8 @@ import requests
 import traceback
 from time import time
 from six import reraise
-from asyncio import Queue, create_task
+from queue import Queue
+from asyncio import create_task
 from uuid import uuid4
 from typing import Callable, Optional, Union
 from contextlib import AsyncExitStack
@@ -33,9 +34,10 @@ from burla._helpers import (
     spinner_with_signal_handlers,
     parallelism_capacity,
     using_demo_cluster,
+    has_explicit_return,
 )
 
-os.environ["PYTHONASYNCIODEBUG"] = "1"
+# os.environ["PYTHONASYNCIODEBUG"] = "1"
 
 
 class NoNodes(Exception):
@@ -166,8 +168,6 @@ async def _execute_job(
             "client_has_all_results": False,
         }
     )
-    # constantly update last_ping_from_client to signal that the client is still listening
-    Thread(target=send_alive_pings, args=(sync_db, job_id), daemon=True).start()
 
     async def assign_node(node: dict, session: aiohttp.ClientSession):
         request_json = {
@@ -194,16 +194,27 @@ async def _execute_job(
 
     async with AsyncExitStack() as stack:
         session = await stack.enter_async_context(aiohttp.ClientSession())
-        logs_collection = sync_db.collection("jobs").document(job_id).collection("logs")
-        log_stream = logs_collection.on_snapshot(_on_new_log_message)
-        stack.callback(log_stream.unsubscribe)
 
-        results = await asyncio.gather(*[assign_node(node, session) for node in nodes_to_assign])
-        nodes = [node for node in results if node]
+        if not background:
+            # constantly update last_ping_from_client to signal that the client is still listening
+            Thread(target=send_alive_pings, args=(sync_db, job_id), daemon=True).start()
+            # stream stdout back to client
+            logs_collection = sync_db.collection("jobs").document(job_id).collection("logs")
+            log_stream = logs_collection.on_snapshot(_on_new_log_message)
+            stack.callback(log_stream.unsubscribe)
+
+        assign_node_tasks = [assign_node(node, session) for node in nodes_to_assign]
+        nodes = [node for node in await asyncio.gather(*assign_node_tasks) if node]
         if not nodes:
             raise Exception("Job refused by all available Nodes!")
 
         input_task = create_task(upload_inputs(job_id, nodes, inputs, session))
+
+        if background:
+            if spinner:
+                spinner.text = f"Uploading {len(inputs)} inputs to {len(nodes)} nodes ..."
+            await input_task
+            return
 
         if spinner:
             msg = f"Running {len(inputs)} inputs through `{function_.__name__}` "
@@ -331,6 +342,12 @@ def remote_parallel_map(
         msg += "Email jake@burla.dev if this is really annoying and we will fix it! :)"
         raise ValueError(msg)
 
+    if background and has_explicit_return(function_):
+        print(
+            f"Warning: Function `{function_.__name__}` has an explicit return statement.\n"
+            "Because this job is set to run in the background, any returned objects will be lost!"
+        )
+
     job_id = str(uuid4())
     return_queue = Queue()
     try:
@@ -353,6 +370,16 @@ def remote_parallel_map(
                 api_key=api_key,
             )
         )
+
+        if background:
+            demo_host = "https://cluster.burla.dev"
+            host = demo_host if using_demo_cluster() else os.environ["BURLA_API_URL"]
+            job_url = f"{host}/jobs/{job_id}"
+            msg = f"Done uploading inputs.\n"
+            msg += f"Job will continue running in the background, monitor progress at: {job_url}"
+            spinner.text = msg
+            spinner.ok("✔")
+            return
 
         def _output_generator():
             n_results = 0

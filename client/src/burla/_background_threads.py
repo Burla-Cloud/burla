@@ -69,7 +69,6 @@ async def upload_inputs(
             input_pkl_with_idx = (index, cloudpickle.dumps(input))
             input_size = len(input_pkl_with_idx[1])
 
-            # await asyncio.sleep(0)
             total_bytes += input_size
             if total_bytes > 1000:
                 await asyncio.sleep(0)

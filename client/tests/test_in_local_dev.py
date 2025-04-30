@@ -48,7 +48,7 @@ def in_remote_dev_mode():
 def run_simple_test_job():
 
     my_inputs = list(range(100_000_000))
-    # my_inputs = _normally_distributed_random_numbers(100_000_000)
+    # my_inputs = _normally_distributed_random_numbers(1_000_000)
     # print(f"\nsum of all sleeps: {sum(my_inputs)}")
     # print(f"lowest possible runtime: {sum(my_inputs) / 10}\n")
     # stdout = StringIO()

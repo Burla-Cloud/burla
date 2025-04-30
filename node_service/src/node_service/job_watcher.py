@@ -171,10 +171,10 @@ async def job_watcher_async(n_inputs: int, is_background_job: bool, logger: Logg
             seconds_since_last_ping = time() - LAST_CLIENT_PING_TIMESTAMP
             timeout = max(TIME_BETWEEN_CLIENT_PINGS * 3, 4)
 
-            if seconds_since_last_ping > timeout:
-                logger.log(f"AHHHHHHHHHHHHH timeout={timeout}")
+            # if seconds_since_last_ping > timeout:
+            #     logger.log(f"AHHHHHHHHHHHHH timeout={timeout}")
 
-            client_disconnected = seconds_since_last_ping > 30  # timeout
+            client_disconnected = seconds_since_last_ping > timeout
             if not is_background_job and client_disconnected:
                 job_doc.update({"status": "FAILED"})
                 logger.log(f"No client ping in the last {seconds_since_last_ping}s, REBOOTING")
@@ -223,7 +223,6 @@ async def send_inputs_to_workers(inputs_pkl_with_idx: list):
         if batch:
             input_batches.append(batch)
         start = end
-    assert sum(len(batch) for batch in input_batches) == len(inputs_pkl_with_idx)
 
     # send batches to workers
     async def _upload_to_single_worker(session, url, batch):

@@ -43,7 +43,7 @@ export const ClusterStatusCard = ({ status, parallelism }: ClusterStatusCardProp
           {/* Parallelism section */}
           <div className="absolute left-[150px] flex items-baseline gap-1">
             <span className="text-lg font-semibold text-gray-800">{parallelism}</span>
-            <span className="text-sm text-gray-500">workers</span>
+            <span className="text-sm text-gray-500">CPUs</span>
           </div>
         </div>
       </CardContent>

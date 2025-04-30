@@ -1,3 +1,4 @@
+import { useJobs } from "@/contexts/JobsContext";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import {
   Table,
@@ -8,27 +9,23 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
-import { Square } from "lucide-react";
 import { Link } from "react-router-dom";
-import { useJobs } from "@/contexts/JobsContext";
 
 export const JobsList = () => {
-  const { jobs, setJobs, page, setPage, totalPages } = useJobs();
+  const { jobs, setJobs, page, setPage, totalPages, isLoading } = useJobs();
   const anySelected = jobs.some((job) => job.checked);
 
   const handleCheckboxChange = (id: string) => {
-    setJobs((prevJobs) =>
-      prevJobs.map((job) =>
+    setJobs((prev) =>
+      prev.map((job) =>
         job.id === id ? { ...job, checked: !job.checked } : job
       )
     );
   };
 
   const handleSelectAllChange = () => {
-    const newSelectAll = !jobs.every((job) => job.checked);
-    setJobs((prevJobs) =>
-      prevJobs.map((job) => ({ ...job, checked: newSelectAll }))
-    );
+    const selectAll = !jobs.every((job) => job.checked);
+    setJobs((prev) => prev.map((job) => ({ ...job, checked: selectAll })));
   };
 
   const getStatusClass = (status: string | null) => {
@@ -44,20 +41,24 @@ export const JobsList = () => {
   return (
     <div className="space-y-6 overflow-hidden">
       <Card>
-        <CardHeader className="flex items-center justify-between py-4">
-        </CardHeader>
+        <CardHeader className="flex items-center justify-between py-4" />
+
         <CardContent>
-          {jobs.length === 0 ? (
+          {isLoading ? (
+            <div className="flex justify-center py-8">
+              <div className="w-5 h-5 border-2 border-[#3b5a64] border-t-transparent rounded-full animate-spin" />
+            </div>
+          ) : jobs.length === 0 ? (
             <div className="text-center text-gray-500 py-4">No jobs</div>
           ) : (
             <>
               <Table className="w-full">
                 <TableHeader>
-                  <TableRow className="align-middle">
+                  <TableRow>
                     <TableHead className="w-10">
                       <input
                         type="checkbox"
-                        checked={jobs.every((job) => job.checked)}
+                        checked={jobs.every((j) => j.checked)}
                         onChange={handleSelectAllChange}
                         className="w-4 h-4 border-2 border-gray-400 rounded-none appearance-none checked:bg-[#3b5a64] checked:border-[#3b5a64] cursor-pointer"
                       />
@@ -70,6 +71,7 @@ export const JobsList = () => {
                     <TableHead className="w-[5px] text-right" />
                   </TableRow>
                 </TableHeader>
+
                 <TableBody>
                   {jobs.map((job) => (
                     <TableRow key={job.id}>
@@ -92,27 +94,34 @@ export const JobsList = () => {
                       <TableCell>
                         <Link
                           to={`/jobs/${job.id}`}
-                          className="text-black underline underline-offset-2 decoration-[0.5px] hover:text-[#1a1a1a] hover:decoration-[1px] transition-all"
+                          className="text-black underline underline-offset-2 hover:text-[#1a1a1a] transition-all"
                         >
                           {job.id}
                         </Link>
                       </TableCell>
                       <TableCell>
-  <div className="flex flex-col space-y-1 min-w-[100px]">
-    {/* Numbers */}
-    <div>
-      {job.n_results.toLocaleString()} / {job.n_inputs.toLocaleString()}
-    </div>
-
-    {/* Progress bar */}
-    <div className="w-full bg-gray-200 rounded h-1.5 overflow-hidden">
-      <div
-        className="bg-[#3b5a64] h-1.5 transition-all"
-        style={{ width: `${Math.min(100, (job.n_inputs ? (job.n_results / job.n_inputs) * 100 : 0))}%` }}
-      />
-    </div>
-  </div>
-</TableCell>
+                        <div className="flex flex-col space-y-1 min-w-[100px]">
+                          <div>
+                            {job.n_results.toLocaleString()} /{" "}
+                            {job.n_inputs.toLocaleString()}
+                          </div>
+                          <div className="w-full bg-gray-200 rounded h-1.5 overflow-hidden">
+                            <div
+                              className="bg-[#3b5a64] h-1.5 transition-all"
+                              style={{
+                                width: `${
+                                  job.n_inputs
+                                    ? Math.min(
+                                        100,
+                                        (job.n_results / job.n_inputs) * 100
+                                      )
+                                    : 0
+                                }%`,
+                              }}
+                            />
+                          </div>
+                        </div>
+                      </TableCell>
                       <TableCell>{job.user}</TableCell>
                       <TableCell>
                         {job.started_at
@@ -136,77 +145,72 @@ export const JobsList = () => {
               {/* Pagination */}
               <div className="flex justify-center mt-6 space-x-2 items-center">
                 {page > 0 && (
-                    <button
+                  <button
                     onClick={() => setPage(page - 1)}
                     className="px-3 py-1 text-sm text-[#3b5a64] hover:underline"
-                    >
+                  >
                     ‹ Prev
-                    </button>
+                  </button>
                 )}
 
-                {/* Always show first page */}
                 <button
-                    onClick={() => setPage(0)}
-                    className={`px-3 py-1 rounded text-sm border ${
+                  onClick={() => setPage(0)}
+                  className={`px-3 py-1 rounded text-sm border ${
                     page === 0
-                        ? "bg-[#3b5a64] text-white"
-                        : "bg-white text-gray-700 hover:bg-gray-100"
-                    }`}
+                      ? "bg-[#3b5a64] text-white"
+                      : "bg-white text-gray-700 hover:bg-gray-100"
+                  }`}
                 >
-                    1
+                  1
                 </button>
 
-                {/* Show ... if needed before current page group */}
                 {page > 3 && <span className="px-1">...</span>}
 
-                {/* Show 2 pages before and after current */}
                 {Array.from({ length: totalPages }, (_, i) => i)
-                    .filter(
+                  .filter(
                     (i) =>
-                        i !== 0 &&
-                        i !== totalPages - 1 &&
-                        Math.abs(i - page) <= 2
-                    )
-                    .map((i) => (
+                      i !== 0 &&
+                      i !== totalPages - 1 &&
+                      Math.abs(i - page) <= 2
+                  )
+                  .map((i) => (
                     <button
-                        key={i}
-                        onClick={() => setPage(i)}
-                        className={`px-3 py-1 rounded text-sm border ${
+                      key={i}
+                      onClick={() => setPage(i)}
+                      className={`px-3 py-1 rounded text-sm border ${
                         page === i
-                            ? "bg-[#3b5a64] text-white"
-                            : "bg-white text-gray-700 hover:bg-gray-100"
-                        }`}
+                          ? "bg-[#3b5a64] text-white"
+                          : "bg-white text-gray-700 hover:bg-gray-100"
+                      }`}
                     >
-                        {i + 1}
+                      {i + 1}
                     </button>
-                    ))}
+                  ))}
 
-                {/* Show ... if needed before last page */}
                 {page < totalPages - 4 && <span className="px-1">...</span>}
 
-                {/* Always show last page if it's not the first */}
                 {totalPages > 1 && (
-                    <button
+                  <button
                     onClick={() => setPage(totalPages - 1)}
                     className={`px-3 py-1 rounded text-sm border ${
-                        page === totalPages - 1
+                      page === totalPages - 1
                         ? "bg-[#3b5a64] text-white"
                         : "bg-white text-gray-700 hover:bg-gray-100"
                     }`}
-                    >
+                  >
                     {totalPages}
-                    </button>
+                  </button>
                 )}
 
                 {page < totalPages - 1 && (
-                    <button
+                  <button
                     onClick={() => setPage(page + 1)}
                     className="px-3 py-1 text-sm text-[#3b5a64] hover:underline"
-                    >
+                  >
                     Next ›
-                    </button>
+                  </button>
                 )}
-                </div>
+              </div>
             </>
           )}
         </CardContent>
@@ -214,4 +218,3 @@ export const JobsList = () => {
     </div>
   );
 };
-

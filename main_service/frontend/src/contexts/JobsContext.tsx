@@ -13,6 +13,7 @@ interface JobsContextType {
   page: number;
   setPage: React.Dispatch<React.SetStateAction<number>>;
   totalPages: number;
+  isLoading: boolean;
 }
 
 const JobsContext = createContext<JobsContextType>({
@@ -21,26 +22,35 @@ const JobsContext = createContext<JobsContextType>({
   page: 0,
   setPage: () => {},
   totalPages: 1,
+  isLoading: false,
 });
 
 export const JobsProvider = ({ children }: { children: React.ReactNode }) => {
   const [jobs, setJobs] = useState<BurlaJob[]>([]);
   const [page, setPage] = useState(0);
   const [totalPages, setTotalPages] = useState(1);
+  const [isLoading, setIsLoading] = useState(false);
 
   const fetchJobs = useCallback(async () => {
+    setIsLoading(true);
     try {
       const response = await fetch(`/v1/jobs_paginated?page=${page}`);
       const json = await response.json();
-
       const jobList = (json.jobs ?? []).map(createNewJob);
 
-      setJobs(
-        jobList.sort(
-          (a, b) =>
-            (b.started_at?.getTime() || 0) - (a.started_at?.getTime() || 0)
-        )
-      );
+      setJobs((prev) => {
+        if (page !== 0) {
+          return jobList;
+        }
+
+        const existingIds = new Set(jobList.map((j) => j.id));
+        const preservedFromSSE = prev.filter((j) => !existingIds.has(j.id));
+
+        return [...jobList, ...preservedFromSSE]
+          .filter((job, index, arr) => arr.findIndex((j) => j.id === job.id) === index)
+          .sort((a, b) => (b.started_at?.getTime() || 0) - (a.started_at?.getTime() || 0))
+          .slice(0, 15);
+      });
 
       if (json.total && json.limit) {
         setTotalPages(Math.max(1, Math.ceil(json.total / json.limit)));
@@ -49,18 +59,21 @@ export const JobsProvider = ({ children }: { children: React.ReactNode }) => {
       }
     } catch (err) {
       console.error("❌ Error fetching paginated jobs:", err);
+    } finally {
+      setIsLoading(false);
     }
   }, [page]);
 
   useEffect(() => {
     fetchJobs();
+  }, [page, fetchJobs]);
 
+  useEffect(() => {
     const eventSource = new EventSource("/v1/jobs_paginated?stream=true");
 
     eventSource.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
-
         if (data.deleted) return;
 
         const newJob: BurlaJob = {
@@ -76,28 +89,29 @@ export const JobsProvider = ({ children }: { children: React.ReactNode }) => {
               : undefined,
         };
 
-        setJobs((prev) => {
-          const idx = prev.findIndex((j) => j.id === newJob.id);
-
-          // If it's already in the list, update it
+        setJobs((prevJobs) => {
+          const idx = prevJobs.findIndex((j) => j.id === newJob.id);
           if (idx !== -1) {
-            const copy = [...prev];
-            copy[idx] = { ...copy[idx], ...newJob };
-            return copy;
+            const updated = [...prevJobs];
+            updated[idx] = { ...updated[idx], ...newJob };
+            return updated;
           }
 
-          // If you're on page 0, insert it at top and trim to 15
           if (page === 0) {
-            const next = [newJob, ...prev].sort(
-              (a, b) =>
-                (b.started_at?.getTime() || 0) -
-                (a.started_at?.getTime() || 0)
-            );
-            return next.slice(0, 15);
+            return [newJob, ...prevJobs]
+              .filter(
+                (job, index, arr) =>
+                  arr.findIndex((j) => j.id === job.id) === index
+              )
+              .sort(
+                (a, b) =>
+                  (b.started_at?.getTime() || 0) -
+                  (a.started_at?.getTime() || 0)
+              )
+              .slice(0, 15);
           }
 
-          // Otherwise, ignore new jobs
-          return prev;
+          return prevJobs;
         });
       } catch (err) {
         console.error("❌ Failed to parse SSE job update:", err);
@@ -110,10 +124,12 @@ export const JobsProvider = ({ children }: { children: React.ReactNode }) => {
     };
 
     return () => eventSource.close();
-  }, [page, fetchJobs]);
+  }, [page]);
 
   return (
-    <JobsContext.Provider value={{ jobs, setJobs, page, setPage, totalPages }}>
+    <JobsContext.Provider
+      value={{ jobs, setJobs, page, setPage, totalPages, isLoading }}
+    >
       {children}
     </JobsContext.Provider>
   );

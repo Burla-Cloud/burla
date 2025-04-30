@@ -92,7 +92,7 @@ async def upload_inputs(
     await send_inputs_to_workers(inputs_pkl_with_idx)
 
     SELF["current_input_batch_forwarded"] = True
-    logger.log(f"Received {len(inputs_pkl_with_idx)} inputs.")
+    # logger.log(f"Received {len(inputs_pkl_with_idx)} inputs.")
 
 
 @router.get("/jobs/{job_id}/results")
@@ -103,7 +103,7 @@ def get_results(job_id: str = Path(...), logger: Logger = Depends(get_logger)):
     start = time()
     results = []
     total_bytes = 0
-    while (not SELF["results_queue"].empty()) and (total_bytes < (1_048_576 * 0.2)):
+    while (not SELF["results_queue"].empty()) and (total_bytes < (1_000_000 * 1)):
         try:
             result = SELF["results_queue"].get_nowait()
             results.append(result)
@@ -111,7 +111,7 @@ def get_results(job_id: str = Path(...), logger: Logger = Depends(get_logger)):
         except Empty:
             break
 
-    logger.log(f"returning {len(results)} results after {time() - start:.2f}s")
+    # logger.log(f"returning {len(results)} results after {time() - start:.2f}s")
     response_json = {
         "results": results,
         "current_parallelism": SELF["current_parallelism"],

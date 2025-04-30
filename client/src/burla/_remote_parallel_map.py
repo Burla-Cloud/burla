@@ -13,6 +13,7 @@ from asyncio import Queue, create_task
 from uuid import uuid4
 from typing import Callable, Optional, Union
 from contextlib import AsyncExitStack
+from threading import Thread
 
 import cloudpickle
 from tblib import Traceback
@@ -33,6 +34,8 @@ from burla._helpers import (
     parallelism_capacity,
     using_demo_cluster,
 )
+
+os.environ["PYTHONASYNCIODEBUG"] = "1"
 
 
 class NoNodes(Exception):
@@ -163,6 +166,8 @@ async def _execute_job(
             "client_has_all_results": False,
         }
     )
+    # constantly update last_ping_from_client to signal that the client is still listening
+    Thread(target=send_alive_pings, args=(sync_db, job_id), daemon=True).start()
 
     async def assign_node(node: dict, session: aiohttp.ClientSession):
         request_json = {
@@ -193,8 +198,6 @@ async def _execute_job(
         log_stream = logs_collection.on_snapshot(_on_new_log_message)
         stack.callback(log_stream.unsubscribe)
 
-        ping_task = create_task(send_alive_pings(job_ref))
-
         results = await asyncio.gather(*[assign_node(node, session) for node in nodes_to_assign])
         nodes = [node for node in results if node]
         if not nodes:
@@ -213,9 +216,18 @@ async def _execute_job(
                 elif response.status != 200:
                     raise Exception(f"Result-check failed for node: {node['instance_name']}")
 
+                total_bytes = 0
                 return_values = []
-                node_status = pickle.loads(await response.content.read())
+                response_content = await response.content.read()
+                node_status = await asyncio.to_thread(pickle.loads, response_content)
                 for input_index, is_error, result_pkl in node_status["results"]:
+
+                    # await asyncio.sleep(0)
+                    total_bytes += len(result_pkl)
+                    if total_bytes > 5000:
+                        await asyncio.sleep(0)
+                        total_bytes = 0
+
                     if is_error:
                         exc_info = pickle.loads(result_pkl)
                         traceback = Traceback.from_dict(exc_info["traceback_dict"]).as_traceback()
@@ -242,7 +254,7 @@ async def _execute_job(
                     return_queue.put_nowait(return_value)
                     n_results += 1
 
-            for task in [input_task, ping_task]:
+            for task in [input_task]:  # , ping_task]:
                 if task.done() and task.exception():
                     raise task.exception()
 

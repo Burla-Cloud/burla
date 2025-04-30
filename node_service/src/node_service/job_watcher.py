@@ -86,13 +86,20 @@ async def job_watcher_async(n_inputs: int, is_background_job: bool, logger: Logg
     node_doc.set({"current_num_results": 0})
 
     LAST_CLIENT_PING_TIMESTAMP = time()
+    TIME_BETWEEN_CLIENT_PINGS = 2
     neighboring_node = None
     neighbor_had_no_inputs_at = None
     seconds_neighbor_had_no_inputs = 0
 
     def _on_job_snapshot(doc_snapshot, changes, read_time):
         nonlocal LAST_CLIENT_PING_TIMESTAMP
+        nonlocal TIME_BETWEEN_CLIENT_PINGS
+        last_time_between_client_pings = time() - LAST_CLIENT_PING_TIMESTAMP
+        TIME_BETWEEN_CLIENT_PINGS = max(TIME_BETWEEN_CLIENT_PINGS, last_time_between_client_pings)
         LAST_CLIENT_PING_TIMESTAMP = time()
+
+        if last_time_between_client_pings == TIME_BETWEEN_CLIENT_PINGS:
+            logger.log(f"NEW -- TIME_BETWEEN_CLIENT_PINGS: {TIME_BETWEEN_CLIENT_PINGS}")
 
     if not is_background_job:
         # Client intentionally updates the job doc every 2sec to signal that it's still listening.
@@ -118,7 +125,7 @@ async def job_watcher_async(n_inputs: int, is_background_job: bool, logger: Logg
             if failed:
                 logger.log(f"workers failed: {', '.join(failed)}", severity="ERROR")
                 break
-            logger.log(f"result_check_all_workers took {time() - thing:.2f}s")
+            # logger.log(f"result_check_all_workers took {time() - thing:.2f}s")
 
             # has this node finished all it's inputs ?
             all_workers_idle_twice = all_workers_idle and SELF["current_parallelism"] == 0
@@ -162,7 +169,12 @@ async def job_watcher_async(n_inputs: int, is_background_job: bool, logger: Logg
 
             # client still listening? (if this is NOT a background job)
             seconds_since_last_ping = time() - LAST_CLIENT_PING_TIMESTAMP
-            client_disconnected = seconds_since_last_ping > 4
+            timeout = max(TIME_BETWEEN_CLIENT_PINGS * 3, 4)
+
+            if seconds_since_last_ping > timeout:
+                logger.log(f"AHHHHHHHHHHHHH timeout={timeout}")
+
+            client_disconnected = seconds_since_last_ping > 30  # timeout
             if not is_background_job and client_disconnected:
                 job_doc.update({"status": "FAILED"})
                 logger.log(f"No client ping in the last {seconds_since_last_ping}s, REBOOTING")

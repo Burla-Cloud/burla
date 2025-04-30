@@ -2,11 +2,11 @@ import logging
 import asyncio
 import aiohttp
 import pickle
-from time import time
+from time import time, sleep
 import os
 
 import cloudpickle
-from google.cloud.firestore import DocumentReference
+from google.cloud.firestore import Client
 
 
 # throws some uncatchable, unimportant, warnings
@@ -20,13 +20,19 @@ class InputTooBig(Exception):
     pass
 
 
-async def send_alive_pings(job_doc_ref: DocumentReference):
+def send_alive_pings(sync_db: Client, job_id: str):
+    job_doc = sync_db.collection("jobs").document(job_id)
+    last_ping_time = time()
+    starve_time = 2
     while True:
-        start = time()
-        await asyncio.sleep(2)
-        await job_doc_ref.update({"last_ping_from_client": time()})
-        if time() - start > 3:
-            print("\nWARNING: async loop took >3s to yield control")
+        sleep(1)
+        current_time = time()
+        job_doc.update({"last_ping_from_client": current_time})
+        last_ping_time = current_time
+
+        if current_time - last_ping_time > starve_time:
+            starve_time = current_time - last_ping_time
+            print(f"\nWARNING: ping thread starve increased! ({starve_time}s)")
 
 
 async def upload_inputs(
@@ -38,33 +44,37 @@ async def upload_inputs(
 
     async def _upload_inputs_single_node(session, node):
         url = node["host"]
-        for input_chunk in node["input_chunks"]:  # <- actual pickling/chunking happens here
+        async for input_chunk in node["input_chunks"]:  # <- actual pickling/chunking happens here
             data = aiohttp.FormData()
-            data.add_field("inputs_pkl_with_idx", pickle.dumps(input_chunk))
+            inputs_pkl_with_idx = await asyncio.to_thread(pickle.dumps, input_chunk)
+            data.add_field("inputs_pkl_with_idx", inputs_pkl_with_idx)
             async with session.post(f"{url}/jobs/{job_id}/inputs", data=data) as response:
                 response.raise_for_status()
 
         async with session.post(f"{url}/jobs/{job_id}/inputs/done") as response:
             response.raise_for_status()
 
-    def _chunk_inputs_by_size_generator(
+    async def _chunk_inputs_by_size_generator(
         inputs: list,
         start_index: int,
-        min_chunk_size: int = 1_000_000 * 0.5,  # 0.5MB
+        min_chunk_size: int = 1_000_000 * 10,  # 10MB
         max_chunk_size: int = 1_000_000 * 1000,  # 1GB
     ):
         current_chunk = []
         current_chunk_size = 0
-        start = time()
+        total_bytes = 0
 
         for index_within_chunk, input in enumerate(inputs):
-            if time() - start > 0.1:  # ensure we yield control of the asyncio loop atl every 100ms
-                asyncio.sleep(0)
-                start = time()
-
             index = start_index + index_within_chunk
             input_pkl_with_idx = (index, cloudpickle.dumps(input))
             input_size = len(input_pkl_with_idx[1])
+
+            # await asyncio.sleep(0)
+            total_bytes += input_size
+            if total_bytes > 5000:
+                await asyncio.sleep(0)
+                total_bytes = 0
+
             if input_size > max_chunk_size:
                 # This exists to prevent theoretical (never demonstrated) memory issues
                 raise InputTooBig(f"Input of size {input_size} exceeds maximum size of 1GB.")

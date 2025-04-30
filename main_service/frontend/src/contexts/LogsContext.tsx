@@ -3,7 +3,6 @@ import {
   useContext,
   useState,
   useRef,
-  useMemo,
 } from "react";
 import { LogEntry } from "@/types/coreTypes";
 
@@ -25,10 +24,10 @@ export const LogsProvider = ({ children }: { children: React.ReactNode }) => {
   const [logsByJobId, setLogsByJobId] = useState<Record<string, LogEntry[]>>({});
   const [hasMoreByJobId, setHasMoreByJobId] = useState<Record<string, boolean>>({});
   const cursorRef = useRef<Record<string, { time: number; id: string } | null>>({});
-  const logsMapRef = useRef<Record<string, Record<string, LogEntry>>>({});
+  const logsListRef = useRef<Record<string, Record<string, LogEntry>>>({});
 
-  const sortLogs = (logsObj: Record<string, LogEntry>): LogEntry[] =>
-    Object.values(logsObj).sort((a, b) => b.created_at - a.created_at);
+  const sortLogs = (logMap: Record<string, LogEntry>): LogEntry[] =>
+    Object.values(logMap).sort((a, b) => a.created_at - b.created_at);
 
   const fetchInitialLogs = async (jobId: string) => {
     const res = await fetch(`/v1/job_logs/${jobId}/paginated?limit=1000`);
@@ -40,14 +39,14 @@ export const LogsProvider = ({ children }: { children: React.ReactNode }) => {
       created_at: log.time,
     }));
 
-    logsMapRef.current[jobId] = {};
-    for (const log of newLogs) {
-      logsMapRef.current[jobId][log.id] = log;
+    logsListRef.current[jobId] = {};
+    for (const log of newLogs.reverse()) {
+      logsListRef.current[jobId][log.id] = log;
     }
 
     setLogsByJobId((prev) => ({
       ...prev,
-      [jobId]: sortLogs(logsMapRef.current[jobId]),
+      [jobId]: sortLogs(logsListRef.current[jobId]),
     }));
 
     cursorRef.current[jobId] = json.nextCursor
@@ -75,15 +74,14 @@ export const LogsProvider = ({ children }: { children: React.ReactNode }) => {
       created_at: log.time,
     }));
 
-    if (!logsMapRef.current[jobId]) logsMapRef.current[jobId] = {};
-
-    for (const log of newLogs) {
-      logsMapRef.current[jobId][log.id] = log;
+    if (!logsListRef.current[jobId]) logsListRef.current[jobId] = {};
+    for (const log of newLogs.reverse()) {
+      logsListRef.current[jobId][log.id] = log;
     }
 
     setLogsByJobId((prev) => ({
       ...prev,
-      [jobId]: sortLogs(logsMapRef.current[jobId]),
+      [jobId]: sortLogs(logsListRef.current[jobId]),
     }));
 
     cursorRef.current[jobId] = json.nextCursor
@@ -111,6 +109,3 @@ export const LogsProvider = ({ children }: { children: React.ReactNode }) => {
 };
 
 export const useLogsContext = () => useContext(LogsContext);
-
-
-

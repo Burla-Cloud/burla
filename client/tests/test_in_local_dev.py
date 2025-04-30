@@ -18,7 +18,7 @@ os.environ["BURLA_API_URL"] = "http://localhost:5001"
 
 def _normally_distributed_random_numbers(quantity):
 
-    def clamp(x, lower=0, upper=60):
+    def clamp(x, lower=0, upper=0.00000000000001):
         return max(lower, min(x, upper))
 
     def box_muller():

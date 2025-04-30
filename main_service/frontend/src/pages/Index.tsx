@@ -11,6 +11,20 @@ const Dashboard = () => {
     const { nodes } = useNodes();
     const { clusterStatus } = useCluster();
 
+    const extractCpuCount = (type: string): number | null => {
+        const customMatch = type.match(/^custom-(\d+)-/);
+        if (customMatch) return parseInt(customMatch[1], 10);
+    
+        const standardMatch = type.match(/-(\d+)$/);
+        return standardMatch ? parseInt(standardMatch[1], 10) : null;
+      };
+    
+      const parallelism = nodes.reduce((sum, node) => {
+        const cpus = node.cpus ?? extractCpuCount(node.type) ?? 0;
+        return sum + cpus;
+      }, 0);
+    
+
     return (
         <div className="flex-1 flex flex-col justify-start px-12 pt-0">
             <div className="max-w-6xl mx-auto w-full">
@@ -21,7 +35,7 @@ const Dashboard = () => {
 
                 <div className="space-y-6">
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        <ClusterStatusCard status={clusterStatus} />
+                        <ClusterStatusCard status={clusterStatus} parallelism={parallelism}/>
                         <div className="flex items-center justify-center">
                             <ClusterControls
                                 status={clusterStatus}

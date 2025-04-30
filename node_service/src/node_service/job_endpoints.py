@@ -103,7 +103,7 @@ def get_results(job_id: str = Path(...), logger: Logger = Depends(get_logger)):
     start = time()
     results = []
     total_bytes = 0
-    while (not SELF["results_queue"].empty()) and (total_bytes < (1_000_000 * 1)):
+    while (not SELF["results_queue"].empty()) and (total_bytes < (1_000_000 * 0.5)):
         try:
             result = SELF["results_queue"].get_nowait()
             results.append(result)

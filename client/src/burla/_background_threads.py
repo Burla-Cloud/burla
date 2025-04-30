@@ -57,7 +57,7 @@ async def upload_inputs(
     async def _chunk_inputs_by_size_generator(
         inputs: list,
         start_index: int,
-        min_chunk_size: int = 1_000_000 * 10,  # 10MB
+        min_chunk_size: int = 1_000_000 * 1,  # 1MB
         max_chunk_size: int = 1_000_000 * 1000,  # 1GB
     ):
         current_chunk = []
@@ -71,7 +71,7 @@ async def upload_inputs(
 
             # await asyncio.sleep(0)
             total_bytes += input_size
-            if total_bytes > 5000:
+            if total_bytes > 1000:
                 await asyncio.sleep(0)
                 total_bytes = 0
 

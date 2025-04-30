@@ -222,9 +222,8 @@ async def _execute_job(
                 node_status = await asyncio.to_thread(pickle.loads, response_content)
                 for input_index, is_error, result_pkl in node_status["results"]:
 
-                    # await asyncio.sleep(0)
                     total_bytes += len(result_pkl)
-                    if total_bytes > 5000:
+                    if total_bytes > 1000:
                         await asyncio.sleep(0)
                         total_bytes = 0
 

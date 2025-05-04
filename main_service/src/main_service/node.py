@@ -102,6 +102,7 @@ class Node:
         logger: Logger,
         machine_type: str,
         containers: list[Container],
+        spot: bool = False,
         service_port: int = 8080,  # <- this needs to be open in your cloud firewall!
         as_local_container: bool = False,
         instance_client: Optional[InstancesClient] = None,
@@ -115,6 +116,7 @@ class Node:
         self.logger = logger
         self.machine_type = machine_type
         self.containers = containers
+        self.spot = spot
         self.port = service_port
         self.inactivity_shutdown_time_sec = inactivity_shutdown_time_sec
         self.disk_size = disk_size if disk_size else 20  # minimum is 10 due to disk image
@@ -264,7 +266,10 @@ class Node:
         access_config = AccessConfig(name="External NAT", type="ONE_TO_ONE_NAT")
         network_interface = NetworkInterface(name=network_name, access_configs=[access_config])
 
-        scheduling = Scheduling(provisioning_model="SPOT", instance_termination_action="DELETE")
+        if self.spot:
+            scheduling = Scheduling(provisioning_model="SPOT", instance_termination_action="DELETE")
+        else:
+            scheduling = Scheduling(provisioning_model="STANDARD")
 
         access_anything_scope = "https://www.googleapis.com/auth/cloud-platform"
         service_account = ServiceAccount(email=GCE_DEFAULT_SVC, scopes=[access_anything_scope])

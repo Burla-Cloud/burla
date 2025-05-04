@@ -1,7 +1,8 @@
 """
-The tests here assume the cluster is running in "remote-dev-mode".
+The tests here assume the cluster is running in "local-dev-mode".
 """
 
+import heapq
 import math
 import os
 import random
@@ -18,7 +19,7 @@ os.environ["BURLA_API_URL"] = "http://localhost:5001"
 
 def _normally_distributed_random_numbers(quantity):
 
-    def clamp(x, lower=0, upper=0.00000000000001):
+    def clamp(x, lower=0, upper=60):
         return max(lower, min(x, upper))
 
     def box_muller():
@@ -33,9 +34,19 @@ def _normally_distributed_random_numbers(quantity):
 
     for _ in range(quantity):
         val = clamp(mean + box_muller() * std_dev)
+        val = val * 0.3
         samples.append(val)
 
     return samples
+
+
+def _min_total_runtime(sleep_times, num_workers):
+    workers = [0] * num_workers
+    heapq.heapify(workers)
+    for t in sorted(sleep_times, reverse=True):
+        earliest = heapq.heappop(workers)
+        heapq.heappush(workers, earliest + t)
+    return max(workers)
 
 
 def in_remote_dev_mode():
@@ -47,10 +58,17 @@ def in_remote_dev_mode():
 
 def run_simple_test_job():
 
-    my_inputs = list(range(100_000_000))
-    # my_inputs = _normally_distributed_random_numbers(1_000_000)
-    # print(f"\nsum of all sleeps: {sum(my_inputs)}")
-    # print(f"lowest possible runtime: {sum(my_inputs) / 10}\n")
+    # my_inputs = list(range(100_000))
+
+    N_WORKERS = 5
+    my_inputs = _normally_distributed_random_numbers(500)
+    print(f"\nsum of all sleeps: {sum(my_inputs)}")
+    print(f"lowest possible runtime: {_min_total_runtime(my_inputs, N_WORKERS)}\n")
+
+    # make inputs bigger
+    INPUT_SIZE = 1_000_000
+    my_inputs = [{"sleep_time": my_input, "blob": bytes(INPUT_SIZE)} for my_input in my_inputs]
+
     # stdout = StringIO()
     # sys.stdout = stdouts
     start = time()
@@ -59,7 +77,12 @@ def run_simple_test_job():
         # print(test_input)
         # print(f"STARTING input #{test_input}")
         # print(f"sleeping for {test_input} seconds")
-        # sleep(0.01)
+        # if test_input == 100_000:
+        #     sleep(90)
+        blob_size_mb = len(test_input["blob"]) / 1_000_000
+        print(f"Sleeping for {test_input['sleep_time']}s, blob size: {blob_size_mb:.2f} MB")
+        sleep(test_input["sleep_time"])
+
         # print(f"FINISHED input #{test_input}")
         return test_input  # f"Waited 1 seconds for input {test_input}!"
 
@@ -77,7 +100,7 @@ def run_simple_test_job():
     # assert all([result in test_inputs for result in results])
     # if not len(results) == len(test_inputs):
     #     print(results)
-    assert len(results) == len(my_inputs)
+
     # for i in range(n_inputs):
     #     assert str(i) in stdout
 

@@ -1,15 +1,11 @@
-import os
-from time import sleep
+# from time import time, sleep
 
-from burla import remote_parallel_map
-
-os.environ["BURLA_API_URL"] = "http://localhost:5001"
+# def my_function(my_input):
+#     sleep(1)
 
 
-def test_function(x):
+import pyautogui
+import time
 
-    sleep(0.1)
-
-
-my_inputs = list(range(1_000_000))
-remote_parallel_map(test_function, my_inputs, background=True)
+time.sleep(1)
+pyautogui.write("this is fake typing", interval=0.1)

@@ -40,7 +40,7 @@ LOCAL_DEV_CONFIG = {  # <- config used only in local dev mode
                 },
             ],
             "machine_type": "n4-standard-1",  # should match `INSTANCE_N_CPUS` in node svc
-            "quantity": 2,
+            "quantity": 5,
             "inactivity_shutdown_time_sec": 60 * 10,
         }
     ]

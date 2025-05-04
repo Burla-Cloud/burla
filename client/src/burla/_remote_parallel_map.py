@@ -37,8 +37,6 @@ from burla._helpers import (
     has_explicit_return,
 )
 
-# os.environ["PYTHONASYNCIODEBUG"] = "1"
-
 
 class NoNodes(Exception):
     pass
@@ -193,11 +191,15 @@ async def _execute_job(
             log_msg_stdout.write(change.document.to_dict()["msg"])
 
     async with AsyncExitStack() as stack:
-        session = await stack.enter_async_context(aiohttp.ClientSession())
+        connector = aiohttp.TCPConnector(limit=500, limit_per_host=100)
+        session = await stack.enter_async_context(aiohttp.ClientSession(connector=connector))
 
         if not background:
             # constantly update last_ping_from_client to signal that the client is still listening
+            # kinda feels like this gets more attention when in a thread than an asyncio task
+            # but I'm not positive. It still struggles sometimes to send pings in time.
             Thread(target=send_alive_pings, args=(sync_db, job_id), daemon=True).start()
+
             # stream stdout back to client
             logs_collection = sync_db.collection("jobs").document(job_id).collection("logs")
             log_stream = logs_collection.on_snapshot(_on_new_log_message)
@@ -208,12 +210,12 @@ async def _execute_job(
         if not nodes:
             raise Exception("Job refused by all available Nodes!")
 
-        input_task = create_task(upload_inputs(job_id, nodes, inputs, session))
+        uploader_task = create_task(upload_inputs(job_id, nodes, inputs, session))
 
         if background:
             if spinner:
                 spinner.text = f"Uploading {len(inputs)} inputs to {len(nodes)} nodes ..."
-            await input_task
+            await uploader_task
             return
 
         if spinner:
@@ -223,7 +225,7 @@ async def _execute_job(
         async def _check_single_node(node: dict):
             async with session.get(f"{node['host']}/jobs/{job_id}/results") as response:
                 if response.status == 404:
-                    nodes.remove(node)  # <- means node is likely rebooting and done
+                    nodes.remove(node)  # <- means node is likely rebooting and failed or is done
                 elif response.status != 200:
                     raise Exception(f"Result-check failed for node: {node['instance_name']}")
 
@@ -249,10 +251,15 @@ async def _execute_job(
 
         n_results = 0
         all_nodes_empty = False
+        start = time()
         while n_results < len(inputs):
 
             if all_nodes_empty:
-                await asyncio.sleep(0.3)
+                elapsed_time = time() - start
+                if elapsed_time > 3:
+                    await asyncio.sleep(0.3)
+                else:
+                    await asyncio.sleep(0)
 
             total_parallelism = 0
             all_nodes_empty = True
@@ -264,9 +271,8 @@ async def _execute_job(
                     return_queue.put_nowait(return_value)
                     n_results += 1
 
-            for task in [input_task]:  # , ping_task]:
-                if task.done() and task.exception():
-                    raise task.exception()
+            if uploader_task.done() and uploader_task.exception():
+                raise uploader_task.exception()
 
             if spinner:
                 spinner.text = (

@@ -74,9 +74,9 @@ def execute_job(job_id: str, function_pkl: bytes):
     logged_idle = False
     while not SELF["STOP_PROCESSING_EVENT"].is_set():
         try:
-            input_index, input_pkl = SELF["inputs_queue"].get_nowait()
+            SELF["in_progress_input"] = SELF["inputs_queue"].get_nowait()
+            input_index, input_pkl = SELF["in_progress_input"]
             SELF["IDLE"] = False
-            SELF["in_progress_input"] = input_pkl
             # SELF["logs"].append(f"Popped input #{input_index} from queue.")
         except Empty:
             SELF["IDLE"] = True

@@ -71,30 +71,6 @@ class ResultsEndpointFilter(python_logging.Filter):
 
 
 python_logging.getLogger("uvicorn.access").addFilter(ResultsEndpointFilter())
-# uvicorn_logger = python_logging.getLogger("uvicorn.access")
-# python_logging.getLogger("uvicorn.access").setLevel(python_logging.CRITICAL + 1)
-
-
-# class FullTimingMiddleware:
-#     def __init__(self, app):
-#         self.app = app
-
-#     async def __call__(self, scope, receive, send):
-#         if scope["type"] != "http":
-#             return await self.app(scope, receive, send)
-
-#         start = time()
-
-#         async def send_wrapper(message):
-#             # last chunk of the body?
-#             if message["type"] == "http.response.body" and not message.get("more_body", False):
-#                 total = time() - start
-#                 method = scope["method"]
-#                 path = scope["raw_path"].decode()
-#                 uvicorn_logger.info(f"{method} {path} completed in {total:.3f}s")
-#             await send(message)
-
-#         await self.app(scope, receive, send_wrapper)
 
 
 async def get_request_json(request: Request):
@@ -205,7 +181,6 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None)
-# app.add_middleware(FullTimingMiddleware)
 app.include_router(job_endpoints_router)
 app.include_router(reboot_endpoints_router)
 
@@ -269,7 +244,7 @@ async def log_and_time_requests__log_errors(request: Request, call_next):
         msg = f"{request.method} to {request.url} returned 200 after {latency}s."
         add_background_task(logger.log, msg, latency=latency)
 
-    if response.status_code == 500:
+    if response.status_code == 500 and not str(request.url).endswith("/shutdown"):
         add_background_task(reboot_containers, logger=logger)
     if response.status_code == 200:
         SELF["last_activity_timestamp"] = time()

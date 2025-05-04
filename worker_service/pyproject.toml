@@ -13,6 +13,8 @@ google-cloud-logging = "^3.8.0"
 google-api-python-client = "^2.147.0"
 fastapi = "^0.115.12"
 uvicorn = "^0.34.1"
+python-multipart = "^0.0.20"
+aiohttp = "^3.11.18"
 
 # These packages are not used by the worker service
 # These exist so that users can run code in burla that uses these packages
@@ -21,7 +23,6 @@ numpy = "^2.1.2"
 scikit-learn = "^1.5.2"
 google-cloud-storage = "^2.18.2"
 # ---------------------------------------------
-python-multipart = "^0.0.20"
 
 [build-system]
 requires = ["poetry-core"]

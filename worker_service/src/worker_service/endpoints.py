@@ -1,10 +1,9 @@
 import pickle
-from io import BytesIO
-import requests
+import asyncio
+import aiohttp
 from typing import Optional
 from queue import Empty
-from fastapi import APIRouter, Path, Response, Depends
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Path, Response, Depends, Query
 
 from worker_service import SELF, get_request_json, get_request_files
 from worker_service.udf_executor import execute_job
@@ -14,7 +13,7 @@ router = APIRouter()
 
 
 @router.get("/")
-def get_status():
+async def get_status():
     # A worker can also be "IDLE" but that is returned when checking for results (more efficient)
     if SELF["STARTED"]:
         return {"status": "BUSY"}
@@ -23,14 +22,14 @@ def get_status():
 
 
 def _check_udf_executor_thread():
-    if SELF["current_job"]:
+    if SELF["current_job"] and not SELF["STOP_PROCESSING_EVENT"].is_set():
         thread = SELF.get("udf_executor_thread")
         if not (thread and thread.is_alive()):
             raise Exception(f"UDF executor thread failed! traceback:\n{thread.traceback_str}")
 
 
 @router.get("/jobs/{job_id}/results")
-def get_results(job_id: str = Path(...)):
+async def get_results(job_id: str = Path(...)):
     _check_udf_executor_thread()
     if SELF["current_job"] != job_id:
         return Response("job not found", status_code=404)
@@ -45,55 +44,55 @@ def get_results(job_id: str = Path(...)):
         except Empty:
             break
 
+    await asyncio.sleep(0)
     response_json = {
         "results": results,
         "is_idle": SELF["IDLE"],  # <- used to determine if job is done
         "is_empty": SELF["results_queue"].empty(),
     }
     data = pickle.dumps(response_json)
+    await asyncio.sleep(0)
     headers = {"Content-Disposition": 'attachment; filename="results.pkl"'}
     return Response(content=data, media_type="application/octet-stream", headers=headers)
 
 
 @router.get("/jobs/{job_id}/inputs")
-def get_half_inputs(job_id: str = Path(...)):
+async def get_inputs(job_id: str = Path(...), min_reply_size: float = Query(...)):
     _check_udf_executor_thread()
     if SELF["current_job"] != job_id:
         return Response("job not found", status_code=404)
 
-    # gather half of the inputs from the queue
     inputs = []
-    qsize = SELF["inputs_queue"].qsize()
-
-    n_inputs_to_send = qsize if qsize <= 1 else int(qsize // 1.5)  # <- actually takes more like 2/3
-    for _ in range(n_inputs_to_send):
+    total_bytes = 0
+    while not SELF["inputs_queue"].empty() and (total_bytes < min_reply_size):
         try:
-            inputs.append(SELF["inputs_queue"].get_nowait())
+            input_pkl_with_idx = SELF["inputs_queue"].get_nowait()
+            inputs.append(input_pkl_with_idx)
+            total_bytes += len(input_pkl_with_idx[1])
         except Empty:
             break
 
-    if not inputs:
-        return Response(status_code=204)
-    else:
-        SELF["logs"].append(f"queue had size {qsize} sending {len(inputs)} inputs to another node")
-
-    data = BytesIO(pickle.dumps(inputs))
-    data.seek(0)  # ensure file pointer is at the beginning of the file.
+    await asyncio.sleep(0)
+    data = pickle.dumps(inputs)
     headers = {"Content-Disposition": 'attachment; filename="inputs.pkl"'}
-    return StreamingResponse(data, media_type="application/octet-stream", headers=headers)
+    return Response(content=data, media_type="application/octet-stream", headers=headers)
 
 
 @router.post("/jobs/{job_id}/inputs")
-def upload_inputs(
+async def upload_inputs(
     job_id: str = Path(...),
     request_files: Optional[dict] = Depends(get_request_files),
 ):
     _check_udf_executor_thread()
     if SELF["current_job"] != job_id:
         return Response("job not found", status_code=404)
+    if SELF["STOP_PROCESSING_EVENT"].is_set():
+        return Response("Cannot accept inputs - worker is shutting down", status_code=409)
 
+    SELF["INPUT_UPLOAD_IN_PROGRESS"] = True
     pickled_inputs_pkl_with_idx = request_files["inputs_pkl_with_idx"]
     inputs_pkl_with_idx = pickle.loads(pickled_inputs_pkl_with_idx)
+    await asyncio.sleep(0)
 
     total_data = sum(len(input_pkl) for input_pkl in inputs_pkl_with_idx)
     msg = f"Received {len(inputs_pkl_with_idx)} inputs for job {job_id} ({total_data} bytes)."
@@ -101,6 +100,7 @@ def upload_inputs(
 
     for input_pkl_with_idx in inputs_pkl_with_idx:
         SELF["inputs_queue"].put(input_pkl_with_idx)
+    SELF["INPUT_UPLOAD_IN_PROGRESS"] = False
 
 
 @router.post("/jobs/{job_id}")
@@ -127,7 +127,7 @@ async def start_job(
 
 
 @router.post("/jobs/{job_id}/transfer_inputs")
-def transfer_inputs(
+async def transfer_inputs(
     job_id: str = Path(...),
     request_json: dict = Depends(get_request_json),
 ):
@@ -136,17 +136,29 @@ def transfer_inputs(
         return Response("job not found", status_code=404)
 
     SELF["STOP_PROCESSING_EVENT"].set()
+    if SELF["INPUT_UPLOAD_IN_PROGRESS"]:
+        while SELF["INPUT_UPLOAD_IN_PROGRESS"]:
+            await asyncio.sleep(1)
+
     target_node_url = request_json["target_node_url"]
     SELF["logs"].append(f"Received request to transfer inputs to {target_node_url}.")
 
-    remaining_inputs = []
-    while not SELF["inputs_queue"].empty():
-        remaining_inputs.append(SELF["inputs_queue"].get())
+    async with aiohttp.ClientSession() as session:
+        chunk = [SELF["in_progress_input"]]
+        total_bytes = len(SELF["in_progress_input"][1])
+        total_inputs = 0
+        while not SELF["inputs_queue"].empty():
+            input_pkl_with_idx = SELF["inputs_queue"].get_nowait()
+            chunk.append(input_pkl_with_idx)
+            total_inputs += 1
+            total_bytes += len(input_pkl_with_idx[1])
 
-    if SELF["in_progress_input"]:
-        remaining_inputs.append(SELF["in_progress_input"])
-
-    files = {"inputs_pkl_with_idx": pickle.dumps(remaining_inputs)}
-    response = requests.post(f"{target_node_url}/jobs/{job_id}/inputs", files=files)
-    response.raise_for_status()
-    SELF["logs"].append(f"Sent {len(remaining_inputs)} inputs to {target_node_url}.")
+            if total_bytes > 1_000_000 * 0.2:
+                data = aiohttp.FormData()
+                data.add_field("inputs_pkl_with_idx", pickle.dumps(chunk))
+                url = f"{target_node_url}/jobs/{job_id}/inputs"
+                async with session.post(url, data=data) as response:
+                    response.raise_for_status()
+                    chunk = []
+                    total_bytes = 0
+    SELF["logs"].append(f"Transferred {total_inputs} remaining inputs to {target_node_url}.")

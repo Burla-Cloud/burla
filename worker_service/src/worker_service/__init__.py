@@ -42,6 +42,7 @@ SELF = {
     "started_at": None,
     "logs": verbose_list,
     "STOP_PROCESSING_EVENT": Event(),
+    "INPUT_UPLOAD_IN_PROGRESS": False,
 }
 
 

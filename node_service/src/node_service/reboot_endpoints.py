@@ -114,9 +114,12 @@ def reboot_containers(
         SELF["BOOTING"] = False
         node_doc.update({"status": "READY"})
 
-    except Exception as e:
+    except Exception as parent_exception:
         SELF["FAILED"] = True
-        node_doc.update({"status": "FAILED"})
-        raise e
+        try:
+            node_doc.delete()
+        except Exception as e:
+            raise e from parent_exception
+        raise parent_exception
 
     logger.log(f"Done booting {len(SELF['workers'])} workers, {INSTANCE_NAME} is READY!")

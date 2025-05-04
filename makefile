@@ -10,17 +10,11 @@ MAIN_SVC_IMAGE_NAME := us-docker.pkg.dev/$(PROJECT_ID)/burla-main-service/burla-
 shell:
 	poetry -C ./client shell
 
-test-local:
-	poetry -C ./client run pytest client/tests/test_in_local_dev.py -s -x --disable-warnings
-
-test-local-base:
-	poetry -C ./client run pytest client/tests/test_in_local_dev.py::test_base -s -x --disable-warnings
+test:
+	poetry -C ./client run pytest client/tests/test.py -s -x --disable-warnings
 
 test-jupyter:
 	poetry -C ./client run jupyter-lab
-
-test-remote:
-	poetry -C ./client run pytest client/tests/test_in_remote_dev.py -s -x --disable-warnings
 
 # start ONLY the main service, in local dev mode
 # The cluster is run 100% locally using the config `LOCAL_DEV_CONFIG` in `main_service.__init__.py`

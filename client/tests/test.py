@@ -8,8 +8,6 @@ import os
 import random
 from time import time, sleep
 
-import docker
-
 from burla import remote_parallel_map
 
 
@@ -34,7 +32,7 @@ def _normally_distributed_random_numbers(quantity):
 
     for _ in range(quantity):
         val = clamp(mean + box_muller() * std_dev)
-        val = val * 0.3
+        val = val * 4
         samples.append(val)
 
     return samples
@@ -49,64 +47,55 @@ def _min_total_runtime(sleep_times, num_workers):
     return max(workers)
 
 
-def in_remote_dev_mode():
-    docker_client = docker.from_env()
-    main_svc_container = docker_client.containers.get("main_service")
-    env_vars = {e.split("=")[0]: e.split("=")[1] for e in main_svc_container.attrs["Config"]["Env"]}
-    return env_vars.get("IN_LOCAL_DEV_MODE") != "True"
+def _max_total_runtime(sleep_times, num_workers):
+    chunk_size = len(sleep_times) // num_workers
+    remainder = len(sleep_times) % num_workers
+
+    chunks = []
+    start = 0
+    for i in range(num_workers):
+        end = start + chunk_size + (1 if i < remainder else 0)
+        chunks.append(sum(sleep_times[start:end]))
+        start = end
+
+    return max(chunks)
 
 
-def run_simple_test_job():
+def test_base():
 
-    my_inputs = list(range(10_000_000))
+    my_inputs = list(range(10_000))
 
-    # N_WORKERS = 5
-    # my_inputs = _normally_distributed_random_numbers(500)
+    # my_inputs = [1 for _ in range(15_000)]
+    # my_inputs[4321] = 90
+
+    # N_WORKERS = 160
+    # my_inputs = _normally_distributed_random_numbers(1_000)
     # print(f"\nsum of all sleeps: {sum(my_inputs)}")
-    # print(f"lowest possible runtime: {_min_total_runtime(my_inputs, N_WORKERS)}\n")
+    # print(f"lowest possible runtime: {_min_total_runtime(my_inputs, N_WORKERS)}")
+    # print(f"highest possible runtime: {_max_total_runtime(my_inputs, N_WORKERS)}")
+    # print("")
 
-    # # make inputs bigger
+    # make inputs bigger
     # INPUT_SIZE = 1_000_000
-    # my_inputs = [{"sleep_time": my_input, "blob": bytes(INPUT_SIZE)} for my_input in my_inputs]
+    INPUT_SIZE = 10
+    my_inputs = [{"sleep_time": my_input, "blob": bytes(INPUT_SIZE)} for my_input in my_inputs]
 
-    # stdout = StringIO()
-    # sys.stdout = stdouts
     start = time()
 
     def simple_test_function(test_input):
-        # print(test_input)
-        # print(f"STARTING input #{test_input}")
+
         # print(f"sleeping for {test_input} seconds")
         # if test_input == 100_000:
         #     sleep(90)
 
         # blob_size_mb = len(test_input["blob"]) / 1_000_000
         # print(f"Sleeping for {test_input['sleep_time']}s, blob size: {blob_size_mb:.2f} MB")
-        # sleep(test_input["sleep_time"])
+        sleep(test_input["sleep_time"])
 
-        # print(f"FINISHED input #{test_input}")
-        return test_input  # f"Waited 1 seconds for input {test_input}!"
+        return test_input
 
     results = remote_parallel_map(simple_test_function, my_inputs)  ##, generator=True)
 
-    # for result in results:
-    #     print(result)
-
     e2e_runtime = time() - start
-    # sys.stdout = sys.__stdout__
-    # stdout = stdout.getvalue()
 
-    # assert e2e_runtime < 5
     print(f"e2e_runtime: {e2e_runtime}")
-    # assert all([result in test_inputs for result in results])
-    # if not len(results) == len(test_inputs):
-    #     print(results)
-
-    # for i in range(n_inputs):
-    #     assert str(i) in stdout
-
-
-def test_base():
-    # assert in_remote_dev_mode()
-
-    run_simple_test_job()

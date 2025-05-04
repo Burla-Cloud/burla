@@ -58,16 +58,16 @@ def in_remote_dev_mode():
 
 def run_simple_test_job():
 
-    # my_inputs = list(range(100_000))
+    my_inputs = list(range(10_000_000))
 
-    N_WORKERS = 5
-    my_inputs = _normally_distributed_random_numbers(500)
-    print(f"\nsum of all sleeps: {sum(my_inputs)}")
-    print(f"lowest possible runtime: {_min_total_runtime(my_inputs, N_WORKERS)}\n")
+    # N_WORKERS = 5
+    # my_inputs = _normally_distributed_random_numbers(500)
+    # print(f"\nsum of all sleeps: {sum(my_inputs)}")
+    # print(f"lowest possible runtime: {_min_total_runtime(my_inputs, N_WORKERS)}\n")
 
-    # make inputs bigger
-    INPUT_SIZE = 1_000_000
-    my_inputs = [{"sleep_time": my_input, "blob": bytes(INPUT_SIZE)} for my_input in my_inputs]
+    # # make inputs bigger
+    # INPUT_SIZE = 1_000_000
+    # my_inputs = [{"sleep_time": my_input, "blob": bytes(INPUT_SIZE)} for my_input in my_inputs]
 
     # stdout = StringIO()
     # sys.stdout = stdouts
@@ -79,9 +79,10 @@ def run_simple_test_job():
         # print(f"sleeping for {test_input} seconds")
         # if test_input == 100_000:
         #     sleep(90)
-        blob_size_mb = len(test_input["blob"]) / 1_000_000
-        print(f"Sleeping for {test_input['sleep_time']}s, blob size: {blob_size_mb:.2f} MB")
-        sleep(test_input["sleep_time"])
+
+        # blob_size_mb = len(test_input["blob"]) / 1_000_000
+        # print(f"Sleeping for {test_input['sleep_time']}s, blob size: {blob_size_mb:.2f} MB")
+        # sleep(test_input["sleep_time"])
 
         # print(f"FINISHED input #{test_input}")
         return test_input  # f"Waited 1 seconds for input {test_input}!"

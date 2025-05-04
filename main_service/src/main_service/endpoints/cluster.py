@@ -167,20 +167,24 @@ async def cluster_info(logger: Logger = Depends(get_logger)):
                 if change.type.name == "REMOVED":
                     event_data = {"nodeId": instance_name, "deleted": True}
                 else:
-                    event_data = {"nodeId": instance_name, "status": doc_data.get("status"), "type": doc_data.get("machine_type")}
+                    event_data = {
+                        "nodeId": instance_name,
+                        "status": doc_data.get("status"),
+                        "type": doc_data.get("machine_type"),
+                    }
 
                 current_loop.call_soon_threadsafe(queue.put_nowait, event_data)
                 logger.log(f"Firestore event detected: {event_data}")
 
         status_filter = FieldFilter("status", "in", ["READY", "BOOTING", "RUNNING"])
         query = DB.collection("nodes").where(filter=status_filter)
-        unsubscribe = query.on_snapshot(on_snapshot)
+        node_watch = query.on_snapshot(on_snapshot)
 
         try:
             while True:
                 event = await queue.get()
                 yield f"data: {json.dumps(event)}\n\n"
         finally:
-            unsubscribe()
+            node_watch.unsubscribe()
 
     return StreamingResponse(node_stream(), media_type="text/event-stream")

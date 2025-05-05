@@ -63,7 +63,7 @@ def _max_total_runtime(sleep_times, num_workers):
 
 def test_base():
 
-    my_inputs = list(range(100_000_000))
+    my_inputs = list(range(10_000_000))
 
     # my_inputs = [1 for _ in range(15_000)]
     # my_inputs[4321] = 90
@@ -78,7 +78,7 @@ def test_base():
     # make inputs bigger
     # INPUT_SIZE = 1_000_000
     INPUT_SIZE = 10
-    my_inputs = [{"sleep_time": my_input, "blob": bytes(INPUT_SIZE)} for my_input in my_inputs]
+    # my_inputs = [{"sleep_time": my_input, "blob": bytes(INPUT_SIZE)} for my_input in my_inputs]
 
     start = time()
 

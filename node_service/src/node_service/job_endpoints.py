@@ -153,6 +153,8 @@ async def shutdown_node(request: Request, logger: Logger = Depends(get_logger)):
     async_db = AsyncClient(project=PROJECT_ID, database="burla")
     await async_db.collection("nodes").document(INSTANCE_NAME).delete()
 
+    # TODO: if running a job, and cannot transfer, set job state to FAILED
+
     if not SELF["current_job"]:
         return
 

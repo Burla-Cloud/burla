@@ -1,6 +1,6 @@
 <p align="center"><img src="https://raw.githubusercontent.com/Burla-Cloud/.github/main/media/readme_banner.png" width=1000></p>
 
-[Watch our 2min Demo!](https://www.youtube.com/watch?v=1HQkTL-7_VY)
+[Watch our 2min demo on YouTube!](https://www.youtube.com/watch?v=1HQkTL-7_VY)
 
 
 #### Burla is a library for running python functions on remote computers.

@@ -1,4 +1,5 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Link } from "react-router-dom";
 import {
     Table,
     TableBody,
@@ -8,14 +9,27 @@ import {
     TableRow,
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
-import { Cpu, Database } from "lucide-react";
-import { NodeStatus, BurlaNode } from "@/types/cluster";
+import { Cpu, X } from "lucide-react";
+import { NodeStatus, BurlaNode } from "@/types/coreTypes";
+import { useEffect, useState } from "react";
 
 interface NodesListProps {
     nodes: BurlaNode[];
 }
 
 export const NodesList = ({ nodes }: NodesListProps) => {
+    const [showWelcome, setShowWelcome] = useState(true);
+
+    useEffect(() => {
+        const isWelcomeHidden = localStorage.getItem("welcomeMessageHidden") === "true";
+        setShowWelcome(!isWelcomeHidden);
+    }, []);
+
+    const handleDismissWelcome = () => {
+        setShowWelcome(false);
+        localStorage.setItem("welcomeMessageHidden", "true");
+    };
+
     const getStatusClass = (nodeStatus: NodeStatus | null) => {
         const statusClasses = {
             READY: "bg-green-500",
@@ -26,82 +40,91 @@ export const NodesList = ({ nodes }: NodesListProps) => {
         return cn("w-2 h-2 rounded-full", nodeStatus ? statusClasses[nodeStatus] : "bg-gray-300");
     };
 
+    const extractCpuCount = (type: string): number | null => {
+        const customMatch = type.match(/^custom-(\d+)-/);
+        if (customMatch) return parseInt(customMatch[1], 10);
+
+        const standardMatch = type.match(/-(\d+)$/);
+        return standardMatch ? parseInt(standardMatch[1], 10) : null;
+    };
+
     return (
         <div className="space-y-6">
-            <Card className="w-full">
-                <CardHeader>
-                    <CardTitle className="text-xl font-semibold" style={{ color: "#3b5a64" }}>
-                        Welcome to Burla!
-                    </CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                    <div className="grid grid-cols-1 md:grid-cols-1 gap-4">
-                        {/* below div is necessary, or links create line breaks around them for some reason*/}
-                        <div>
-                            This is our demo cluster (Burla is built to be self-hosted), use it for
-                            free, but not for anything important!
-                            <br />
-                            Click "Start" to boot eight, 32 CPU machines (1-2 minutes). Click "Stop"
-                            to shut them down.
-                            <br />
-                            Machines die after 10 min of inactivity,{" "}
-                            <a
-                                href="mailto:jake@burla.dev"
-                                className="text-blue-500 hover:underline"
-                            >
-                                email me
-                            </a>
-                            &nbsp;to have this or any other settings changed.
-                            <br /> <br />
-                            Confused? see our{" "}
-                            <a
-                                href="https://colab.research.google.com/drive/17MWiQFyFKxTmNBaq7POGL0juByWIMA3w?usp=sharing"
-                                className="text-blue-500 hover:underline"
-                            >
-                                quickstart
-                            </a>
-                            ,{" "}
-                            <a
-                                href="https://docs.burla.dev"
-                                className="text-blue-500 hover:underline"
-                            >
-                                documentation
-                            </a>
-                            , or{" "}
-                            <a
-                                href="mailto:jake@burla.dev"
-                                className="text-blue-500 hover:underline"
-                            >
-                                send me an email
-                            </a>
-                            !<br />
-                            Thank you for trying Burla!
+            {showWelcome && (
+                <Card className="w-full relative">
+                    <button
+                        onClick={handleDismissWelcome}
+                        className="absolute top-2 right-2 p-1 hover:bg-gray-100 rounded-full"
+                        aria-label="Dismiss welcome message"
+                    >
+                        <X className="h-4 w-4" />
+                    </button>
+                    <CardHeader>
+                        <CardTitle className="text-xl font-semibold text-[#3b5a64]">
+                            Welcome to Burla!
+                        </CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                        <div className="grid grid-cols-1 gap-4">
+                            <div>
+                                Click "Start" to boot the cluster,
+                                <br />
+                                See the{" "}
+                                <Link to="/settings" className="text-blue-500 hover:underline">
+                                    settings tab
+                                </Link>{" "}
+                                to change the machine type, quantity, or container your code runs
+                                inside.
+                                <br />
+                                <br />
+                                Don't hesitate to{" "}
+                                <a
+                                    href="mailto:jake@burla.dev"
+                                    className="text-blue-500 hover:underline"
+                                >
+                                    email us
+                                </a>{" "}
+                                with feature requests, changes, or for free 1 on 1 help!
+                                <br />
+                                Be sure to check out our{" "}
+                                <a
+                                    href="https://docs.burla.dev"
+                                    className="text-blue-500 hover:underline"
+                                >
+                                    documentation
+                                </a>
+                                , and thank you for using Burla!
+                            </div>
                         </div>
-                    </div>
-                </CardContent>
-            </Card>
+                    </CardContent>
+                </Card>
+            )}
 
             <Card className="w-full">
                 <CardHeader className="flex flex-row items-center justify-between">
-                    <CardTitle className="text-xl font-semibold" style={{ color: "#3b5a64" }}>
-                        Nodes
-                    </CardTitle>
+                    <CardTitle className="text-xl font-semibold text-[#3b5a64]">Nodes</CardTitle>
                 </CardHeader>
                 <CardContent>
-                    <Table>
+                    <Table className="table-fixed w-full">
+                        {/* Define four columns with equal widths */}
+                        <colgroup>
+                            <col className="w-1/4" />
+                            <col className="w-1/4" />
+                            <col className="w-1/4" />
+                            <col className="w-1/4" />
+                        </colgroup>
                         <TableHeader>
                             <TableRow>
-                                <TableHead>Status</TableHead>
-                                <TableHead>Name</TableHead>
-                                <TableHead>Type</TableHead>
-                                <TableHead>CPUs</TableHead>
-                                <TableHead>Memory</TableHead>
+                                <TableHead className="px-4 py-2">Status</TableHead>
+                                <TableHead className="px-4 py-2">Name</TableHead>
+                                <TableHead className="px-4 py-2">Type</TableHead>
+                                <TableHead className="px-4 py-2 text-center">CPUs</TableHead>
                             </TableRow>
                         </TableHeader>
                         <TableBody>
                             {nodes.map((node) => (
                                 <TableRow key={node.id}>
-                                    <TableCell>
+                                    <TableCell className="px-4 py-2">
                                         <div className="flex items-center space-x-2">
                                             <div className={getStatusClass(node.status)} />
                                             <span className={cn("text-sm capitalize", node.status)}>
@@ -109,22 +132,16 @@ export const NodesList = ({ nodes }: NodesListProps) => {
                                             </span>
                                         </div>
                                     </TableCell>
-                                    <TableCell>{node.name}</TableCell>
-                                    <TableCell>{node.type}</TableCell>
-
-                                    <TableCell>
-                                        <div className="flex items-center space-x-1">
+                                    <TableCell className="px-4 py-2">{node.name}</TableCell>
+                                    <TableCell className="px-4 py-2">{node.type}</TableCell>
+                                    <TableCell className="px-4 py-2 text-center">
+                                        <div className="inline-flex items-center space-x-1 justify-center">
                                             <Cpu className="h-4 w-4" />
-                                            <span>{node.cpus || 0}</span>
+                                            <span>
+                                                {node.cpus ?? extractCpuCount(node.type) ?? "?"}
+                                            </span>
                                         </div>
                                     </TableCell>
-                                    <TableCell>
-                                        <div className="flex items-center space-x-1">
-                                            <Database className="h-4 w-4" />
-                                            <span>{node.memory || "0"}</span>
-                                        </div>
-                                    </TableCell>
-                                    <TableCell className="text-right"></TableCell>
                                 </TableRow>
                             ))}
                         </TableBody>

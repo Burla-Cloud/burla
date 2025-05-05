@@ -1,20 +1,20 @@
 [tool.poetry]
 name = "worker_service"
-version = "0.9.16"
+version = "1.0.0"
 description = ""
 authors = ["Jacob Zuliani <jake@burla.dev>"]
 packages = [{include = "worker_service", from = "src"}]
 
 [tool.poetry.dependencies]
-python = ">=3.10,<4.0"
-flask = "^3.0.3"
-gunicorn = "^23.0.0"
-google-cloud-firestore = "^2.19.0"
-google-api-python-client = "^2.147.0"
+python = ">=3.10"
 cloudpickle = "^3.0.0"
 tblib = "^3.0.0"
 google-cloud-logging = "^3.8.0"
-google-cloud-secret-manager = "^2.16.4"
+google-api-python-client = "^2.147.0"
+fastapi = "^0.115.12"
+uvicorn = "^0.34.1"
+python-multipart = "^0.0.20"
+aiohttp = "^3.11.18"
 
 # These packages are not used by the worker service
 # These exist so that users can run code in burla that uses these packages

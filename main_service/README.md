@@ -5,7 +5,6 @@ This service acts as a traditional "head node" would, as well as handing other r
 This service is responsible for:
 
 - Adding/removing/managing nodes in the cluster.
-- Routing requests from clients to the correct `node_service`'s, (`/burla/node_service`)
 - Hosting the cluster-management dashboard (react/ts)
 
 Every "main service" instance has it's own [google-cloud-firestore](cloud.google.com/firestore) database associated with it.  

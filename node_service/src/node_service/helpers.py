@@ -1,55 +1,10 @@
 import sys
-import socket
-import random
 import requests
 from itertools import groupby
-from typing import Optional, Callable
-from requests.exceptions import HTTPError
-
+from typing import Optional
+import logging as python_logging
 from fastapi import Request
-from docker.errors import APIError, NotFound
-from node_service import IN_LOCAL_DEV_MODE, GCL_CLIENT, SELF, PROJECT_ID, BURLA_BACKEND_URL
-
-
-PRIVATE_PORT_QUEUE = list(range(32768, 60999))  # <- these ports should be mostly free.
-
-
-def ignore_400_409_404(f: Callable):
-
-    def wrapped(*a, **kw):
-        try:
-            f(*a, **kw)
-        except (APIError, NotFound, HTTPError) as e:
-            # ignore errors indicating the desired operation already happened.
-            if not ("400" in str(e) or "404" in str(e) or "409" in str(e)):
-                raise e
-
-    return wrapped
-
-
-def startup_error_msg(container_logs, image):
-    return {
-        "severity": "ERROR",
-        "message": "worker timed out.",
-        "exception": container_logs,
-        "job_id": SELF["current_job_id"],
-        "image": image,
-    }
-
-
-def next_free_port():
-    """
-    pops ports from `PRIVATE_PORT_QUEUE` until free one is found.
-    The "correct" way to do this is to bind to port 0 which tells the os to return a random free
-    port. This was attempted first, but it kept returning already-in-use ports?
-    """
-    index = random.randint(0, len(PRIVATE_PORT_QUEUE) - 1)
-    port = PRIVATE_PORT_QUEUE.pop(index)
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        if s.connect_ex(("localhost", port)) != 0:
-            return port
-        else:
-            return next_free_port()
+from node_service import IN_LOCAL_DEV_MODE, GCL_CLIENT, PROJECT_ID, BURLA_BACKEND_URL
 
 
 def format_traceback(traceback_details: list):
@@ -61,7 +16,15 @@ def format_traceback(traceback_details: list):
 class Logger:
 
     def __init__(self, request: Optional[Request] = None):
-        self.loggable_request = self.__loggable_request(request) if request else {}
+        self.request = request
+        self.loggable_request = None
+
+        # using prints instead of logger.info causes a bunch of issues with threading
+        self.logger = python_logging.getLogger("node_service")
+        if not self.logger.handlers:
+            self.logger.setLevel(python_logging.INFO)
+            self.logger.addHandler(python_logging.StreamHandler(sys.stdout))
+            self.logger.propagate = False
 
     def __make_serializeable(self, obj):
         """
@@ -97,10 +60,13 @@ class Logger:
         return self.__make_serializeable(request_dict)
 
     def log(self, message: str, severity="INFO", **kw):
+        if (self.loggable_request is None) and self.request:
+            self.loggable_request = self.__loggable_request(self.request)
+
         if "traceback" in kw.keys():
-            print(f"\nERROR: {message.strip()}\n{kw['traceback'].strip()}\n", file=sys.stderr)
+            self.logger.error(f"\nERROR: {message.strip()}\n{kw['traceback'].strip()}\n")
         else:
-            print(message)
+            self.logger.info(message)
 
         if not IN_LOCAL_DEV_MODE:
             struct = dict(message=message, request=self.loggable_request, **kw)

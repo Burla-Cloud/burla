@@ -61,7 +61,7 @@ GCE_DEFAULT_SVC = f"{project.name.split('/')[-1]}-compute@developer.gserviceacco
 
 NODE_BOOT_TIMEOUT = 60 * 3
 ACCEPTABLE_ZONES = ["us-central1-b", "us-central1-c", "us-central1-f", "us-central1-a"]
-NODE_SVC_VERSION = "0.9.16"  # <- this maps to a git tag/release or branch
+NODE_SVC_VERSION = "1.0.0"  # <- this maps to a git tag/release or branch
 
 
 class Node:
@@ -102,6 +102,7 @@ class Node:
         logger: Logger,
         machine_type: str,
         containers: list[Container],
+        spot: bool = False,
         service_port: int = 8080,  # <- this needs to be open in your cloud firewall!
         as_local_container: bool = False,
         instance_client: Optional[InstancesClient] = None,
@@ -115,6 +116,7 @@ class Node:
         self.logger = logger
         self.machine_type = machine_type
         self.containers = containers
+        self.spot = spot
         self.port = service_port
         self.inactivity_shutdown_time_sec = inactivity_shutdown_time_sec
         self.disk_size = disk_size if disk_size else 20  # minimum is 10 due to disk image
@@ -168,6 +170,7 @@ class Node:
         try:
             response = requests.post(f"{self.host}/reboot")
             response.raise_for_status()
+            pass
         except requests.exceptions.HTTPError as e:
             if not "409" in str(e):  # 409 means node is already rebooting.
                 raise e
@@ -184,7 +187,7 @@ class Node:
             self.instance_client.delete(**kwargs)
         except (NotFound, ValueError):
             pass  # these errors mean it was already deleted.
-        self.node_ref.update({"status": "DELETED"})
+        self.node_ref.delete()  # Delete the document instead of marking as deleted
 
     def status(self):
         """Returns one of: `BOOTING`, `RUNNING`, `READY`, `FAILED`"""
@@ -263,7 +266,10 @@ class Node:
         access_config = AccessConfig(name="External NAT", type="ONE_TO_ONE_NAT")
         network_interface = NetworkInterface(name=network_name, access_configs=[access_config])
 
-        scheduling = Scheduling(provisioning_model="SPOT", instance_termination_action="DELETE")
+        if self.spot:
+            scheduling = Scheduling(provisioning_model="SPOT", instance_termination_action="DELETE")
+        else:
+            scheduling = Scheduling(provisioning_model="STANDARD")
 
         access_anything_scope = "https://www.googleapis.com/auth/cloud-platform"
         service_account = ServiceAccount(email=GCE_DEFAULT_SVC, scopes=[access_anything_scope])
@@ -333,36 +339,8 @@ class Node:
         """
 
     def __get_shutdown_script(self):
-        firestore_base_url = "https://firestore.googleapis.com"
-        firestore_db_url = f"{firestore_base_url}/v1/projects/{PROJECT_ID}/databases/burla"
-        firestore_document_url = f"{firestore_db_url}/documents/nodes/{self.instance_name}"
         return f"""
         #! /bin/bash
-        # This script marks the node as "DELETED" in the database when the vm instance is shutdown.
-        # This is necessary due to situations where instances are preempted,
-        # otherwise the `main_service` doesn't know which vm's are still running when starting a job,
-        # checking if they are still running is too slow, increasing latency.
-
-        # record environment variable indicating whether this instance was preempted.
-        preempted_instances_matching_filter=$( \
-            gcloud compute operations list \
-            --filter="operationType=compute.instances.preempted AND targetLink:instances/{self.instance_name}" \
-        )
-        # Set PREEMPTED to true if the output is non-empty, otherwise false
-        export PREEMPTED=$([ -n "$preempted_instances_matching_filter" ] && echo true || echo false)
-
-        curl -X PATCH \
-        -H "Authorization: Bearer $(gcloud auth print-access-token)" \
-        -H "Content-Type: application/json" \
-        -d '{{
-            "fields": {{
-                "status": {{
-                    "stringValue": "DELETED"
-                }},
-                "preempted": {{
-                    "booleanValue": '"$PREEMPTED"'
-                }}
-            }}
-        }}' \
-        "{firestore_document_url}?updateMask.fieldPaths=status&updateMask.fieldPaths=preempted"
+        # Tell the node_service this VM is being shutdown so it can reassign inputs and stuff.
+        curl -X POST "http://localhost:{self.port}/shutdown"
         """

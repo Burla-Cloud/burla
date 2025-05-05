@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "node-service"
-version = "0.9.16"
+version = "1.0.0"
 description = ""
 authors = ["Jacob Zuliani <jake@burla.dev>"]
 packages = [{include = "node_service", from = "src"}]
@@ -20,7 +20,7 @@ tblib = "^3.0.0"
 black = "^23.1.0"
 pytest = "^7.4.3"
 six = "^1.16.0"
-google-cloud-run = "^0.10.0"
+google-cloud-run = "^1.0.0"
 werkzeug = "^3.0.1"
 fastapi = "^0.109.0"
 uvicorn = "^0.27.0"

@@ -21,7 +21,6 @@ from main_service import (
     get_logger,
     get_add_background_task_function,
 )
-from main_service.cluster import reconcile
 from main_service.node import Container, Node
 from main_service.helpers import Logger
 
@@ -113,9 +112,6 @@ def restart_cluster(
             if not (is_main_service or belongs_to_current_node):
                 docker_client.remove_container(container["Id"], force=True)
 
-    logger.log("Done restarting, reconciling ...")
-    add_background_task(reconcile, DB, logger, add_background_task)
-
     duration = time() - start
     logger.log(f"Restarted after {duration//60}m {duration%60}s")
 
@@ -171,20 +167,24 @@ async def cluster_info(logger: Logger = Depends(get_logger)):
                 if change.type.name == "REMOVED":
                     event_data = {"nodeId": instance_name, "deleted": True}
                 else:
-                    event_data = {"nodeId": instance_name, "status": doc_data.get("status")}
+                    event_data = {
+                        "nodeId": instance_name,
+                        "status": doc_data.get("status"),
+                        "type": doc_data.get("machine_type"),
+                    }
 
                 current_loop.call_soon_threadsafe(queue.put_nowait, event_data)
                 logger.log(f"Firestore event detected: {event_data}")
 
         status_filter = FieldFilter("status", "in", ["READY", "BOOTING", "RUNNING"])
         query = DB.collection("nodes").where(filter=status_filter)
-        unsubscribe = query.on_snapshot(on_snapshot)
+        node_watch = query.on_snapshot(on_snapshot)
 
         try:
             while True:
                 event = await queue.get()
                 yield f"data: {json.dumps(event)}\n\n"
         finally:
-            unsubscribe()
+            node_watch.unsubscribe()
 
     return StreamingResponse(node_stream(), media_type="text/event-stream")

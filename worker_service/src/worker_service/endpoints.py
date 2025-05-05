@@ -1,100 +1,164 @@
-import sys
 import pickle
+import asyncio
+import aiohttp
+from typing import Optional
+from queue import Empty
+from fastapi import APIRouter, Path, Response, Depends, Query
 
-from flask import jsonify, Blueprint, request
-
-from worker_service import SELF, LOGGER, IN_LOCAL_DEV_MODE
+from worker_service import SELF, get_request_json, get_request_files
 from worker_service.udf_executor import execute_job
 from worker_service.helpers import ThreadWithExc
 
-BP = Blueprint("endpoints", __name__)
-ERROR_ALREADY_LOGGED = False
-
-from time import time
+router = APIRouter()
 
 
-@BP.get("/")
-def get_status():
-    """
-    There are four possible states:
-     1. “READY”: This service is ready to start processing a subjob.
-     2. “RUNNING”: This service is processing a subjob.
-     3. “FAILED”: This service had an internal error and failed to process the subjob.
-     4. “DONE”: This worker successfully processed the subjob.
-    """
-    global ERROR_ALREADY_LOGGED
-    bar = "----------------------------------"
-    status_log = f"{bar}\nReceived request to get worker status.\n"
-
-    thread_is_running = SELF["subjob_thread"] and SELF["subjob_thread"].is_alive()
-    thread_traceback_str = SELF["subjob_thread"].traceback_str if SELF["subjob_thread"] else None
-    thread_died = SELF["subjob_thread"] and (not SELF["subjob_thread"].is_alive())
-
-    READY = not SELF["STARTED"]
-    RUNNING = thread_is_running and (not thread_traceback_str) and (not SELF["DONE"])
-    FAILED = thread_traceback_str or (thread_died and not SELF["DONE"])
-    DONE = SELF["DONE"]
-
-    # print error if in development so I dont need to go to google cloud logging to see it
-    if IN_LOCAL_DEV_MODE and SELF["subjob_thread"] and SELF["subjob_thread"].traceback_str:
-        status_log += "ERROR DETECTED IN WORKER THREAD (printing in stderr).\n"
-        print(thread_traceback_str, file=sys.stderr)
-
-    if FAILED and not ERROR_ALREADY_LOGGED:
-        status_log += "ERROR DETECTED IN WORKER THREAD (logging in GCL).\n"
-        struct = {"severity": "ERROR", "worker_logs": SELF["WORKER_LOGS"]}
-        if thread_traceback_str:
-            struct.update({"traceback": thread_traceback_str})
-        else:
-            struct.update({"message": "Subjob thread died without error!"})
-        LOGGER.log_struct(struct)
-        ERROR_ALREADY_LOGGED = True
-
-    if READY:
-        status = "READY"
-    elif RUNNING:
-        status = "RUNNING"
-    elif FAILED:
-        status = "FAILED"
-    elif DONE:
-        status = "DONE"
-
-    status_log += f"Status = {status}"
-    SELF["WORKER_LOGS"].append(f"{status_log}\n{bar}")
-    return jsonify({"status": status})
-
-
-@BP.post("/jobs/<job_id>")
-def start_job(job_id: str):
-    # only one job will ever be executed by this service
+@router.get("/")
+async def get_status():
+    # A worker can also be "IDLE" but that is returned when checking for results (more efficient)
     if SELF["STARTED"]:
-        return "STARTED", 409
+        return {"status": "BUSY"}
+    else:
+        return {"status": "READY"}
 
-    request_json = pickle.loads(request.files["request_json"].read())
-    function_pkl = request.files.get("function_pkl")
-    if function_pkl:
-        function_pkl = function_pkl.read()
 
-    SELF["WORKER_LOGS"].append(f"Executing job {job_id}.")
-    SELF["WORKER_LOGS"].append(f"STARTING WORK AT INDEX #{request_json['starting_index']}")
+def _check_udf_executor_thread():
+    if SELF["current_job"] and not SELF["STOP_PROCESSING_EVENT"].is_set():
+        thread = SELF.get("udf_executor_thread")
+        if not (thread and thread.is_alive()):
+            raise Exception(f"UDF executor thread failed! traceback:\n{thread.traceback_str}")
 
-    # ThreadWithExc is a thread that catches and stores errors.
-    # We need so we can save the error until the status of this service is checked.
-    args = (
-        job_id,
-        request_json["inputs_id"],
-        request_json["n_inputs"],
-        request_json["starting_index"],
-        request_json["planned_future_job_parallelism"],
-        function_pkl,
-    )
-    thread = ThreadWithExc(target=execute_job, args=args)
+
+@router.get("/jobs/{job_id}/results")
+async def get_results(job_id: str = Path(...)):
+    _check_udf_executor_thread()
+    if SELF["current_job"] != job_id:
+        return Response("job not found", status_code=404)
+
+    results = []
+    total_bytes = 0
+    while not SELF["results_queue"].empty() and (total_bytes < (1_000_000 * 0.2)):
+        try:
+            result = SELF["results_queue"].get_nowait()
+            results.append(result)
+            total_bytes += len(result[2])
+        except Empty:
+            break
+
+    await asyncio.sleep(0)
+    response_json = {
+        "results": results,
+        "is_idle": SELF["IDLE"],  # <- used to determine if job is done
+        "is_empty": SELF["results_queue"].empty(),
+    }
+    data = pickle.dumps(response_json)
+    await asyncio.sleep(0)
+    headers = {"Content-Disposition": 'attachment; filename="results.pkl"'}
+    return Response(content=data, media_type="application/octet-stream", headers=headers)
+
+
+@router.get("/jobs/{job_id}/inputs")
+async def get_inputs(job_id: str = Path(...), min_reply_size: float = Query(...)):
+    _check_udf_executor_thread()
+    if SELF["current_job"] != job_id:
+        return Response("job not found", status_code=404)
+
+    inputs = []
+    total_bytes = 0
+    while not SELF["inputs_queue"].empty() and (total_bytes < min_reply_size):
+        try:
+            input_pkl_with_idx = SELF["inputs_queue"].get_nowait()
+            inputs.append(input_pkl_with_idx)
+            total_bytes += len(input_pkl_with_idx[1])
+        except Empty:
+            break
+
+    await asyncio.sleep(0)
+    data = pickle.dumps(inputs)
+    headers = {"Content-Disposition": 'attachment; filename="inputs.pkl"'}
+    return Response(content=data, media_type="application/octet-stream", headers=headers)
+
+
+@router.post("/jobs/{job_id}/inputs")
+async def upload_inputs(
+    job_id: str = Path(...),
+    request_files: Optional[dict] = Depends(get_request_files),
+):
+    _check_udf_executor_thread()
+    if SELF["current_job"] != job_id:
+        return Response("job not found", status_code=404)
+    if SELF["STOP_PROCESSING_EVENT"].is_set():
+        return Response("Cannot accept inputs - worker is shutting down", status_code=409)
+
+    SELF["INPUT_UPLOAD_IN_PROGRESS"] = True
+    pickled_inputs_pkl_with_idx = request_files["inputs_pkl_with_idx"]
+    inputs_pkl_with_idx = pickle.loads(pickled_inputs_pkl_with_idx)
+    await asyncio.sleep(0)
+
+    total_data = sum(len(input_pkl) for input_pkl in inputs_pkl_with_idx)
+    msg = f"Received {len(inputs_pkl_with_idx)} inputs for job {job_id} ({total_data} bytes)."
+    SELF["logs"].append(msg)
+
+    for input_pkl_with_idx in inputs_pkl_with_idx:
+        SELF["inputs_queue"].put(input_pkl_with_idx)
+    SELF["INPUT_UPLOAD_IN_PROGRESS"] = False
+
+
+@router.post("/jobs/{job_id}")
+async def start_job(
+    job_id: str = Path(...),
+    request_files: Optional[dict] = Depends(get_request_files),
+):
+    # only one job should ever be executed by this service
+    # then it should be restarted (to clear/reset the filesystem)
+    if SELF["STARTED"]:
+        msg = f"ERROR: Received request to start job {job_id}, but this worker was previously "
+        SELF["logs"].append(msg + f"assigned to job {SELF['job_id']}! Returning 409.")
+        return Response("Already started.", status_code=409)
+
+    SELF["logs"].append(f"Assigned to job {job_id}.")
+    function_pkl = request_files["function_pkl"]
+    thread = ThreadWithExc(target=execute_job, args=(job_id, function_pkl), daemon=True)
     thread.start()
 
     SELF["current_job"] = job_id
-    SELF["subjob_thread"] = thread
+    SELF["udf_executor_thread"] = thread
     SELF["STARTED"] = True
-    SELF["started_at"] = time()
-    SELF["starting_index"] = request_json["starting_index"]
+    SELF["logs"].append(f"Successfully started job {job_id}.")
 
-    return "Success"
+
+@router.post("/jobs/{job_id}/transfer_inputs")
+async def transfer_inputs(
+    job_id: str = Path(...),
+    request_json: dict = Depends(get_request_json),
+):
+    """Stop processing the current job and transfer remaining inputs to another node"""
+    if SELF["current_job"] != job_id:
+        return Response("job not found", status_code=404)
+
+    SELF["STOP_PROCESSING_EVENT"].set()
+    if SELF["INPUT_UPLOAD_IN_PROGRESS"]:
+        while SELF["INPUT_UPLOAD_IN_PROGRESS"]:
+            await asyncio.sleep(1)
+
+    target_node_url = request_json["target_node_url"]
+    SELF["logs"].append(f"Received request to transfer inputs to {target_node_url}.")
+
+    async with aiohttp.ClientSession() as session:
+        chunk = [SELF["in_progress_input"]]
+        total_bytes = len(SELF["in_progress_input"][1])
+        total_inputs = 0
+        while not SELF["inputs_queue"].empty():
+            input_pkl_with_idx = SELF["inputs_queue"].get_nowait()
+            chunk.append(input_pkl_with_idx)
+            total_inputs += 1
+            total_bytes += len(input_pkl_with_idx[1])
+
+            if total_bytes > 1_000_000 * 0.2:
+                data = aiohttp.FormData()
+                data.add_field("inputs_pkl_with_idx", pickle.dumps(chunk))
+                url = f"{target_node_url}/jobs/{job_id}/inputs"
+                async with session.post(url, data=data) as response:
+                    response.raise_for_status()
+                    chunk = []
+                    total_bytes = 0
+    SELF["logs"].append(f"Transferred {total_inputs} remaining inputs to {target_node_url}.")

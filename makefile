@@ -7,14 +7,14 @@ ACCESS_TOKEN := $(shell gcloud auth print-access-token)
 MAIN_SVC_IMAGE_NAME := us-docker.pkg.dev/$(PROJECT_ID)/burla-main-service/burla-main-service:latest
 
 
-test-local:
-	poetry -C ./client run pytest ./client/tests/test_in_local_dev_mode.py -s -x --disable-warnings
+shell:
+	poetry -C ./client shell
+
+test:
+	poetry -C ./client run pytest client/tests/test.py -s -x --disable-warnings
 
 test-jupyter:
 	poetry -C ./client run jupyter-lab
-
-test-remote:
-	poetry -C ./client run pytest ./client/tests/test_in_remote_dev_mode.py -s -x --disable-warnings
 
 # start ONLY the main service, in local dev mode
 # The cluster is run 100% locally using the config `LOCAL_DEV_CONFIG` in `main_service.__init__.py`
@@ -102,3 +102,7 @@ deploy-test:
 	$(MAKE) image; \
 	$(MAKE) deploy-test
 
+worker:
+	set -e; \
+	cd ./worker_service; \
+	$(MAKE) image_same_env

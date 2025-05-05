@@ -3,7 +3,7 @@ import requests
 from itertools import groupby
 from typing import Optional
 
-from fastapi import Request, HTTPException
+from fastapi import Request
 
 from main_service import PROJECT_ID, BURLA_BACKEND_URL, GCL_CLIENT
 
@@ -40,7 +40,7 @@ class Logger:
         scope = {key: request.scope.get(key) for key in keys}
         request_dict = {
             "scope": scope,
-            "url": str(request.url),
+            "url": str(request.url), 
             "base_url": str(request.base_url),
             "headers": request.headers,
             "query_params": request.query_params,
@@ -69,17 +69,6 @@ class Logger:
                 requests.post(f"{BURLA_BACKEND_URL}/v1/telemetry/alert", json=json, timeout=1)
             except Exception:
                 pass
-
-
-def validate_create_job_request(request_json: dict):
-    if request_json["python_version"] not in ["3.8", "3.9", "3.10", "3.11", "3.12"]:
-        raise HTTPException(400, detail="invalid python version, } [3.8, 3.9, 3.10, 3.11, 3.12]")
-    elif (request_json["func_cpu"] > 96) or (request_json["func_cpu"] < 1):
-        raise HTTPException(400, detail="invalid func_cpu, must be in [1.. 96]")
-    elif (request_json["func_ram"] > 624) or (request_json["func_ram"] < 1):
-        raise HTTPException(400, detail="invalid func_ram, must be in [1.. 624]")
-    # elif (request_json["func_gpu"] > 4) or (request_json["func_ram"] < 1):
-    #     abort(400, "invalid func_gpu, must be in [1.. 4]")
 
 
 def validate_headers_and_login(request: Request):

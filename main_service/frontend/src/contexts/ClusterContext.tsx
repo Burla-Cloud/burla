@@ -1,5 +1,5 @@
 import { createContext, useContext, useMemo, useState, useEffect } from "react";
-import { ClusterStatus } from "@/types/cluster";
+import { ClusterStatus } from "@/types/coreTypes";
 import { useNodes } from "@/contexts/NodesContext";
 
 interface ClusterContextType {

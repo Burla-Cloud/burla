@@ -165,7 +165,7 @@ async def _job_watcher(n_inputs: int, is_background_job: bool, logger: Logger):
 
             # client still listening? (if this is NOT a background job)
             seconds_since_last_ping = time() - LAST_CLIENT_PING_TIMESTAMP
-            timeout = max(TIME_BETWEEN_CLIENT_PINGS * 3, 4)
+            timeout = max(TIME_BETWEEN_CLIENT_PINGS * 3, 10)
             client_disconnected = seconds_since_last_ping > timeout
             if not is_background_job and client_disconnected:
                 await job_doc.update({"status": "FAILED"})

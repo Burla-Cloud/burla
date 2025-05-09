@@ -33,7 +33,6 @@ from burla._helpers import (
     get_db_clients,
     spinner_with_signal_handlers,
     parallelism_capacity,
-    using_demo_cluster,
     has_explicit_return,
 )
 
@@ -141,9 +140,8 @@ async def _execute_job(
     max_parallelism: int,
     background: bool,
     spinner: Union[bool, Spinner],
-    api_key: Optional[str],
 ):
-    sync_db, async_db = get_db_clients(api_key)
+    sync_db, async_db = get_db_clients()
     log_msg_stdout = spinner if spinner else sys.stdout
 
     nodes_to_assign, total_target_parallelism = await _select_nodes_to_assign_to_job(
@@ -161,7 +159,7 @@ async def _execute_job(
             "user_python_version": f"3.{sys.version_info.minor}",
             "max_parallelism": max_parallelism,
             "target_parallelism": total_target_parallelism,
-            "user": get_auth_headers(api_key).get("email", "api-key"),
+            "user": get_auth_headers().get("email", "api-key"),
             "started_at": time(),
             "last_ping_from_client": time(),
             "is_background_job": background,
@@ -298,7 +296,6 @@ def remote_parallel_map(
     generator: bool = False,
     spinner: bool = True,
     max_parallelism: Optional[int] = None,
-    api_key: Optional[str] = None,
 ):
     """
     Run an arbitrary Python function on many remote computers in parallel.
@@ -331,8 +328,6 @@ def remote_parallel_map(
         max_parallelism (int, optional):
             The maximum number of `function_` instances allowed to be running at the same time.
             Defaults to the number of available CPUs divided by `func_cpu`.
-        api_key (str, optional):
-            An API key for use in deployment environments where `burla login` cannot be run.
 
     Returns:
         List[Any] or Generator[Any, None, None]:
@@ -375,14 +370,14 @@ def remote_parallel_map(
                 max_parallelism=max_parallelism,
                 background=background,
                 spinner=spinner,
-                api_key=api_key,
             )
         )
 
         if background:
             demo_host = "https://cluster.burla.dev"
-            host = demo_host if using_demo_cluster() else os.environ["BURLA_API_URL"]
+            host = os.environ["BURLA_API_URL"]
             job_url = f"{host}/jobs/{job_id}"
+
             msg = f"Done uploading inputs.\n"
             msg += f"Job will continue running in the background, monitor progress at: {job_url}"
             spinner.text = msg
@@ -408,13 +403,9 @@ def remote_parallel_map(
             spinner.stop()
 
         try:
-            sync_db, _ = get_db_clients(api_key)
+            sync_db, _ = get_db_clients()
             sync_db.collection("jobs").document(job_id).update({"status": "FAILED"})
-
-            if using_demo_cluster():
-                project_id = "burla-prod"
-            else:
-                _, project_id = google.auth.default()
+            _, project_id = google.auth.default()
 
             # Report errors back to Burla's cloud.
             exc_type, exc_value, exc_traceback = sys.exc_info()

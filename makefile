@@ -37,6 +37,22 @@ local-dev:
 		$(MAIN_SVC_IMAGE_NAME) -m uvicorn main_service:app --host 0.0.0.0 --port 5001 --reload \
 			--reload-exclude main_service/frontend/node_modules/
 
+# Only the `main_service` is run locally, nodes are started as GCE VM's in the test cloud.
+# Uses cluster config from firestore doc: `/databases/burla/cluster_config/cluster_config`
+remote-dev:
+	set -e; \
+	$(MAKE) __check-local-services-up-to-date && echo "" || exit 1; \
+	:; \
+	docker run --rm -it \
+		--name main_service \
+		-v $(PWD)/main_service:/burla/main_service \
+		-v ~/.config/gcloud:/root/.config/gcloud \
+		-e GOOGLE_CLOUD_PROJECT=$(PROJECT_ID) \
+		-p 5001:5001 \
+		--entrypoint python3.11 \
+		$(MAIN_SVC_IMAGE_NAME) -m uvicorn main_service:app --host 0.0.0.0 --port 5001 --reload \
+			--reload-exclude main_service/frontend/node_modules/
+
 # raise error if local node/worker services are different from remote-dev versions
 # does the worker service have a git diff since AFTER the last image was pushed?
 # does the node service have a git diff?
@@ -62,23 +78,6 @@ __check-local-services-up-to-date:
 		exit 1; \
 	fi; \
 	echo "deployed worker service and node service are up to date with local versions.";
-
-
-# Only the `main_service` is run locally, nodes are started as GCE VM's in the test cloud.
-# Uses cluster config from firestore doc: `/databases/burla/cluster_config/cluster_config`
-remote-dev:
-	set -e; \
-	$(MAKE) __check-local-services-up-to-date && echo "" || exit 1; \
-	:; \
-	docker run --rm -it \
-		--name main_service \
-		-v $(PWD)/main_service:/burla/main_service \
-		-v ~/.config/gcloud:/root/.config/gcloud \
-		-e GOOGLE_CLOUD_PROJECT=$(PROJECT_ID) \
-		-p 5001:5001 \
-		--entrypoint python3.11 \
-		$(MAIN_SVC_IMAGE_NAME) -m uvicorn main_service:app --host 0.0.0.0 --port 5001 --reload \
-			--reload-exclude main_service/frontend/node_modules/
 
 # Moves latest worker service image to prod & 
 # Builds new main-service image, moves to prod, then deploys prod main service

@@ -157,6 +157,14 @@ def dashboard():
     return FileResponse("src/main_service/static/index.html")
 
 
+# Add routes for SPA navigation to handle page refreshes
+@app.get("/jobs")
+@app.get("/jobs/{job_id}")
+@app.get("/settings")
+def spa_routes():
+    return FileResponse("src/main_service/static/index.html")
+
+
 # must be mounted after the above endpoint (`/`) is declared, or this will overwrite that endpoint.
 app.mount("/", StaticFiles(directory="src/main_service/static"), name="static")
 

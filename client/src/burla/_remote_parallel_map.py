@@ -366,19 +366,25 @@ def remote_parallel_map(
             spinner.start()
             spinner.text = f"Preparing to run {len(inputs)} inputs through `{function_.__name__}`"
 
-        asyncio.run(
-            _execute_job(
-                job_id=job_id,
-                return_queue=return_queue,
-                function_=function_,
-                inputs=inputs,
-                func_cpu=func_cpu,
-                func_ram=func_ram,
-                max_parallelism=max_parallelism,
-                background=background,
-                spinner=spinner,
-            )
+        job_executor_coroutine = _execute_job(
+            job_id=job_id,
+            return_queue=return_queue,
+            function_=function_,
+            inputs=inputs,
+            func_cpu=func_cpu,
+            func_ram=func_ram,
+            max_parallelism=max_parallelism,
+            background=background,
+            spinner=spinner,
         )
+
+        try:
+            # use existing event loop if there is one (needed to work in jupyter notebooks).
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            asyncio.run(job_executor_coroutine)
+        else:
+            loop.create_task(job_executor_coroutine)
 
         if background:
             _, project_id = google.auth.default()

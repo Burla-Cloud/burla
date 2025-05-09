@@ -4,7 +4,6 @@ The tests here assume the cluster is running in "local-dev-mode".
 
 import heapq
 import math
-import os
 import random
 from time import time, sleep
 

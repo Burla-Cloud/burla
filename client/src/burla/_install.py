@@ -3,6 +3,25 @@ import shutil
 import subprocess
 
 from yaspin import yaspin
+from google.cloud.firestore import Client
+
+
+DEFAULT_CLUSTER_CONFIG = {
+    "Nodes": [
+        {
+            "containers": [
+                {
+                    "image": "jakezuliani/burla_worker_service:latest",
+                    "python_executable": "python3.11",
+                    "python_version": "3.11",
+                }
+            ],
+            "inactivity_shutdown_time_sec": 300,
+            "machine_type": "n4-standard-4",
+            "quantity": 1,
+        }
+    ]
+}
 
 
 class VerboseCalledProcessError(Exception):
@@ -96,7 +115,7 @@ def _install(spinner):
     _run_command("gcloud services enable run.googleapis.com")
     _run_command("gcloud services enable firestore.googleapis.com")
     _run_command("gcloud services enable cloudresourcemanager.googleapis.com")
-    spinner.text = "Enabling required services...Done."
+    spinner.text = "Enabling required services... Done."
     spinner.ok("✓")
 
     # Open port 8080
@@ -136,6 +155,8 @@ def _install(spinner):
         spinner.fail("✗")
         raise VerboseCalledProcessError(cmd, result.stderr)
     else:
+        db = Client(database="burla")
+        db.collection("cluster_config").document("cluster_config").set(DEFAULT_CLUSTER_CONFIG)
         spinner.text = "Creating Firestore database ... Done."
         spinner.ok("✓")
 
@@ -171,7 +192,6 @@ def _install(spinner):
     msg += f"Here is a short quickstart guide:\n"
     msg += f"  1. Start your cluster at the link above ^\n"
     msg += f"  2. Run the command: `burla login`\n"
-    msg += f"  3. Run the command: `export BURLA_API_URL={dashboard_url}`\n"
-    msg += f"  4. Run the example code at https://docs.burla.dev/#basic-example\n"
+    msg += f"  3. Run the example code at https://docs.burla.dev/#basic-example\n"
     msg == f"E-Mail jake@burla.dev with any questions, thank you for using Burla!"
     spinner.write(msg)

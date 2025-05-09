@@ -91,16 +91,7 @@ deploy-prod:
 	cd ..; \
 	cd ./main_service; \
 	$(MAKE) image; \
-	$(MAKE) publish-prod-image; \
-	$(MAKE) deploy-prod
-
-deploy-test:
-	set -e; \
-	$(MAKE) __check-local-services-up-to-date && echo "" || exit 1; \
-	:; \
-	cd ./main_service; \
-	$(MAKE) image; \
-	$(MAKE) deploy-test
+	$(MAKE) publish-prod-image;
 
 worker:
 	set -e; \

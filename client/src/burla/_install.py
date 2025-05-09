@@ -52,6 +52,11 @@ def main_service_url():
 
 
 def install():
+    """Install or Update the Burla cluster in your current default Google Cloud Project.
+
+    - Run: `gcloud config get project` to view your default project.
+    - Run: `gcloud config set project <new-project-id>` to change your default project.
+    """
     with yaspin() as spinner:
         _install(spinner)
 

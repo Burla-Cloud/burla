@@ -149,6 +149,11 @@ async def _execute_job(
         async_db, max_parallelism, func_cpu, func_ram, spinner
     )
 
+    try:
+        user_id = get_auth_headers().get("email", "api-key")
+    except:
+        user_id = "<unauthenticated-user>"
+
     job_ref = async_db.collection("jobs").document(job_id)
     await job_ref.set(
         {
@@ -160,7 +165,7 @@ async def _execute_job(
             "user_python_version": f"3.{sys.version_info.minor}",
             "max_parallelism": max_parallelism,
             "target_parallelism": total_target_parallelism,
-            "user": get_auth_headers().get("email", "api-key"),
+            "user": user_id,
             "started_at": time(),
             "last_ping_from_client": time(),
             "is_background_job": background,

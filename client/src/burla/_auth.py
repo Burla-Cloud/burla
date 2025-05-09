@@ -5,9 +5,8 @@ import requests
 from time import sleep
 from uuid import uuid4
 from pathlib import Path
-from typing import Tuple, Optional
+from typing import Tuple
 
-from google.oauth2 import service_account
 from appdirs import user_config_dir
 
 from burla import _BURLA_BACKEND_URL
@@ -30,22 +29,8 @@ class AuthException(Exception):
         )
 
 
-def get_gcs_credentials(api_key: Optional[str] = None):
-    auth_headers = get_auth_headers(api_key)
-    url = f"{_BURLA_BACKEND_URL}/v1/private/svc_account"
-    response = requests.get(url, headers=auth_headers)
-    response.raise_for_status()
-    service_account_info = json.loads(response.json())
-    credentials = service_account.Credentials.from_service_account_info(service_account_info)
-    return credentials
-
-
-def get_auth_headers(api_key: Optional[str] = None) -> Tuple[str, str]:
-    login_credentials_missing = not CONFIG_PATH.exists()
-
-    if api_key:
-        return {"Authorization": f"Bearer {api_key}"}
-    elif login_credentials_missing:
+def get_auth_headers() -> Tuple[str, str]:
+    if not CONFIG_PATH.exists():
         raise AuthException()
     else:
         auth_info = json.loads(CONFIG_PATH.read_text())

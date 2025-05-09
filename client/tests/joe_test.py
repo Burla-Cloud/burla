@@ -1,13 +1,14 @@
 from burla import remote_parallel_map
 import os
 
-os.environ["BURLA_API_URL"] = "http://localhost:5001"
 
 my_arguments = [1, 2, 3, 4, 89, 949649, 9539053]
+
 
 def my_function(my_argument: int):
     print(f"Running on remote computer #{my_argument} in the cloud!")
     return my_argument * 2
+
 
 results = remote_parallel_map(my_function, my_arguments)
 

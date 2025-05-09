@@ -19,6 +19,7 @@ from threading import Thread
 import cloudpickle
 from tblib import Traceback
 import google.auth
+from google.cloud.run_v2 import ServicesClient
 from google.cloud.firestore import FieldFilter
 from google.cloud.firestore_v1.async_client import AsyncClient
 from yaspin import Spinner
@@ -33,7 +34,6 @@ from burla._helpers import (
     get_db_clients,
     spinner_with_signal_handlers,
     parallelism_capacity,
-    using_demo_cluster,
     has_explicit_return,
 )
 
@@ -141,9 +141,8 @@ async def _execute_job(
     max_parallelism: int,
     background: bool,
     spinner: Union[bool, Spinner],
-    api_key: Optional[str],
 ):
-    sync_db, async_db = get_db_clients(api_key)
+    sync_db, async_db = get_db_clients()
     log_msg_stdout = spinner if spinner else sys.stdout
 
     nodes_to_assign, total_target_parallelism = await _select_nodes_to_assign_to_job(
@@ -161,7 +160,7 @@ async def _execute_job(
             "user_python_version": f"3.{sys.version_info.minor}",
             "max_parallelism": max_parallelism,
             "target_parallelism": total_target_parallelism,
-            "user": get_auth_headers(api_key).get("email", "api-key"),
+            "user": get_auth_headers().get("email", "api-key"),
             "started_at": time(),
             "last_ping_from_client": time(),
             "is_background_job": background,
@@ -298,15 +297,14 @@ def remote_parallel_map(
     generator: bool = False,
     spinner: bool = True,
     max_parallelism: Optional[int] = None,
-    api_key: Optional[str] = None,
 ):
     """
     Run an arbitrary Python function on many remote computers in parallel.
 
-    Run provided function_ on each item in inputs at the same time, each on a separate CPU,
-    up to 256 CPUs (as of 1/3/25). If more than 256 inputs are provided, inputs are queued and
+    Run provided function_ on each item in inputs at the same time, each on a separate CPU.
+    If more than inputs than there are cpu's are provided, inputs are queued and
     processed sequentially on each worker. Any exception raised by `function_`
-    (including its stack trace) will be re-raised on the client machine.
+    (including its stack trace) will be re-raised here on the client machine.
 
     Args:
         function_ (Callable):
@@ -315,11 +313,9 @@ def remote_parallel_map(
         inputs (Iterable[Any]):
             An iterable of elements that will be passed to `function_`.
         func_cpu (int, optional):
-            The number of CPUs allocated for each instance of `function_`. The maximum allowable
-            value is 32. Defaults to 1.
+            The number of CPUs allocated for each instance of `function_`. Defaults to 1.
         func_ram (int, optional):
-            The amount of RAM (in GB) allocated for each instance of `function_`. The maximum
-            allowable value is 128. Defaults to 4.
+            The amount of RAM (in GB) allocated for each instance of `function_`. Defaults to 4.
         background (bool, optional):
             If True, returns as soon as all inputs are uploaded and runs the job in the background.
             Defaults to False.
@@ -331,8 +327,6 @@ def remote_parallel_map(
         max_parallelism (int, optional):
             The maximum number of `function_` instances allowed to be running at the same time.
             Defaults to the number of available CPUs divided by `func_cpu`.
-        api_key (str, optional):
-            An API key for use in deployment environments where `burla login` cannot be run.
 
     Returns:
         List[Any] or Generator[Any, None, None]:
@@ -350,11 +344,14 @@ def remote_parallel_map(
         msg += "Email jake@burla.dev if this is really annoying and we will fix it! :)"
         raise ValueError(msg)
 
-    if background and has_explicit_return(function_):
-        print(
-            f"Warning: Function `{function_.__name__}` has an explicit return statement.\n"
-            "Because this job is set to run in the background, any returned objects will be lost!"
-        )
+    try:
+        if background and has_explicit_return(function_):
+            print(
+                f"Warning: Function `{function_.__name__}` has an explicit return statement.\n"
+                "Because this job is set to run in the background, any returned objects will be lost!"
+            )
+    except:
+        pass
 
     job_id = str(uuid4())
     return_queue = Queue()
@@ -375,14 +372,15 @@ def remote_parallel_map(
                 max_parallelism=max_parallelism,
                 background=background,
                 spinner=spinner,
-                api_key=api_key,
             )
         )
 
         if background:
-            demo_host = "https://cluster.burla.dev"
-            host = demo_host if using_demo_cluster() else os.environ["BURLA_API_URL"]
-            job_url = f"{host}/jobs/{job_id}"
+            _, project_id = google.auth.default()
+            client = ServicesClient()
+            service_path = client.service_path(project_id, "us-central1", "burla-main-service")
+            job_url = f"{client.get_service(name=service_path).uri}/jobs/{job_id}"
+
             msg = f"Done uploading inputs.\n"
             msg += f"Job will continue running in the background, monitor progress at: {job_url}"
             spinner.text = msg
@@ -408,13 +406,9 @@ def remote_parallel_map(
             spinner.stop()
 
         try:
-            sync_db, _ = get_db_clients(api_key)
+            sync_db, _ = get_db_clients()
             sync_db.collection("jobs").document(job_id).update({"status": "FAILED"})
-
-            if using_demo_cluster():
-                project_id = "burla-prod"
-            else:
-                _, project_id = google.auth.default()
+            _, project_id = google.auth.default()
 
             # Report errors back to Burla's cloud.
             exc_type, exc_value, exc_traceback = sys.exc_info()

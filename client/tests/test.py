@@ -11,10 +11,6 @@ from time import time, sleep
 from burla import remote_parallel_map
 
 
-# call the locally running instance of Burla!
-os.environ["BURLA_API_URL"] = "http://localhost:5001"
-
-
 def _normally_distributed_random_numbers(quantity):
 
     def clamp(x, lower=0, upper=60):
@@ -63,7 +59,7 @@ def _max_total_runtime(sleep_times, num_workers):
 
 def test_base():
 
-    my_inputs = list(range(10_000_000))
+    my_inputs = list(range(100))
 
     # my_inputs = [1 for _ in range(15_000)]
     # my_inputs[4321] = 90
@@ -90,11 +86,12 @@ def test_base():
 
         # blob_size_mb = len(test_input["blob"]) / 1_000_000
         # print(f"Sleeping for {test_input['sleep_time']}s, blob size: {blob_size_mb:.2f} MB")
-        # sleep(test_input["sleep_time"])
+        sleep(1)
 
         return test_input
 
-    results = remote_parallel_map(simple_test_function, my_inputs)  ##, generator=True)
+    # results = remote_parallel_map(simple_test_function, my_inputs)
+    results = remote_parallel_map(simple_test_function, my_inputs, background=True)
 
     e2e_runtime = time() - start
 

@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "burla"
-version = "1.0.2"
+version = "1.0.3"
 description = "Scale your program across 1000s of computers with one line of code."
 authors = ["Jake Zuliani <jake@burla.dev>"]
 
@@ -17,6 +17,7 @@ tomli = "^2.0.1"
 ipython = "^7.0.0"
 google-cloud-firestore = "^2.20.1"
 aiohttp = "^3.11.14"
+google-cloud-run = "^0.10.17"
 
 [tool.poetry.scripts]
 burla = "burla.__init__:init_cli"

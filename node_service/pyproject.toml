@@ -7,27 +7,14 @@ packages = [{include = "node_service", from = "src"}]
 
 [tool.poetry.dependencies]
 python = "^3.11"
-gunicorn = "^20.1.0"
 docker = "^7.1.0"
 google-cloud-logging = "^3.5.0"
-grpcio = "^1.54.2"
 google-cloud-firestore = "^2.11.1"
-google-cloud-secret-manager = "^2.16.2"
-google-cloud-storage = "^2.10.0"
-cloudpickle = "^2.2.1"
-tblib = "^3.0.0"
-# some of these are dev dependencies but I want the inatalled in "prod" so I can develop in "prod"
-black = "^23.1.0"
-pytest = "^7.4.3"
-six = "^1.16.0"
-google-cloud-run = "^1.0.0"
-werkzeug = "^3.0.1"
 fastapi = "^0.109.0"
 uvicorn = "^0.27.0"
 python-multipart = "^0.0.9"
 aiohttp = "^3.10.3"
 google-cloud-compute = "^1.19.2"
-pytz = "^2024.2"
 
 [build-system]
 requires = ["poetry-core"]

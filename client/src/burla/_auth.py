@@ -52,6 +52,11 @@ def _get_login_response(client_id, attempt=0):
 
 
 def login():
+    """Login to Burla using your Google account. Only necessary to access secure deployments.
+
+    A "secure deployment" is one where, in the settings, only certain users are authorized to view
+    the dashboard and submit jobs.
+    """
     client_id = uuid4().hex
     login_url = f"{_BURLA_BACKEND_URL}/v1/login/{client_id}"
 

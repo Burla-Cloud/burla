@@ -366,19 +366,24 @@ def remote_parallel_map(
             spinner.start()
             spinner.text = f"Preparing to run {len(inputs)} inputs through `{function_.__name__}`"
 
-        asyncio.run(
-            _execute_job(
-                job_id=job_id,
-                return_queue=return_queue,
-                function_=function_,
-                inputs=inputs,
-                func_cpu=func_cpu,
-                func_ram=func_ram,
-                max_parallelism=max_parallelism,
-                background=background,
-                spinner=spinner,
+        def execute_job():
+            asyncio.run(
+                _execute_job(
+                    job_id=job_id,
+                    return_queue=return_queue,
+                    function_=function_,
+                    inputs=inputs,
+                    func_cpu=func_cpu,
+                    func_ram=func_ram,
+                    max_parallelism=max_parallelism,
+                    background=background,
+                    spinner=spinner,
+                )
             )
-        )
+
+        t = Thread(target=execute_job)
+        t.start()
+        t.join()
 
         if background:
             _, project_id = google.auth.default()

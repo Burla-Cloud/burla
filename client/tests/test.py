@@ -4,7 +4,6 @@ The tests here assume the cluster is running in "local-dev-mode".
 
 import heapq
 import math
-import os
 import random
 from time import time, sleep
 
@@ -91,7 +90,7 @@ def test_base():
         return test_input
 
     # results = remote_parallel_map(simple_test_function, my_inputs)
-    results = remote_parallel_map(simple_test_function, my_inputs, background=True)
+    results = remote_parallel_map(simple_test_function, my_inputs)  # , background=True)
 
     e2e_runtime = time() - start
 

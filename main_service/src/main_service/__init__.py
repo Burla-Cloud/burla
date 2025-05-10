@@ -151,13 +151,8 @@ app.include_router(jobs_router)
 app.add_middleware(SessionMiddleware, secret_key=uuid4().hex)
 
 
-# don't move this function! must be declared before static files are mounted to the same path below.
+# don't move this! must be declared before static files are mounted to the same path below.
 @app.get("/")
-def dashboard():
-    return FileResponse("src/main_service/static/index.html")
-
-
-# Add routes for SPA navigation to handle page refreshes
 @app.get("/jobs")
 @app.get("/jobs/{job_id}")
 @app.get("/settings")

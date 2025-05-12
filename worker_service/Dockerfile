@@ -1,7 +1,8 @@
-FROM python:3.11
+ARG PYTHON_VERSION
+FROM python:${PYTHON_VERSION}
 
 ADD . /burla/worker_service
 WORKDIR /burla/worker_service
-RUN python3.11 -m pip install -e .
+RUN python${PYTHON_VERSION} -m pip install -e .
 
 ENTRYPOINT []

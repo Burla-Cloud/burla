@@ -36,14 +36,12 @@ from main_service.helpers import Logger, format_traceback
 @dataclass
 class Container:
     image: int
-    python_executable: str
     python_version: str
 
     @classmethod
     def from_dict(cls, _dict: dict):
         return cls(
             image=_dict["image"],
-            python_executable=_dict["python_executable"],
             python_version=_dict["python_version"],
         )
 

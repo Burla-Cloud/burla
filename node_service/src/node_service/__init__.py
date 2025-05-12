@@ -60,7 +60,6 @@ from node_service.helpers import Logger
 
 class Container(BaseModel):
     image: str
-    python_executable: str
     python_version: str
 
 

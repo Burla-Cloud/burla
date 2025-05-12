@@ -106,7 +106,7 @@ def reboot_containers(
             for i in range(INSTANCE_N_CPUS):
                 # have just one worker send logs to gcl, too many will break gcl
                 send_logs_to_gcl = False  # (i == 0) and (not IN_LOCAL_DEV_MODE)
-                args = (spec.python_version, spec.python_executable, spec.image, docker_client)
+                args = (spec.python_version, spec.image, docker_client)
                 futures.append(executor.submit(Worker, *args, send_logs_to_gcl=send_logs_to_gcl))
 
         executor.shutdown(wait=True)

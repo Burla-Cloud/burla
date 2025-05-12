@@ -12,7 +12,6 @@ DEFAULT_CLUSTER_CONFIG = {
             "containers": [
                 {
                     "image": "jakezuliani/burla_worker_service:latest",
-                    "python_executable": "python3.11",
                     "python_version": "3.11",
                 }
             ],

@@ -15,34 +15,31 @@ export interface BurlaNode {
 }
 
 export interface BurlaJob {
-  id: string;
-  status: JobsStatus | null;
-  user: string;
-  checked: boolean;
-  n_inputs: number;
-  n_results: number; 
-  started_at?: Date; // parsed from UNIX timestamp in jobContext & jobs_paginated
+    id: string;
+    status: JobsStatus | null;
+    user: string;
+    checked: boolean;
+    n_inputs: number;
+    n_results: number;
+    started_at?: Date; // parsed from UNIX timestamp in jobContext & jobs_paginated
 }
-
-
 
 export interface Settings {
     containerImage: string;
-    pythonExecutable: string;
     pythonVersion: string;
     machineType: string;
     machineQuantity: number;
     users: string[];
-  }
+}
 
-  export interface ServiceAccount {
+export interface ServiceAccount {
     id: string;
     name: string;
     token: string;
-  }
+}
 
-  export interface LogEntry {
+export interface LogEntry {
     created_at: number;
     message: string;
     id?: string;
-  }
+}

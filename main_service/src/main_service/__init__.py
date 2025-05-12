@@ -35,7 +35,6 @@ LOCAL_DEV_CONFIG = {  # <- config used only in local dev mode
             "containers": [
                 {
                     "image": "us-docker.pkg.dev/burla-test/burla-worker-service/burla-worker-service:latest",
-                    "python_executable": "python3.11",
                     "python_version": "3.11",
                 },
             ],
@@ -51,7 +50,6 @@ DEFAULT_CONFIG = {  # <- config used only when config is missing from firestore
             "containers": [
                 {
                     "image": "jakezuliani/burla_worker_service:latest",
-                    "python_executable": "python3.11",
                     "python_version": "3.11",
                 },
             ],

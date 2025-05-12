@@ -21,7 +21,6 @@ class Worker:
     def __init__(
         self,
         python_version: str,
-        python_executable: str,
         image: str,
         docker_client: docker.APIClient,
         send_logs_to_gcl: bool = False,
@@ -36,14 +35,21 @@ class Worker:
         self.docker_client = docker_client
         self.python_version = python_version
 
+        # this is a signifigant assumption! (it's in the tooltip so users should be aware?)
+        self.python_executable = f"python{self.python_version}"
+
         # pull image
-        image_stored_in_gcp = "docker.pkg.dev" in image or "gcr.io" in image
-        if image_stored_in_gcp:
+        is_private_image = f"docker.pkg.dev/{PROJECT_ID}" in image
+        is_private_image = is_private_image or f"gcr.io/{PROJECT_ID}" in image
+
+        if is_private_image:
+            # use current GCP vm's credentials to pull the image
             CREDENTIALS.refresh(Request())
             auth_config = {"username": "oauth2accesstoken", "password": CREDENTIALS.token}
             docker_client.pull(image, auth_config=auth_config)
         else:
             docker_client.pull(image)
+
         try:
             # ODDLY, if docker_client.pull fails to pull the image, it will NOT throw any error >:(
             # check here that the image was actually pulled and exists on disk,
@@ -58,7 +64,7 @@ class Worker:
         workers_arg = ["--workers", "1"]
         timeout_arg = ["--timeout-keep-alive", "30"]
         uvicorn_cmd_args = [*host_arg, *port_arg, *workers_arg, *timeout_arg]
-        cmd = [python_executable, "-m", "uvicorn", "worker_service:app", *uvicorn_cmd_args]
+        cmd = [self.python_executable, "-m", "uvicorn", "worker_service:app", *uvicorn_cmd_args]
         if IN_LOCAL_DEV_MODE:
             cmd.append("--reload")
             host_config = docker_client.create_host_config(

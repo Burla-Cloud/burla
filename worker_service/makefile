@@ -1,109 +1,70 @@
 .ONESHELL:
 .SILENT:
 
-WEBSERVICE_NAME = burla-worker-service
-PYTHON_MODULE_NAME = worker_service
-
-ARTIFACT_REPO_NAME := $(WEBSERVICE_NAME)
-ARTIFACT_PKG_NAME := $(WEBSERVICE_NAME)
-PROD_IMAGE_BASE_NAME := us-docker.pkg.dev/burla-prod/$(ARTIFACT_REPO_NAME)/$(ARTIFACT_PKG_NAME)
+PYTHON_VERSIONS = 3.10 3.11 3.12 3.13
+REPO = cluster-default
 
 
 service:
 	python3.11 -m gunicorn -t 60 -b 0.0.0.0:8080 worker_service:app
 
 
-publish-prod-image:
+publish:
 	set -e; \
-	PROJECT_ID=$$(gcloud config get-value project 2>/dev/null); \
-	TEST_IMAGE_BASE_NAME=$$( echo \
-		"us-docker.pkg.dev/$${PROJECT_ID}/$(ARTIFACT_REPO_NAME)/$(ARTIFACT_PKG_NAME)" \
-	); \
-	TEST_IMAGE_TAG=$$( \
-		gcloud artifacts tags list \
-			--package=$(ARTIFACT_PKG_NAME) \
-			--location=us \
-			--repository=$(ARTIFACT_REPO_NAME) \
-			--project $${PROJECT_ID} \
-			2>&1 | grep -Eo '^[0-9]+' | sort -n | tail -n 1 \
-	); \
-	TEST_IMAGE_NAME=$${TEST_IMAGE_BASE_NAME}:$${TEST_IMAGE_TAG}; \
-	DOCKERHUB_TOKEN=$$( \
-		gcloud secrets versions access latest \
-			--secret=jakes-docker-access-token \
-			--project=burla-prod \
-	); \
-	echo $${DOCKERHUB_TOKEN} | docker login -u jakezuliani --password-stdin; \
-	:; \
-	docker tag $${TEST_IMAGE_NAME} jakezuliani/burla_worker_service:$${TEST_IMAGE_TAG}; \
-	docker push jakezuliani/burla_worker_service:$${TEST_IMAGE_TAG}; \
-	docker tag $${TEST_IMAGE_NAME} jakezuliani/burla_worker_service:latest; \
-	docker push jakezuliani/burla_worker_service:latest
+	VERSIONS="$(PYTHON_VERSIONS)"; \
+	printf "%s\n" $$VERSIONS | parallel --line-buffer -j4 '\
+		set -e; \
+		VERSION={}; \
+		PROJECT_ID=$$(gcloud config get-value project 2>/dev/null); \
+		BASE_NAME="us-docker.pkg.dev/$${PROJECT_ID}/$(REPO)/$${VERSION}"; \
+		TAG=$$(gcloud artifacts tags list --package=$${VERSION} --location=us --repository=$(REPO) --project $${PROJECT_ID} 2>/dev/null | grep -Eo "^[0-9]+" | sort -n | tail -n1); \
+		DOCKERHUB_TOKEN=$$(gcloud secrets versions access latest --secret=jakes-docker-access-token --project=burla-prod); \
+		echo $${DOCKERHUB_TOKEN} | docker login -u jakezuliani --password-stdin; \
+		docker tag $${BASE_NAME}:$${TAG} burlacloud/default-image-py$${VERSION}:$${TAG}; \
+		docker push burlacloud/default-image-py$${VERSION}:$${TAG}; \
+		docker tag $${BASE_NAME}:$${TAG} burlacloud/default-image-py$${VERSION}:latest; \
+		docker push burlacloud/default-image-py$${VERSION}:latest'
 
 
-image:
+images:
 	set -e; \
 	printf "$$(date "+%Y-%m-%d %H:%M:%S")" > last_image_pushed_at.txt; \
-	PROJECT_ID=$$(gcloud config get-value project 2>/dev/null); \
-	TEST_IMAGE_BASE_NAME=$$( echo \
-		"us-docker.pkg.dev/$${PROJECT_ID}/$(ARTIFACT_REPO_NAME)/$(ARTIFACT_PKG_NAME)" \
-	); \
-	TEST_IMAGE_TAG=$$( \
-		gcloud artifacts tags list \
-			--package=$(ARTIFACT_PKG_NAME) \
-			--location=us \
-			--repository=$(ARTIFACT_REPO_NAME) \
-			--project $${PROJECT_ID} \
-			2>&1 | grep -Eo '^[0-9]+' | sort -n | tail -n 1 \
-	); \
-	NEW_TEST_IMAGE_TAG=$$(($${TEST_IMAGE_TAG} + 1)); \
-	TEST_IMAGE_NAME_SEQUENTIAL=$$( echo $${TEST_IMAGE_BASE_NAME}:$${NEW_TEST_IMAGE_TAG} ); \
-	TEST_IMAGE_NAME_LATEST=$$( echo $${TEST_IMAGE_BASE_NAME}:latest ); \
-	docker build \
-		--platform linux/amd64 \
-		--build-arg PYTHON_VERSION=3.11 \
-		-t $${TEST_IMAGE_NAME_SEQUENTIAL} .; \
-	docker push $${TEST_IMAGE_NAME_SEQUENTIAL}; \
-	docker tag $${TEST_IMAGE_NAME_SEQUENTIAL} $${TEST_IMAGE_NAME_LATEST}; \
-	docker push $${TEST_IMAGE_NAME_LATEST}; \
-	echo "Successfully built Docker Image:"; \
-	echo "$${TEST_IMAGE_NAME_SEQUENTIAL}"; \
-	echo "$${TEST_IMAGE_NAME_LATEST}"; \
-	echo "";
+	VERSIONS="$(PYTHON_VERSIONS)"; \
+	printf "%s\n" $$VERSIONS | parallel --line-buffer -j4 '\
+		set -e; \
+		VERSION={}; \
+		PROJECT_ID=$$(gcloud config get-value project 2>/dev/null); \
+		BASE_NAME="us-docker.pkg.dev/$${PROJECT_ID}/$(REPO)/$${VERSION}"; \
+		TAG=$$(gcloud artifacts tags list --package=$${VERSION} --location=us --repository=$(REPO) --project $${PROJECT_ID} 2>/dev/null | grep -Eo "^[0-9]+" | sort -n | tail -n1); \
+		NAME="$${BASE_NAME}:$$(($${TAG} + 1))"; \
+		docker build --platform linux/amd64 --build-arg PV=$${VERSION} -t "$${NAME}" -t "$${BASE_NAME}:latest" .; \
+		docker push "$${NAME}"; \
+		docker push "$${BASE_NAME}:latest"; \
+		echo "Successfully built default image for $${VERSION}"'
 
-image_same_env:
+
+images_same_env:
 	set -e; \
 	printf "$$(date "+%Y-%m-%d %H:%M:%S")" > last_image_pushed_at.txt; \
-	PROJECT_ID=$$(gcloud config get-value project 2>/dev/null); \
-	TEST_IMAGE_BASE_NAME=$$( echo \
-		"us-docker.pkg.dev/$${PROJECT_ID}/$(ARTIFACT_REPO_NAME)/$(ARTIFACT_PKG_NAME)" \
-	); \
-	TEST_IMAGE_TAG=$$( \
-		gcloud artifacts tags list \
-			--package=$(ARTIFACT_PKG_NAME) \
-			--location=us \
-			--repository=$(ARTIFACT_REPO_NAME) \
-			--project $${PROJECT_ID} \
-			2>&1 | grep -Eo '^[0-9]+' | sort -n | tail -n 1 \
-	); \
-	NEW_TEST_IMAGE_TAG=$$(($${TEST_IMAGE_TAG} + 1)); \
-	TEST_IMAGE_NAME_SEQUENTIAL=$$( echo $${TEST_IMAGE_BASE_NAME}:$${NEW_TEST_IMAGE_TAG} ); \
-	TEST_IMAGE_NAME_LATEST=$$( echo $${TEST_IMAGE_BASE_NAME}:latest ); \
-	docker build --platform linux/amd64 -t $${TEST_IMAGE_NAME_SEQUENTIAL} -f Dockerfile_same_env .; \
-	docker push $${TEST_IMAGE_NAME_SEQUENTIAL}; \
-	docker tag $${TEST_IMAGE_NAME_SEQUENTIAL} $${TEST_IMAGE_NAME_LATEST}; \
-	docker push $${TEST_IMAGE_NAME_LATEST}; \
-	echo "Successfully built Docker Image:"; \
-	echo "$${TEST_IMAGE_NAME_SEQUENTIAL}"; \
-	echo "$${TEST_IMAGE_NAME_LATEST}"; \
-	echo "";
+	VERSIONS="$(PYTHON_VERSIONS)"; \
+	printf "%s\n" $$VERSIONS | parallel --line-buffer -j4 '\
+		set -e; \
+		VERSION={}; \
+		PROJECT_ID=$$(gcloud config get-value project 2>/dev/null); \
+		BASE_NAME="us-docker.pkg.dev/$${PROJECT_ID}/$(REPO)/$${VERSION}"; \
+		TAG=$$(gcloud artifacts tags list --package=$${VERSION} --location=us --repository=$(REPO) --project $${PROJECT_ID} 2>/dev/null | grep -Eo "^[0-9]+" | sort -n | tail -n1); \
+		NAME="$${BASE_NAME}:$$(($${TAG} + 1))"; \
+		docker build --platform linux/amd64 --build-arg BASE_IMAGE=$${BASE_NAME} -t "$${NAME}" -t "$${BASE_NAME}:latest" -f Dockerfile_same_env .; \
+		docker push "$${NAME}"; \
+		docker push "$${BASE_NAME}:latest"; \
+		echo "Successfully built default image for $${VERSION}"'
 
+
+# uses 3.10, I should develop in the oldest supported version.
 container:
 	set -e; \
 	PROJECT_ID=$$(gcloud config get-value project 2>/dev/null); \
-	TEST_IMAGE_NAME=$$( echo \
-		"us-docker.pkg.dev/$${PROJECT_ID}/$(ARTIFACT_REPO_NAME)/$(ARTIFACT_PKG_NAME):latest" \
-	); \
+	IMAGE="us-docker.pkg.dev/$${PROJECT_ID}/$(REPO)/3.10:latest"; \
 	docker run --rm -it \
 		--name worker_service \
 		-v $(PWD):/burla/worker_service \
@@ -114,4 +75,4 @@ container:
 		-e HOST_PWD=$(PWD) \
 		-e HOST_HOME_DIR=$${HOME} \
 		-p 8080:8080 \
-		$${TEST_IMAGE_NAME} bash
+		$${IMAGE} bash

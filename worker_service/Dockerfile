@@ -1,8 +1,8 @@
-ARG PYTHON_VERSION
-FROM python:${PYTHON_VERSION}
+ARG PV
+FROM python:${PV}
 
 ADD . /burla/worker_service
 WORKDIR /burla/worker_service
-RUN python${PYTHON_VERSION} -m pip install -e .
+RUN python${PV} -m pip install -e .
 
 ENTRYPOINT []

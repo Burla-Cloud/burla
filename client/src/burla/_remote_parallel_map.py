@@ -38,6 +38,10 @@ from burla._helpers import (
 )
 
 
+class NodeConflict(Exception):
+    pass
+
+
 class NoNodes(Exception):
     pass
 
@@ -190,7 +194,10 @@ async def _execute_job(
                 return node
             except Exception as e:
                 node_name = node["instance_name"]
-                log_msg_stdout.write(f"Failed to assign {node_name}! ignoring error: {e}")
+                if response.status == 409:
+                    raise NodeConflict(f"ERROR from {node_name}: {await response.text()}")
+                else:
+                    log_msg_stdout.write(f"Failed to assign {node_name}! ignoring error: {e}")
 
     def _on_new_log_message(col_snapshot, changes, read_time):
         for change in changes:

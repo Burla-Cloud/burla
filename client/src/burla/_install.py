@@ -165,33 +165,32 @@ def _install(spinner):
         spinner.text = "Creating Firestore database ... Done."
         spinner.ok("✓")
 
-    # # Deploy cloud run service
-    # spinner.text = "Deploying burla-main-service to Google Cloud Run ... "
-    # spinner.start()
-    # _run_command(
-    #     f"gcloud run deploy burla-main-service "
-    #     f"--image=burlacloud/main-service:latest "
-    #     f"--project {PROJECT_ID} "
-    #     f"--region=us-central1 "
-    #     f"--min-instances 1 "
-    #     f"--max-instances 20 "
-    #     f"--memory 4Gi "
-    #     f"--cpu 1 "
-    #     f"--timeout 360 "
-    #     f"--concurrency 20 "
-    #     f"--allow-unauthenticated"
-    # )
-    # _run_command(
-    #     f"gcloud run services update-traffic burla-main-service "
-    #     f"--project {PROJECT_ID} "
-    #     f"--region=us-central1 "
-    #     f"--to-latest"
-    # )
-    # spinner.text = "Deploying Burla-Main-Service to Google Cloud Run ... Done."
-    # spinner.ok("✓")
+    # Deploy cloud run service
+    spinner.text = "Deploying burla-main-service to Google Cloud Run ... "
+    spinner.start()
+    _run_command(
+        f"gcloud run deploy burla-main-service "
+        f"--image=burlacloud/main-service:latest "
+        f"--project {PROJECT_ID} "
+        f"--region=us-central1 "
+        f"--min-instances 1 "
+        f"--max-instances 20 "
+        f"--memory 4Gi "
+        f"--cpu 1 "
+        f"--timeout 360 "
+        f"--concurrency 20 "
+        f"--allow-unauthenticated"
+    )
+    _run_command(
+        f"gcloud run services update-traffic burla-main-service "
+        f"--project {PROJECT_ID} "
+        f"--region=us-central1 "
+        f"--to-latest"
+    )
+    spinner.text = "Deploying Burla-Main-Service to Google Cloud Run ... Done."
+    spinner.ok("✓")
 
-    # dashboard_url = main_service_url()
-    dashboard_url = "https://burla-main-service-140225958505.us-central1.run.app"
+    dashboard_url = main_service_url()
 
     msg = f"\nSuccess!\nView your new dashboard: {dashboard_url}\n"
     msg += f"Quickstart:\n"

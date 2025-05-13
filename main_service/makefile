@@ -18,56 +18,8 @@ build-frontend:
 	cd ..; \
 	printf "$$(date +%s)" > .frontend_last_built_at.txt
 
-deploy-test:
-	set -e; \
-	PROJECT_ID=$$(gcloud config get-value project 2>/dev/null); \
-	TEST_IMAGE_BASE_NAME=$$( echo \
-		"us-docker.pkg.dev/$${PROJECT_ID}/$(ARTIFACT_REPO_NAME)/$(ARTIFACT_PKG_NAME)" \
-	); \
-	TEST_IMAGE_TAG=$$( \
-		gcloud artifacts tags list \
-			--package=$(ARTIFACT_PKG_NAME) \
-			--location=us \
-			--repository=$(ARTIFACT_REPO_NAME) \
-			--project=$${PROJECT_ID} \
-			2>&1 | grep -Eo '^[0-9]+' | sort -n | tail -n 1 \
-	); \
-	TEST_IMAGE_NAME=$$( echo $${TEST_IMAGE_BASE_NAME}:$${TEST_IMAGE_TAG} ); \
-	gcloud run deploy $(WEBSERVICE_NAME) \
-		--image=$${TEST_IMAGE_NAME} \
-		--project $${PROJECT_ID} \
-		--region=us-central1 \
-		--min-instances 0 \
-		--max-instances 5 \
-		--memory 2Gi \
-		--cpu 1 \
-		--timeout 360 \
-		--concurrency 20 \
-		--allow-unauthenticated; \
-	echo $${PROJECT_ID}; \
-	gcloud run services update-traffic $(WEBSERVICE_NAME) \
-		--project $${PROJECT_ID} \
-		--region=us-central1 \
-		--to-latest
 
-deploy-prod:
-	gcloud run deploy $(WEBSERVICE_NAME) \
-		--image=jakezuliani/burla_main_service:latest \
-		--project burla-prod \
-		--region=us-central1 \
-		--min-instances 1 \
-		--max-instances 20 \
-		--memory 4Gi \
-		--cpu 1 \
-		--timeout 360 \
-		--concurrency 20 \
-		--allow-unauthenticated; \
-	gcloud run services update-traffic $(WEBSERVICE_NAME) \
-		--project burla-prod \
-		--region=us-central1 \
-		--to-latest
-
-publish-prod-image:
+publish:
 	set -e; \
 	PROJECT_ID=$$(gcloud config get-value project 2>/dev/null); \
 	TEST_IMAGE_BASE_NAME=$$( echo \
@@ -89,10 +41,10 @@ publish-prod-image:
 	); \
 	echo $${DOCKERHUB_TOKEN} | docker login -u jakezuliani --password-stdin; \
 	:; \
-	docker tag $${TEST_IMAGE_NAME} jakezuliani/burla_main_service:$${TEST_IMAGE_TAG}; \
-	docker push jakezuliani/burla_main_service:$${TEST_IMAGE_TAG}; \
-	docker tag $${TEST_IMAGE_NAME} jakezuliani/burla_main_service:latest; \
-	docker push jakezuliani/burla_main_service:latest
+	docker tag $${TEST_IMAGE_NAME} burlacloud/main-service:$${TEST_IMAGE_TAG}; \
+	docker push burlacloud/main-service:$${TEST_IMAGE_TAG}; \
+	docker tag $${TEST_IMAGE_NAME} burlacloud/main-service:latest; \
+	docker push burlacloud/main-service:latest
 
 image:
 	set -e; \

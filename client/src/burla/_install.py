@@ -6,13 +6,14 @@ from yaspin import yaspin
 from google.cloud.firestore import Client
 
 
+python_version = f"{sys.version_info.major}.{sys.version_info.minor}"
 DEFAULT_CLUSTER_CONFIG = {
     "Nodes": [
         {
             "containers": [
                 {
-                    "image": "jakezuliani/burla_worker_service:latest",
-                    "python_version": "3.11",
+                    "image": f"burlacloud/default-image-py{python_version}:latest",
+                    "python_version": python_version,
                 }
             ],
             "inactivity_shutdown_time_sec": 300,
@@ -169,7 +170,7 @@ def _install(spinner):
     spinner.start()
     _run_command(
         f"gcloud run deploy burla-main-service "
-        f"--image=jakezuliani/burla_main_service:latest "
+        f"--image=burlacloud/main-service:latest "
         f"--project {PROJECT_ID} "
         f"--region=us-central1 "
         f"--min-instances 1 "

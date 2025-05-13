@@ -86,13 +86,13 @@ deploy-prod:
 	$(MAKE) __check-local-services-up-to-date && echo "" || exit 1; \
 	:; \
 	cd ./worker_service; \
-	$(MAKE) publish-prod-image; \
+	$(MAKE) publish; \
 	cd ..; \
 	cd ./main_service; \
 	$(MAKE) image; \
-	$(MAKE) publish-prod-image;
+	$(MAKE) publish;
 
-worker:
+new-worker:
 	set -e; \
 	cd ./worker_service; \
 	$(MAKE) image_same_env

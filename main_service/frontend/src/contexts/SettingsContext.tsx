@@ -8,8 +8,8 @@ interface SettingsContextType {
 }
 
 const defaultSettings: SettingsData = {
-    containerImage: "jakezuliani/burla_worker_service:latest",
-    pythonVersion: "3.11",
+    containerImage: "burlacloud/default-image-py3.12",
+    pythonVersion: "3.12",
     machineType: "n4-standard-4",
     machineQuantity: 1,
     users: [],

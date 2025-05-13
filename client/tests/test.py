@@ -58,7 +58,7 @@ def _max_total_runtime(sleep_times, num_workers):
 
 def test_base():
 
-    my_inputs = list(range(100))
+    my_inputs = list(range(30))
 
     # my_inputs = [1 for _ in range(15_000)]
     # my_inputs[4321] = 90

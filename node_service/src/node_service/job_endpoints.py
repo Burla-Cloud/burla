@@ -231,13 +231,11 @@ async def execute(
     if not workers_to_keep:
         msg = "No compatible containers.\n"
         msg += f"User is running python version {user_python_version}, "
-        cluster_python_versions = list(set([e.python_version for e in SELF["workers"]]))
-        cluster_python_versions_msg = ", ".join(cluster_python_versions[:-1])
-        cluster_python_versions_msg += f", and {cluster_python_versions[-1]}"
-        msg += f"containers in the cluster are running: {cluster_python_versions_msg}.\n"
+        versions = list(set([e.python_version for e in SELF["workers"]]))
+        msg += f"containers in the cluster are running: {', '.join(versions)}.\n"
         msg += "To fix this you can either:\n"
-        msg += f" - update the cluster to run containers with python v{user_python_version}\n"
-        msg += f" - update your local python version to be one of {cluster_python_versions}"
+        msg += f" - update the cluster to run containers with python{user_python_version}\n"
+        msg += f" - update your local python version to be one of {versions}"
         return Response(msg, status_code=409)
 
     async def assign_worker(session, worker):

@@ -63,8 +63,8 @@ export const SettingsForm: React.FC<SettingsFormProps> = ({ isEditing }) => {
                                                     This can be the URI of any image with Python and
                                                     Burla's worker service installed.
                                                     <br />
-                                                    Private images stored in Artifact Registry or
-                                                    GCR work here too!
+                                                    Private images stored in your Artifact Registry
+                                                    or GCR work here too!
                                                 </p>
                                             </TooltipContent>
                                         </Tooltip>

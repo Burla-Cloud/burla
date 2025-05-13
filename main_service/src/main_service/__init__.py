@@ -34,8 +34,8 @@ LOCAL_DEV_CONFIG = {  # <- config used only in local dev mode
         {
             "containers": [
                 {
-                    "image": "us-docker.pkg.dev/burla-test/burla-worker-service/burla-worker-service:latest",
-                    "python_version": "3.11",
+                    "image": "us-docker.pkg.dev/burla-test/cluster-default/3.10:latest",
+                    "python_version": "3.10",
                 },
             ],
             "machine_type": "n4-standard-1",  # should match `INSTANCE_N_CPUS` in node svc
@@ -49,12 +49,12 @@ DEFAULT_CONFIG = {  # <- config used only when config is missing from firestore
         {
             "containers": [
                 {
-                    "image": "jakezuliani/burla_worker_service:latest",
-                    "python_version": "3.11",
+                    "image": "burlacloud/default-image-py3.12",
+                    "python_version": "3.12",
                 },
             ],
-            "machine_type": "n4-standard-2",
-            "quantity": 2,
+            "machine_type": "n4-standard-4",
+            "quantity": 1,
             "inactivity_shutdown_time_sec": 60 * 10,
         }
     ]

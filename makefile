@@ -33,7 +33,7 @@ local-dev:
 		-e HOST_PWD=$(PWD) \
 		-e HOST_HOME_DIR=$${HOME} \
 		-p 5001:5001 \
-		--entrypoint python3.11 \
+		--entrypoint python3.13 \
 		$(MAIN_SVC_IMAGE_NAME) -m uvicorn main_service:app --host 0.0.0.0 --port 5001 --reload \
 			--reload-exclude main_service/frontend/node_modules/
 
@@ -49,7 +49,7 @@ remote-dev:
 		-v ~/.config/gcloud:/root/.config/gcloud \
 		-e GOOGLE_CLOUD_PROJECT=$(PROJECT_ID) \
 		-p 5001:5001 \
-		--entrypoint python3.11 \
+		--entrypoint python3.13 \
 		$(MAIN_SVC_IMAGE_NAME) -m uvicorn main_service:app --host 0.0.0.0 --port 5001 --reload \
 			--reload-exclude main_service/frontend/node_modules/
 
@@ -86,13 +86,13 @@ deploy-prod:
 	$(MAKE) __check-local-services-up-to-date && echo "" || exit 1; \
 	:; \
 	cd ./worker_service; \
-	$(MAKE) publish-prod-image; \
+	$(MAKE) publish; \
 	cd ..; \
 	cd ./main_service; \
 	$(MAKE) image; \
-	$(MAKE) publish-prod-image;
+	$(MAKE) publish;
 
-worker:
+new-worker:
 	set -e; \
 	cd ./worker_service; \
 	$(MAKE) image_same_env

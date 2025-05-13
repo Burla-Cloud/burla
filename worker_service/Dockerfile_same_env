@@ -1,7 +1,5 @@
-FROM us-docker.pkg.dev/burla-test/burla-worker-service/burla-worker-service:latest
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}:latest
 
+# works because worker_service in installed in -e mode.
 ADD . /burla/worker_service
-# WORKDIR /burla/worker_service
-# RUN python3.11 -m pip install -e .
-
-ENTRYPOINT []

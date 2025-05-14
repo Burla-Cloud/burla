@@ -1129,7 +1129,7 @@ files = [
 
 [[package]]
 name = "httpcore"
-version = "1.0.9"
+version = "1.0.10"
 description = "A minimal low-level HTTP client."
 optional = false
 python-versions = ">=3.8"

@@ -18,7 +18,7 @@ from starlette.concurrency import run_in_threadpool
 from fastapi import FastAPI, Request, BackgroundTasks, Depends
 from fastapi.responses import Response
 from starlette.datastructures import UploadFile
-from google.cloud import logging
+from google.cloud import logging, secretmanager
 from google.cloud.compute_v1 import InstancesClient
 
 __version__ = "1.0.10"
@@ -31,6 +31,11 @@ INSTANCE_NAME = os.environ["INSTANCE_NAME"]
 INACTIVITY_SHUTDOWN_TIME_SEC = int(os.environ.get("INACTIVITY_SHUTDOWN_TIME_SEC"))
 INSTANCE_N_CPUS = 1 if IN_LOCAL_DEV_MODE else os.cpu_count()
 GCL_CLIENT = logging.Client().logger("node_service", labels=dict(INSTANCE_NAME=INSTANCE_NAME))
+
+secret_client = secretmanager.SecretManagerServiceClient()
+secret_name = f"projects/{PROJECT_ID}/secrets/burla-cluster-id-token/versions/latest"
+response = secret_client.access_secret_version(request={"name": secret_name})
+CLUSTER_ID_TOKEN = response.payload.data.decode("UTF-8")
 
 
 # SELF = state of this current instance of the node service

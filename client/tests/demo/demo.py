@@ -4,10 +4,14 @@ from burla import remote_parallel_map
 
 def my_function(my_input):
 
+    print("hi")
+
     sleep(1)
 
 
-my_inputs = list(range(10))
+my_inputs = list(range(1000000))
 
 
-remote_parallel_map(my_function, my_inputs)
+print("starting")
+
+remote_parallel_map(my_function, my_inputs, background=True)

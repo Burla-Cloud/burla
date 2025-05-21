@@ -1,4 +1,3 @@
-import os
 import sys
 import pickle
 import json
@@ -25,7 +24,7 @@ from google.cloud.firestore_v1.async_client import AsyncClient
 from yaspin import Spinner
 
 from burla import __version__, _BURLA_BACKEND_URL
-from burla._auth import get_auth_headers
+from burla._auth import get_auth_headers, AuthException
 from burla._background_threads import (
     upload_inputs,
     send_alive_pings,
@@ -154,9 +153,10 @@ async def _execute_job(
     )
 
     try:
-        user_id = get_auth_headers().get("email", "api-key")
-    except:
-        user_id = "<unauthenticated-user>"
+        auth_headers = get_auth_headers()
+        user_email = get_auth_headers()["email"]
+    except AuthException:
+        user_email = "<unauthenticated-user>"
 
     job_ref = async_db.collection("jobs").document(job_id)
     await job_ref.set(
@@ -169,7 +169,7 @@ async def _execute_job(
             "user_python_version": f"3.{sys.version_info.minor}",
             "max_parallelism": max_parallelism,
             "target_parallelism": total_target_parallelism,
-            "user": user_id,
+            "user": user_email,
             "started_at": time(),
             "last_ping_from_client": time(),
             "is_background_job": background,
@@ -438,7 +438,7 @@ def remote_parallel_map(
             traceback_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
             traceback_str = "".join(traceback_details)
             json = {"project_id": project_id, "message": exc_type, "traceback": traceback_str}
-            requests.post(f"{_BURLA_BACKEND_URL}/v1/telemetry/alert", json=json, timeout=1)
+            requests.post(f"{_BURLA_BACKEND_URL}/v1/telemetry/log/ERROR", json=json, timeout=1)
         except Exception:
             pass
 

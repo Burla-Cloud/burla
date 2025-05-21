@@ -29,7 +29,7 @@ from google.cloud.compute_v1 import (
     Scheduling,
 )
 
-from main_service import PROJECT_ID, CREDENTIALS, IN_LOCAL_DEV_MODE
+from main_service import PROJECT_ID, CREDENTIALS, IN_LOCAL_DEV_MODE, CLUSTER_ID_TOKEN
 from main_service.helpers import Logger, format_traceback
 
 
@@ -166,9 +166,9 @@ class Node:
 
     def reboot(self):
         try:
-            response = requests.post(f"{self.host}/reboot")
+            headers = {"Authorization": f"Bearer {CLUSTER_ID_TOKEN}", "X-Project-ID": PROJECT_ID}
+            response = requests.post(f"{self.host}/reboot", headers=headers)
             response.raise_for_status()
-            pass
         except requests.exceptions.HTTPError as e:
             if not "409" in str(e):  # 409 means node is already rebooting.
                 raise e

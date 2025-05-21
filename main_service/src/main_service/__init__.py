@@ -2,16 +2,16 @@ import sys
 import os
 import json
 import traceback
+import aiohttp
 from uuid import uuid4
 from time import time, sleep
 from typing import Callable
 from pathlib import Path
-from requests.exceptions import HTTPError
 from contextlib import asynccontextmanager
 
 import google.auth
-from google.cloud import firestore, logging
-from fastapi.responses import Response, FileResponse
+from google.cloud import firestore, logging, secretmanager
+from fastapi.responses import Response, FileResponse, RedirectResponse
 from fastapi import FastAPI, Request, BackgroundTasks, Depends
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
@@ -28,6 +28,11 @@ CREDENTIALS, PROJECT_ID = google.auth.default()
 BURLA_BACKEND_URL = "https://backend.burla.dev"
 GCL_CLIENT = logging.Client().logger("main_service")
 DB = firestore.Client(database="burla")
+
+secret_client = secretmanager.SecretManagerServiceClient()
+secret_name = f"projects/{PROJECT_ID}/secrets/burla-cluster-id-token/versions/latest"
+response = secret_client.access_secret_version(request={"name": secret_name})
+CLUSTER_ID_TOKEN = response.payload.data.decode("UTF-8")
 
 LOCAL_DEV_CONFIG = {  # <- config used only in local dev mode
     "Nodes": [
@@ -60,7 +65,7 @@ DEFAULT_CONFIG = {  # <- config used only when config is missing from firestore
     ]
 }
 
-from main_service.helpers import validate_headers_and_login, Logger, format_traceback
+from main_service.helpers import Logger, format_traceback
 
 
 async def get_request_json(request: Request):
@@ -146,7 +151,6 @@ app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None)
 app.include_router(cluster_router)
 app.include_router(settings_router)
 app.include_router(jobs_router)
-app.add_middleware(SessionMiddleware, secret_key=uuid4().hex)
 
 
 # don't move this! must be declared before static files are mounted to the same path below.
@@ -154,7 +158,7 @@ app.add_middleware(SessionMiddleware, secret_key=uuid4().hex)
 @app.get("/jobs")
 @app.get("/jobs/{job_id}")
 @app.get("/settings")
-def spa_routes():
+def dashboard():
     return FileResponse("src/main_service/static/index.html")
 
 
@@ -163,73 +167,76 @@ app.mount("/", StaticFiles(directory="src/main_service/static"), name="static")
 
 
 @app.middleware("http")
-async def login__log_and_time_requests__log_errors(request: Request, call_next):
+async def catch_errors(request: Request, call_next):
     """
     Fastapi `@app.exception_handler` will completely hide errors if middleware is used.
     Catching errors in a `Depends` function will not distinguish
         http errors originating here vs other services.
     """
-    start = time()
-    request.state.uuid = uuid4().hex
-    url_path = Path(request.url.path)
-
-    # Check if requesting a static file from root URL
-    static_dir = Path("src/main_service/static")
-    requested_file = static_dir / url_path.relative_to("/")
-    requesting_static_file = requested_file.exists() and requested_file.is_file()
-
-    public_endpoints = [
-        "/",
-        "/v1/cluster",
-        "/v1/cluster/restart",
-        "/v1/cluster/shutdown",
-        "/v1/job_context",
-        "/jobs",
-        "/v1/service-accounts",
-        "/v1/settings",
-        "/v1/service-accounts/",
-    ]
-    requesting_public_endpoint = any(
-        str(url_path).startswith(endpoint) for endpoint in public_endpoints
-    )
-    request_requires_auth = not (requesting_public_endpoint or requesting_static_file)
-
-    if request_requires_auth:
-        try:
-            user_info = validate_headers_and_login(request)
-            request.state.user_email = user_info.get("email")
-        except HTTPError as e:
-            if "401" in str(e):
-                return Response(status_code=401, content="Unauthorized.")
-            else:
-                raise e
-
-    # If `get_logger` was a dependency this will be the second time a Logger is created.
-    # This is fine because creating this object only attaches the `request` to a function.
-    logger = Logger(request)
-
-    # Important to note that HTTP exceptions do not raise errors here!
     try:
-        response = await call_next(request)
+        # Important to note that HTTP exceptions do not raise errors here!
+        return await call_next(request)
     except Exception as e:
         # create new response object to return gracefully.
         response = Response(status_code=500, content="Internal server error.")
         response.background = BackgroundTasks()
+        logger = Logger(request)
         add_background_task = get_add_background_task_function(response.background, logger=logger)
 
         exc_type, exc_value, exc_traceback = sys.exc_info()
         tb_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
         traceback_str = format_traceback(tb_details)
         add_background_task(logger.log, str(e), "ERROR", traceback=traceback_str)
+        return response
 
-    response_contains_background_tasks = getattr(response, "background") is not None
-    if not response_contains_background_tasks:
-        response.background = BackgroundTasks()
-    add_background_task = get_add_background_task_function(response.background, logger=logger)
+
+@app.middleware("http")
+async def validate_requests(request: Request, call_next):
+    client_id = request.query_params.get("client_id")
+
+    if client_id:
+        token_url = f"{BURLA_BACKEND_URL}/v1/login/{client_id}/token"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(token_url) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    request.session["email"] = data["email"]
+                    request.session["Authorization"] = f"Bearer {data['token']}"
+
+        base_url = f"{request.url.scheme}://{request.url.netloc}{request.url.path}"
+        response = RedirectResponse(url=base_url, status_code=303)
+        session = request.cookies.get("session")
+        response.set_cookie(key="session", value=session, httponly=True, samesite="lax")
+        return response
+
+    email = request.session.get("email")
+    token = request.session.get("Authorization")
+    if email and token:
+        print(f"User already authenticated: {email}")
+    else:
+        return Response(
+            status_code=401, content="Unauthorized. Please run `burla dashboard` to login."
+        )
+
+    return await call_next(request)
+
+
+@app.middleware("http")
+async def log_and_time_requests(request: Request, call_next):
+    start = time()
+    request.state.uuid = uuid4().hex
+
+    response = await call_next(request)
 
     if not IN_LOCAL_DEV_MODE:
-        msg = f"Received {request.method} at {request.url}"
-        add_background_task(logger.log, msg)
+
+        response_contains_background_tasks = getattr(response, "background") is not None
+        if not response_contains_background_tasks:
+            response.background = BackgroundTasks()
+
+        logger = Logger(request)
+        add_background_task = get_add_background_task_function(response.background, logger=logger)
+        add_background_task(logger.log, f"Received {request.method} at {request.url}")
 
         status = response.status_code
         latency = time() - start
@@ -237,3 +244,6 @@ async def login__log_and_time_requests__log_errors(request: Request, call_next):
         add_background_task(logger.log, msg, latency=latency)
 
     return response
+
+
+app.add_middleware(SessionMiddleware, secret_key=CLUSTER_ID_TOKEN)

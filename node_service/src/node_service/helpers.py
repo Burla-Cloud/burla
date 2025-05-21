@@ -3,14 +3,21 @@ import requests
 from itertools import groupby
 from typing import Optional
 import logging as python_logging
-from fastapi import Request
-from node_service import IN_LOCAL_DEV_MODE, GCL_CLIENT, PROJECT_ID, BURLA_BACKEND_URL
+from fastapi import Request, HTTPException
+from node_service import IN_LOCAL_DEV_MODE, GCL_CLIENT, PROJECT_ID, BURLA_BACKEND_URL, SELF
 
 
 def format_traceback(traceback_details: list):
     details = ["  ... (detail hidden)\n" if "/pypoetry/" in d else d for d in traceback_details]
     details = [key for key, _ in groupby(details)]  # <- remove consecutive duplicates
     return "".join(details).split("another exception occurred:")[-1]
+
+
+def validate_headers(request: Request):
+    email = request.headers.get("email")
+    token = request.headers.get("Authorization", "").replace("Bearer ", "")
+    if not any(e == email and t == token for e, t in SELF["authorized_users"]):
+        raise HTTPException(status_code=401)
 
 
 class Logger:
@@ -77,6 +84,6 @@ class Logger:
             try:
                 tb = kw.get("traceback", "")
                 json = {"project_id": PROJECT_ID, "message": message, "traceback": tb}
-                requests.post(f"{BURLA_BACKEND_URL}/v1/telemetry/alert", json=json, timeout=1)
+                requests.post(f"{BURLA_BACKEND_URL}/v1/telemetry/log/ERROR", json=json, timeout=1)
             except Exception:
                 pass

@@ -37,7 +37,7 @@ def restart_cluster(
 
     try:
         json = {"project_id": PROJECT_ID, "message": "Someone turned the cluster on."}
-        requests.post(f"{BURLA_BACKEND_URL}/v1/telemetry/alert", json=json, timeout=1)
+        requests.post(f"{BURLA_BACKEND_URL}/v1/telemetry/log/INFO", json=json, timeout=1)
     except Exception:
         pass
 
@@ -123,7 +123,7 @@ async def shutdown_cluster(logger: Logger = Depends(get_logger)):
 
     try:
         json = {"project_id": PROJECT_ID, "message": "Someone turned the cluster off."}
-        requests.post(f"{BURLA_BACKEND_URL}/v1/telemetry/alert", json=json, timeout=1)
+        requests.post(f"{BURLA_BACKEND_URL}/v1/telemetry/log/INFO", json=json, timeout=1)
     except Exception:
         pass
 

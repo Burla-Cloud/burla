@@ -110,7 +110,7 @@ async def log_and_time_requests__log_errors(request: Request, call_next):
         # Report errors back to Burla's cloud.
         try:
             json = {"project_id": PROJECT_ID, "message": exc_type, "traceback": traceback_str}
-            requests.post(f"{BURLA_BACKEND_URL}/v1/telemetry/alert", json=json, timeout=1)
+            requests.post(f"{BURLA_BACKEND_URL}/v1/telemetry/log/ERROR", json=json, timeout=1)
         except Exception:
             pass
 

@@ -1,9 +1,12 @@
 import sys
 import shutil
 import subprocess
-
+import traceback
+import requests
 from yaspin import yaspin
 from google.cloud.firestore import Client
+
+from burla import _BURLA_BACKEND_URL
 
 
 python_version = f"{sys.version_info.major}.{sys.version_info.minor}"
@@ -30,8 +33,16 @@ class VerboseCalledProcessError(Exception):
     def __init__(self, cmd: str, stderr: str):
         msg = "SubCommand failed with non-zero exit code!\n"
         msg += f'Command = "{cmd}"\n'
-        msg += f"Command Stderr--------------------------------------------------------\n{stderr}"
+        msg += f"Command Stderr--------------------------------------------------------\n"
+        msg += f"{stderr}\n"
+        msg += f"--------------------------------------------------------\n"
+        msg += f"If you're not sure what to do, please email jake@burla.dev, or call me at 508-320-8778!\n"
+        msg += f"We take errors very seriously, and would really like to help you get Burla installed.\n"
         super().__init__(msg)
+
+
+class InstallError(Exception):
+    pass
 
 
 def _run_command(command, raise_error=True):
@@ -57,11 +68,32 @@ def install():
     - Run: `gcloud config get project` to view your default project.
     - Run: `gcloud config set project <new-project-id>` to change your default project.
     """
-    with yaspin() as spinner:
-        _install(spinner)
+    try:
+        with yaspin() as spinner:
+            _install(spinner)
+    except Exception as e:
+        try:  # Report errors back to Burla's cloud.
+            exc_type, exc_value, exc_traceback = sys.exc_info()
+            traceback_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
+            traceback_str = "".join(traceback_details)
+            json = {"message": str(exc_type), "traceback": traceback_str}
+            requests.post(f"{_BURLA_BACKEND_URL}/v1/telemetry/log/ERROR", json=json, timeout=1)
+        except:
+            pass
+
+        # reraise
+        if isinstance(e, VerboseCalledProcessError):
+            raise e
+        else:
+            msg = f"If you're not sure what to do, please email jake@burla.dev, or call me at 508-320-8778!\n"
+            msg += f"We take errors very seriously, and would really like to help you get Burla installed!\n"
+            raise InstallError(msg) from e
 
 
 def _install(spinner):
+    json = {"message": "Somebody is running `burla install`!"}
+    requests.post(f"{_BURLA_BACKEND_URL}/v1/telemetry/log/INFO", json=json, timeout=1)
+
     # check gcloud is installed:
     spinner.text = "Checking for gcloud ... "
     spinner.start()
@@ -113,6 +145,9 @@ def _install(spinner):
     spinner.text = f"Checking for gcloud project ... Using project: {PROJECT_ID}"
     spinner.ok("✓")
 
+    json = {"project_id": PROJECT_ID, "message": "Installer has gcloud and is logged in."}
+    requests.post(f"{_BURLA_BACKEND_URL}/v1/telemetry/log/INFO", json=json, timeout=1)
+
     # Enable required services
     spinner.text = "Enabling required services ... "
     spinner.start()
@@ -120,6 +155,7 @@ def _install(spinner):
     _run_command("gcloud services enable run.googleapis.com")
     _run_command("gcloud services enable firestore.googleapis.com")
     _run_command("gcloud services enable cloudresourcemanager.googleapis.com")
+    _run_command("gcloud services enable iap.googleapis.com")
     spinner.text = "Enabling required services... Done."
     spinner.ok("✓")
 
@@ -146,6 +182,33 @@ def _install(spinner):
         raise VerboseCalledProcessError(cmd, result.stderr)
     else:
         spinner.text = "Opening port 8080 to VM's with tag 'burla-cluster-node' ... Done."
+        spinner.ok("✓")
+
+    # Register cluster and save token
+    spinner.text = "Creating secrets ... "
+    spinner.start()
+    cmd = 'gcloud secrets describe burla-cluster-id-token --format="value(name)"'
+    result = _run_command(cmd, raise_error=False)
+    if result.returncode == 1 and "NOT_FOUND" in result.stderr.decode():
+        # get user's email from gcloud
+        cmd = f'gcloud auth list --filter=status:ACTIVE --format="value(account)"'
+        result = _run_command(cmd)
+        cluster_owner_email = result.stdout.decode().strip()
+
+        # tell backend service that email is authorized to run jobs in this project
+        url = f"{_BURLA_BACKEND_URL}/v1/projects/{PROJECT_ID}"
+        response = requests.post(url, json={"cluster_owner_email": cluster_owner_email})
+        if response.status_code == 200:
+            cluster_id_token = response.json()["token"]
+            # save token as secret
+            cmd = 'gcloud secrets create burla-cluster-id-token --replication-policy="automatic"'
+            result = _run_command(cmd)
+            cmd = f'printf "%s" "{cluster_id_token}" | gcloud secrets versions add burla-cluster-id-token --data-file=-'
+            result = _run_command(cmd)
+            spinner.text = "Creating secrets ... Done."
+            spinner.ok("✓")
+    else:
+        spinner.text = "Creating secrets ... Done."
         spinner.ok("✓")
 
     # Create Firestore database
@@ -177,7 +240,7 @@ def _install(spinner):
         f"--max-instances 20 "
         f"--memory 4Gi "
         f"--cpu 1 "
-        f"--timeout 360 "
+        f"--timeout 10 "
         f"--concurrency 20 "
         f"--allow-unauthenticated"
     )
@@ -190,11 +253,14 @@ def _install(spinner):
     spinner.text = "Deploying Burla-Main-Service to Google Cloud Run ... Done."
     spinner.ok("✓")
 
+    # print success message
     dashboard_url = main_service_url()
-
     msg = f"\nSuccess!\nView your new dashboard: {dashboard_url}\n"
     msg += f"Quickstart:\n"
     msg += f"  1. Start your cluster at the link above ^\n"
     msg += f"  2. Import and call `remote_parallel_map`!\n\n"
     msg += f"Don't hesitate to E-Mail jake@burla.dev, or call me at 508-320-8778, thank you for using Burla!"
     spinner.write(msg)
+
+    json = {"project_id": PROJECT_ID, "message": "Burla successfully installed!"}
+    requests.post(f"{_BURLA_BACKEND_URL}/v1/telemetry/log/INFO", json=json, timeout=1)

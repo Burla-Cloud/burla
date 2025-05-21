@@ -1,16 +1,13 @@
-# src/main_service/endpoints/settings.py
+import random
+from uuid import uuid4
+import string
 
 from fastapi import APIRouter, Depends, Request, HTTPException
 from fastapi.responses import JSONResponse
 from google.api_core.exceptions import GoogleAPICallError
-from google.cloud import firestore
 
-from main_service import DB, get_user_email, get_logger, get_request_json
+from main_service import DB, get_logger
 from main_service.helpers import Logger
-from typing import Dict
-import random
-from uuid import uuid4
-import string
 
 router = APIRouter()
 

@@ -37,7 +37,7 @@ class VerboseCalledProcessError(Exception):
         msg += f"{stderr}\n"
         msg += f"--------------------------------------------------------\n"
         msg += f"If you're not sure what to do, please email jake@burla.dev, or call me at 508-320-8778!\n"
-        msg += f"We take errors very seriously, and would really like to help you get Burla installed.\n"
+        msg += f"We take errors very seriously, and would really like to help you get Burla installed!\n"
         super().__init__(msg)
 
 
@@ -62,6 +62,20 @@ def main_service_url():
             return line.split()[1]
 
 
+def _log_telemetry(message, severity="INFO", **kwargs):
+    try:
+        json = {"message": message, **kwargs}
+        response = requests.post(f"{_BURLA_BACKEND_URL}/v1/telemetry/log/{severity}", json=json)
+        response.raise_for_status()
+    except Exception as e:
+        # exc_type, exc_value, exc_traceback = sys.exc_info()
+        # traceback_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
+        # traceback_str = "".join(traceback_details)
+        # print(f"Error logging telemetry: {e}", file=sys.stderr)
+        # print(f"Traceback: {traceback_str}", file=sys.stderr)
+        pass
+
+
 def install():
     """Install or Update the Burla cluster in your current default Google Cloud Project.
 
@@ -72,14 +86,11 @@ def install():
         with yaspin() as spinner:
             _install(spinner)
     except Exception as e:
-        try:  # Report errors back to Burla's cloud.
-            exc_type, exc_value, exc_traceback = sys.exc_info()
-            traceback_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
-            traceback_str = "".join(traceback_details)
-            json = {"message": str(exc_type), "traceback": traceback_str}
-            requests.post(f"{_BURLA_BACKEND_URL}/v1/telemetry/log/ERROR", json=json, timeout=1)
-        except:
-            pass
+        # Report errors back to Burla's cloud.
+        exc_type, exc_value, exc_traceback = sys.exc_info()
+        traceback_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
+        traceback_str = "".join(traceback_details)
+        _log_telemetry(str(exc_type), "ERROR", traceback=traceback_str)
 
         # reraise
         if isinstance(e, VerboseCalledProcessError):
@@ -91,8 +102,7 @@ def install():
 
 
 def _install(spinner):
-    json = {"message": "Somebody is running `burla install`!"}
-    requests.post(f"{_BURLA_BACKEND_URL}/v1/telemetry/log/INFO", json=json, timeout=1)
+    _log_telemetry("Somebody is running `burla install`!")
 
     # check gcloud is installed:
     spinner.text = "Checking for gcloud ... "
@@ -145,8 +155,7 @@ def _install(spinner):
     spinner.text = f"Checking for gcloud project ... Using project: {PROJECT_ID}"
     spinner.ok("✓")
 
-    json = {"project_id": PROJECT_ID, "message": "Installer has gcloud and is logged in."}
-    requests.post(f"{_BURLA_BACKEND_URL}/v1/telemetry/log/INFO", json=json, timeout=1)
+    _log_telemetry("Installer has gcloud and is logged in.", project_id=PROJECT_ID)
 
     # Enable required services
     spinner.text = "Enabling required services ... "
@@ -262,5 +271,4 @@ def _install(spinner):
     msg += f"Don't hesitate to E-Mail jake@burla.dev, or call me at 508-320-8778, thank you for using Burla!"
     spinner.write(msg)
 
-    json = {"project_id": PROJECT_ID, "message": "Burla successfully installed!"}
-    requests.post(f"{_BURLA_BACKEND_URL}/v1/telemetry/log/INFO", json=json, timeout=1)
+    _log_telemetry("Burla successfully installed!", project_id=PROJECT_ID)

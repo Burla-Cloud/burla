@@ -40,6 +40,8 @@ def reboot_containers_endpoint(
     if token != CLUSTER_ID_TOKEN or project_id_header != PROJECT_ID:
         return Response("Invalid authentication", status_code=401)
 
+    return reboot_containers(new_container_config, logger)
+
 
 def reboot_containers(
     new_container_config: Optional[list[Container]] = None,
@@ -75,6 +77,7 @@ def reboot_containers(
         headers = {"Authorization": f"Bearer {CLUSTER_ID_TOKEN}"}
         url = f"{BURLA_BACKEND_URL}/v1/projects/{PROJECT_ID}/users"
         response = requests.get(url, headers=headers)
+        response.raise_for_status()
         SELF["authorized_users"] = response.json()["authorized_users"]
 
         futures = []

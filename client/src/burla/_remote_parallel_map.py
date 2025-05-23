@@ -145,18 +145,13 @@ async def _execute_job(
     background: bool,
     spinner: Union[bool, Spinner],
 ):
+    auth_headers = get_auth_headers()
     sync_db, async_db = get_db_clients()
     log_msg_stdout = spinner if spinner else sys.stdout
 
     nodes_to_assign, total_target_parallelism = await _select_nodes_to_assign_to_job(
         async_db, max_parallelism, func_cpu, func_ram, spinner
     )
-
-    try:
-        auth_headers = get_auth_headers()
-        user_email = get_auth_headers()["email"]
-    except AuthException:
-        user_email = "<unauthenticated-user>"
 
     job_ref = async_db.collection("jobs").document(job_id)
     await job_ref.set(
@@ -169,7 +164,7 @@ async def _execute_job(
             "user_python_version": f"3.{sys.version_info.minor}",
             "max_parallelism": max_parallelism,
             "target_parallelism": total_target_parallelism,
-            "user": user_email,
+            "user": auth_headers["email"],
             "started_at": time(),
             "last_ping_from_client": time(),
             "is_background_job": background,
@@ -188,7 +183,8 @@ async def _execute_job(
         data.add_field("request_json", json.dumps(request_json))
         data.add_field("function_pkl", cloudpickle.dumps(function_))
 
-        async with session.post(f"{node['host']}/jobs/{job_id}", data=data) as response:
+        url = f"{node['host']}/jobs/{job_id}"
+        async with session.post(url, data=data, headers=auth_headers) as response:
             try:
                 response.raise_for_status()
                 return node
@@ -223,7 +219,7 @@ async def _execute_job(
         if not nodes:
             raise Exception("Job refused by all available Nodes!")
 
-        uploader_task = create_task(upload_inputs(job_id, nodes, inputs, session))
+        uploader_task = create_task(upload_inputs(job_id, nodes, inputs, session, auth_headers))
 
         if background:
             if spinner:
@@ -236,7 +232,8 @@ async def _execute_job(
             spinner.text = msg + f"(0/{len(inputs)} completed)"
 
         async def _check_single_node(node: dict):
-            async with session.get(f"{node['host']}/jobs/{job_id}/results") as response:
+            url = f"{node['host']}/jobs/{job_id}/results"
+            async with session.get(url, headers=auth_headers) as response:
                 if response.status == 404:
                     nodes.remove(node)  # <- means node is likely rebooting and failed or is done
                 elif response.status != 200:

@@ -4,7 +4,14 @@ from itertools import groupby
 from typing import Optional
 import logging as python_logging
 from fastapi import Request, HTTPException
-from node_service import IN_LOCAL_DEV_MODE, GCL_CLIENT, PROJECT_ID, BURLA_BACKEND_URL, SELF
+from node_service import (
+    IN_LOCAL_DEV_MODE,
+    GCL_CLIENT,
+    PROJECT_ID,
+    BURLA_BACKEND_URL,
+    SELF,
+    CLUSTER_ID_TOKEN,
+)
 
 
 def format_traceback(traceback_details: list):
@@ -13,11 +20,26 @@ def format_traceback(traceback_details: list):
     return "".join(details).split("another exception occurred:")[-1]
 
 
-def validate_headers(request: Request):
+def validate_headers(request: Request, second_try: bool = False):
     email = request.headers.get("email")
     token = request.headers.get("Authorization", "").replace("Bearer ", "")
-    if not any(e == email and t == token for e, t in SELF["authorized_users"]):
+    print(f"email: {email}, token: {token}")
+    for user_dict in SELF["authorized_users"]:
+        print(f"user_dict: {user_dict}")
+        if email == user_dict["email"] and token == user_dict["token"]:
+            return
+
+    if second_try:
         raise HTTPException(status_code=401)
+
+    # if user's token doesn't match any authorized tokens,
+    # refresh authorized tokens and try again before throwing 401
+    headers = {"Authorization": f"Bearer {CLUSTER_ID_TOKEN}"}
+    url = f"{BURLA_BACKEND_URL}/v1/projects/{PROJECT_ID}/users"
+    response = requests.get(url, headers=headers)
+    response.raise_for_status()
+    SELF["authorized_users"] = response.json()["authorized_users"]
+    return validate_headers(request, second_try=True)
 
 
 class Logger:

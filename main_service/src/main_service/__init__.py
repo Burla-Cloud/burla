@@ -211,12 +211,11 @@ async def validate_requests(request: Request, call_next):
 
     email = request.session.get("email")
     token = request.session.get("Authorization")
-    if email and token:
-        print(f"User already authenticated: {email}")
-    else:
-        return Response(
-            status_code=401, content="Unauthorized. Please run `burla dashboard` to login."
-        )
+    if not (email and token):
+        msg = "Unauthorized. Please run `burla dashboard` to login, "
+        msg += "or contact your cluster owner to be added to the list of approved users.\n"
+        msg += "If you believe this is an error, please email jake@burla.dev or call 508-320-8778."
+        return Response(status_code=401, content=msg)
 
     return await call_next(request)
 

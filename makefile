@@ -7,6 +7,9 @@ ACCESS_TOKEN := $(shell gcloud auth print-access-token)
 MAIN_SVC_IMAGE_NAME := us-docker.pkg.dev/$(PROJECT_ID)/burla-main-service/burla-main-service:latest
 
 
+demo:
+	poetry -C ./client run python client/tests/demo/demo.py
+
 shell:
 	poetry -C ./client shell
 

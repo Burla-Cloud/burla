@@ -23,9 +23,7 @@ def format_traceback(traceback_details: list):
 def validate_headers(request: Request, second_try: bool = False):
     email = request.headers.get("email")
     token = request.headers.get("Authorization", "").replace("Bearer ", "")
-    print(f"email: {email}, token: {token}")
     for user_dict in SELF["authorized_users"]:
-        print(f"user_dict: {user_dict}")
         if email == user_dict["email"] and token == user_dict["token"]:
             return
 

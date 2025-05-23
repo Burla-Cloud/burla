@@ -10,6 +10,7 @@ from typing import Tuple
 from appdirs import user_config_dir
 
 from burla import _BURLA_BACKEND_URL
+from burla._install import main_service_url
 
 AUTH_TIMEOUT_SECONDS = 180
 BURLA_APPDATA_DIR = Path(user_config_dir(appname="burla", appauthor="burla"))
@@ -79,7 +80,8 @@ def login():
 def dashboard():
     """Open your Burla dashboard in your browser."""
 
-    dashboard_url = "http://127.0.0.1:5001/"
+    # dashboard_url = "http://127.0.0.1:5001/"
+    dashboard_url = main_service_url()
 
     client_id = uuid4().hex
     login_url = f"{_BURLA_BACKEND_URL}/v1/login/{client_id}?redirect_url={dashboard_url}"

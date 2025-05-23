@@ -263,8 +263,7 @@ def _install(spinner):
     spinner.ok("✓")
 
     # print success message
-    dashboard_url = main_service_url()
-    msg = f"\nSuccess!\nView your new dashboard: {dashboard_url}\n"
+    msg = f"\nSuccess! To view your new dashboard run `burla dashboard`\n"
     msg += f"Quickstart:\n"
     msg += f"  1. Start your cluster at the link above ^\n"
     msg += f"  2. Import and call `remote_parallel_map`!\n\n"

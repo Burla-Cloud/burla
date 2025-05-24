@@ -72,34 +72,3 @@ async def update_settings(request: Request, logger: Logger = Depends(get_logger)
         if email not in new_user_emails:
             response = requests.delete(users_url, json={"user_to_remove": email}, headers=headers)
             response.raise_for_status()
-
-
-@router.post("/v1/service-accounts")
-async def create_service_account(logger: Logger = Depends(get_logger)):
-    service_id = str(uuid4())
-    name = "test"
-    token = "test-token"
-
-    doc_ref = DB.collection("service_accounts").document(service_id)
-    doc_ref.set({"id": service_id, "name": name, "token": token})
-    return {"id": service_id, "name": name, "token": token}
-
-
-@router.delete("/v1/service-accounts/{service_id}")
-async def delete_service_account(service_id: str, logger: Logger = Depends(get_logger)):
-    doc_ref = DB.collection("service_accounts").document(service_id)
-    doc_ref.delete()
-
-
-@router.get("/v1/service-accounts")
-async def list_service_accounts(logger: Logger = Depends(get_logger)):
-    docs = DB.collection("service_accounts").stream()
-    accounts = [doc.to_dict() for doc in docs]
-    return {"service_accounts": accounts}
-
-
-@router.post("/v1/service-accounts/{service_id}/refresh-token")
-async def refresh_service_account_token(service_id: str, logger: Logger = Depends(get_logger)):
-    new_token = "test-token"
-    DB.collection("service_accounts").document(service_id).update({"token": new_token})
-    return {"token": new_token}

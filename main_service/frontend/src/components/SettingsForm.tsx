@@ -179,7 +179,7 @@ export const SettingsForm: React.FC<SettingsFormProps> = ({ isEditing }) => {
                     {/* Section: Users */}
                     <div className="space-y-2">
                         <h2 className="text-xl font-semibold" style={{ color: "#3b5a64" }}>
-                            Users
+                            Authorized Users
                         </h2>
                         <div>
                             <div className="flex items-center gap-1">
@@ -191,11 +191,11 @@ export const SettingsForm: React.FC<SettingsFormProps> = ({ isEditing }) => {
                                         </TooltipTrigger>
                                         <TooltipContent>
                                             <p>
-                                                This feature is not yet implemented!
-                                                <br />A list of user emails who are authorized to
-                                                access this deployment.
+                                                <br />A list of emails who are authorized to view
+                                                this dashboard and run workloads on this deployment.
                                                 <br />
-                                                Run `burla login` to authenticate.
+                                                Run `burla login` to authenticate your local client,
+                                                and `burla dashboard` to login to this dashboard.
                                             </p>
                                         </TooltipContent>
                                     </Tooltip>

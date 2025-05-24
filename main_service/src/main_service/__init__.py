@@ -192,9 +192,11 @@ async def catch_errors(request: Request, call_next):
 
 @app.middleware("http")
 async def validate_requests(request: Request, call_next):
-    client_id = request.query_params.get("client_id")
 
-    if client_id:
+    # convert temporary client_id to email/token
+    # client_id's are only valid once, and for a very short period of time
+    if request.query_params.get("client_id"):
+        client_id = request.query_params.get("client_id")
         token_url = f"{BURLA_BACKEND_URL}/v1/login/{client_id}/token"
         async with aiohttp.ClientSession() as session:
             async with session.get(token_url) as response:
@@ -209,15 +211,24 @@ async def validate_requests(request: Request, call_next):
         response.set_cookie(key="session", value=session, httponly=True, samesite="lax")
         return response
 
+    # validate user is authorized
     email = request.session.get("email")
     token = request.session.get("Authorization")
-    if not (email and token):
-        msg = "Unauthorized. Please run `burla dashboard` to login, "
-        msg += "or contact your cluster owner to be added to the list of approved users.\n"
-        msg += "If you believe this is an error, please email jake@burla.dev or call 508-320-8778."
-        return Response(status_code=401, content=msg)
+    if email and token:
+        async with aiohttp.ClientSession() as session:
+            url = f"{BURLA_BACKEND_URL}/v1/projects/{PROJECT_ID}/users:validate"
+            headers = {"Authorization": f"Bearer {CLUSTER_ID_TOKEN}"}
+            headers.update({"X-Validate-Token": token, "X-Validate-Email": email})
+            async with session.get(url, headers=headers) as response:
+                if response.status == 200:
+                    return await call_next(request)
+                elif response.status != 401:
+                    response.raise_for_status()
 
-    return await call_next(request)
+    msg = "Unauthorized. Please run `burla dashboard` to login, "
+    msg += "or contact your cluster owner to be added to the list of approved users.\n"
+    msg += "If you believe this is an error, please email jake@burla.dev or call 508-320-8778."
+    return Response(status_code=401, content=msg)
 
 
 @app.middleware("http")

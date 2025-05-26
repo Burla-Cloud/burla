@@ -1,39 +1,17 @@
 import json
-import requests
 import asyncio
-from datetime import datetime, timezone, timedelta
-from typing import Optional, Callable
-from uuid import uuid4
+from datetime import datetime, timezone
+from typing import Optional
 
-from fastapi import APIRouter, Path, Depends, Query, Request
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 from starlette.responses import StreamingResponse
 from google.cloud import firestore
-from google.cloud.firestore import FieldFilter
 
-from main_service import DB, get_logger, get_add_background_task_function
-from main_service.helpers import Logger
+from main_service import DB
 
 router = APIRouter()
 
-
-@router.get("/v1/jobs/{job_id}")
-def run_job_healthcheck(
-    job_id: str = Path(...),
-    logger: Logger = Depends(get_logger),
-    add_background_task: Callable = Depends(get_add_background_task_function),
-):
-    # get all nodes working on this job
-    _filter = FieldFilter("current_job", "==", job_id)
-    nodes_with_job = [n.to_dict() for n in DB.collection("nodes").where(filter=_filter).stream()]
-
-    # check status of every node / worker working on this job
-    for node in nodes_with_job:
-        response = requests.get(f"{node['host']}/jobs/{job_id}")
-        response.raise_for_status()
-        if response.json()["any_workers_failed"]:
-            raise Exception(f"Worker failed. Check logs for node {node['instance_name']}")
-        
 
 @router.get("/v1/jobs_paginated")
 async def get_recent_jobs(request: Request, page: int = 0, stream: bool = False):
@@ -43,10 +21,10 @@ async def get_recent_jobs(request: Request, page: int = 0, stream: bool = False)
     accept = request.headers.get("accept", "")
     paginated_docs = list(
         DB.collection("jobs")
-          .order_by("started_at", direction=firestore.Query.DESCENDING)
-          .offset(offset)
-          .limit(limit)
-          .stream()
+        .order_by("started_at", direction=firestore.Query.DESCENDING)
+        .offset(offset)
+        .limit(limit)
+        .stream()
     )
 
     job_ids = [doc.id for doc in paginated_docs]
@@ -69,7 +47,9 @@ async def get_recent_jobs(request: Request, page: int = 0, stream: bool = False)
 
                 # Sum n_results from assigned_nodes
                 n_results = 0
-                assigned_nodes_ref = DB.collection("jobs").document(doc.id).collection("assigned_nodes")
+                assigned_nodes_ref = (
+                    DB.collection("jobs").document(doc.id).collection("assigned_nodes")
+                )
                 for node_doc in assigned_nodes_ref.stream():
                     node_data = node_doc.to_dict()
                     if node_data:
@@ -114,14 +94,16 @@ async def get_recent_jobs(request: Request, page: int = 0, stream: bool = False)
             if node_data:
                 n_results += node_data.get("current_num_results", 0)
 
-        jobs.append({
-            "jobId": doc.id,
-            "status": d.get("status"),
-            "user": d.get("user", "Unknown"),
-            "n_inputs": d.get("n_inputs", 0),
-            "n_results": n_results,
-            "started_at": ts,
-        })
+        jobs.append(
+            {
+                "jobId": doc.id,
+                "status": d.get("status"),
+                "user": d.get("user", "Unknown"),
+                "n_inputs": d.get("n_inputs", 0),
+                "n_results": n_results,
+                "started_at": ts,
+            }
+        )
 
     total = sum(1 for _ in DB.collection("jobs").stream())
     return JSONResponse({"jobs": jobs, "page": page, "limit": limit, "total": total})

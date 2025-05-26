@@ -1,43 +1,31 @@
 <p align="center"><img src="https://raw.githubusercontent.com/Burla-Cloud/.github/main/media/readme_banner.png" width=1000></p>
 
-[Watch our 2min demo on YouTube!](https://www.youtube.com/watch?v=1HQkTL-7_VY)
 
+#### Burla is an open-source, batch-processing platform for Python developers.
 
-#### Burla is a library for running python functions on remote computers.
+- Burla can deploy a simple python function to 10,000VM's in about 2 seconds (see our [demo](https://www.youtube.com/watch?v=1HQkTL-7_VY)).
+- Code runs in any docker container, on any machine type, for any length of time.
+- It comes with a dashboard to monitor long running jobs, and view logs.
+- Burla can be installed with one command.
 
-Burla only has one function: **remote_parallel_map**.  
-Given some python function, and a list of arguments, `remote_parallel_map` calls the given function, on every argument in the list, at the same time, each on a separate virtual machine in the cloud.
-
-Here's an example:
+#### Burla is a python package with only one function:
 ```python
 from burla import remote_parallel_map
-
-my_arguments = [1, 2, 3, 4]
-
-def my_function(my_argument: int):
-    print(f"Running remote computer #{my_argument} in the cloud!")
-    return my_argument * 2
+​
+​
+def my_function(my_input):
+    print("I'm running on remote computer in the cloud!")
     
-results = remote_parallel_map(my_function, my_arguments)
-
-print(f"return values: {list(results)}")
+remote_parallel_map(my_function, [1, 2, 3])
 ```
 
-In the above example, each call to `my_function` runs on a separate virtual machine, in parallel.  
-With Burla, running code on remote computers feels the same as running locally. This means:
-- Any errors your function throws will appear on local machine just like they normally do.
-- Anything you print appears in your local stdout, just like it normally does.
-- responses are pretty quick (you can call a million simple functions in a couple seconds).
+This code runs: `my_function(1)`, `my_function(2)`, `my_function(3)` in parallel, each in a separate container, and on a separate cpu, in the cloud.
+With Burla, running code in the cloud feels the same as coding locally:
+- Anything you print appears your local terminal.
+- Exceptions thrown in your code are thrown on your local machine.
+- Responses are pretty quick, you can call a million simple functions in a couple seconds.
 
 [Click here to learn more about remote_parallel_map.](https://docs.burla.dev/overview)
-
-#### Introduction to Burla Clusters:
-Burla is open-source cluster-compute software designed to be self-hosted in the cloud.  
-To use Burla you must have a cluster running that the client knows about.   
-Burla clusters are multi-tenant / can run many jobs from separate users.  
-Nodes in a burla cluster are single-tenant / your job will never be on the same machine as another job.
-
-[Click here to learn more about how burla-clusters work.](https://docs.burla.dev/how-does-it-work)
 
 #### Developing:
 

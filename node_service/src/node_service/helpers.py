@@ -77,6 +77,6 @@ class Logger:
             try:
                 tb = kw.get("traceback", "")
                 json = {"project_id": PROJECT_ID, "message": message, "traceback": tb}
-                requests.post(f"{BURLA_BACKEND_URL}/v1/telemetry/alert", json=json, timeout=1)
+                requests.post(f"{BURLA_BACKEND_URL}/v1/telemetry/log/ERROR", json=json, timeout=1)
             except Exception:
                 pass

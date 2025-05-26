@@ -1,11 +1,10 @@
 import pickle
-from time import time, sleep
 from queue import Empty
 from typing import Optional, Callable
 
 import asyncio
 import aiohttp
-from fastapi import APIRouter, Path, Depends, Response, Request
+from fastapi import APIRouter, Path, Depends, Response
 from google.cloud.firestore import AsyncClient
 
 from node_service import (
@@ -18,21 +17,13 @@ from node_service import (
     get_add_background_task_function,
 )
 from node_service.helpers import Logger
-from node_service.job_watcher import (
-    send_inputs_to_workers,
-    job_watcher_logged,
-    get_neighboring_node,
-    result_check_all_workers,
-)
+from node_service.job_watcher import send_inputs_to_workers, job_watcher_logged
 
 router = APIRouter()
 
 
 @router.get("/jobs/{job_id}/inputs")
-async def get_inputs(
-    job_id: str = Path(...),
-    logger: Logger = Depends(get_logger),
-):
+async def get_inputs(job_id: str = Path(...), logger: Logger = Depends(get_logger)):
     if job_id != SELF["current_job"]:
         return Response("job not found", status_code=404)
     elif SELF["SHUTTING_DOWN"]:
@@ -126,12 +117,7 @@ async def get_results(job_id: str = Path(...)):
 
 
 @router.post("/shutdown")
-async def shutdown_node(request: Request, logger: Logger = Depends(get_logger)):
-    # Only allow shutdown requests from localhost (inside the shutdown script defined in main_svc)
-    if request.client.host != "127.0.0.1":
-        return Response("Shutdown endpoint can only be called from localhost", status_code=403)
-
-    start = time()
+async def shutdown_node(logger: Logger = Depends(get_logger)):
     SELF["SHUTTING_DOWN"] = True
     SELF["job_watcher_stop_event"].set()
 
@@ -152,50 +138,6 @@ async def shutdown_node(request: Request, logger: Logger = Depends(get_logger)):
 
     async_db = AsyncClient(project=PROJECT_ID, database="burla")
     await async_db.collection("nodes").document(INSTANCE_NAME).delete()
-
-    # TODO: if running a job, and cannot transfer, set job state to FAILED
-
-    if not SELF["current_job"]:
-        return
-
-    # # Wait for curent batch to finish uploading:
-    # # It's really important the client and node-service are on the same page.
-    # # which is why we don't just stop it and take the inputs that are there.
-    # if SELF["current_input_batch_forwarded"] == False:
-    #     start_time = time()
-    #     while not SELF["current_input_batch_forwarded"]:
-    #         if time() - start_time > 10:
-    #             raise Exception("Timeout waiting for input batch to be forwarded (>10 seconds)")
-    #         sleep(0.1)
-
-    # async with aiohttp.ClientSession() as session:
-
-    #     async def _transfer_inputs(worker, host):
-    #         worker_url = f"{worker.url}/jobs/{SELF['current_job']}/transfer_inputs"
-    #         async with session.post(worker_url, json={"target_node_url": host}) as response:
-    #             response.raise_for_status()
-
-    #     # send remaining inputs to another node
-    #     neighboring_node = await get_neighboring_node(async_db)
-    #     host = neighboring_node.get("host")
-    #     await asyncio.gather(*[_transfer_inputs(w, host) for w in SELF["workers"]])
-    #     async with session.post(f"{host}/jobs/{SELF['current_job']}/inputs/done") as response:
-    #         response.raise_for_status()
-
-    #     neighbor_name = neighboring_node.get("instance_name")
-    #     logger.log(f"Successfully transferred remaining inputs to node {neighbor_name}")
-
-    #     # grab remaining results from all workers so client has a chance to grab them.
-    #     all_workers_empty = False
-    #     while not all_workers_empty:
-    #         await result_check_all_workers(session, logger)
-    #         all_workers_empty = all(w.is_empty for w in SELF["workers"])
-
-    # # node has 30s to shutdown, stall for remaining time and hope client grabs all results.
-    # time_remaining = 30 - (time() - start)
-    # while time_remaining > 3:
-    #     await asyncio.sleep(1)
-    #     time_remaining = 30 - (time() - start)
 
 
 @router.post("/jobs/{job_id}")

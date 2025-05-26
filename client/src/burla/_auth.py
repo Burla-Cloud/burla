@@ -10,6 +10,7 @@ from typing import Tuple
 from appdirs import user_config_dir
 
 from burla import _BURLA_BACKEND_URL
+from burla._install import main_service_url
 
 AUTH_TIMEOUT_SECONDS = 180
 BURLA_APPDATA_DIR = Path(user_config_dir(appname="burla", appauthor="burla"))
@@ -34,7 +35,10 @@ def get_auth_headers() -> Tuple[str, str]:
         raise AuthException()
     else:
         auth_info = json.loads(CONFIG_PATH.read_text())
-        return {"email": auth_info["email"], "Authorization": f"Bearer {auth_info['auth_token']}"}
+        return {
+            "X-User-Email": auth_info["email"],
+            "Authorization": f"Bearer {auth_info['auth_token']}",
+        }
 
 
 def _get_login_response(client_id, attempt=0):
@@ -52,10 +56,8 @@ def _get_login_response(client_id, attempt=0):
 
 
 def login():
-    """Login to Burla using your Google account. Only necessary to access secure deployments.
-
-    A "secure deployment" is one where, in the settings, only certain users are authorized to view
-    the dashboard and submit jobs.
+    """Login to Burla using your Google account.
+    Allows you to call `remote_paralell_map` on clusters where you're authorized to do so.
     """
     client_id = uuid4().hex
     login_url = f"{_BURLA_BACKEND_URL}/v1/login/{client_id}"
@@ -72,6 +74,28 @@ def login():
     message += "Please email jake@burla.dev with any questions!\n"
     print(message)
 
+    if not CONFIG_PATH.exists():
+        CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        CONFIG_PATH.touch()
+    CONFIG_PATH.write_text(json.dumps({"auth_token": auth_token, "email": email}))
+
+
+def dashboard():
+    """Open your Burla dashboard in your browser."""
+
+    dashboard_url = "http://127.0.0.1:5001/"
+    # dashboard_url = main_service_url()
+
+    client_id = uuid4().hex
+    login_url = f"{_BURLA_BACKEND_URL}/v1/login/{client_id}?redirect_url={dashboard_url}"
+
+    if IN_COLAB:
+        print(f"Please navigate to the following URL to open your dashboard:\n\n    {login_url}\n")
+        print(f"(We are unable to automatically open this from a Google Colab notebook)")
+    else:
+        webbrowser.open(login_url)
+
+    auth_token, email = _get_login_response(client_id)
     if not CONFIG_PATH.exists():
         CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
         CONFIG_PATH.touch()

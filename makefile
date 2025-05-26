@@ -7,6 +7,9 @@ ACCESS_TOKEN := $(shell gcloud auth print-access-token)
 MAIN_SVC_IMAGE_NAME := us-docker.pkg.dev/$(PROJECT_ID)/burla-main-service/burla-main-service:latest
 
 
+demo:
+	poetry -C ./client run python client/tests/demo/demo.py
+
 shell:
 	poetry -C ./client shell
 
@@ -35,7 +38,7 @@ local-dev:
 		-p 5001:5001 \
 		--entrypoint python3.13 \
 		$(MAIN_SVC_IMAGE_NAME) -m uvicorn main_service:app --host 0.0.0.0 --port 5001 --reload \
-			--reload-exclude main_service/frontend/node_modules/
+			--reload-exclude main_service/frontend/node_modules/ --timeout-keep-alive 600
 
 # Only the `main_service` is run locally, nodes are started as GCE VM's in the test cloud.
 # Uses cluster config from firestore doc: `/databases/burla/cluster_config/cluster_config`

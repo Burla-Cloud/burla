@@ -40,18 +40,21 @@ async def upload_inputs(
     nodes: list[dict],
     inputs: list,
     session: aiohttp.ClientSession,
+    auth_headers: dict,
 ):
 
     async def _upload_inputs_single_node(session, node):
-        url = node["host"]
         async for input_chunk in node["input_chunks"]:  # <- actual pickling/chunking happens here
             data = aiohttp.FormData()
             inputs_pkl_with_idx = await asyncio.to_thread(pickle.dumps, input_chunk)
             data.add_field("inputs_pkl_with_idx", inputs_pkl_with_idx)
-            async with session.post(f"{url}/jobs/{job_id}/inputs", data=data) as response:
+
+            url = f"{node['host']}/jobs/{job_id}/inputs"
+            async with session.post(url, data=data, headers=auth_headers) as response:
                 response.raise_for_status()
 
-        async with session.post(f"{url}/jobs/{job_id}/inputs/done") as response:
+        url = f"{node['host']}/jobs/{job_id}/inputs/done"
+        async with session.post(url, headers=auth_headers) as response:
             response.raise_for_status()
 
     async def _chunk_inputs_by_size_generator(

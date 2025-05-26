@@ -1,5 +1,6 @@
 from time import time
-from typing import Optional, Callable
+import requests
+from typing import Optional
 import concurrent.futures
 
 import docker
@@ -13,8 +14,9 @@ from node_service import (
     INSTANCE_N_CPUS,
     INSTANCE_NAME,
     IN_LOCAL_DEV_MODE,
+    BURLA_BACKEND_URL,
+    CLUSTER_ID_TOKEN,
     get_logger,
-    get_add_background_task_function,
     Container,
 )
 from node_service.helpers import Logger
@@ -23,15 +25,15 @@ from node_service.worker import Worker
 router = APIRouter()
 
 
-@router.post("/background_reboot")
-def background_reboot(
-    logger: Logger = Depends(get_logger),
-    add_background_task: Callable = Depends(get_add_background_task_function),
-):
-    add_background_task(reboot_containers, logger=logger)
-
-
 @router.post("/reboot")
+def reboot_containers_endpoint(
+    new_container_config: Optional[list[Container]] = None, logger: Logger = Depends(get_logger)
+):
+    if SELF["BOOTING"]:
+        return Response("Node already BOOTING, unable to satisfy request.", status_code=409)
+    return reboot_containers(new_container_config, logger)
+
+
 def reboot_containers(
     new_container_config: Optional[list[Container]] = None,
     logger: Logger = Depends(get_logger),
@@ -40,9 +42,6 @@ def reboot_containers(
     Rebooting will reboot the containers that are currently/ were previously running.
     If new containers are passed with the reboot request, those containers will be booted instead.
     """
-    if SELF["BOOTING"]:
-        return Response("Node already BOOTING, unable to satisfy request.", status_code=409)
-
     logger.log(f"Rebooting Node: {INSTANCE_NAME}")
     db = firestore.Client(project=PROJECT_ID, database="burla")
     node_doc = db.collection("nodes").document(INSTANCE_NAME)
@@ -64,6 +63,13 @@ def reboot_containers(
         SELF["current_container_config"] = current_container_config
         if new_container_config:
             SELF["current_container_config"] = new_container_config
+
+        # get list of authorized users/tokens from backend service
+        headers = {"Authorization": f"Bearer {CLUSTER_ID_TOKEN}"}
+        url = f"{BURLA_BACKEND_URL}/v1/projects/{PROJECT_ID}/users"
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()
+        SELF["authorized_users"] = response.json()["authorized_users"]
 
         futures = []
         executor = concurrent.futures.ThreadPoolExecutor()

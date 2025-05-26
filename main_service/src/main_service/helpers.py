@@ -40,7 +40,7 @@ class Logger:
         scope = {key: request.scope.get(key) for key in keys}
         request_dict = {
             "scope": scope,
-            "url": str(request.url), 
+            "url": str(request.url),
             "base_url": str(request.base_url),
             "headers": request.headers,
             "query_params": request.query_params,
@@ -66,17 +66,6 @@ class Logger:
             try:
                 tb = kw.get("traceback", "")
                 json = {"project_id": PROJECT_ID, "message": message, "traceback": tb}
-                requests.post(f"{BURLA_BACKEND_URL}/v1/telemetry/alert", json=json, timeout=1)
+                requests.post(f"{BURLA_BACKEND_URL}/v1/telemetry/log/ERROR", json=json, timeout=1)
             except Exception:
                 pass
-
-
-def validate_headers_and_login(request: Request):
-
-    headers = {"authorization": request.headers.get("Authorization")}
-    if request.headers.get("Email"):
-        headers["Email"] = request.headers.get("Email")
-
-    response = requests.get(f"{BURLA_BACKEND_URL}/v1/private/user_info", headers=headers)
-    response.raise_for_status()
-    return response.json()

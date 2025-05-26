@@ -83,6 +83,8 @@ def test_base():
         # if test_input == 100_000:
         #     sleep(90)
 
+        # print("hi")
+
         # blob_size_mb = len(test_input["blob"]) / 1_000_000
         # print(f"Sleeping for {test_input['sleep_time']}s, blob size: {blob_size_mb:.2f} MB")
         sleep(1)

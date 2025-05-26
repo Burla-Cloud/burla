@@ -3,9 +3,8 @@ import asyncio
 import docker
 import requests
 from time import time
-from typing import Callable
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from google.cloud.firestore_v1 import FieldFilter
 from google.cloud.compute_v1 import InstancesClient
 from starlette.responses import StreamingResponse
@@ -19,7 +18,6 @@ from main_service import (
     PROJECT_ID,
     BURLA_BACKEND_URL,
     get_logger,
-    get_add_background_task_function,
 )
 from main_service.node import Container, Node
 from main_service.helpers import Logger
@@ -28,12 +26,13 @@ router = APIRouter()
 
 
 @router.post("/v1/cluster/restart")
-def restart_cluster(
-    add_background_task: Callable = Depends(get_add_background_task_function),
-    logger: Logger = Depends(get_logger),
-):
+def restart_cluster(request: Request, logger: Logger = Depends(get_logger)):
     start = time()
     instance_client = InstancesClient()
+
+    email = request.session.get("X-User-Email")
+    authorization = request.session.get("Authorization")
+    auth_headers = {"Authorization": authorization, "X-User-Email": email}
 
     try:
         json = {"project_id": PROJECT_ID, "message": "Someone turned the cluster on."}
@@ -47,7 +46,7 @@ def restart_cluster(
     # delete all nodes
     node_filter = FieldFilter("status", "in", ["READY", "BOOTING", "RUNNING"])
     for node_snapshot in DB.collection("nodes").where(filter=node_filter).stream():
-        node = Node.from_snapshot(DB, logger, node_snapshot, instance_client)
+        node = Node.from_snapshot(DB, logger, node_snapshot, auth_headers, instance_client)
         futures.append(executor.submit(node.delete))
 
     # add nodes according to cluster_config doc
@@ -57,6 +56,7 @@ def restart_cluster(
             logger=logger,
             machine_type=machine_type,
             containers=containers,
+            auth_headers=auth_headers,
             service_port=node_service_port,
             as_local_container=IN_LOCAL_DEV_MODE,  # <- start in a container if IN_LOCAL_DEV_MODE
             inactivity_shutdown_time_sec=inactivity_time,
@@ -117,9 +117,13 @@ def restart_cluster(
 
 
 @router.post("/v1/cluster/shutdown")
-async def shutdown_cluster(logger: Logger = Depends(get_logger)):
+async def shutdown_cluster(request: Request, logger: Logger = Depends(get_logger)):
     start = time()
     instance_client = InstancesClient()
+
+    email = request.session.get("X-User-Email")
+    authorization = request.session.get("Authorization")
+    auth_headers = {"Authorization": authorization, "X-User-Email": email}
 
     try:
         json = {"project_id": PROJECT_ID, "message": "Someone turned the cluster off."}
@@ -133,7 +137,7 @@ async def shutdown_cluster(logger: Logger = Depends(get_logger)):
     # delete all nodes
     node_filter = FieldFilter("status", "in", ["READY", "BOOTING", "RUNNING"])
     for node_snapshot in DB.collection("nodes").where(filter=node_filter).stream():
-        node = Node.from_snapshot(DB, logger, node_snapshot, instance_client)
+        node = Node.from_snapshot(DB, logger, node_snapshot, auth_headers, instance_client)
         futures.append(executor.submit(node.delete))
 
     # remove any existing node/worker service containers if in IN_LOCAL_DEV_MODE

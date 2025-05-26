@@ -1,11 +1,10 @@
 import pickle
-from time import time
 from queue import Empty
 from typing import Optional, Callable
 
 import asyncio
 import aiohttp
-from fastapi import APIRouter, Path, Depends, Response, Request
+from fastapi import APIRouter, Path, Depends, Response
 from google.cloud.firestore import AsyncClient
 
 from node_service import (
@@ -17,19 +16,14 @@ from node_service import (
     get_request_files,
     get_add_background_task_function,
 )
-from node_service.helpers import Logger, validate_headers
+from node_service.helpers import Logger
 from node_service.job_watcher import send_inputs_to_workers, job_watcher_logged
 
 router = APIRouter()
 
 
 @router.get("/jobs/{job_id}/inputs")
-async def get_inputs(
-    job_id: str = Path(...),
-    logger: Logger = Depends(get_logger),
-    request: Request = None,
-):
-    validate_headers(request)
+async def get_inputs(job_id: str = Path(...), logger: Logger = Depends(get_logger)):
     if job_id != SELF["current_job"]:
         return Response("job not found", status_code=404)
     elif SELF["SHUTTING_DOWN"]:
@@ -67,8 +61,7 @@ async def get_inputs(
 
 
 @router.post("/jobs/{job_id}/inputs/done")
-async def input_upload_done(job_id: str = Path(...), request: Request = None):
-    validate_headers(request)
+async def input_upload_done(job_id: str = Path(...)):
     if job_id != SELF["current_job"]:
         return Response("job not found", status_code=404)
     SELF["all_inputs_uploaded"] = True
@@ -78,9 +71,7 @@ async def input_upload_done(job_id: str = Path(...), request: Request = None):
 async def upload_inputs(
     job_id: str = Path(...),
     request_files: Optional[dict] = Depends(get_request_files),
-    request: Request = None,
 ):
-    validate_headers(request)
     if job_id != SELF["current_job"]:
         return Response("job not found", status_code=404)
     elif SELF["SHUTTING_DOWN"]:
@@ -99,8 +90,7 @@ async def upload_inputs(
 
 
 @router.get("/jobs/{job_id}/results")
-async def get_results(job_id: str = Path(...), request: Request = None):
-    validate_headers(request)
+async def get_results(job_id: str = Path(...)):
     if job_id != SELF["current_job"]:
         return Response("job not found", status_code=404)
 
@@ -127,12 +117,7 @@ async def get_results(job_id: str = Path(...), request: Request = None):
 
 
 @router.post("/shutdown")
-async def shutdown_node(request: Request, logger: Logger = Depends(get_logger)):
-    # Only allow shutdown requests from localhost (inside the shutdown script defined in main_svc)
-    if request.client.host != "127.0.0.1":
-        return Response("Shutdown endpoint can only be called from localhost", status_code=403)
-
-    start = time()
+async def shutdown_node(logger: Logger = Depends(get_logger)):
     SELF["SHUTTING_DOWN"] = True
     SELF["job_watcher_stop_event"].set()
 
@@ -162,12 +147,10 @@ async def execute(
     request_files: Optional[dict] = Depends(get_request_files),
     logger: Logger = Depends(get_logger),
     add_background_task: Callable = Depends(get_add_background_task_function),
-    request: Request = None,
 ):
     if SELF["RUNNING"] or SELF["BOOTING"]:
         return Response("Node currently running or booting, request refused.", status_code=409)
 
-    validate_headers(request)
     SELF["current_job"] = job_id
     SELF["RUNNING"] = True
 

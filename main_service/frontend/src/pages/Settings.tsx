@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useSettings } from "@/contexts/SettingsContext";
 import { SettingsForm } from "@/components/SettingsForm";
-import { ServiceAccounts } from "@/components/ServiceAccounts";
+// import { ServiceAccounts } from "@/components/ServiceAccounts";
 import { Button } from "@/components/ui/button";
 import { useSaveSettings } from "@/hooks/useSaveSettings";
 import { toast } from "@/components/ui/use-toast";
@@ -36,7 +36,6 @@ const SettingsPage = () => {
                 </div>
                 <div className="space-y-6">
                     <SettingsForm isEditing={isEditing} />
-                    {/* <ServiceAccounts isEditing={isEditing} /> */}
                 </div>
             </div>
         </div>

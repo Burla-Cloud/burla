@@ -35,7 +35,10 @@ def get_auth_headers() -> Tuple[str, str]:
         raise AuthException()
     else:
         auth_info = json.loads(CONFIG_PATH.read_text())
-        return {"email": auth_info["email"], "Authorization": f"Bearer {auth_info['auth_token']}"}
+        return {
+            "X-User-Email": auth_info["email"],
+            "Authorization": f"Bearer {auth_info['auth_token']}",
+        }
 
 
 def _get_login_response(client_id, attempt=0):

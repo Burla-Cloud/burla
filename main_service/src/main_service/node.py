@@ -29,7 +29,7 @@ from google.cloud.compute_v1 import (
     Scheduling,
 )
 
-from main_service import PROJECT_ID, CREDENTIALS, IN_LOCAL_DEV_MODE, CLUSTER_ID_TOKEN
+from main_service import PROJECT_ID, CREDENTIALS, IN_LOCAL_DEV_MODE
 from main_service.helpers import Logger, format_traceback
 
 
@@ -74,6 +74,7 @@ class Node:
         db: firestore.Client,
         logger: Logger,
         node_snapshot: DocumentSnapshot,
+        auth_headers: dict,
         instance_client: Optional[InstancesClient] = None,
     ):
         node_doc = node_snapshot.to_dict()
@@ -91,6 +92,7 @@ class Node:
         self.current_job = node_doc["current_job"]
         self.is_booting = node_doc["status"] == "BOOTING"
         self.instance_client = instance_client
+        self.auth_headers = auth_headers
         return self
 
     @classmethod
@@ -100,6 +102,7 @@ class Node:
         logger: Logger,
         machine_type: str,
         containers: list[Container],
+        auth_headers: dict,
         spot: bool = False,
         service_port: int = 8080,  # <- this needs to be open in your cloud firewall!
         as_local_container: bool = False,
@@ -114,6 +117,7 @@ class Node:
         self.logger = logger
         self.machine_type = machine_type
         self.containers = containers
+        self.auth_headers = auth_headers
         self.spot = spot
         self.port = service_port
         self.inactivity_shutdown_time_sec = inactivity_shutdown_time_sec
@@ -159,20 +163,6 @@ class Node:
         self.is_booting = False
         return self
 
-    def time_until_booted(self):
-        time_spent_booting = time() - self.started_booting_at
-        time_until_booted = TOTAL_BOOT_TIME - time_spent_booting
-        return max(0, time_until_booted)
-
-    def reboot(self):
-        try:
-            headers = {"Authorization": f"Bearer {CLUSTER_ID_TOKEN}", "X-Project-ID": PROJECT_ID}
-            response = requests.post(f"{self.host}/reboot", headers=headers)
-            response.raise_for_status()
-        except requests.exceptions.HTTPError as e:
-            if not "409" in str(e):  # 409 means node is already rebooting.
-                raise e
-
     def delete(self):
         """
         An `instance_client.delete` request creates an `operation` that runs in the background.
@@ -192,7 +182,7 @@ class Node:
 
         if self.host is not None:
             try:
-                response = requests.get(f"{self.host}/", timeout=2)
+                response = requests.get(f"{self.host}/", timeout=2, headers=self.auth_headers)
                 response.raise_for_status()
                 return response.json()["status"]
             except (ConnectionError, ConnectTimeout, Timeout):

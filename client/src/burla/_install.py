@@ -206,7 +206,7 @@ def _install(spinner):
 
         # tell backend service that email is authorized to run jobs in this project
         url = f"{_BURLA_BACKEND_URL}/v1/projects/{PROJECT_ID}"
-        response = requests.post(url, json={"cluster_owner_email": cluster_owner_email})
+        response = requests.post(url, headers={"X-User-Email": cluster_owner_email})
         if response.status_code == 200:
             cluster_id_token = response.json()["token"]
             # save token as secret

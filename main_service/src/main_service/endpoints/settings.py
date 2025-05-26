@@ -1,5 +1,4 @@
 import requests
-from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Request
 
@@ -11,7 +10,7 @@ BURLA_BACKEND_URL = "https://backend.burla.dev"
 
 
 @router.get("/v1/settings")
-def get_settings(logger: Logger = Depends(get_logger)):
+def get_settings(request: Request, logger: Logger = Depends(get_logger)):
     config_doc = DB.collection("cluster_config").document("cluster_config")
     config_dict = config_doc.get().to_dict()
     node = config_dict.get("Nodes", [{}])[0]
@@ -55,10 +54,13 @@ async def update_settings(request: Request, logger: Logger = Depends(get_logger)
     nodes[0]["containers"] = [container]
     config_ref.update({"Nodes": nodes})
 
+    email = request.session.get("X-User-Email")
+    authorization = request.session.get("Authorization")
+    headers = {"Authorization": authorization, "X-User-Email": email}
+
     # updates users in backend service
     users_url = f"{BURLA_BACKEND_URL}/v1/projects/{PROJECT_ID}/users"
-    headers = {"Authorization": f"Bearer {CLUSTER_ID_TOKEN}"}
-    response = requests.get(users_url, headers=headers)
+    response = requests.get(users_url, headers={"Authorization": f"Bearer {CLUSTER_ID_TOKEN}"})
     response.raise_for_status()
     current_user_emails = [user["email"] for user in response.json()["authorized_users"]]
     new_user_emails = request_json.get("users", [])

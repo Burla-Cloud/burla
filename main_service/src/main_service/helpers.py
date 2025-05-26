@@ -69,14 +69,3 @@ class Logger:
                 requests.post(f"{BURLA_BACKEND_URL}/v1/telemetry/log/ERROR", json=json, timeout=1)
             except Exception:
                 pass
-
-
-def validate_headers_and_login(request: Request):
-
-    headers = {"authorization": request.headers.get("Authorization")}
-    if request.headers.get("Email"):
-        headers["Email"] = request.headers.get("Email")
-
-    response = requests.get(f"{BURLA_BACKEND_URL}/v1/private/user_info", headers=headers)
-    response.raise_for_status()
-    return response.json()

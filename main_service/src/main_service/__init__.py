@@ -176,17 +176,13 @@ async def catch_errors(request: Request, call_next):
     try:
         # Important to note that HTTP exceptions do not raise errors here!
         return await call_next(request)
-    except Exception as e:
+    except Exception as exception:
         # create new response object to return gracefully.
         response = Response(status_code=500, content="Internal server error.")
-        response.background = BackgroundTasks()
-        logger = Logger(request)
-        add_background_task = get_add_background_task_function(response.background, logger=logger)
-
         exc_type, exc_value, exc_traceback = sys.exc_info()
         tb_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
         traceback_str = format_traceback(tb_details)
-        add_background_task(logger.log, str(e), "ERROR", traceback=traceback_str)
+        Logger(request).log(str(exception), "ERROR", traceback=traceback_str)
         return response
 
 
@@ -202,7 +198,7 @@ async def validate_requests(request: Request, call_next):
             async with session.get(token_url) as response:
                 if response.status == 200:
                     data = await response.json()
-                    request.session["email"] = data["email"]
+                    request.session["X-User-Email"] = data["email"]
                     request.session["Authorization"] = f"Bearer {data['token']}"
 
         base_url = f"{request.url.scheme}://{request.url.netloc}{request.url.path}"
@@ -212,13 +208,12 @@ async def validate_requests(request: Request, call_next):
         return response
 
     # validate user is authorized
-    email = request.session.get("email")
-    token = request.session.get("Authorization")
-    if email and token:
+    email = request.session.get("X-User-Email")
+    authorization = request.session.get("Authorization")
+    if email and authorization:
         async with aiohttp.ClientSession() as session:
             url = f"{BURLA_BACKEND_URL}/v1/projects/{PROJECT_ID}/users:validate"
-            headers = {"Authorization": f"Bearer {CLUSTER_ID_TOKEN}"}
-            headers.update({"X-Validate-Token": token, "X-Validate-Email": email})
+            headers = {"Authorization": authorization, "X-User-Email": email}
             async with session.get(url, headers=headers) as response:
                 if response.status == 200:
                     return await call_next(request)

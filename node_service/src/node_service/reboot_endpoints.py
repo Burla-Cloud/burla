@@ -4,7 +4,7 @@ from typing import Optional
 import concurrent.futures
 
 import docker
-from fastapi import APIRouter, Depends, Response, Request
+from fastapi import APIRouter, Depends, Response
 from google.cloud import firestore
 
 from node_service import (
@@ -27,19 +27,10 @@ router = APIRouter()
 
 @router.post("/reboot")
 def reboot_containers_endpoint(
-    request: Request,
-    new_container_config: Optional[list[Container]] = None,
-    logger: Logger = Depends(get_logger),
+    new_container_config: Optional[list[Container]] = None, logger: Logger = Depends(get_logger)
 ):
     if SELF["BOOTING"]:
         return Response("Node already BOOTING, unable to satisfy request.", status_code=409)
-
-    # check this request comes from authorized source
-    token = request.headers.get("Authorization", "").replace("Bearer ", "")
-    project_id_header = request.headers.get("X-Project-ID")
-    if token != CLUSTER_ID_TOKEN or project_id_header != PROJECT_ID:
-        return Response("Invalid authentication", status_code=401)
-
     return reboot_containers(new_container_config, logger)
 
 

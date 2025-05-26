@@ -11,12 +11,13 @@ import logging as python_logging
 from contextlib import asynccontextmanager
 from threading import Event
 
+import aiohttp
 import google.auth
 from google.auth.transport.requests import Request
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 from fastapi import FastAPI, Request, BackgroundTasks, Depends
-from fastapi.responses import Response
+from fastapi.responses import Response, RedirectResponse
 from starlette.datastructures import UploadFile
 from google.cloud import logging, secretmanager
 from google.cloud.compute_v1 import InstancesClient
@@ -202,29 +203,95 @@ def get_status():
 
 
 @app.middleware("http")
-async def log_and_time_requests__log_errors(request: Request, call_next):
+async def handle_errors(request: Request, call_next):
     """
     Fastapi `@app.exception_handler` will completely hide errors if middleware is used.
-    Catching errors in a `Depends` function will not distinguish http errors
-        originating here vs from other services.
+    Catching errors in a `Depends` function will not distinguish
+        http errors originating here vs other services.
     """
-    start = time()
-    request.state.uuid = uuid4().hex
-    logger = Logger(request)  # Yes this is a duplicate logger, it's ok because init is really fast.
-    not_requesting_udf_results = not str(request.url).endswith("/results")  # too many to log
-    not_requesting_udf_results = True if IN_LOCAL_DEV_MODE else not_requesting_udf_results
-
     try:
         # Important to note that HTTP exceptions do not raise errors here!
         response = await call_next(request)
     except Exception as exception:
+        # create new response object to return gracefully.
         response = Response(status_code=500, content="Internal server error.")
         exc_type, exc_value, exc_traceback = sys.exc_info()
         tb_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
         traceback_str = format_traceback(tb_details)
-        logger.log(str(exception), "ERROR", traceback=traceback_str)
+        Logger(request).log(str(exception), "ERROR", traceback=traceback_str)
+
+    # make background tasks availabe:
+    logger = Logger(request)
+    has_background_tasks = getattr(response, "background") is not None
+    response.background = response.background if has_background_tasks else BackgroundTasks()
+    add_background_task = get_add_background_task_function(response.background, logger=logger)
+
+    # handle response failure/success:
+    if response.status_code == 500 and not str(request.url).endswith("/shutdown"):
+        add_background_task(reboot_containers, logger=logger)
+    if response.status_code == 200:
+        SELF["last_activity_timestamp"] = time()
+
+    return response
+
+
+@app.middleware("http")
+async def validate_requests(request: Request, call_next):
+    """
+    How request validation works:
+    - SELF["authorized_users"] is pre-loaded in the reboot endpoint.
+    - If user/token doesn't match any authorized_users, refresh and try again before returning 401
+    - Shutdown endpoint only callable from localhost (inside the shutdown script in the main_svc).
+    """
+
+    # validate shutdown requests
+    is_shutdown_request = str(request.url).endswith("/shutdown")
+    if is_shutdown_request:
+        if request.client.host == "127.0.0.1":
+            return await call_next(request)
+        else:
+            return Response("Shutdown endpoint can only be called from localhost", status_code=403)
+
+    # validate all other requests:
+    invalid_headers = True
+    email = request.headers.get("X-User-Email")
+    token = request.headers.get("Authorization", "").replace("Bearer ", "")
+
+    for user_dict in SELF["authorized_users"]:
+        if email == user_dict["email"] and token == user_dict["token"]:
+            invalid_headers = False
+
+    if invalid_headers:
+        # refresh and try again:
+        headers = {"Authorization": f"Bearer {CLUSTER_ID_TOKEN}"}
+        url = f"{BURLA_BACKEND_URL}/v1/projects/{PROJECT_ID}/users"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=headers) as response:
+                response.raise_for_status()
+                response_json = await response.json()
+                SELF["authorized_users"] = response_json["authorized_users"]
+
+        for user_dict in SELF["authorized_users"]:
+            if email == user_dict["email"] and token == user_dict["token"]:
+                invalid_headers = False
+
+    if invalid_headers:
+        return Response(status_code=401, content="Unauthorized.")
+
+    return await call_next(request)
+
+
+@app.middleware("http")
+async def log_and_time_requests(request: Request, call_next):
+    start = time()
+    request.state.uuid = uuid4().hex
+    not_requesting_udf_results = not str(request.url).endswith("/results")  # too many to log
+    not_requesting_udf_results = True if IN_LOCAL_DEV_MODE else not_requesting_udf_results
+
+    response = await call_next(request)
 
     # ensure background tasks are availabe:
+    logger = Logger(request)
     has_background_tasks = getattr(response, "background") is not None
     response.background = response.background if has_background_tasks else BackgroundTasks()
     add_background_task = get_add_background_task_function(response.background, logger=logger)
@@ -239,7 +306,7 @@ async def log_and_time_requests__log_errors(request: Request, call_next):
         response_text = body.decode("utf-8", errors="ignore")
         logger.log(f"non-2xx status response: {response.status_code}: {response_text}", "WARNING")
 
-        async def body_stream():  # it has to be ugly like this :(
+        async def body_stream():  #  <- it has to be ugly like this :(
             yield body
 
         response.body_iterator = body_stream()
@@ -247,10 +314,5 @@ async def log_and_time_requests__log_errors(request: Request, call_next):
         latency = time() - start
         msg = f"{request.method} to {request.url} returned 200 after {latency}s."
         add_background_task(logger.log, msg, latency=latency)
-
-    if response.status_code == 500 and not str(request.url).endswith("/shutdown"):
-        add_background_task(reboot_containers, logger=logger)
-    if response.status_code == 200:
-        SELF["last_activity_timestamp"] = time()
 
     return response

@@ -164,7 +164,7 @@ async def _execute_job(
             "user_python_version": f"3.{sys.version_info.minor}",
             "max_parallelism": max_parallelism,
             "target_parallelism": total_target_parallelism,
-            "user": auth_headers["email"],
+            "user": auth_headers["X-User-Email"],
             "started_at": time(),
             "last_ping_from_client": time(),
             "is_background_job": background,

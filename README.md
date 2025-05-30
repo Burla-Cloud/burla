@@ -31,7 +31,6 @@ With Burla, running code in the cloud feels the same as coding locally:
 
 If you want to contribute, send me an [email](mailto:jake@burla.dev)!  
 We are still early so there is quite a bit of undocumented / manual setup necessary to get a dev environment going.  
-Please read the [how-it-works](https://docs.burla.dev/how-does-it-work) page as a prerequisite.
   
 Here is a quick attempt to explain how dev works. The cluster can be run in three modes:
 - `local dev mode`:  

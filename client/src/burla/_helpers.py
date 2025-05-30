@@ -3,6 +3,7 @@ import sys
 import signal
 import ast
 import inspect
+import requests
 
 import google.auth
 from google.cloud.firestore import Client
@@ -10,6 +11,7 @@ from google.cloud.firestore_v1.async_client import AsyncClient
 from google.auth.exceptions import DefaultCredentialsError
 from yaspin import yaspin
 
+from burla import _BURLA_BACKEND_URL
 
 N_FOUR_STANDARD_CPU_TO_RAM = {1: 4, 2: 8, 4: 16, 8: 32, 16: 64, 32: 128, 48: 192, 64: 256, 80: 320}
 POSIX_SIGNALS_TO_HANDLE = ["SIGINT", "SIGTERM", "SIGHUP", "SIGQUIT"]
@@ -72,3 +74,17 @@ def spinner_with_signal_handlers():
         sys.exit(0)
 
     return yaspin(sigmap={sig: _signal_handler for sig in SIGNALS_TO_HANDLE})
+
+
+def _log_telemetry(message, severity="INFO", **kwargs):
+    try:
+        json = {"message": message, **kwargs}
+        response = requests.post(f"{_BURLA_BACKEND_URL}/v1/telemetry/log/{severity}", json=json)
+        response.raise_for_status()
+    except Exception as e:
+        # exc_type, exc_value, exc_traceback = sys.exc_info()
+        # traceback_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
+        # traceback_str = "".join(traceback_details)
+        # print(f"Error logging telemetry: {e}", file=sys.stderr)
+        # print(f"Traceback: {traceback_str}", file=sys.stderr)
+        pass

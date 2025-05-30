@@ -34,6 +34,7 @@ from burla._helpers import (
     spinner_with_signal_handlers,
     parallelism_capacity,
     has_explicit_return,
+    _log_telemetry,
 )
 
 
@@ -363,6 +364,13 @@ def remote_parallel_map(
         pass
 
     job_id = str(uuid4())
+    _, project_id = google.auth.default()
+
+    msg = f"RPM called with: {len(inputs)} inputs, func_cpu={func_cpu}, func_ram={func_ram}, "
+    msg += f"background={background}, generator={generator}, spinner={spinner}, "
+    msg += f"max_parallelism={max_parallelism}, job_id={job_id}"
+    _log_telemetry(msg, project_id=project_id)
+
     return_queue = Queue()
     try:
         if spinner:
@@ -396,7 +404,6 @@ def remote_parallel_map(
             raise execute_job.exc_info[1].with_traceback(execute_job.exc_info[2])
 
         if background:
-            _, project_id = google.auth.default()
             client = ServicesClient()
             service_path = client.service_path(project_id, "us-central1", "burla-main-service")
             job_url = f"{client.get_service(name=service_path).uri}/jobs/{job_id}"
@@ -419,6 +426,8 @@ def remote_parallel_map(
             spinner.text = msg
             spinner.ok("✔")
 
+        _log_telemetry(f"Job {job_id} returned successfully.", project_id=project_id)
+
         return _output_generator() if generator else list(_output_generator())
 
     except Exception:
@@ -428,15 +437,14 @@ def remote_parallel_map(
         try:
             sync_db, _ = get_db_clients()
             sync_db.collection("jobs").document(job_id).update({"status": "FAILED"})
-            _, project_id = google.auth.default()
 
             # Report errors back to Burla's cloud.
             exc_type, exc_value, exc_traceback = sys.exc_info()
             traceback_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
             traceback_str = "".join(traceback_details)
-            json = {"project_id": project_id, "message": exc_type, "traceback": traceback_str}
-            requests.post(f"{_BURLA_BACKEND_URL}/v1/telemetry/log/ERROR", json=json, timeout=1)
-        except Exception:
+            kwargs = dict(traceback=traceback_str, project_id=project_id, job_id=job_id)
+            _log_telemetry(exc_type, severity="ERROR", **kwargs)
+        except:
             pass
 
         raise

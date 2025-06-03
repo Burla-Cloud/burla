@@ -58,7 +58,7 @@ def _max_total_runtime(sleep_times, num_workers):
 
 def test_base():
 
-    my_inputs = list(range(30))
+    my_inputs = list(range(100))
 
     # my_inputs = [1 for _ in range(15_000)]
     # my_inputs[4321] = 90
@@ -71,9 +71,9 @@ def test_base():
     # print("")
 
     # make inputs bigger
-    # INPUT_SIZE = 1_000_000
-    INPUT_SIZE = 10
-    # my_inputs = [{"sleep_time": my_input, "blob": bytes(INPUT_SIZE)} for my_input in my_inputs]
+    INPUT_SIZE = 99 * 1_000_000
+    # INPUT_SIZE = 10
+    my_inputs = [{"sleep_time": my_input, "blob": bytes(INPUT_SIZE)} for my_input in my_inputs]
 
     start = time()
 
@@ -85,14 +85,16 @@ def test_base():
 
         # print("hi")
 
-        # blob_size_mb = len(test_input["blob"]) / 1_000_000
-        # print(f"Sleeping for {test_input['sleep_time']}s, blob size: {blob_size_mb:.2f} MB")
-        sleep(1)
+        blob_size_mb = len(test_input["blob"]) / 1_000_000
+        print(f"Sleeping for {test_input['sleep_time']}s, blob size: {blob_size_mb:.2f} MB")
+        # sleep(1)
 
         return test_input
 
     # results = remote_parallel_map(simple_test_function, my_inputs)
     results = remote_parallel_map(simple_test_function, my_inputs)  # , background=True)
+
+    print(len(results))
 
     e2e_runtime = time() - start
 

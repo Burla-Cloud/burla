@@ -2,19 +2,18 @@ import sys
 import pickle
 import json
 import inspect
-import aiohttp
 import asyncio
-import requests
 import traceback
+from asyncio import create_task
 from time import time
 from six import reraise
 from queue import Queue
-from asyncio import create_task
 from uuid import uuid4
 from typing import Callable, Optional, Union
 from contextlib import AsyncExitStack
 from threading import Thread
 
+import aiohttp
 import cloudpickle
 from tblib import Traceback
 import google.auth
@@ -23,17 +22,18 @@ from google.cloud.firestore import FieldFilter
 from google.cloud.firestore_v1.async_client import AsyncClient
 from yaspin import Spinner
 
-from burla import __version__, _BURLA_BACKEND_URL
-from burla._auth import get_auth_headers, AuthException
-from burla._background_threads import (
+from burla import __version__
+from burla._auth import get_auth_headers
+from burla._background_stuff import (
     upload_inputs,
-    send_alive_pings,
+    send_alive_pings_in_background,
 )
 from burla._helpers import (
     get_db_clients,
     spinner_with_signal_handlers,
     parallelism_capacity,
     has_explicit_return,
+    _log_telemetry,
 )
 
 
@@ -148,6 +148,7 @@ async def _execute_job(
     auth_headers = get_auth_headers()
     sync_db, async_db = get_db_clients()
     log_msg_stdout = spinner if spinner else sys.stdout
+    function_pkl = cloudpickle.dumps(function_)
 
     nodes_to_assign, total_target_parallelism = await _select_nodes_to_assign_to_job(
         async_db, max_parallelism, func_cpu, func_ram, spinner
@@ -181,7 +182,7 @@ async def _execute_job(
         }
         data = aiohttp.FormData()
         data.add_field("request_json", json.dumps(request_json))
-        data.add_field("function_pkl", cloudpickle.dumps(function_))
+        data.add_field("function_pkl", function_pkl)
 
         url = f"{node['host']}/jobs/{job_id}"
         async with session.post(url, data=data, headers=auth_headers) as response:
@@ -203,11 +204,11 @@ async def _execute_job(
         connector = aiohttp.TCPConnector(limit=500, limit_per_host=100)
         session = await stack.enter_async_context(aiohttp.ClientSession(connector=connector))
 
+        ping_exception_queue = None
         if not background:
-            # constantly update last_ping_from_client to signal that the client is still listening
-            # kinda feels like this gets more attention when in a thread than an asyncio task
-            # but I'm not positive. It still struggles sometimes to send pings in time.
-            Thread(target=send_alive_pings, args=(sync_db, job_id), daemon=True).start()
+            # Constantly update firestore to tell nodes client is still listening.
+            ping_process, ping_exception_queue = await send_alive_pings_in_background(job_id)
+            stack.callback(ping_process.kill)
 
             # stream stdout back to client
             logs_collection = sync_db.collection("jobs").document(job_id).collection("logs")
@@ -239,17 +240,9 @@ async def _execute_job(
                 elif response.status != 200:
                     raise Exception(f"Result-check failed for node: {node['instance_name']}")
 
-                total_bytes = 0
                 return_values = []
-                response_content = await response.content.read()
-                node_status = await asyncio.to_thread(pickle.loads, response_content)
+                node_status = pickle.loads(await response.content.read())
                 for input_index, is_error, result_pkl in node_status["results"]:
-
-                    total_bytes += len(result_pkl)
-                    if total_bytes > 1000:
-                        await asyncio.sleep(0)
-                        total_bytes = 0
-
                     if is_error:
                         exc_info = pickle.loads(result_pkl)
                         traceback = Traceback.from_dict(exc_info["traceback_dict"]).as_traceback()
@@ -283,6 +276,11 @@ async def _execute_job(
 
             if uploader_task.done() and uploader_task.exception():
                 raise uploader_task.exception()
+
+            if ping_exception_queue and not ping_exception_queue.empty():
+                exc_info = pickle.loads(ping_exception_queue.get())
+                traceback = Traceback.from_dict(exc_info["traceback_dict"]).as_traceback()
+                reraise(tp=exc_info["type"], value=exc_info["exception"], tb=traceback)
 
             if spinner:
                 spinner.text = (
@@ -363,6 +361,13 @@ def remote_parallel_map(
         pass
 
     job_id = str(uuid4())
+    _, project_id = google.auth.default()
+
+    msg = f"RPM called with: {len(inputs)} inputs, func_cpu={func_cpu}, func_ram={func_ram}, "
+    msg += f"background={background}, generator={generator}, spinner={spinner}, "
+    msg += f"max_parallelism={max_parallelism}, job_id={job_id}"
+    _log_telemetry(msg, project_id=project_id)
+
     return_queue = Queue()
     try:
         if spinner:
@@ -396,7 +401,6 @@ def remote_parallel_map(
             raise execute_job.exc_info[1].with_traceback(execute_job.exc_info[2])
 
         if background:
-            _, project_id = google.auth.default()
             client = ServicesClient()
             service_path = client.service_path(project_id, "us-central1", "burla-main-service")
             job_url = f"{client.get_service(name=service_path).uri}/jobs/{job_id}"
@@ -419,6 +423,7 @@ def remote_parallel_map(
             spinner.text = msg
             spinner.ok("✔")
 
+        _log_telemetry(f"Job {job_id} returned successfully.", project_id=project_id)
         return _output_generator() if generator else list(_output_generator())
 
     except Exception:
@@ -428,15 +433,14 @@ def remote_parallel_map(
         try:
             sync_db, _ = get_db_clients()
             sync_db.collection("jobs").document(job_id).update({"status": "FAILED"})
-            _, project_id = google.auth.default()
 
             # Report errors back to Burla's cloud.
             exc_type, exc_value, exc_traceback = sys.exc_info()
             traceback_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
             traceback_str = "".join(traceback_details)
-            json = {"project_id": project_id, "message": exc_type, "traceback": traceback_str}
-            requests.post(f"{_BURLA_BACKEND_URL}/v1/telemetry/log/ERROR", json=json, timeout=1)
-        except Exception:
+            kwargs = dict(traceback=traceback_str, project_id=project_id, job_id=job_id)
+            _log_telemetry(exc_type, severity="ERROR", **kwargs)
+        except:
             pass
 
         raise

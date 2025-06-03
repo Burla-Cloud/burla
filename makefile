@@ -7,6 +7,9 @@ ACCESS_TOKEN := $(shell gcloud auth print-access-token)
 MAIN_SVC_IMAGE_NAME := us-docker.pkg.dev/$(PROJECT_ID)/burla-main-service/burla-main-service:latest
 
 
+local-dashboard:
+	BURLA_DASHBOARD_URL=http://localhost:5001 poetry -C ./client run burla dashboard
+
 demo:
 	poetry -C ./client run python client/tests/demo/demo.py
 

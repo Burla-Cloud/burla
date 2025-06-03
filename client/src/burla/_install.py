@@ -7,6 +7,7 @@ from yaspin import yaspin
 from google.cloud.firestore import Client
 
 from burla import _BURLA_BACKEND_URL
+from burla._helpers import _log_telemetry
 
 
 python_version = f"{sys.version_info.major}.{sys.version_info.minor}"
@@ -62,20 +63,6 @@ def main_service_url():
             return line.split()[1]
 
 
-def _log_telemetry(message, severity="INFO", **kwargs):
-    try:
-        json = {"message": message, **kwargs}
-        response = requests.post(f"{_BURLA_BACKEND_URL}/v1/telemetry/log/{severity}", json=json)
-        response.raise_for_status()
-    except Exception as e:
-        # exc_type, exc_value, exc_traceback = sys.exc_info()
-        # traceback_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
-        # traceback_str = "".join(traceback_details)
-        # print(f"Error logging telemetry: {e}", file=sys.stderr)
-        # print(f"Traceback: {traceback_str}", file=sys.stderr)
-        pass
-
-
 def install():
     """Install or Update the Burla cluster in your current default Google Cloud Project.
 
@@ -112,6 +99,7 @@ def _install(spinner):
         msg = "Error: Google Cloud SDK (gcloud) is not installed or not in your PATH.\n"
         msg += "Please install the Google Cloud SDK from: https://cloud.google.com/sdk/docs/install"
         print(msg, file=sys.stderr)
+        _log_telemetry("User does not have gcloud installed.")
         sys.exit(1)
     spinner.text = "Checking for gcloud ... Done."
     spinner.ok("✓")
@@ -127,7 +115,9 @@ def _install(spinner):
         msg += "Please run 'gcloud auth login' before installing Burla."
         print("")
         print(msg, file=sys.stderr)
+        _log_telemetry("User has gcloud but is not logged in.")
         sys.exit(1)
+
     cmd = "gcloud auth application-default print-access-token 2>/dev/null"
     result = _run_command(cmd, raise_error=False)
     if result.returncode != 0 and result.stdout == b"":
@@ -136,6 +126,7 @@ def _install(spinner):
         msg += "Please run 'gcloud auth application-default login' before installing Burla."
         print("")
         print(msg, file=sys.stderr)
+        _log_telemetry("User has gcloud but is not logged in with application-default credentials.")
         sys.exit(1)
     spinner.text = "Checking for gcloud credentials ... Done."
     spinner.ok("✓")
@@ -151,6 +142,7 @@ def _install(spinner):
         msg += "Please run 'gcloud config set project <YOUR_PROJECT_ID>' before installing Burla."
         print("")
         print(msg, file=sys.stderr)
+        _log_telemetry("User is logged in but does not have a project set.")
         sys.exit(1)
     spinner.text = f"Checking for gcloud project ... Using project: {PROJECT_ID}"
     spinner.ok("✓")
@@ -164,7 +156,7 @@ def _install(spinner):
     _run_command("gcloud services enable run.googleapis.com")
     _run_command("gcloud services enable firestore.googleapis.com")
     _run_command("gcloud services enable cloudresourcemanager.googleapis.com")
-    _run_command("gcloud services enable iap.googleapis.com")
+    _run_command("gcloud services enable secretmanager.googleapis.com")
     spinner.text = "Enabling required services... Done."
     spinner.ok("✓")
 
@@ -265,7 +257,7 @@ def _install(spinner):
     # print success message
     msg = f"\nSuccess! To view your new dashboard run `burla dashboard`\n"
     msg += f"Quickstart:\n"
-    msg += f"  1. Start your cluster at the link above ^\n"
+    msg += f'  1. Start your cluster by hitting "⏻ Start" in the dashboard\n'
     msg += f"  2. Import and call `remote_parallel_map`!\n\n"
     msg += f"Don't hesitate to E-Mail jake@burla.dev, or call me at 508-320-8778, thank you for using Burla!"
     spinner.write(msg)

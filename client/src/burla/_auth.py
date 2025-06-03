@@ -83,7 +83,10 @@ def login():
 def dashboard():
     """Open your Burla dashboard in your browser."""
 
-    dashboard_url = main_service_url()
+    if os.getenv("BURLA_DASHBOARD_URL"):
+        dashboard_url = os.getenv("BURLA_DASHBOARD_URL")
+    else:
+        dashboard_url = main_service_url()
 
     client_id = uuid4().hex
     login_url = f"{_BURLA_BACKEND_URL}/v1/login/{client_id}?redirect_url={dashboard_url}"

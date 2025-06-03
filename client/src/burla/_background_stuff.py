@@ -1,13 +1,17 @@
+import os
+import sys
 import logging
 import asyncio
 import aiohttp
 import pickle
+import importlib.machinery
 from time import time, sleep
-import os
+from multiprocessing import Process, Queue
 
 import cloudpickle
-from google.cloud.firestore import Client
+from tblib import Traceback
 
+from burla._helpers import get_db_clients
 
 # throws some uncatchable, unimportant, warnings
 logging.getLogger("google.api_core.bidi").setLevel(logging.ERROR)
@@ -20,19 +24,48 @@ class InputTooBig(Exception):
     pass
 
 
-def send_alive_pings(sync_db: Client, job_id: str):
-    job_doc = sync_db.collection("jobs").document(job_id)
-    last_ping_time = time()
-    starve_time = 2
-    while True:
-        sleep(1)
-        current_time = time()
-        job_doc.update({"last_ping_from_client": current_time})
-        last_ping_time = current_time
+def _send_alive_pings(job_id: str, ping_exception_queue: Queue):
+    try:
+        sync_db, _ = get_db_clients()
+        job_doc = sync_db.collection("jobs").document(job_id)
+        while True:
+            sleep(1)
+            current_time = time()
+            job_doc.update({"last_ping_from_client": current_time})
 
-        if current_time - last_ping_time > starve_time:
-            starve_time = current_time - last_ping_time
-            print(f"\nWARNING: ping thread starve increased! ({starve_time}s)")
+    except Exception:
+        exception_type, exception, traceback = sys.exc_info()
+        pickled_exception_info = pickle.dumps(
+            dict(
+                type=exception_type,
+                exception=exception,
+                traceback_dict=Traceback(traceback).to_dict(),
+            )
+        )
+        ping_exception_queue.put(pickled_exception_info)
+
+
+async def send_alive_pings_in_background(job_id: str):
+    """
+    Constantly update `last_ping_from_client` in Firestore to tell nodes client is still listening.
+    This must run in a separate process.
+    Otherwise, at when a lots of stuff (high parallelism, large inputs/outputs, or both) is
+    happening the thread or async task (tried both) are starved, causing Nodes to believe the
+    client disconnected (which it didn't) and restart, causing the job to fail.
+    """
+    # This is a hack that makes multiprocessing NOT re-run the __main__ module when the separate
+    # process is spawned. This removes the requirement for the user to do:
+    # `if __name__ == "__main__":` at the start of their script.
+    _main = sys.modules["__main__"]
+    if getattr(_main, "__spec__", None) is None:
+        _main.__spec__ = importlib.machinery.ModuleSpec(name="__main__", loader=None)
+
+    # daemon process dies automatically when main process dies.
+    ping_exception_queue = Queue()
+    send_alive_ping_args = (job_id, ping_exception_queue)
+    ping_process = Process(target=_send_alive_pings, args=send_alive_ping_args, daemon=True)
+    ping_process.start()
+    return ping_process, ping_exception_queue
 
 
 async def upload_inputs(
@@ -60,7 +93,7 @@ async def upload_inputs(
     async def _chunk_inputs_by_size_generator(
         inputs: list,
         start_index: int,
-        min_chunk_size: int = 1_000_000 * 1,  # 1MB
+        min_chunk_size: int = 1_000_000 * 6,  # 6MB
         max_chunk_size: int = 1_000_000 * 1000,  # 1GB
     ):
         current_chunk = []

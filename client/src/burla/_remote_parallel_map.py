@@ -53,6 +53,10 @@ class NoCompatibleNodes(Exception):
     pass
 
 
+class FirestoreTimeout(Exception):
+    pass
+
+
 class UnknownClusterError(Exception):
     def __init__(self):
         msg = "\nAn unknown error occurred inside your Burla cluster, "
@@ -92,7 +96,20 @@ async def _num_booting_nodes(db: AsyncClient):
 
 async def _get_ready_nodes(db: AsyncClient):
     filter_ = FieldFilter("status", "==", "READY")
-    return [n.to_dict() async for n in db.collection("nodes").where(filter=filter_).stream()]
+    ready_node_iterator = db.collection("nodes").where(filter=filter_).stream()
+
+    # get first doc, takes 0.1-0.3s independant of number of documents/matches in collection
+    try:
+        first_ready_node = await asyncio.wait_for(anext(ready_node_iterator), 2)
+    except StopAsyncIteration:
+        return []
+    except asyncio.TimeoutError:
+        msg = "\nFirestore request timed out after 2s.\n"
+        msg += "This almost always means your Google Cloud credentials have expired!\n"
+        msg += "Please run `gcloud auth application-default login` then try again.\n"
+        raise FirestoreTimeout(msg)
+
+    return [first_ready_node.to_dict()] + [n.to_dict() async for n in ready_node_iterator]
 
 
 async def _select_nodes_to_assign_to_job(
@@ -426,15 +443,21 @@ def remote_parallel_map(
         _log_telemetry(f"Job {job_id} returned successfully.", project_id=project_id)
         return _output_generator() if generator else list(_output_generator())
 
-    except Exception:
+    except Exception as e:
         if spinner:
             spinner.stop()
 
-        try:
-            sync_db, _ = get_db_clients()
-            sync_db.collection("jobs").document(job_id).update({"status": "FAILED"})
+        # After a `FirestoreTimeout` further attempts to use firestore will take forever then fail.
+        if not isinstance(e, FirestoreTimeout):
+            try:
+                sync_db, _ = get_db_clients()
+                sync_db.collection("jobs").document(job_id).update({"status": "FAILED"})
+            except Exception:
+                pass
 
+        try:
             # Report errors back to Burla's cloud.
+            _, project_id = google.auth.default()
             exc_type, exc_value, exc_traceback = sys.exc_info()
             traceback_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
             traceback_str = "".join(traceback_details)

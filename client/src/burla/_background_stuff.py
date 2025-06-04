@@ -79,7 +79,7 @@ async def upload_inputs(
     async def _upload_inputs_single_node(session, node):
         async for input_chunk in node["input_chunks"]:  # <- actual pickling/chunking happens here
             data = aiohttp.FormData()
-            inputs_pkl_with_idx = await asyncio.to_thread(pickle.dumps, input_chunk)
+            inputs_pkl_with_idx = pickle.dumps(input_chunk)
             data.add_field("inputs_pkl_with_idx", inputs_pkl_with_idx)
 
             url = f"{node['host']}/jobs/{job_id}/inputs"

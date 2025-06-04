@@ -204,22 +204,19 @@ async def _execute_job(
         connector = aiohttp.TCPConnector(limit=500, limit_per_host=100)
         session = await stack.enter_async_context(aiohttp.ClientSession(connector=connector))
 
-        ping_exception_queue = None
+        # start stdout/stderr stream
         if not background:
-            # Constantly update firestore to tell nodes client is still listening.
-            ping_process, ping_exception_queue = await send_alive_pings_in_background(job_id)
-            stack.callback(ping_process.kill)
-
-            # stream stdout back to client
             logs_collection = sync_db.collection("jobs").document(job_id).collection("logs")
             log_stream = logs_collection.on_snapshot(_on_new_log_message)
             stack.callback(log_stream.unsubscribe)
 
+        # send function to every node
         assign_node_tasks = [assign_node(node, session) for node in nodes_to_assign]
         nodes = [node for node in await asyncio.gather(*assign_node_tasks) if node]
         if not nodes:
             raise Exception("Job refused by all available Nodes!")
 
+        # start uploading inputs
         uploader_task = create_task(upload_inputs(job_id, nodes, inputs, session, auth_headers))
 
         if background:
@@ -227,6 +224,12 @@ async def _execute_job(
                 spinner.text = f"Uploading {len(inputs)} inputs to {len(nodes)} nodes ..."
             await uploader_task
             return
+
+        # start sending "I am alive" pings to nodes
+        ping_exception_queue = None
+        if not background:
+            ping_process, ping_exception_queue = await send_alive_pings_in_background(job_id)
+            stack.callback(ping_process.kill)
 
         if spinner:
             msg = f"Running {len(inputs)} inputs through `{function_.__name__}` "
@@ -393,7 +396,7 @@ def remote_parallel_map(
             except Exception as e:
                 execute_job.exc_info = sys.exc_info()
 
-        t = Thread(target=execute_job)
+        t = Thread(target=execute_job, daemon=True)
         t.start()
         t.join()
 

@@ -17,7 +17,8 @@ from google.auth.transport.requests import Request
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 from fastapi import FastAPI, Request, BackgroundTasks, Depends
-from fastapi.responses import Response, RedirectResponse
+from fastapi.responses import Response
+from starlette.requests import ClientDisconnect
 from starlette.datastructures import UploadFile
 from google.cloud import logging, secretmanager
 from google.cloud.compute_v1 import InstancesClient
@@ -212,6 +213,8 @@ async def handle_errors(request: Request, call_next):
     try:
         # Important to note that HTTP exceptions do not raise errors here!
         response = await call_next(request)
+    except ClientDisconnect:
+        response = Response(status_code=499, content="client closed request")
     except Exception as exception:
         # create new response object to return gracefully.
         response = Response(status_code=500, content="Internal server error.")
@@ -228,7 +231,10 @@ async def handle_errors(request: Request, call_next):
 
     # handle response failure/success:
     if response.status_code == 500 and not str(request.url).endswith("/shutdown"):
-        add_background_task(reboot_containers, logger=logger)
+        try:
+            add_background_task(reboot_containers, logger=logger)
+        except Exception:
+            pass
     if response.status_code == 200:
         SELF["last_activity_timestamp"] = time()
 
@@ -287,11 +293,17 @@ async def log_and_time_requests(request: Request, call_next):
     request.state.uuid = uuid4().hex
     not_requesting_udf_results = not str(request.url).endswith("/results")  # too many to log
     not_requesting_udf_results = True if IN_LOCAL_DEV_MODE else not_requesting_udf_results
+    logger = Logger(request)
 
-    response = await call_next(request)
+    try:
+        response = await call_next(request)
+    except RuntimeError as e:
+        # Thrown when client disconnects during request, cannot be caught elsewhere
+        if not "No response returned." in str(e):
+            raise e
+        response = Response(status_code=499, content="Client disconnected.")
 
     # ensure background tasks are availabe:
-    logger = Logger(request)
     has_background_tasks = getattr(response, "background") is not None
     response.background = response.background if has_background_tasks else BackgroundTasks()
     add_background_task = get_add_background_task_function(response.background, logger=logger)

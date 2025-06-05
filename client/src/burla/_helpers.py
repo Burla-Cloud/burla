@@ -4,12 +4,17 @@ import signal
 import ast
 import inspect
 import requests
+import subprocess
+import textwrap
+from typing import Union
+from threading import Event
 
 import google.auth
 from google.cloud.firestore import Client
 from google.cloud.firestore_v1.async_client import AsyncClient
 from google.auth.exceptions import DefaultCredentialsError
-from yaspin import yaspin
+from yaspin import Spinner
+import cloudpickle
 
 from burla import _BURLA_BACKEND_URL
 
@@ -22,6 +27,21 @@ SIGNALS_TO_HANDLE = [getattr(signal, s) for s in _signal_names_to_handle]
 
 class GoogleLoginError(Exception):
     pass
+
+
+async def run_in_subprocess(func, *args):
+    code = textwrap.dedent(
+        """
+        import sys, cloudpickle
+        func, args = cloudpickle.load(sys.stdin.buffer)
+        func(*args)
+        """
+    )
+    cmd = [sys.executable, "-u", "-c", code]
+    process = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
+    process.stdin.write(cloudpickle.dumps((func, args)))
+    process.stdin.close()
+    return process
 
 
 def has_explicit_return(fn):
@@ -68,23 +88,35 @@ def get_db_clients():
         ) from e
 
 
-def spinner_with_signal_handlers():
-    def _signal_handler(signum, frame, spinner):
-        spinner.stop()
+def install_signal_handlers(
+    job_id: str, spinner: Union[Spinner, bool] = False, job_canceled_event: Event = None
+):
+
+    def _signal_handler(signum, frame):
+        job_canceled_event.set()
+        if spinner:
+            spinner.stop()
+        try:
+            sync_db, _ = get_db_clients()
+            sync_db.collection("jobs").document(job_id).update({"status": "FAILED"})
+        except Exception:
+            pass
         sys.exit(0)
 
-    return yaspin(sigmap={sig: _signal_handler for sig in SIGNALS_TO_HANDLE})
+    original_signal_handlers = {s: signal.getsignal(s) for s in SIGNALS_TO_HANDLE}
+    [signal.signal(sig, _signal_handler) for sig in SIGNALS_TO_HANDLE]
+    return original_signal_handlers
 
 
-def _log_telemetry(message, severity="INFO", **kwargs):
+def restore_signal_handlers(original_signal_handlers):
+    for sig, original_handler in original_signal_handlers.items():
+        signal.signal(sig, original_handler)
+
+
+def log_telemetry(message, severity="INFO", **kwargs):
     try:
         json = {"message": message, **kwargs}
         response = requests.post(f"{_BURLA_BACKEND_URL}/v1/telemetry/log/{severity}", json=json)
         response.raise_for_status()
-    except Exception as e:
-        # exc_type, exc_value, exc_traceback = sys.exc_info()
-        # traceback_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
-        # traceback_str = "".join(traceback_details)
-        # print(f"Error logging telemetry: {e}", file=sys.stderr)
-        # print(f"Traceback: {traceback_str}", file=sys.stderr)
+    except Exception:
         pass

@@ -32,7 +32,7 @@ def send_alive_pings(job_id: str):
     sync_db, _ = get_db_clients()
     job_doc = sync_db.collection("jobs").document(job_id)
     while True:
-        sleep(1)
+        sleep(2)
         current_time = time()
         job_doc.update({"last_ping_from_client": current_time})
 

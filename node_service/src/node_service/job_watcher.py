@@ -34,7 +34,7 @@ async def get_neighboring_node(async_db):
         return neighboring_node
 
 
-async def get_inputs_from_neighbor(neighboring_node, session, logger):
+async def get_inputs_from_neighbor(neighboring_node, session, logger, auth_headers):
     neighboring_node_host = neighboring_node.get("host") if neighboring_node else None
 
     if (not neighboring_node) or SELF["SHUTTING_DOWN"]:
@@ -43,20 +43,19 @@ async def get_inputs_from_neighbor(neighboring_node, session, logger):
 
     try:
         url = f"{neighboring_node_host}/jobs/{SELF['current_job']}/inputs"
-        async with session.get(url, timeout=2) as response:  # must be close to SHUTTING_DOWN check
+        # must be close to SHUTTING_DOWN check \/
+        async with session.get(url, timeout=2, headers=auth_headers) as response:
             logger.log("Asked neighboring node for more inputs ...")  # must log after get ^
-            neighbor_has_no_inputs = response.status in [204, 404]
-            if neighbor_has_no_inputs:
+            if response.status in [204, 404]:
                 logger.log(f"{neighboring_node.id} doesn't have any extra inputs to give.")
                 return
+            elif response.status == 200:
+                return pickle.loads(await response.read())
             else:
-                response.raise_for_status()
-                content = await response.read()
-                return await asyncio.to_thread(pickle.loads, content)
-
-    except Exception as e:
-        logger.log(f"Error getting inputs from {neighboring_node.id}: {e}", "ERROR")
-        return
+                msg = f"Error getting inputs from {neighboring_node.id}: {response.status}"
+                logger.log(msg, "ERROR")
+    except asyncio.TimeoutError:
+        pass
 
 
 async def result_check_all_workers(session: aiohttp.ClientSession, logger: Logger):
@@ -67,7 +66,7 @@ async def result_check_all_workers(session: aiohttp.ClientSession, logger: Logge
                 return worker, http_response.status
 
             response_content = await http_response.content.read()
-            response = await asyncio.to_thread(pickle.loads, response_content)
+            response = pickle.loads(response_content)
             for result in response["results"]:
                 SELF["results_queue"].put(result)
                 SELF["num_results_received"] += 1
@@ -80,7 +79,7 @@ async def result_check_all_workers(session: aiohttp.ClientSession, logger: Logge
     return await asyncio.gather(*tasks)
 
 
-async def _job_watcher(n_inputs: int, is_background_job: bool, logger: Logger):
+async def _job_watcher(n_inputs: int, is_background_job: bool, logger: Logger, auth_headers: dict):
     async_db = AsyncClient(project=PROJECT_ID, database="burla")
     sync_db = firestore.Client(project=PROJECT_ID, database="burla")
     job_doc = async_db.collection("jobs").document(SELF["current_job"])
@@ -129,7 +128,9 @@ async def _job_watcher(n_inputs: int, is_background_job: bool, logger: Logger):
             if finished_all_assigned_inputs:
                 logger.log("Finished all inputs.")
                 neighboring_node = await get_neighboring_node(async_db)
-                new_inputs = await get_inputs_from_neighbor(neighboring_node, session, logger)
+                new_inputs = await get_inputs_from_neighbor(
+                    neighboring_node, session, logger, auth_headers
+                )
                 if new_inputs:
                     neighbor_had_no_inputs_at = None
                     seconds_neighbor_had_no_inputs = 0
@@ -187,10 +188,10 @@ async def _job_watcher(n_inputs: int, is_background_job: bool, logger: Logger):
         reboot_containers(logger=logger)
 
 
-async def job_watcher_logged(n_inputs: int, is_background_job: bool):
+async def job_watcher_logged(n_inputs: int, is_background_job: bool, auth_headers: dict):
     logger = Logger()  # new logger has no request attached like the one in execute job did.
     try:
-        await _job_watcher(n_inputs, is_background_job, logger)
+        await _job_watcher(n_inputs, is_background_job, logger, auth_headers)
     except Exception as e:
         exc_type, exc_value, exc_traceback = sys.exc_info()
         tb_details = traceback.format_exception(exc_type, exc_value, exc_traceback)

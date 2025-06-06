@@ -199,15 +199,13 @@ async def _execute_job(
 
         url = f"{node['host']}/jobs/{job_id}"
         async with session.post(url, data=data, headers=auth_headers) as response:
-            try:
-                response.raise_for_status()
+            if response.status == 200:
                 return node
-            except Exception as e:
-                node_name = node["instance_name"]
-                if response.status == 409:
-                    raise NodeConflict(f"ERROR from {node_name}: {await response.text()}")
-                else:
-                    spinner_compatible_print(f"Failed to assign {node_name}! ignoring error: {e}")
+            elif response.status == 409:
+                raise NodeConflict(f"ERROR from {node['instance_name']}: {await response.text()}")
+            else:
+                msg = f"Failed to assign {node['instance_name']}! ignoring: {response.status}"
+                spinner_compatible_print(msg)
 
     async with AsyncExitStack() as stack:
         connector = aiohttp.TCPConnector(limit=500, limit_per_host=100)
@@ -289,6 +287,7 @@ async def _execute_job(
             total_parallelism = 0
             all_nodes_empty = True
             nodes_status = await asyncio.gather(*[_check_single_node(n) for n in nodes])
+
             for is_empty, node_parallelism, return_values in nodes_status:
                 total_parallelism += node_parallelism
                 all_nodes_empty = all_nodes_empty and is_empty

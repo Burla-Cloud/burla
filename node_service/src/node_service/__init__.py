@@ -221,20 +221,15 @@ async def handle_errors(request: Request, call_next):
         exc_type, exc_value, exc_traceback = sys.exc_info()
         tb_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
         traceback_str = format_traceback(tb_details)
-        Logger(request).log(str(exception), "ERROR", traceback=traceback_str)
-
-    # make background tasks availabe:
-    logger = Logger(request)
-    has_background_tasks = getattr(response, "background") is not None
-    response.background = response.background if has_background_tasks else BackgroundTasks()
-    add_background_task = get_add_background_task_function(response.background, logger=logger)
+        logger = Logger(request)
+        logger.log(str(exception), "ERROR", traceback=traceback_str)
 
     # handle response failure/success:
     if response.status_code == 500 and not str(request.url).endswith("/shutdown"):
-        try:
-            add_background_task(reboot_containers, logger=logger)
-        except Exception:
-            pass
+        has_background_tasks = getattr(response, "background") is not None
+        response.background = response.background if has_background_tasks else BackgroundTasks()
+        add_background_task = get_add_background_task_function(response.background, logger=logger)
+        add_background_task(reboot_containers, logger=logger)
     if response.status_code == 200:
         SELF["last_activity_timestamp"] = time()
 
@@ -249,7 +244,6 @@ async def validate_requests(request: Request, call_next):
     - If user/token doesn't match any authorized_users, refresh and try again before returning 401
     - Shutdown endpoint only callable from localhost (inside the shutdown script in the main_svc).
     """
-
     # validate shutdown requests
     is_shutdown_request = str(request.url).endswith("/shutdown")
     if is_shutdown_request:

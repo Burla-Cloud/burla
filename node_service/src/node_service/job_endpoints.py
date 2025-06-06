@@ -1,10 +1,11 @@
 import pickle
 from queue import Empty
 from typing import Optional, Callable
+from time import time
 
 import asyncio
 import aiohttp
-from fastapi import APIRouter, Path, Depends, Response
+from fastapi import APIRouter, Path, Depends, Response, Request
 from google.cloud.firestore import AsyncClient
 
 from node_service import (
@@ -142,12 +143,14 @@ async def shutdown_node(logger: Logger = Depends(get_logger)):
 
 @router.post("/jobs/{job_id}")
 async def execute(
+    request: Request,
     job_id: str = Path(...),
     request_json: dict = Depends(get_request_json),
     request_files: Optional[dict] = Depends(get_request_files),
     logger: Logger = Depends(get_logger),
     add_background_task: Callable = Depends(get_add_background_task_function),
 ):
+    start = time()
     if SELF["RUNNING"] or SELF["BOOTING"]:
         return Response("Node currently running or booting, request refused.", status_code=409)
 
@@ -205,5 +208,10 @@ async def execute(
     add_background_task(remove_workers, workers_to_remove)
 
     SELF["job_watcher_stop_event"].clear()  # is initalized as set by default
-    job_watcher_coroutine = job_watcher_logged(request_json["n_inputs"], is_background_job)
+    auth_headers = request.headers
+    job_watcher_coroutine = job_watcher_logged(
+        request_json["n_inputs"], is_background_job, auth_headers
+    )
     SELF["job_watcher_task"] = asyncio.create_task(job_watcher_coroutine)
+
+    print(f"TIME TAKEN: {time() - start:.2f}s")

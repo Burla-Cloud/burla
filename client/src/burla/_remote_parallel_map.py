@@ -11,7 +11,8 @@ from queue import Queue
 from uuid import uuid4
 from typing import Callable, Optional, Union
 from contextlib import AsyncExitStack
-from threading import Thread
+from threading import Thread, Event
+from pickle import UnpicklingError
 
 import aiohttp
 import cloudpickle
@@ -20,20 +21,19 @@ import google.auth
 from google.cloud.run_v2 import ServicesClient
 from google.cloud.firestore import FieldFilter
 from google.cloud.firestore_v1.async_client import AsyncClient
-from yaspin import Spinner
+from yaspin import yaspin, Spinner
 
 from burla import __version__
 from burla._auth import get_auth_headers
-from burla._background_stuff import (
-    upload_inputs,
-    send_alive_pings_in_background,
-)
+from burla._background_stuff import upload_inputs, send_alive_pings
 from burla._helpers import (
     get_db_clients,
-    spinner_with_signal_handlers,
+    install_signal_handlers,
+    restore_signal_handlers,
     parallelism_capacity,
     has_explicit_return,
-    _log_telemetry,
+    log_telemetry,
+    run_in_subprocess,
 )
 
 
@@ -57,13 +57,8 @@ class FirestoreTimeout(Exception):
     pass
 
 
-class UnknownClusterError(Exception):
-    def __init__(self):
-        msg = "\nAn unknown error occurred inside your Burla cluster, "
-        msg += "this is not an error with your code, but with the Burla.\n"
-        msg += "If this issue is urgent please don't hesitate to call me (Jake) directly"
-        msg += " at 508-320-8778, or email me at jake@burla.dev."
-        super().__init__(msg)
+class NodeDisconnected(Exception):
+    pass
 
 
 async def _wait_for_nodes_to_boot(db: AsyncClient, spinner: Union[bool, Spinner]):
@@ -161,10 +156,11 @@ async def _execute_job(
     max_parallelism: int,
     background: bool,
     spinner: Union[bool, Spinner],
+    job_canceled_event: Event,
 ):
     auth_headers = get_auth_headers()
     sync_db, async_db = get_db_clients()
-    log_msg_stdout = spinner if spinner else sys.stdout
+    spinner_compatible_print = lambda msg: spinner.write(msg) if spinner else print(msg)
     function_pkl = cloudpickle.dumps(function_)
 
     nodes_to_assign, total_target_parallelism = await _select_nodes_to_assign_to_job(
@@ -203,41 +199,27 @@ async def _execute_job(
 
         url = f"{node['host']}/jobs/{job_id}"
         async with session.post(url, data=data, headers=auth_headers) as response:
-            try:
-                response.raise_for_status()
+            if response.status == 200:
                 return node
-            except Exception as e:
-                node_name = node["instance_name"]
-                if response.status == 409:
-                    raise NodeConflict(f"ERROR from {node_name}: {await response.text()}")
-                else:
-                    log_msg_stdout.write(f"Failed to assign {node_name}! ignoring error: {e}")
-
-    def _on_new_log_message(col_snapshot, changes, read_time):
-        for change in changes:
-            log_msg_stdout.write(change.document.to_dict()["msg"])
+            elif response.status == 409:
+                raise NodeConflict(f"ERROR from {node['instance_name']}: {await response.text()}")
+            else:
+                msg = f"Failed to assign {node['instance_name']}! ignoring: {response.status}"
+                spinner_compatible_print(msg)
 
     async with AsyncExitStack() as stack:
         connector = aiohttp.TCPConnector(limit=500, limit_per_host=100)
         session = await stack.enter_async_context(aiohttp.ClientSession(connector=connector))
 
-        ping_exception_queue = None
-        if not background:
-            # Constantly update firestore to tell nodes client is still listening.
-            ping_process, ping_exception_queue = await send_alive_pings_in_background(job_id)
-            stack.callback(ping_process.kill)
-
-            # stream stdout back to client
-            logs_collection = sync_db.collection("jobs").document(job_id).collection("logs")
-            log_stream = logs_collection.on_snapshot(_on_new_log_message)
-            stack.callback(log_stream.unsubscribe)
-
+        # send function to every node
         assign_node_tasks = [assign_node(node, session) for node in nodes_to_assign]
         nodes = [node for node in await asyncio.gather(*assign_node_tasks) if node]
         if not nodes:
             raise Exception("Job refused by all available Nodes!")
 
-        uploader_task = create_task(upload_inputs(job_id, nodes, inputs, session, auth_headers))
+        # start uploading inputs
+        upload_inputs_args = (job_id, nodes, inputs, session, auth_headers, job_canceled_event)
+        uploader_task = create_task(upload_inputs(*upload_inputs_args))
 
         if background:
             if spinner:
@@ -249,6 +231,20 @@ async def _execute_job(
             msg = f"Running {len(inputs)} inputs through `{function_.__name__}` "
             spinner.text = msg + f"(0/{len(inputs)} completed)"
 
+        if not background:
+            # start sending "alive" pings to nodes
+            ping_process = await run_in_subprocess(send_alive_pings, job_id)
+            stack.callback(ping_process.kill)
+
+            # start stdout/stderr stream
+            def _on_new_log_message(col_snapshot, changes, read_time):
+                for change in changes:
+                    spinner_compatible_print(change.document.to_dict()["msg"])
+
+            logs_collection = sync_db.collection("jobs").document(job_id).collection("logs")
+            log_stream = logs_collection.on_snapshot(_on_new_log_message)
+            stack.callback(log_stream.unsubscribe)
+
         async def _check_single_node(node: dict):
             url = f"{node['host']}/jobs/{job_id}/results"
             async with session.get(url, headers=auth_headers) as response:
@@ -257,8 +253,15 @@ async def _execute_job(
                 elif response.status != 200:
                     raise Exception(f"Result-check failed for node: {node['instance_name']}")
 
+                try:
+                    node_status = pickle.loads(await response.content.read())
+                except UnpicklingError as e:
+                    if not "Memo value not found at index" in str(e):
+                        raise e
+                    msg = f"Node {node['instance_name']} disconnected while transmitting results.\n"
+                    raise NodeDisconnected(msg)
+
                 return_values = []
-                node_status = pickle.loads(await response.content.read())
                 for input_index, is_error, result_pkl in node_status["results"]:
                     if is_error:
                         exc_info = pickle.loads(result_pkl)
@@ -284,6 +287,7 @@ async def _execute_job(
             total_parallelism = 0
             all_nodes_empty = True
             nodes_status = await asyncio.gather(*[_check_single_node(n) for n in nodes])
+
             for is_empty, node_parallelism, return_values in nodes_status:
                 total_parallelism += node_parallelism
                 all_nodes_empty = all_nodes_empty and is_empty
@@ -294,10 +298,10 @@ async def _execute_job(
             if uploader_task.done() and uploader_task.exception():
                 raise uploader_task.exception()
 
-            if ping_exception_queue and not ping_exception_queue.empty():
-                exc_info = pickle.loads(ping_exception_queue.get())
-                traceback = Traceback.from_dict(exc_info["traceback_dict"]).as_traceback()
-                reraise(tp=exc_info["type"], value=exc_info["exception"], tb=traceback)
+            exit_code = ping_process.poll()
+            if exit_code:
+                stderr = ping_process.stderr.read().decode("utf-8")
+                raise Exception(f"Ping process exited with code: {exit_code}\n{stderr}")
 
             if spinner:
                 spinner.text = (
@@ -362,8 +366,8 @@ def remote_parallel_map(
         or API-Reference: https://docs.burla.dev/api-reference
     """
     max_parallelism = max_parallelism if max_parallelism else len(inputs)
-    sig = inspect.signature(function_)
-    if len(sig.parameters) != 1:
+    function_signature = inspect.signature(function_)
+    if len(function_signature.parameters) != 1:
         msg = "Function must accept exactly one argument! (even if it does nothing)\n"
         msg += "Email jake@burla.dev if this is really annoying and we will fix it! :)"
         raise ValueError(msg)
@@ -380,17 +384,15 @@ def remote_parallel_map(
     job_id = str(uuid4())
     _, project_id = google.auth.default()
 
-    msg = f"RPM called with: {len(inputs)} inputs, func_cpu={func_cpu}, func_ram={func_ram}, "
-    msg += f"background={background}, generator={generator}, spinner={spinner}, "
-    msg += f"max_parallelism={max_parallelism}, job_id={job_id}"
-    _log_telemetry(msg, project_id=project_id)
-
     return_queue = Queue()
+    original_signal_handlers = None
     try:
         if spinner:
-            spinner = spinner_with_signal_handlers()
+            spinner = yaspin(sigmap={})  # <- .start will overwrite my handlers without sigmap={}
             spinner.start()
             spinner.text = f"Preparing to run {len(inputs)} inputs through `{function_.__name__}`"
+        job_canceled_event = Event()
+        original_signal_handlers = install_signal_handlers(job_id, spinner, job_canceled_event)
 
         def execute_job():
             try:
@@ -405,13 +407,20 @@ def remote_parallel_map(
                         max_parallelism=max_parallelism,
                         background=background,
                         spinner=spinner,
+                        job_canceled_event=job_canceled_event,
                     )
                 )
             except Exception as e:
                 execute_job.exc_info = sys.exc_info()
 
-        t = Thread(target=execute_job)
+        t = Thread(target=execute_job, daemon=True)
         t.start()
+
+        msg = f"RPM called with: {len(inputs)} inputs, func_cpu={func_cpu}, func_ram={func_ram}, "
+        msg += f"background={background}, generator={generator}, spinner={spinner}, "
+        msg += f"max_parallelism={max_parallelism}, job_id={job_id}"
+        log_telemetry(msg, project_id=project_id)
+
         t.join()
 
         if hasattr(execute_job, "exc_info"):
@@ -440,7 +449,7 @@ def remote_parallel_map(
             spinner.text = msg
             spinner.ok("✔")
 
-        _log_telemetry(f"Job {job_id} returned successfully.", project_id=project_id)
+        log_telemetry(f"Job {job_id} returned successfully.", project_id=project_id)
         return _output_generator() if generator else list(_output_generator())
 
     except Exception as e:
@@ -457,13 +466,15 @@ def remote_parallel_map(
 
         try:
             # Report errors back to Burla's cloud.
-            _, project_id = google.auth.default()
             exc_type, exc_value, exc_traceback = sys.exc_info()
             traceback_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
             traceback_str = "".join(traceback_details)
             kwargs = dict(traceback=traceback_str, project_id=project_id, job_id=job_id)
-            _log_telemetry(exc_type, severity="ERROR", **kwargs)
+            log_telemetry(exc_type, severity="ERROR", **kwargs)
         except:
             pass
 
         raise
+    finally:
+        if original_signal_handlers:
+            restore_signal_handlers(original_signal_handlers)

@@ -1,15 +1,12 @@
 import os
-import sys
 import logging
 import asyncio
 import aiohttp
 import pickle
-import importlib.machinery
 from time import time, sleep
-from multiprocessing import Process, Queue
+from threading import Event
 
 import cloudpickle
-from tblib import Traceback
 
 from burla._helpers import get_db_clients
 
@@ -24,28 +21,7 @@ class InputTooBig(Exception):
     pass
 
 
-def _send_alive_pings(job_id: str, ping_exception_queue: Queue):
-    try:
-        sync_db, _ = get_db_clients()
-        job_doc = sync_db.collection("jobs").document(job_id)
-        while True:
-            sleep(1)
-            current_time = time()
-            job_doc.update({"last_ping_from_client": current_time})
-
-    except Exception:
-        exception_type, exception, traceback = sys.exc_info()
-        pickled_exception_info = pickle.dumps(
-            dict(
-                type=exception_type,
-                exception=exception,
-                traceback_dict=Traceback(traceback).to_dict(),
-            )
-        )
-        ping_exception_queue.put(pickled_exception_info)
-
-
-async def send_alive_pings_in_background(job_id: str):
+def send_alive_pings(job_id: str):
     """
     Constantly update `last_ping_from_client` in Firestore to tell nodes client is still listening.
     This must run in a separate process.
@@ -53,19 +29,12 @@ async def send_alive_pings_in_background(job_id: str):
     happening the thread or async task (tried both) are starved, causing Nodes to believe the
     client disconnected (which it didn't) and restart, causing the job to fail.
     """
-    # This is a hack that makes multiprocessing NOT re-run the __main__ module when the separate
-    # process is spawned. This removes the requirement for the user to do:
-    # `if __name__ == "__main__":` at the start of their script.
-    _main = sys.modules["__main__"]
-    if getattr(_main, "__spec__", None) is None:
-        _main.__spec__ = importlib.machinery.ModuleSpec(name="__main__", loader=None)
-
-    # daemon process dies automatically when main process dies.
-    ping_exception_queue = Queue()
-    send_alive_ping_args = (job_id, ping_exception_queue)
-    ping_process = Process(target=_send_alive_pings, args=send_alive_ping_args, daemon=True)
-    ping_process.start()
-    return ping_process, ping_exception_queue
+    sync_db, _ = get_db_clients()
+    job_doc = sync_db.collection("jobs").document(job_id)
+    while True:
+        sleep(2)
+        current_time = time()
+        job_doc.update({"last_ping_from_client": current_time})
 
 
 async def upload_inputs(
@@ -74,12 +43,13 @@ async def upload_inputs(
     inputs: list,
     session: aiohttp.ClientSession,
     auth_headers: dict,
+    job_canceled_event: Event,
 ):
 
     async def _upload_inputs_single_node(session, node):
         async for input_chunk in node["input_chunks"]:  # <- actual pickling/chunking happens here
             data = aiohttp.FormData()
-            inputs_pkl_with_idx = await asyncio.to_thread(pickle.dumps, input_chunk)
+            inputs_pkl_with_idx = pickle.dumps(input_chunk)
             data.add_field("inputs_pkl_with_idx", inputs_pkl_with_idx)
 
             url = f"{node['host']}/jobs/{job_id}/inputs"
@@ -149,4 +119,8 @@ async def upload_inputs(
         node["input_chunks"] = _chunk_inputs_by_size_generator(inputs_for_node, start_index=start)
         start = end
 
-    await asyncio.gather(*[_upload_inputs_single_node(session, node) for node in nodes])
+    try:
+        await asyncio.gather(*[_upload_inputs_single_node(session, node) for node in nodes])
+    except aiohttp.client_exceptions.ServerDisconnectedError as e:
+        if not job_canceled_event.is_set():
+            raise e

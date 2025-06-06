@@ -15,6 +15,9 @@ from node_service.reboot_endpoints import reboot_containers
 from node_service.helpers import Logger, format_traceback
 
 
+CLIENT_DC_TIMEOUT_SEC = 5
+
+
 async def get_neighboring_node(async_db):
     am_only_node_working_on_job = False
     status_filter = FieldFilter("status", "==", "RUNNING")
@@ -31,7 +34,7 @@ async def get_neighboring_node(async_db):
         return neighboring_node
 
 
-async def get_inputs_from_neighbor(neighboring_node, session, logger):
+async def get_inputs_from_neighbor(neighboring_node, session, logger, auth_headers):
     neighboring_node_host = neighboring_node.get("host") if neighboring_node else None
 
     if (not neighboring_node) or SELF["SHUTTING_DOWN"]:
@@ -40,20 +43,19 @@ async def get_inputs_from_neighbor(neighboring_node, session, logger):
 
     try:
         url = f"{neighboring_node_host}/jobs/{SELF['current_job']}/inputs"
-        async with session.get(url, timeout=2) as response:  # must be close to SHUTTING_DOWN check
+        # must be close to SHUTTING_DOWN check \/
+        async with session.get(url, timeout=2, headers=auth_headers) as response:
             logger.log("Asked neighboring node for more inputs ...")  # must log after get ^
-            neighbor_has_no_inputs = response.status in [204, 404]
-            if neighbor_has_no_inputs:
+            if response.status in [204, 404]:
                 logger.log(f"{neighboring_node.id} doesn't have any extra inputs to give.")
                 return
+            elif response.status == 200:
+                return pickle.loads(await response.read())
             else:
-                response.raise_for_status()
-                content = await response.read()
-                return await asyncio.to_thread(pickle.loads, content)
-
-    except Exception as e:
-        logger.log(f"Error getting inputs from {neighboring_node.id}: {e}", "ERROR")
-        return
+                msg = f"Error getting inputs from {neighboring_node.id}: {response.status}"
+                logger.log(msg, "ERROR")
+    except asyncio.TimeoutError:
+        pass
 
 
 async def result_check_all_workers(session: aiohttp.ClientSession, logger: Logger):
@@ -64,7 +66,7 @@ async def result_check_all_workers(session: aiohttp.ClientSession, logger: Logge
                 return worker, http_response.status
 
             response_content = await http_response.content.read()
-            response = await asyncio.to_thread(pickle.loads, response_content)
+            response = pickle.loads(response_content)
             for result in response["results"]:
                 SELF["results_queue"].put(result)
                 SELF["num_results_received"] += 1
@@ -77,7 +79,7 @@ async def result_check_all_workers(session: aiohttp.ClientSession, logger: Logge
     return await asyncio.gather(*tasks)
 
 
-async def _job_watcher(n_inputs: int, is_background_job: bool, logger: Logger):
+async def _job_watcher(n_inputs: int, is_background_job: bool, logger: Logger, auth_headers: dict):
     async_db = AsyncClient(project=PROJECT_ID, database="burla")
     sync_db = firestore.Client(project=PROJECT_ID, database="burla")
     job_doc = async_db.collection("jobs").document(SELF["current_job"])
@@ -88,16 +90,12 @@ async def _job_watcher(n_inputs: int, is_background_job: bool, logger: Logger):
     await node_doc.set({"current_num_results": 0})
 
     LAST_CLIENT_PING_TIMESTAMP = time()
-    TIME_BETWEEN_CLIENT_PINGS = 2
     neighboring_node = None
     neighbor_had_no_inputs_at = None
     seconds_neighbor_had_no_inputs = 0
 
     def _on_job_snapshot(doc_snapshot, changes, read_time):
         nonlocal LAST_CLIENT_PING_TIMESTAMP
-        nonlocal TIME_BETWEEN_CLIENT_PINGS
-        last_time_between_client_pings = time() - LAST_CLIENT_PING_TIMESTAMP
-        TIME_BETWEEN_CLIENT_PINGS = max(TIME_BETWEEN_CLIENT_PINGS, last_time_between_client_pings)
         LAST_CLIENT_PING_TIMESTAMP = time()
 
     if not is_background_job:
@@ -130,7 +128,9 @@ async def _job_watcher(n_inputs: int, is_background_job: bool, logger: Logger):
             if finished_all_assigned_inputs:
                 logger.log("Finished all inputs.")
                 neighboring_node = await get_neighboring_node(async_db)
-                new_inputs = await get_inputs_from_neighbor(neighboring_node, session, logger)
+                new_inputs = await get_inputs_from_neighbor(
+                    neighboring_node, session, logger, auth_headers
+                )
                 if new_inputs:
                     neighbor_had_no_inputs_at = None
                     seconds_neighbor_had_no_inputs = 0
@@ -165,12 +165,21 @@ async def _job_watcher(n_inputs: int, is_background_job: bool, logger: Logger):
 
             # client still listening? (if this is NOT a background job)
             seconds_since_last_ping = time() - LAST_CLIENT_PING_TIMESTAMP
-            timeout = max(TIME_BETWEEN_CLIENT_PINGS * 3, 10)
-            client_disconnected = seconds_since_last_ping > timeout
+            client_disconnected = seconds_since_last_ping > CLIENT_DC_TIMEOUT_SEC
             if not is_background_job and client_disconnected:
-                await job_doc.update({"status": "FAILED"})
-                logger.log(f"No client ping in the last {seconds_since_last_ping}s, REBOOTING")
-                break
+                # check again (synchronously) because sometimes the ping watcher thread is starved.
+                sync_job_doc = sync_db.collection("jobs").document(SELF["current_job"])
+                last_ping_timestamp = sync_job_doc.get().to_dict()["last_ping_from_client"]
+                client_disconnected = time() - last_ping_timestamp > CLIENT_DC_TIMEOUT_SEC
+                if client_disconnected:
+                    try:
+                        await job_doc.update({"status": "FAILED"})
+                    except Exception:
+                        # ignore because this can get hit by like 100's of nodes at once
+                        # one of them will succeed and the others will throw errors we can ignore.
+                        pass
+                    logger.log(f"No client ping in the last {CLIENT_DC_TIMEOUT_SEC}s, REBOOTING")
+                    break
 
     if not is_background_job:
         job_watch.unsubscribe()
@@ -179,10 +188,10 @@ async def _job_watcher(n_inputs: int, is_background_job: bool, logger: Logger):
         reboot_containers(logger=logger)
 
 
-async def job_watcher_logged(n_inputs: int, is_background_job: bool):
+async def job_watcher_logged(n_inputs: int, is_background_job: bool, auth_headers: dict):
     logger = Logger()  # new logger has no request attached like the one in execute job did.
     try:
-        await _job_watcher(n_inputs, is_background_job, logger)
+        await _job_watcher(n_inputs, is_background_job, logger, auth_headers)
     except Exception as e:
         exc_type, exc_value, exc_traceback = sys.exc_info()
         tb_details = traceback.format_exception(exc_type, exc_value, exc_traceback)

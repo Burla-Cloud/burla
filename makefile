@@ -98,7 +98,7 @@ deploy-prod:
 	$(MAKE) image; \
 	$(MAKE) publish;
 
-new-worker:
+new-workers:
 	set -e; \
 	cd ./worker_service; \
 	$(MAKE) image_same_env

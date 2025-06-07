@@ -1,27 +1,27 @@
 [tool.poetry]
 name = "worker_service"
-version = "1.0.15"
+version = "1.0.16"
 description = ""
 authors = ["Jacob Zuliani <jake@burla.dev>"]
 packages = [{include = "worker_service", from = "src"}]
 
 [tool.poetry.dependencies]
 python = ">=3.10"
-cloudpickle = "^3.0.0"
-tblib = "^3.0.0"
-google-cloud-logging = "^3.8.0"
-google-api-python-client = "^2.147.0"
-fastapi = "^0.115.12"
-uvicorn = "^0.34.1"
-python-multipart = "^0.0.20"
-aiohttp = "^3.11.18"
+cloudpickle = ">=3.0"
+tblib = ">=3.0"
+google-cloud-logging = ">=3.8"
+google-api-python-client = ">=2.147"
+fastapi = ">=0.115"
+uvicorn = ">=0.34"
+python-multipart = ">=0.0.20"
+aiohttp = ">=3.11"
 
 # These packages are not used by the worker service
 # These exist so that users can run code in burla that uses these packages
-pandas = "^2.2.3"
-numpy = "^2.1.2"
-scikit-learn = "^1.5.2"
-google-cloud-storage = "^2.18.2"
+pandas = ">=2.2"
+numpy = ">=2.1"
+scikit-learn = ">=1.5"
+google-cloud-storage = ">=2.18"
 # ---------------------------------------------
 
 [build-system]

@@ -8,22 +8,19 @@ REPO = cluster-default
 service:
 	python3.11 -m gunicorn -t 60 -b 0.0.0.0:8080 worker_service:app
 
-
 publish:
 	set -e; \
-	VERSIONS="$(PYTHON_VERSIONS)"; \
-	printf "%s\n" $$VERSIONS | parallel --line-buffer -j4 '\
-		set -e; \
-		VERSION={}; \
-		PROJECT_ID=$$(gcloud config get-value project 2>/dev/null); \
-		BASE_NAME="us-docker.pkg.dev/$${PROJECT_ID}/$(REPO)/$${VERSION}"; \
-		TAG=$$(gcloud artifacts tags list --package=$${VERSION} --location=us --repository=$(REPO) --project $${PROJECT_ID} 2>/dev/null | grep -Eo "^[0-9]+" | sort -n | tail -n1); \
-		DOCKERHUB_TOKEN=$$(gcloud secrets versions access latest --secret=jakes-docker-access-token --project=burla-prod); \
-		echo $${DOCKERHUB_TOKEN} | docker login -u jakezuliani --password-stdin; \
-		docker tag $${BASE_NAME}:$${TAG} burlacloud/default-image-py$${VERSION}:$${TAG}; \
-		docker push burlacloud/default-image-py$${VERSION}:$${TAG}; \
-		docker tag $${BASE_NAME}:$${TAG} burlacloud/default-image-py$${VERSION}:latest; \
-		docker push burlacloud/default-image-py$${VERSION}:latest'
+	PROJECT_ID=$$(gcloud config get-value project 2>/dev/null); \
+	DOCKERHUB_TOKEN=$$(gcloud secrets versions access latest --secret=jakes-docker-access-token --project=burla-prod); \
+	echo $$DOCKERHUB_TOKEN | docker login -u jakezuliani --password-stdin; \
+	for VERSION in $(PYTHON_VERSIONS); do \
+		BASE_NAME="us-docker.pkg.dev/$$PROJECT_ID/$(REPO)/$$VERSION"; \
+		TAG=$$(gcloud artifacts tags list --package=$$VERSION --location=us --repository=$(REPO) --project $$PROJECT_ID 2>/dev/null | grep -Eo "^[0-9]+" | sort -n | tail -n1); \
+		docker tag $$BASE_NAME:$$TAG burlacloud/default-image-py$$VERSION:$$TAG; \
+		docker push burlacloud/default-image-py$$VERSION:$$TAG; \
+		docker tag $$BASE_NAME:$$TAG burlacloud/default-image-py$$VERSION:latest; \
+		docker push burlacloud/default-image-py$$VERSION:latest; \
+	done
 
 
 images:
@@ -38,9 +35,17 @@ images:
 		TAG=$$(gcloud artifacts tags list --package=$${VERSION} --location=us --repository=$(REPO) --project $${PROJECT_ID} 2>/dev/null | grep -Eo "^[0-9]+" | sort -n | tail -n1); \
 		NAME="$${BASE_NAME}:$$(($${TAG} + 1))"; \
 		docker build --platform linux/amd64 --build-arg PV=$${VERSION} -t "$${NAME}" -t "$${BASE_NAME}:latest" .; \
+		echo "Successfully built default image for $${VERSION}"'; \
+	for VERSION in $$VERSIONS; do \
+		set -e; \
+		PROJECT_ID=$$(gcloud config get-value project 2>/dev/null); \
+		BASE_NAME="us-docker.pkg.dev/$${PROJECT_ID}/$(REPO)/$$VERSION"; \
+		TAG=$$(gcloud artifacts tags list --package=$${VERSION} --location=us --repository=$(REPO) --project $${PROJECT_ID} 2>/dev/null | grep -Eo "^[0-9]+" | sort -n | tail -n1); \
+		NAME="$${BASE_NAME}:$$(($${TAG} + 1))"; \
 		docker push "$${NAME}"; \
 		docker push "$${BASE_NAME}:latest"; \
-		echo "Successfully built default image for $${VERSION}"'
+		echo "Successfully pushed default image for $$VERSION"; \
+	done
 
 
 images_same_env:
@@ -55,9 +60,17 @@ images_same_env:
 		TAG=$$(gcloud artifacts tags list --package=$${VERSION} --location=us --repository=$(REPO) --project $${PROJECT_ID} 2>/dev/null | grep -Eo "^[0-9]+" | sort -n | tail -n1); \
 		NAME="$${BASE_NAME}:$$(($${TAG} + 1))"; \
 		docker build --platform linux/amd64 --build-arg BASE_IMAGE=$${BASE_NAME} -t "$${NAME}" -t "$${BASE_NAME}:latest" -f Dockerfile_same_env .; \
+		echo "Successfully built default image for $${VERSION}"'; \
+	for VERSION in $$VERSIONS; do \
+		set -e; \
+		PROJECT_ID=$$(gcloud config get-value project 2>/dev/null); \
+		BASE_NAME="us-docker.pkg.dev/$${PROJECT_ID}/$(REPO)/$$VERSION"; \
+		TAG=$$(gcloud artifacts tags list --package=$${VERSION} --location=us --repository=$(REPO) --project $${PROJECT_ID} 2>/dev/null | grep -Eo "^[0-9]+" | sort -n | tail -n1); \
+		NAME="$${BASE_NAME}:$$(($${TAG} + 1))"; \
 		docker push "$${NAME}"; \
 		docker push "$${BASE_NAME}:latest"; \
-		echo "Successfully built default image for $${VERSION}"'
+		echo "Successfully pushed default image for $$VERSION"; \
+	done
 
 
 # uses 3.10, I should develop in the oldest supported version.

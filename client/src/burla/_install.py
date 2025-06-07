@@ -151,6 +151,11 @@ def _install(spinner):
     spinner.text = f"Checking for gcloud project ... Using project: {PROJECT_ID}"
     spinner.ok("✓")
 
+    # Project number needed to reference the default Compute Engine service-account
+    result = _run_command(f"gcloud projects describe {PROJECT_ID} --format='value(projectNumber)'")
+    PROJECT_NUMBER = result.stdout.decode().strip()
+    COMPUTE_SA = f"{PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
+
     log_telemetry("Installer has gcloud and is logged in.", project_id=PROJECT_ID)
 
     # Enable required services
@@ -161,7 +166,39 @@ def _install(spinner):
     _run_command("gcloud services enable firestore.googleapis.com")
     _run_command("gcloud services enable cloudresourcemanager.googleapis.com")
     _run_command("gcloud services enable secretmanager.googleapis.com")
+    _run_command("gcloud services enable logging.googleapis.com")
     spinner.text = "Enabling required services... Done."
+    spinner.ok("✓")
+
+    spinner.text = "Creating service account ... "
+    spinner.start()
+    SERVICE_ACCOUNT_NAME = "burla-main-service"
+    SA_EMAIL = f"{SERVICE_ACCOUNT_NAME}@{PROJECT_ID}.iam.gserviceaccount.com"
+    _run_command(
+        f"gcloud iam service-accounts create {SERVICE_ACCOUNT_NAME} --display-name='Burla Main Service'",
+        raise_error=False,
+    )
+    for role in (
+        "roles/datastore.user",
+        "roles/secretmanager.secretAccessor",
+        "roles/logging.logWriter",
+        "roles/compute.instanceAdmin.v1",
+        "roles/resourcemanager.projectViewer",
+    ):
+        _run_command(
+            f"gcloud projects add-iam-policy-binding {PROJECT_ID} --member=serviceAccount:{SA_EMAIL} --role={role}",
+            raise_error=False,
+        )
+    _run_command(
+        f"gcloud iam service-accounts add-iam-policy-binding {COMPUTE_SA} --member=serviceAccount:{SA_EMAIL} --role=roles/iam.serviceAccountUser",
+        raise_error=False,
+    )
+    # Ensure the default Compute Engine service account (used by node VMs) can write logs
+    _run_command(
+        f"gcloud projects add-iam-policy-binding {PROJECT_ID} --member=serviceAccount:{COMPUTE_SA} --role=roles/logging.logWriter",
+        raise_error=False,
+    )
+    spinner.text = "Creating service account ... Done."
     spinner.ok("✓")
 
     # Open port 8080
@@ -244,6 +281,7 @@ def _install(spinner):
         f"--image=burlacloud/main-service:latest "
         f"--project {PROJECT_ID} "
         f"--region=us-central1 "
+        f"--service-account {SA_EMAIL} "
         f"--min-instances 1 "
         f"--max-instances 20 "
         f"--memory 4Gi "

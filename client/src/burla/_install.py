@@ -46,6 +46,10 @@ class InstallError(Exception):
     pass
 
 
+class BackendError(Exception):
+    pass
+
+
 def _run_command(command, raise_error=True):
     result = subprocess.run(command, shell=True, capture_output=True)
 
@@ -208,6 +212,9 @@ def _install(spinner):
             result = _run_command(cmd)
             spinner.text = "Creating secrets ... Done."
             spinner.ok("✓")
+        else:
+            spinner.fail("✗")
+            raise BackendError(f"Error registering cluster: {response.status_code} {response.text}")
     else:
         spinner.text = "Creating secrets ... Done."
         spinner.ok("✓")

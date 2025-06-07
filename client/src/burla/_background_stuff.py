@@ -31,10 +31,13 @@ def send_alive_pings(job_id: str):
     """
     sync_db, _ = get_db_clients()
     job_doc = sync_db.collection("jobs").document(job_id)
+    last_update_time = 0
     while True:
-        sleep(2)
-        current_time = time()
-        job_doc.update({"last_ping_from_client": current_time})
+        now = time()
+        if now - last_update_time > 1:
+            job_doc.update({"last_ping_from_client": now})
+            last_update_time = now
+        sleep(0.1)
 
 
 async def upload_inputs(

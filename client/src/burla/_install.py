@@ -3,6 +3,7 @@ import shutil
 import subprocess
 import traceback
 import requests
+from time import time, sleep
 from yaspin import yaspin
 from google.cloud.firestore import Client
 
@@ -170,37 +171,6 @@ def _install(spinner):
     spinner.text = "Enabling required services... Done."
     spinner.ok("✓")
 
-    spinner.text = "Creating service account ... "
-    spinner.start()
-    SERVICE_ACCOUNT_NAME = "burla-main-service"
-    SA_EMAIL = f"{SERVICE_ACCOUNT_NAME}@{PROJECT_ID}.iam.gserviceaccount.com"
-    _run_command(
-        f"gcloud iam service-accounts create {SERVICE_ACCOUNT_NAME} --display-name='Burla Main Service'",
-        raise_error=False,
-    )
-    for role in (
-        "roles/datastore.user",
-        "roles/secretmanager.secretAccessor",
-        "roles/logging.logWriter",
-        "roles/compute.instanceAdmin.v1",
-        "roles/resourcemanager.projectViewer",
-    ):
-        _run_command(
-            f"gcloud projects add-iam-policy-binding {PROJECT_ID} --member=serviceAccount:{SA_EMAIL} --role={role}",
-            raise_error=False,
-        )
-    _run_command(
-        f"gcloud iam service-accounts add-iam-policy-binding {COMPUTE_SA} --member=serviceAccount:{SA_EMAIL} --role=roles/iam.serviceAccountUser",
-        raise_error=False,
-    )
-    # Ensure the default Compute Engine service account (used by node VMs) can write logs
-    _run_command(
-        f"gcloud projects add-iam-policy-binding {PROJECT_ID} --member=serviceAccount:{COMPUTE_SA} --role=roles/logging.logWriter",
-        raise_error=False,
-    )
-    spinner.text = "Creating service account ... Done."
-    spinner.ok("✓")
-
     # Open port 8080
     spinner.text = "Opening port 8080 to VM's with tag 'burla-cluster-node' ... "
     spinner.start()
@@ -255,6 +225,52 @@ def _install(spinner):
     else:
         spinner.text = "Creating secrets ... Done."
         spinner.ok("✓")
+
+    # create custom service account for main service
+    spinner.text = "Creating service account ... "
+    spinner.start()
+    SERVICE_ACCOUNT_NAME = "burla-main-service"
+    SA_EMAIL = f"{SERVICE_ACCOUNT_NAME}@{PROJECT_ID}.iam.gserviceaccount.com"
+    result = _run_command(
+        f"gcloud iam service-accounts create {SERVICE_ACCOUNT_NAME} --display-name='Burla Main Service'",
+        raise_error=False,
+    )
+    if not (result.returncode == 1 and "already exists" in result.stderr.decode()):
+        spinner.fail("✗")
+        raise VerboseCalledProcessError(cmd, result.stderr)
+
+    for role in (
+        "roles/datastore.user",
+        "roles/secretmanager.secretAccessor",
+        "roles/logging.logWriter",
+        "roles/compute.instanceAdmin.v1",
+    ):
+        _run_command(
+            f"gcloud projects add-iam-policy-binding {PROJECT_ID} --member=serviceAccount:{SA_EMAIL} --role={role}",
+        )
+
+    # Wait for compute engine service account to exist (if new project):
+    start = time()
+    while time() - start < 30:
+        cmd = f"gcloud iam service-accounts describe {COMPUTE_SA}"
+        if _run_command(cmd, raise_error=False).returncode == 0:
+            break
+        sleep(1)
+    result = _run_command(f"gcloud iam service-accounts describe {COMPUTE_SA}", raise_error=False)
+    if result.returncode != 0:
+        spinner.fail("✗")
+        raise Exception("Compute engine default service account not found after 30s.")
+
+    # Allow default compute engine service account to use burla token secret
+    _run_command(
+        f"gcloud projects add-iam-policy-binding {PROJECT_ID} "
+        f"--member=serviceAccount:{COMPUTE_SA} --role=roles/secretmanager.secretAccessor",
+    )
+    _run_command(
+        f"gcloud iam service-accounts add-iam-policy-binding {COMPUTE_SA} --member=serviceAccount:{SA_EMAIL} --role=roles/iam.serviceAccountUser",
+    )
+    spinner.text = "Creating service account ... Done."
+    spinner.ok("✓")
 
     # Create Firestore database
     spinner.text = "Creating Firestore database ... "

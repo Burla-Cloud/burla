@@ -59,7 +59,7 @@ GCE_DEFAULT_SVC = f"{project.name.split('/')[-1]}-compute@developer.gserviceacco
 
 NODE_BOOT_TIMEOUT = 60 * 3
 ACCEPTABLE_ZONES = ["us-central1-b", "us-central1-c", "us-central1-f", "us-central1-a"]
-NODE_SVC_VERSION = "1.0.18"  # <- this maps to a git tag/release or branch
+NODE_SVC_VERSION = "1.0.19"  # <- this maps to a git tag/release or branch
 
 
 class Node:
@@ -300,14 +300,7 @@ class Node:
 
     def __get_startup_script(self):
         return f"""
-        #! /bin/bash
-        # This script installs and starts the node service
-        
-        # Increases max num open files so we can have more connections open.
-        # ulimit -n 4096 # baked into image when I built `burla-cluster-node-image-5`
-
-        gcloud config set account {GCE_DEFAULT_SVC}
-
+        #! /bin/bash        
         echo "DOWNLOADING BURLA NODE SERVICE V{NODE_SVC_VERSION}"
         git clone --depth 1 --branch {NODE_SVC_VERSION} https://github.com/Burla-Cloud/burla.git  --no-checkout
         cd burla
@@ -315,7 +308,7 @@ class Node:
         git sparse-checkout set node_service
         git checkout {NODE_SVC_VERSION}
         cd node_service
-        python3.11 -m pip install --break-system-packages .
+        python -m pip install --break-system-packages .
         echo "Done installing packages."
 
         export INSTANCE_NAME="{self.instance_name}"
@@ -323,7 +316,7 @@ class Node:
         export CONTAINERS='{json.dumps([c.to_dict() for c in self.containers])}'
         export INACTIVITY_SHUTDOWN_TIME_SEC="{self.inactivity_shutdown_time_sec}"
 
-        python3.11 -m uvicorn node_service:app --host 0.0.0.0 --port {self.port} --workers 1 --timeout-keep-alive 600
+        python -m uvicorn node_service:app --host 0.0.0.0 --port {self.port} --workers 1 --timeout-keep-alive 600
         """
 
     def __get_shutdown_script(self):

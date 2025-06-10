@@ -6,6 +6,7 @@ from uuid import uuid4
 from time import sleep
 
 import docker
+from docker.errors import APIError
 from google.cloud import logging
 from google.auth.transport.requests import Request
 
@@ -38,17 +39,15 @@ class Worker:
         # this is a signifigant assumption! (it's in the tooltip so users should be aware?)
         self.python_executable = f"python{self.python_version}"
 
-        # pull image
-        is_private_image = f"docker.pkg.dev/{PROJECT_ID}" in image
-        is_private_image = is_private_image or f"gcr.io/{PROJECT_ID}" in image
-
-        if is_private_image:
-            # use current GCP vm's credentials to pull the image
-            CREDENTIALS.refresh(Request())
-            auth_config = {"username": "oauth2accesstoken", "password": CREDENTIALS.token}
-            docker_client.pull(image, auth_config=auth_config)
-        else:
+        try:
             docker_client.pull(image)
+        except APIError as e:
+            if e.response.status_code == 401:
+                CREDENTIALS.refresh(Request())
+                auth_config = {"username": "oauth2accesstoken", "password": CREDENTIALS.token}
+                docker_client.pull(image, auth_config=auth_config)
+            else:
+                raise
 
         try:
             # ODDLY, if docker_client.pull fails to pull the image, it will NOT throw any error >:(

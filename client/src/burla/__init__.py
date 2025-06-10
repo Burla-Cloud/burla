@@ -10,6 +10,8 @@ from burla._auth import login, dashboard
 from burla._install import install
 from burla._remote_parallel_map import remote_parallel_map
 
+worker_cache = {}
+
 
 def version():
     """Print current Burla client version."""

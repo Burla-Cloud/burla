@@ -26,7 +26,7 @@ def do_inference(prompt: str):
 
     # from huggingface_hub import login
 
-    # login("XXX")
+    # login("XXXX")
 
     if not worker_cache.get("llm"):
         print("Loading LLM onto GPU")

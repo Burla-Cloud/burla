@@ -58,7 +58,7 @@ client = resourcemanager_v3.ProjectsClient(credentials=CREDENTIALS)
 project = client.get_project(name=f"projects/{PROJECT_ID}")
 GCE_DEFAULT_SVC = f"{project.name.split('/')[-1]}-compute@developer.gserviceaccount.com"
 
-NODE_BOOT_TIMEOUT = 60 * 3
+NODE_BOOT_TIMEOUT = 60 * 6
 ACCEPTABLE_ZONES = ["us-central1-a", "us-central1-b", "us-central1-c", "us-central1-f"]
 NODE_SVC_VERSION = "1.0.19"  # <- this maps to a git tag/release or branch
 

@@ -9,8 +9,9 @@ import docker
 from docker.errors import APIError
 from google.cloud import logging
 from google.auth.transport.requests import Request
+from docker.types import DeviceRequest
 
-from node_service import PROJECT_ID, INSTANCE_NAME, IN_LOCAL_DEV_MODE, CREDENTIALS
+from node_service import PROJECT_ID, INSTANCE_NAME, IN_LOCAL_DEV_MODE, CREDENTIALS, GPU
 
 LOGGER = logging.Client().logger("node_service")
 WORKER_INTERNAL_PORT = 8080
@@ -36,9 +37,6 @@ class Worker:
         self.docker_client = docker_client
         self.python_version = python_version
 
-        # this is a signifigant assumption! (it's in the tooltip so users should be aware?)
-        self.python_executable = f"python{self.python_version}"
-
         try:
             docker_client.pull(image)
         except APIError as e:
@@ -57,15 +55,56 @@ class Worker:
             msg = f"Image {image} not found after pulling!\nDid vm run out of disk space?"
             raise Exception(msg)
 
-        # setup host_config
-        host_arg = ["--host", "0.0.0.0"]
-        port_arg = ["--port", str(WORKER_INTERNAL_PORT)]
-        workers_arg = ["--workers", "1"]
-        timeout_arg = ["--timeout-keep-alive", "30"]
-        uvicorn_cmd_args = [*host_arg, *port_arg, *workers_arg, *timeout_arg]
-        cmd = [self.python_executable, "-m", "uvicorn", "worker_service:app", *uvicorn_cmd_args]
+        cmd_script = f"""    
+            # Find python version:
+            python_cmd=""
+            for py in python{self.python_version} python3 python; do
+                is_executable=$(command -v $py >/dev/null 2>&1 && echo true || echo false)
+                version_matches=$($py --version 2>&1 | grep -q "{self.python_version}" && echo true || echo false)
+                if [ "$is_executable" = true ] && [ "$version_matches" = true ]; then
+                    echo "Found correct python version: $py"
+                    python_cmd=$py
+                    break
+                fi
+            done
+
+            # If python version not found, exit
+            if [ -z "$python_cmd" ]; then
+                echo "Python {self.python_version} not found"
+                exit 1
+            fi
+
+            # Ensure git is installed
+            if ! command -v git >/dev/null 2>&1; then
+                echo "git not found, installing..."
+                apt-get update && apt-get install -y git
+            fi
+
+            # Install worker_service if missing
+            $python_cmd -c "import worker_service" 2>/dev/null || (
+                echo "Installing worker_service..."
+                git clone --depth 1 https://github.com/Burla-Cloud/burla.git --no-checkout
+                cd burla
+                git sparse-checkout init --cone
+                git sparse-checkout set worker_service
+                git checkout main
+                cd worker_service
+                $python_cmd -m pip install --break-system-packages .
+            )
+
+            # If local dev mode, run in reload mode
+            reload_flag=""
+            if [ "{IN_LOCAL_DEV_MODE}" = "True" ]; then
+                reload_flag="--reload"
+            fi
+
+            # Start the worker service
+            exec $python_cmd -m uvicorn worker_service:app --host 0.0.0.0 \
+                --port {WORKER_INTERNAL_PORT} --workers 1 \
+                --timeout-keep-alive 30 $reload_flag
+        """.strip()
+        cmd = ["bash", "-c", cmd_script]
         if IN_LOCAL_DEV_MODE:
-            cmd.append("--reload")
             host_config = docker_client.create_host_config(
                 port_bindings={WORKER_INTERNAL_PORT: ("127.0.0.1", None)},
                 network_mode="local-burla-cluster",
@@ -75,8 +114,12 @@ class Worker:
                 },
             )
         else:
-            port_bindings = {WORKER_INTERNAL_PORT: ("127.0.0.1", None)}
-            host_config = docker_client.create_host_config(port_bindings=port_bindings)
+            device_requests = [DeviceRequest(count=-1, capabilities=[["gpu"]])] if GPU else []
+            host_config = docker_client.create_host_config(
+                port_bindings={WORKER_INTERNAL_PORT: ("127.0.0.1", None)},
+                ipc_mode="host",
+                device_requests=device_requests,
+            )
 
         # start container
         self.container = docker_client.create_container(
@@ -92,6 +135,7 @@ class Worker:
                 "SEND_LOGS_TO_GCL": send_logs_to_gcl,
             },
             detach=True,
+            runtime="nvidia" if GPU else None,
         )
         self.container_id = self.container.get("Id")
         docker_client.start(container=self.container_id)

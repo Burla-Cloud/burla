@@ -114,11 +114,12 @@ export const SettingsForm: React.FC<SettingsFormProps> = ({ isEditing }) => {
                                                 <p>
                                                     Docker image Burla will run your code inside.
                                                     <br />
-                                                    This can be the URI of any image with Python and
-                                                    Burla's worker service installed.
+                                                    This can be the URI of any image as long as it
+                                                    has Python 3.10+ installed.
                                                     <br />
-                                                    Private images stored in your Artifact Registry
-                                                    or GCR work here too!
+                                                    If the image is private, Burla uses the Google
+                                                    service account credentials attached to the host
+                                                    VM to pull it.
                                                 </p>
                                             </TooltipContent>
                                         </Tooltip>
@@ -146,12 +147,11 @@ export const SettingsForm: React.FC<SettingsFormProps> = ({ isEditing }) => {
                                                 </TooltipTrigger>
                                                 <TooltipContent>
                                                     <p>
-                                                        Python version Burla will use to run your
-                                                        code.
+                                                        Python version inside the container image to
+                                                        use to run your code.
                                                         <br />
-                                                        This should match your local Python version,
-                                                        and be callable at `python3.X` in the image
-                                                        linked above.
+                                                        This should be the same as your local python
+                                                        version.
                                                     </p>
                                                 </TooltipContent>
                                             </Tooltip>
@@ -274,8 +274,8 @@ export const SettingsForm: React.FC<SettingsFormProps> = ({ isEditing }) => {
                                         </TooltipTrigger>
                                         <TooltipContent>
                                             <p>
-                                                <br />A list of emails who are authorized to view
-                                                this dashboard and run workloads on this deployment.
+                                                Emails of people who are authorized to view this
+                                                dashboard and run jobs on this Burla deployment.
                                                 <br />
                                                 Run `burla login` to authenticate your local client,
                                                 and `burla dashboard` to login to this dashboard.

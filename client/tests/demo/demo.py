@@ -4,25 +4,46 @@ import burla
 
 # def my_function(my_input):
 
-#     sleep(1)
+#     sleep(0.1)
 
 #     return my_input
 
 
-# my_inputs = list(range(200))
+# my_inputs = list(range(100))
 
-# # start = time()
+# start = time()
 # results = burla.remote_parallel_map(my_function, my_inputs)
-# # print(f"Time taken: {time() - start}")
+# print(f"Time taken: {time() - start}")
 
 
-from vllm import LLM
+import importlib.util
+import subprocess
+
+worker_cache = {}
 
 
 def do_inference(prompt: str):
-    llm = LLM(model="meta-llama/Llama-4-Scout-17B-16E-Instruct")
-    response = llm.generate(prompt)
-    return response[0].outputs[0].text
+
+    if importlib.util.find_spec("vllm") is None:
+        print("Installing vllm ...")
+        subprocess.run(["pip", "install", "vllm"], check=True)
+        from vllm import LLM
+
+    else:
+        from vllm import LLM
+
+    if not worker_cache.get("llm"):
+        print("Loading LLM onto GPU")
+        worker_cache["llm"] = LLM(model="meta-llama/Llama-4-Scout-17B-16E-Instruct")
+    else:
+        print("Using cached LLM")
+
+    print(f"Asking LLM: {prompt}")
+    result = worker_cache["llm"].generate(prompt)
+    response = result[0].outputs[0].text
+    print(f"Response: {response}\n\n")
+
+    return response
 
 
 prompts = [

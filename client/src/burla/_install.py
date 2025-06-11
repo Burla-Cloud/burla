@@ -24,6 +24,7 @@ DEFAULT_CLUSTER_CONFIG = {
             "inactivity_shutdown_time_sec": 300,
             "machine_type": "n4-standard-4",
             "quantity": 1,
+            "disk_size_gb": 50,
         }
     ]
 }

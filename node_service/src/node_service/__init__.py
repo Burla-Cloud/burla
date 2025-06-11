@@ -29,6 +29,7 @@ BURLA_BACKEND_URL = "https://backend.burla.dev"
 
 IN_LOCAL_DEV_MODE = os.environ.get("IN_LOCAL_DEV_MODE") == "True"  # Cluster running locally
 
+GPU = os.environ.get("GPU") == "True"
 INSTANCE_NAME = os.environ["INSTANCE_NAME"]
 INACTIVITY_SHUTDOWN_TIME_SEC = int(os.environ.get("INACTIVITY_SHUTDOWN_TIME_SEC"))
 INSTANCE_N_CPUS = 1 if IN_LOCAL_DEV_MODE else os.cpu_count()

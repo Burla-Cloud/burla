@@ -59,7 +59,7 @@ project = client.get_project(name=f"projects/{PROJECT_ID}")
 GCE_DEFAULT_SVC = f"{project.name.split('/')[-1]}-compute@developer.gserviceaccount.com"
 
 NODE_BOOT_TIMEOUT = 60 * 3
-ACCEPTABLE_ZONES = ["us-central1-b", "us-central1-c", "us-central1-f", "us-central1-a"]
+ACCEPTABLE_ZONES = ["us-central1-a", "us-central1-b", "us-central1-c", "us-central1-f"]
 NODE_SVC_VERSION = "1.0.19"  # <- this maps to a git tag/release or branch
 
 
@@ -136,6 +136,10 @@ class Node:
             self.disk_image = "projects/burla-test/global/images/burla-node-nogpu"
         elif machine_type.startswith("a3"):
             self.disk_image = "projects/burla-test/global/images/burla-node-hopper"
+        elif machine_type.startswith("a2"):
+            self.disk_image = "projects/burla-test/global/images/burla-node-ampere"
+        else:
+            raise ValueError(f"Invalid machine type: {machine_type}")
 
         if verbose:
             self.logger.log(f"Adding node {self.instance_name} ..")
@@ -262,9 +266,18 @@ class Node:
         network_interface = NetworkInterface(name=network_name, access_configs=[access_config])
 
         if self.spot:
-            scheduling = Scheduling(provisioning_model="SPOT", instance_termination_action="DELETE")
+            scheduling = Scheduling(
+                provisioning_model="SPOT",
+                instance_termination_action="DELETE",
+                on_host_maintenance="TERMINATE",
+                automatic_restart=False,
+            )
         else:
-            scheduling = Scheduling(provisioning_model="STANDARD")
+            scheduling = Scheduling(
+                provisioning_model="STANDARD",
+                on_host_maintenance="TERMINATE",
+                automatic_restart=False,
+            )
 
         access_anything_scope = "https://www.googleapis.com/auth/cloud-platform"
         service_account = ServiceAccount(email=GCE_DEFAULT_SVC, scopes=[access_anything_scope])
@@ -318,6 +331,7 @@ class Node:
         python -m pip install --break-system-packages .
         echo "Done installing packages."
 
+        export GPU="{self.machine_type.startswith('a3') or self.machine_type.startswith('a2')}"
         export INSTANCE_NAME="{self.instance_name}"
         export PROJECT_ID="{PROJECT_ID}"
         export CONTAINERS='{json.dumps([c.to_dict() for c in self.containers])}'

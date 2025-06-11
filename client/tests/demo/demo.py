@@ -15,30 +15,29 @@ import burla
 # results = burla.remote_parallel_map(my_function, my_inputs)
 # print(f"Time taken: {time() - start}")
 
-
+import os
 import subprocess
 
 worker_cache = {}
 
 
 def do_inference(prompt: str):
-    result = subprocess.run(["nvidia-smi"], check=True, capture_output=True, text=True)
-    print(result.stdout)
-    if result.stderr:
-        print(result.stderr)
+    from vllm import LLM, SamplingParams
+    from huggingface_hub import login
 
-    # if not worker_cache.get("llm"):
-    #     print("Loading LLM onto GPU")
-    #     worker_cache["llm"] = LLM(model="meta-llama/Llama-4-Scout-17B-16E-Instruct")
-    # else:
-    #     print("Using cached LLM")
+    login("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")
 
-    # print(f"Asking LLM: {prompt}")
-    # result = worker_cache["llm"].generate(prompt)
-    # response = result[0].outputs[0].text
-    # print(f"Response: {response}\n\n")
+    if not worker_cache.get("llm"):
+        print("Loading LLM onto GPU")
+        worker_cache["llm"] = LLM(
+            model="meta-llama/Meta-Llama-3-8B-Instruct", dtype="float16", tensor_parallel_size=1
+        )
+    else:
+        print("Using cached LLM")
 
-    return prompt
+    sampling_params = SamplingParams(temperature=0.7, top_p=0.95)
+    output = worker_cache["llm"].generate(prompt, sampling_params)
+    return output[0].outputs[0].text
 
 
 prompts = [
@@ -54,6 +53,6 @@ prompts = [
     "Write a tweet about AI safety.",
 ]
 
-results = burla.remote_parallel_map(do_inference, [prompts[0]])
+results = burla.remote_parallel_map(do_inference, prompts)
 
 print(results)

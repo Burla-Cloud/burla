@@ -6,6 +6,7 @@ import concurrent.futures
 import docker
 from fastapi import APIRouter, Depends, Response
 from google.cloud import firestore
+from google.cloud.compute_v1 import InstancesClient
 
 from node_service import (
     PROJECT_ID,
@@ -125,7 +126,18 @@ def reboot_containers(
     except Exception as parent_exception:
         SELF["FAILED"] = True
         try:
-            node_doc.delete()
+            logger.log("Node failed to boot!! deleting node.")
+            if not IN_LOCAL_DEV_MODE:
+                instance_client = InstancesClient()
+                silly_response = instance_client.aggregated_list(project=PROJECT_ID)
+                vms_per_zone = [
+                    getattr(vms_in_zone, "instances", []) for _, vms_in_zone in silly_response
+                ]
+                vms = [vm for vms_in_zone in vms_per_zone for vm in vms_in_zone]
+                vm = next((vm for vm in vms if vm.name == INSTANCE_NAME), None)
+                if vm:
+                    zone = vm.zone.split("/")[-1]
+                    instance_client.delete(project=PROJECT_ID, zone=zone, instance=INSTANCE_NAME)
         except Exception as e:
             raise e from parent_exception
         raise parent_exception

@@ -4,6 +4,7 @@ import json
 import requests
 from uuid import uuid4
 from time import sleep
+import threading
 
 import docker
 from docker.errors import APIError
@@ -26,6 +27,7 @@ class Worker:
         image: str,
         docker_client: docker.APIClient,
         send_logs_to_gcl: bool = False,
+        stream_logs: bool = None,
     ):
         self.is_idle = False
         self.is_empty = False
@@ -155,9 +157,28 @@ class Worker:
         if IN_LOCAL_DEV_MODE:
             self.url = f"http://{self.container_name}:{WORKER_INTERNAL_PORT}"
 
+        should_stream = stream_logs if stream_logs is not None else False
+        if should_stream:
+            self._start_log_streaming()
+
         # wait until READY
         if self.status() != "READY":
             raise Exception(f"Worker {self.container_name} failed to become READY.")
+
+    def _start_log_streaming(self):
+        def stream_logs():
+            try:
+                for log_line in self.docker_client.logs(
+                    self.container_id, stream=True, follow=True, stdout=True, stderr=True
+                ):
+                    print(
+                        f"[{self.container_name}] {log_line.decode('utf-8', errors='ignore').rstrip()}"
+                    )
+            except Exception as e:
+                print(f"Log streaming stopped for {self.container_name}: {e}")
+
+        log_thread = threading.Thread(target=stream_logs, daemon=True)
+        log_thread.start()
 
     def exists(self):
         if not self.container_id:

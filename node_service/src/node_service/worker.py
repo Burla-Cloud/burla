@@ -18,24 +18,6 @@ LOGGER = logging.Client().logger("node_service")
 WORKER_INTERNAL_PORT = 8080
 
 
-def pull_image(docker_client: docker.APIClient, image: str, auth_config: dict = None):
-    last_status = {}
-
-    for line in docker_client.pull(image, auth_config=auth_config, stream=True, decode=True):
-        layer = line.get("id", "")
-        status = line.get("status", "")
-        progress = line.get("progress", "")
-
-        if layer and status:
-            msg = f"{layer[:12]}: {status} {progress}"
-            last_status[layer] = msg
-
-            # Clear output and reprint latest state of all layers
-            sys.stdout.write("\x1b[2J\x1b[H")  # Clear screen and move cursor to top
-            for l in sorted(last_status):
-                print(last_status[l])
-
-
 class Worker:
     """An instance of this = a running container with a running `worker_service` instance."""
 
@@ -57,14 +39,17 @@ class Worker:
         self.python_version = python_version
 
         try:
-            pull_image(docker_client, image)
+            print(f"Pulling image {image} ...")
+            docker_client.pull(image)
         except APIError as e:
             if e.response.status_code == 401:
+                print("Image is not public, trying again with credentials ...")
                 CREDENTIALS.refresh(Request())
                 auth_config = {"username": "oauth2accesstoken", "password": CREDENTIALS.token}
-                pull_image(docker_client, image, auth_config)
+                docker_client.pull(image, auth_config=auth_config)
             else:
                 raise
+        print(f"Image {image} pulled successfully.")
 
         try:
             # ODDLY, if docker_client.pull fails to pull the image, it will NOT throw any error >:(

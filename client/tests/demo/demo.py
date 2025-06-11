@@ -16,34 +16,29 @@ import burla
 # print(f"Time taken: {time() - start}")
 
 
-import importlib.util
 import subprocess
 
 worker_cache = {}
 
 
 def do_inference(prompt: str):
+    result = subprocess.run(["nvidia-smi"], check=True, capture_output=True, text=True)
+    print(result.stdout)
+    if result.stderr:
+        print(result.stderr)
 
-    if importlib.util.find_spec("vllm") is None:
-        print("Installing vllm ...")
-        subprocess.run(["pip", "install", "vllm"], check=True)
-        from vllm import LLM
+    # if not worker_cache.get("llm"):
+    #     print("Loading LLM onto GPU")
+    #     worker_cache["llm"] = LLM(model="meta-llama/Llama-4-Scout-17B-16E-Instruct")
+    # else:
+    #     print("Using cached LLM")
 
-    else:
-        from vllm import LLM
+    # print(f"Asking LLM: {prompt}")
+    # result = worker_cache["llm"].generate(prompt)
+    # response = result[0].outputs[0].text
+    # print(f"Response: {response}\n\n")
 
-    if not worker_cache.get("llm"):
-        print("Loading LLM onto GPU")
-        worker_cache["llm"] = LLM(model="meta-llama/Llama-4-Scout-17B-16E-Instruct")
-    else:
-        print("Using cached LLM")
-
-    print(f"Asking LLM: {prompt}")
-    result = worker_cache["llm"].generate(prompt)
-    response = result[0].outputs[0].text
-    print(f"Response: {response}\n\n")
-
-    return response
+    return prompt
 
 
 prompts = [
@@ -59,6 +54,6 @@ prompts = [
     "Write a tweet about AI safety.",
 ]
 
-results = burla.remote_parallel_map(do_inference, prompts)
+results = burla.remote_parallel_map(do_inference, [prompts[0]])
 
 print(results)

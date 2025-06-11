@@ -12,7 +12,7 @@ from google.cloud import logging
 from google.auth.transport.requests import Request
 from docker.types import DeviceRequest
 
-from node_service import PROJECT_ID, INSTANCE_NAME, IN_LOCAL_DEV_MODE, CREDENTIALS, GPU
+from node_service import PROJECT_ID, INSTANCE_NAME, IN_LOCAL_DEV_MODE, CREDENTIALS, NUM_GPUS
 
 LOGGER = logging.Client().logger("node_service")
 WORKER_INTERNAL_PORT = 8080
@@ -133,7 +133,8 @@ class Worker:
                 },
             )
         else:
-            device_requests = [DeviceRequest(count=-1, capabilities=[["gpu"]])] if GPU else []
+            gpu_device_requests = [DeviceRequest(count=-1, capabilities=[["gpu"]])]
+            device_requests = gpu_device_requests if NUM_GPUS != 0 else []
             host_config = docker_client.create_host_config(
                 port_bindings={WORKER_INTERNAL_PORT: ("127.0.0.1", None)},
                 ipc_mode="host",
@@ -155,7 +156,7 @@ class Worker:
                 "SEND_LOGS_TO_GCL": send_logs_to_gcl,
             },
             detach=True,
-            runtime="nvidia" if GPU else None,
+            runtime="nvidia" if NUM_GPUS != 0 else None,
         )
         self.container_id = self.container.get("Id")
         docker_client.start(container=self.container_id)

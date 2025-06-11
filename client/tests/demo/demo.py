@@ -23,9 +23,10 @@ worker_cache = {}
 
 def do_inference(prompt: str):
     from vllm import LLM, SamplingParams
-    from huggingface_hub import login
 
-    login("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")
+    # from huggingface_hub import login
+
+    # login("XXX")
 
     if not worker_cache.get("llm"):
         print("Loading LLM onto GPU")

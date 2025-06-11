@@ -132,6 +132,10 @@ class Node:
         self.current_job = None
         self.node_ref = self.db.collection("nodes").document(self.instance_name)
 
+        self.num_gpus = 0
+        if machine_type.startswith("a"):
+            self.num_gpus = int(machine_type.split("-")[-1][:-1])
+
         if machine_type.startswith("n4"):
             self.disk_image = "projects/burla-test/global/images/burla-node-nogpu"
         elif machine_type.startswith("a3"):
@@ -331,7 +335,7 @@ class Node:
         python -m pip install --break-system-packages .
         echo "Done installing packages."
 
-        export GPU="{self.machine_type.startswith('a3') or self.machine_type.startswith('a2')}"
+        export NUM_GPUS="{self.num_gpus}"
         export INSTANCE_NAME="{self.instance_name}"
         export PROJECT_ID="{PROJECT_ID}"
         export CONTAINERS='{json.dumps([c.to_dict() for c in self.containers])}'

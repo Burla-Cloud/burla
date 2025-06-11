@@ -16,6 +16,7 @@ from node_service import (
     IN_LOCAL_DEV_MODE,
     BURLA_BACKEND_URL,
     CLUSTER_ID_TOKEN,
+    NUM_GPUS,
     get_logger,
     Container,
 )
@@ -109,9 +110,10 @@ def reboot_containers(
         # start new workers.
         futures = []
         for spec in SELF["current_container_config"]:
-            for i in range(INSTANCE_N_CPUS):
+            num_workers = INSTANCE_N_CPUS if NUM_GPUS == 0 else NUM_GPUS
+            for i in range(num_workers):
                 # have just one worker send logs to gcl, too many will break gcl
-                send_logs_to_gcl = False  # (i == 0) and (not IN_LOCAL_DEV_MODE)
+                send_logs_to_gcl = (i == 0) and (not IN_LOCAL_DEV_MODE)
                 args = (spec.python_version, spec.image, docker_client)
                 futures.append(executor.submit(Worker, *args, send_logs_to_gcl=send_logs_to_gcl))
 

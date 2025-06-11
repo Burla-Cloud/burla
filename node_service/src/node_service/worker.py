@@ -45,7 +45,6 @@ class Worker:
         image: str,
         docker_client: docker.APIClient,
         send_logs_to_gcl: bool = False,
-        stream_logs: bool = None,
     ):
         self.is_idle = False
         self.is_empty = False
@@ -123,7 +122,7 @@ class Worker:
                 --port {WORKER_INTERNAL_PORT} --workers 1 \
                 --timeout-keep-alive 30 $reload_flag
         """.strip()
-        cmd = ["bash", "-c", cmd_script]
+        cmd = ["-c", cmd_script]
         if IN_LOCAL_DEV_MODE:
             host_config = docker_client.create_host_config(
                 port_bindings={WORKER_INTERNAL_PORT: ("127.0.0.1", None)},
@@ -145,6 +144,7 @@ class Worker:
         self.container = docker_client.create_container(
             image=image,
             command=cmd,
+            entrypoint=["bash"],
             name=self.container_name,
             ports=[WORKER_INTERNAL_PORT],
             host_config=host_config,
@@ -175,9 +175,7 @@ class Worker:
         if IN_LOCAL_DEV_MODE:
             self.url = f"http://{self.container_name}:{WORKER_INTERNAL_PORT}"
 
-        should_stream = stream_logs if stream_logs is not None else False
-        should_stream = True
-        if should_stream:
+        if send_logs_to_gcl:
             self._start_log_streaming()
 
         # wait until READY

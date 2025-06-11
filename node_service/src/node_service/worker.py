@@ -158,6 +158,7 @@ class Worker:
             self.url = f"http://{self.container_name}:{WORKER_INTERNAL_PORT}"
 
         should_stream = stream_logs if stream_logs is not None else False
+        should_stream = True
         if should_stream:
             self._start_log_streaming()
 

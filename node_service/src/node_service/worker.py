@@ -40,12 +40,15 @@ class Worker:
         self.python_version = python_version
 
         try:
-            docker_client.pull(image)
+            for line in docker_client.pull(image, stream=True, decode=True):
+                print(f"{line['id'][:12]}: {line['status']} {line.get("progress", "")}")
         except APIError as e:
             if e.response.status_code == 401:
                 CREDENTIALS.refresh(Request())
                 auth_config = {"username": "oauth2accesstoken", "password": CREDENTIALS.token}
-                docker_client.pull(image, auth_config=auth_config)
+                logs = docker_client.pull(image, auth_config=auth_config, stream=True, decode=True)
+                for line in logs:
+                    print(f"{line['id'][:12]}: {line['status']} {line.get("progress", "")}")
             else:
                 raise
 

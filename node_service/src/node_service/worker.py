@@ -12,7 +12,14 @@ from google.cloud import logging
 from google.auth.transport.requests import Request
 from docker.types import DeviceRequest
 
-from node_service import PROJECT_ID, INSTANCE_NAME, IN_LOCAL_DEV_MODE, CREDENTIALS, NUM_GPUS
+from node_service import (
+    PROJECT_ID,
+    INSTANCE_NAME,
+    IN_LOCAL_DEV_MODE,
+    CREDENTIALS,
+    NUM_GPUS,
+    __version__,
+)
 
 LOGGER = logging.Client().logger("node_service")
 WORKER_INTERNAL_PORT = 8080
@@ -87,11 +94,11 @@ class Worker:
             # Install worker_service if missing
             $python_cmd -c "import worker_service" 2>/dev/null || (
                 echo "Installing worker_service..."
-                git clone --depth 1 https://github.com/Burla-Cloud/burla.git --no-checkout
+                git clone --depth 1 --branch {__version__} https://github.com/Burla-Cloud/burla.git --no-checkout
                 cd burla
                 git sparse-checkout init --cone
                 git sparse-checkout set worker_service
-                git checkout main
+                git checkout {__version__}
                 cd worker_service
                 $python_cmd -m pip install --break-system-packages .
             )

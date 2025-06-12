@@ -17,10 +17,10 @@ export const SettingsForm: React.FC<SettingsFormProps> = ({ isEditing }) => {
 
     const gpuOptions = [
         "None",
-        "1x A100 80G",
-        "2x A100 80G",
-        "4x A100 80G",
-        "8x A100 80G",
+        // "1x A100 80G",
+        // "2x A100 80G",
+        // "4x A100 80G",
+        // "8x A100 80G",
         "1x H100 80G",
         "2x H100 80G",
         "4x H100 80G",
@@ -39,10 +39,10 @@ export const SettingsForm: React.FC<SettingsFormProps> = ({ isEditing }) => {
     ];
 
     const gpuCpuMap: Record<string, { label: string; value: string }> = {
-        "1x A100 80G": { label: "12CPU / 170G RAM", value: "a2-ultragpu-1g" },
-        "2x A100 80G": { label: "24CPU / 340G RAM", value: "a2-ultragpu-2g" },
-        "4x A100 80G": { label: "48CPU / 680G RAM", value: "a2-ultragpu-4g" },
-        "8x A100 80G": { label: "96CPU / 1360G RAM", value: "a2-ultragpu-8g" },
+        // "1x A100 80G": { label: "12CPU / 170G RAM", value: "a2-ultragpu-1g" },
+        // "2x A100 80G": { label: "24CPU / 340G RAM", value: "a2-ultragpu-2g" },
+        // "4x A100 80G": { label: "48CPU / 680G RAM", value: "a2-ultragpu-4g" },
+        // "8x A100 80G": { label: "96CPU / 1360G RAM", value: "a2-ultragpu-8g" },
         "1x H100 80G": { label: "26CPU / 234G RAM", value: "a3-highgpu-1g" },
         "2x H100 80G": { label: "52CPU / 468G RAM", value: "a3-highgpu-2g" },
         "4x H100 80G": { label: "104CPU / 936G RAM", value: "a3-highgpu-4g" },

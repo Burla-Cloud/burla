@@ -95,6 +95,9 @@ def install():
 
 
 def _install(spinner):
+
+    print(1 / 0)
+
     log_telemetry("Somebody is running `burla install`!")
 
     # check gcloud is installed:

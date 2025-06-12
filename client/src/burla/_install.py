@@ -238,7 +238,7 @@ def _install(spinner):
         raise_error=False,
     )
     if result.returncode != 0 and "already exists" in result.stderr.decode():
-        spinner.text = "Creating service account ... service account already exists."
+        spinner.text = "Creating service account ... Service account already exists."
         spinner.ok("✓")
     elif result.returncode != 0:
         spinner.fail("✗")

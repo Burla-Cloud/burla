@@ -21,7 +21,7 @@ To get this setup install the vscode extension called "Run on Save", the publish
     "emeraldwalk.runonsave": {
         "commands": [
             {
-                "match": ".*", // Run whenever any file is saved
+                "match": "frontend/src/.*\\.(js|ts|jsx|tsx|css|scss|html)$", // Run whenever any source-code file is saved
                 "cmd": "make -C ./main_service build-frontend"
             }
         ]

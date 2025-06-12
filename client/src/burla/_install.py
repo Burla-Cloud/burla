@@ -306,7 +306,7 @@ def _install(spinner):
         f"--region=us-central1 "
         f"--service-account {SA_EMAIL} "
         f"--min-instances 1 "
-        f"--max-instances 20 "
+        f"--max-instances 5 "
         f"--memory 4Gi "
         f"--cpu 1 "
         f"--timeout 10 "

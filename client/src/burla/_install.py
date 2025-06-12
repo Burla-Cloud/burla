@@ -24,6 +24,7 @@ DEFAULT_CLUSTER_CONFIG = {
             "inactivity_shutdown_time_sec": 300,
             "machine_type": "n4-standard-4",
             "quantity": 1,
+            "disk_size_gb": 50,
         }
     ]
 }
@@ -94,6 +95,7 @@ def install():
 
 
 def _install(spinner):
+
     log_telemetry("Somebody is running `burla install`!")
 
     # check gcloud is installed:
@@ -235,9 +237,14 @@ def _install(spinner):
         f"gcloud iam service-accounts create {SERVICE_ACCOUNT_NAME} --display-name='Burla Main Service'",
         raise_error=False,
     )
-    if not (result.returncode == 1 and "already exists" in result.stderr.decode()):
+    if result.returncode != 0 and "already exists" in result.stderr.decode():
+        spinner.text = "Creating service account ... Service account already exists."
+        spinner.ok("✓")
+    elif result.returncode != 0:
         spinner.fail("✗")
         raise VerboseCalledProcessError(cmd, result.stderr)
+    else:
+        spinner.text = "Creating service account ... Done."
 
     for role in (
         "roles/datastore.user",

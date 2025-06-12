@@ -184,9 +184,6 @@ async def _job_watcher(n_inputs: int, is_background_job: bool, logger: Logger, a
     if not is_background_job:
         job_watch.unsubscribe()
 
-    if not SELF["SHUTTING_DOWN"]:
-        reboot_containers(logger=logger)
-
 
 async def job_watcher_logged(n_inputs: int, is_background_job: bool, auth_headers: dict):
     logger = Logger()  # new logger has no request attached like the one in execute job did.
@@ -197,6 +194,7 @@ async def job_watcher_logged(n_inputs: int, is_background_job: bool, auth_header
         tb_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
         traceback_str = format_traceback(tb_details)
         logger.log(str(e), "ERROR", traceback=traceback_str)
+    finally:
         if not SELF["SHUTTING_DOWN"]:
             reboot_containers(logger=logger)
 

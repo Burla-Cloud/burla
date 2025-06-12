@@ -10,6 +10,7 @@ from uuid import uuid4
 from typing import Optional
 
 import docker
+from docker.errors import APIError
 from google.cloud import resourcemanager_v3
 from google.auth.transport.requests import Request
 from google.api_core.exceptions import NotFound, ServiceUnavailable, Conflict
@@ -57,9 +58,9 @@ client = resourcemanager_v3.ProjectsClient(credentials=CREDENTIALS)
 project = client.get_project(name=f"projects/{PROJECT_ID}")
 GCE_DEFAULT_SVC = f"{project.name.split('/')[-1]}-compute@developer.gserviceaccount.com"
 
-NODE_BOOT_TIMEOUT = 60 * 3
-ACCEPTABLE_ZONES = ["us-central1-b", "us-central1-c", "us-central1-f", "us-central1-a"]
-NODE_SVC_VERSION = "1.0.19"  # <- this maps to a git tag/release or branch
+NODE_BOOT_TIMEOUT = 60 * 6
+ACCEPTABLE_ZONES = ["us-central1-a", "us-central1-b", "us-central1-c", "us-central1-f"]
+NODE_SVC_VERSION = "1.0.20"  # <- this maps to a git tag/release or branch
 
 
 class Node:
@@ -110,7 +111,6 @@ class Node:
         inactivity_shutdown_time_sec: Optional[int] = None,
         disk_size: Optional[int] = None,
         verbose=False,
-        disk_image: str = "projects/burla-prod/global/images/burla-cluster-node-image-6",
     ):
         self = cls.__new__(cls)
         self.db = db
@@ -132,6 +132,19 @@ class Node:
         self.current_job = None
         self.node_ref = self.db.collection("nodes").document(self.instance_name)
 
+        self.num_gpus = 0
+        if machine_type.startswith("a"):
+            self.num_gpus = int(machine_type.split("-")[-1][:-1])
+
+        if machine_type.startswith("n4"):
+            self.disk_image = "projects/burla-test/global/images/burla-node-nogpu"
+        elif machine_type.startswith("a3"):
+            self.disk_image = "projects/burla-test/global/images/burla-node-hopper"
+        elif machine_type.startswith("a2"):
+            self.disk_image = "projects/burla-test/global/images/burla-node-ampere"
+        else:
+            raise ValueError(f"Invalid machine type: {machine_type}")
+
         if verbose:
             self.logger.log(f"Adding node {self.instance_name} ..")
 
@@ -145,7 +158,7 @@ class Node:
         if as_local_container:
             self.__start_svc_in_local_container()
         else:
-            self.__start_svc_in_vm(disk_image=disk_image, disk_size=self.disk_size)
+            self.__start_svc_in_vm(disk_image=self.disk_image, disk_size=self.disk_size)
 
         start = time()
         status = self.status()
@@ -216,18 +229,20 @@ class Node:
             },
         )
 
-        image_stored_in_gcp = "docker.pkg.dev" in image or "gcr.io" in image
-        if image_stored_in_gcp:
-            CREDENTIALS.refresh(Request())
-            auth_config = {"username": "oauth2accesstoken", "password": CREDENTIALS.token}
-            docker_client.pull(image, auth_config=auth_config)
-        else:
+        try:
             docker_client.pull(image)
+        except APIError as e:
+            if e.response.status_code == 401:
+                CREDENTIALS.refresh(Request())
+                auth_config = {"username": "oauth2accesstoken", "password": CREDENTIALS.token}
+                docker_client.pull(image, auth_config=auth_config)
+            else:
+                raise
 
         container_name = f"node_{self.instance_name[11:]}"
         container = docker_client.create_container(
             image=image,
-            command=["bash", "-c", f"python3.11 -m {command}"],
+            command=["bash", "-c", f"python -m {command}"],
             name=container_name,
             ports=[self.port],
             host_config=host_config,
@@ -255,9 +270,18 @@ class Node:
         network_interface = NetworkInterface(name=network_name, access_configs=[access_config])
 
         if self.spot:
-            scheduling = Scheduling(provisioning_model="SPOT", instance_termination_action="DELETE")
+            scheduling = Scheduling(
+                provisioning_model="SPOT",
+                instance_termination_action="DELETE",
+                on_host_maintenance="TERMINATE",
+                automatic_restart=False,
+            )
         else:
-            scheduling = Scheduling(provisioning_model="STANDARD")
+            scheduling = Scheduling(
+                provisioning_model="STANDARD",
+                on_host_maintenance="TERMINATE",
+                automatic_restart=False,
+            )
 
         access_anything_scope = "https://www.googleapis.com/auth/cloud-platform"
         service_account = ServiceAccount(email=GCE_DEFAULT_SVC, scopes=[access_anything_scope])
@@ -300,14 +324,7 @@ class Node:
 
     def __get_startup_script(self):
         return f"""
-        #! /bin/bash
-        # This script installs and starts the node service
-        
-        # Increases max num open files so we can have more connections open.
-        # ulimit -n 4096 # baked into image when I built `burla-cluster-node-image-5`
-
-        gcloud config set account {GCE_DEFAULT_SVC}
-
+        #! /bin/bash        
         echo "DOWNLOADING BURLA NODE SERVICE V{NODE_SVC_VERSION}"
         git clone --depth 1 --branch {NODE_SVC_VERSION} https://github.com/Burla-Cloud/burla.git  --no-checkout
         cd burla
@@ -315,15 +332,22 @@ class Node:
         git sparse-checkout set node_service
         git checkout {NODE_SVC_VERSION}
         cd node_service
-        python3.11 -m pip install --break-system-packages .
+        python -m pip install --break-system-packages .
         echo "Done installing packages."
 
+        export NUM_GPUS="{self.num_gpus}"
         export INSTANCE_NAME="{self.instance_name}"
         export PROJECT_ID="{PROJECT_ID}"
         export CONTAINERS='{json.dumps([c.to_dict() for c in self.containers])}'
         export INACTIVITY_SHUTDOWN_TIME_SEC="{self.inactivity_shutdown_time_sec}"
 
-        python3.11 -m uvicorn node_service:app --host 0.0.0.0 --port {self.port} --workers 1 --timeout-keep-alive 600
+        # authenticate docker:
+        ACCESS_TOKEN=$(curl -s -H "Metadata-Flavor: Google" \
+        "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token" \
+        | jq -r .access_token)
+        echo "$ACCESS_TOKEN" | docker login -u oauth2accesstoken --password-stdin https://us-docker.pkg.dev
+
+        python -m uvicorn node_service:app --host 0.0.0.0 --port {self.port} --workers 1 --timeout-keep-alive 600
         """
 
     def __get_shutdown_script(self):

@@ -23,12 +23,13 @@ from starlette.datastructures import UploadFile
 from google.cloud import logging, secretmanager
 from google.cloud.compute_v1 import InstancesClient
 
-__version__ = "1.0.19"
+__version__ = "1.0.20"
 CREDENTIALS, PROJECT_ID = google.auth.default()
 BURLA_BACKEND_URL = "https://backend.burla.dev"
 
 IN_LOCAL_DEV_MODE = os.environ.get("IN_LOCAL_DEV_MODE") == "True"  # Cluster running locally
 
+NUM_GPUS = int(os.environ.get("NUM_GPUS"))
 INSTANCE_NAME = os.environ["INSTANCE_NAME"]
 INACTIVITY_SHUTDOWN_TIME_SEC = int(os.environ.get("INACTIVITY_SHUTDOWN_TIME_SEC"))
 INSTANCE_N_CPUS = 1 if IN_LOCAL_DEV_MODE else os.cpu_count()

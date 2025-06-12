@@ -174,6 +174,7 @@ async def execute(
             workers_to_remove.append(worker)
 
     if not workers_to_keep:
+        SELF["RUNNING"] = False
         msg = "No compatible containers.\n"
         msg += f"User is running python version {user_python_version}, "
         versions = list(set([e.python_version for e in SELF["workers"]]))

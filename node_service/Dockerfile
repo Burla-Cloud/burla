@@ -20,41 +20,37 @@ FROM debian:12
 # dont ask y/n when installing stuff
 ENV DEBIAN_FRONTEND=noninteractive
 
-# install git, python, and deps needed for gcloud
-RUN apt-get update && apt-get install -y git ca-certificates curl gnupg
-RUN apt install -y python3-pip
-
-# Install gcloud
-RUN echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] \
-        http://packages.cloud.google.com/apt cloud-sdk main" | \
-        tee -a /etc/apt/sources.list.d/google-cloud-sdk.list && \
-    curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | \
-        apt-key --keyring /usr/share/keyrings/cloud.google.gpg  add - && \
-    apt-get update -y && apt-get install google-cloud-sdk -y
+# install git and python prerequisites
+RUN apt-get update && apt-get install -y git build-essential libssl-dev zlib1g-dev \
+  libncurses5-dev libncursesw5-dev libreadline-dev libsqlite3-dev \
+  libgdbm-dev libdb5.3-dev libbz2-dev libexpat1-dev liblzma-dev tk-dev curl libffi-dev
+RUN apt-get update
 
 # Install docker,
 # Not done here because you can't run docker in docker, and this image only exists
 # to mimic a VM disk image, where docker would be installed using the below commands.
 # ================================================
-# install -m 0755 -d /etc/apt/keyrings
-# curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-# chmod a+r /etc/apt/keyrings/docker.gpg
-# echo \
-#   "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian \
-#   $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
-#   tee /etc/apt/sources.list.d/docker.list > /dev/null
-# apt-get update
-# apt-get install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-
-# # use gcloud to authenticate docker with GAR
-# gcloud auth configure-docker us-docker.pkg.dev
+# RUN apt-get update && apt-get install -y docker.io
+# RUN systemctl start docker
+# RUN systemctl enable docker
 # ================================================
 
+# install python 3.13 from source
+RUN cd /usr/src && \
+    curl -O https://www.python.org/ftp/python/3.13.4/Python-3.13.4.tgz && \
+    tar -xf Python-3.13.4.tgz && \
+    cd Python-3.13.4 && \
+    ./configure --enable-optimizations && \
+    make -j$(nproc) && \
+    make altinstall
+RUN ln -sf /usr/local/bin/python3.13 /usr/bin/python
+
+
 # Install latest node_service and pip install packages now to make node starts faster
-RUN git clone --depth 1 https://github.com/Burla-Cloud/burla.git --no-checkout
+RUN git clone --depth 1 --branch 1.0.20 https://github.com/Burla-Cloud/burla.git --no-checkout
 WORKDIR burla
 RUN git sparse-checkout init --cone && \
     git sparse-checkout set node_service && \
-    git checkout main
+    git checkout 1.0.20
 WORKDIR node_service
-RUN python3.11 -m pip install --break-system-packages -e .
+RUN python -m pip install --break-system-packages -e .

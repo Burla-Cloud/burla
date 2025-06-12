@@ -11,6 +11,7 @@ PROD_IMAGE_BASE_NAME := us-docker.pkg.dev/burla-prod/$(ARTIFACT_REPO_NAME)/$(ART
 .PHONY: frontend
 build-frontend:
 	set -e; \
+	pgrep -f "rsync -a --delete" >/dev/null && exit 0; \
 	cd ./frontend; \
 	npm i; \
 	npm run build; \

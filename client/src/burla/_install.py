@@ -3,6 +3,9 @@ import shutil
 import subprocess
 import traceback
 import requests
+from pathlib import Path
+import tempfile
+import json
 from time import time, sleep
 from yaspin import yaspin
 from google.cloud.firestore import Client
@@ -233,10 +236,8 @@ def _install(spinner):
     spinner.start()
     SERVICE_ACCOUNT_NAME = "burla-main-service"
     SA_EMAIL = f"{SERVICE_ACCOUNT_NAME}@{PROJECT_ID}.iam.gserviceaccount.com"
-    result = _run_command(
-        f"gcloud iam service-accounts create {SERVICE_ACCOUNT_NAME} --display-name='Burla Main Service'",
-        raise_error=False,
-    )
+    cmd = f"gcloud iam service-accounts create {SERVICE_ACCOUNT_NAME} --display-name='Burla Main Service'"
+    result = _run_command(cmd, raise_error=False)
     if result.returncode != 0 and "already exists" in result.stderr.decode():
         spinner.text = "Creating service account ... Service account already exists."
         spinner.ok("✓")
@@ -246,15 +247,18 @@ def _install(spinner):
     else:
         spinner.text = "Creating service account ... Done."
 
-    for role in (
-        "roles/datastore.user",
-        "roles/secretmanager.secretAccessor",
-        "roles/logging.logWriter",
-        "roles/compute.instanceAdmin.v1",
-    ):
-        _run_command(
-            f"gcloud projects add-iam-policy-binding {PROJECT_ID} --member=serviceAccount:{SA_EMAIL} --role={role}",
-        )
+    members = [f"serviceAccount:{SA_EMAIL}"]
+    policy = {
+        "bindings": [
+            {"role": "roles/datastore.user", "members": members},
+            {"role": "roles/secretmanager.secretAccessor", "members": members},
+            {"role": "roles/logging.logWriter", "members": members},
+            {"role": "roles/compute.instanceAdmin.v1", "members": members},
+        ]
+    }
+    path = Path(tempfile.gettempdir()) / "gcloud_policy.json"
+    path.write_text(json.dumps(policy, indent=2))
+    _run_command(f"gcloud projects set-iam-policy {PROJECT_ID} {path}")
 
     # Wait for compute engine service account to exist (if new project):
     start = time()
@@ -285,6 +289,8 @@ def _install(spinner):
     cmd = "gcloud firestore databases create --database=burla --location=us-central1 --type=firestore-native"
     result = _run_command(cmd, raise_error=False)
     if result.returncode != 0 and "already exists" in result.stderr.decode():
+        db = Client(database="burla")
+        db.collection("cluster_config").document("cluster_config").update(DEFAULT_CLUSTER_CONFIG)
         spinner.text = "Creating Firestore database ... Database already exists."
         spinner.ok("✓")
     elif result.returncode != 0:

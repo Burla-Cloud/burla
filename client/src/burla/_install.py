@@ -52,6 +52,10 @@ class BackendError(Exception):
     pass
 
 
+class AuthError(Exception):
+    pass
+
+
 def _run_command(command, raise_error=True):
     result = subprocess.run(command, shell=True, capture_output=True)
 
@@ -86,7 +90,7 @@ def install():
         log_telemetry(str(exc_type), "ERROR", traceback=traceback_str)
 
         # reraise
-        if isinstance(e, VerboseCalledProcessError):
+        if isinstance(e, VerboseCalledProcessError) or isinstance(e, AuthError):
             raise e
         else:
             msg = f"If you're not sure what to do, please email jake@burla.dev, or call me at 508-320-8778!\n"
@@ -95,7 +99,6 @@ def install():
 
 
 def _install(spinner):
-
     log_telemetry("Somebody is running `burla install`!")
 
     # check gcloud is installed:
@@ -154,11 +157,6 @@ def _install(spinner):
     spinner.text = f"Checking for gcloud project ... Using project: {PROJECT_ID}"
     spinner.ok("✓")
 
-    # Project number needed to reference the default Compute Engine service-account
-    result = _run_command(f"gcloud projects describe {PROJECT_ID} --format='value(projectNumber)'")
-    PROJECT_NUMBER = result.stdout.decode().strip()
-    COMPUTE_SA = f"{PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
-
     log_telemetry("Installer has gcloud and is logged in.", project_id=PROJECT_ID)
 
     # Enable required services
@@ -201,62 +199,82 @@ def _install(spinner):
     # Register cluster and save token
     spinner.text = "Creating secrets ... "
     spinner.start()
-    cmd = 'gcloud secrets describe burla-cluster-id-token --format="value(name)"'
+    cmd = "gcloud secrets versions access latest --secret=burla-cluster-id-token"
     result = _run_command(cmd, raise_error=False)
-    if result.returncode == 1 and "NOT_FOUND" in result.stderr.decode():
-        # get user's email from gcloud
-        cmd = f'gcloud auth list --filter=status:ACTIVE --format="value(account)"'
-        result = _run_command(cmd)
-        cluster_owner_email = result.stdout.decode().strip()
-
-        # tell backend service that email is authorized to run jobs in this project
-        url = f"{_BURLA_BACKEND_URL}/v1/projects/{PROJECT_ID}"
-        response = requests.post(url, headers={"X-User-Email": cluster_owner_email})
-        if response.status_code == 200:
-            cluster_id_token = response.json()["token"]
-            # save token as secret
-            cmd = 'gcloud secrets create burla-cluster-id-token --replication-policy="automatic"'
-            result = _run_command(cmd)
-            cmd = f'printf "%s" "{cluster_id_token}" | gcloud secrets versions add burla-cluster-id-token --data-file=-'
-            result = _run_command(cmd)
-            spinner.text = "Creating secrets ... Done."
-            spinner.ok("✓")
-        else:
+    if result.returncode != 0 and "NOT_FOUND" in result.stderr.decode():
+        already_created = False
+        # create secret
+        cmd = 'gcloud secrets create burla-cluster-id-token --replication-policy="automatic"'
+        _run_command(cmd)
+        # register cluster
+        response = requests.post(f"{_BURLA_BACKEND_URL}/v1/projects/{PROJECT_ID}")
+        if response.status_code == 403:
+            spinner.fail("✗")
+            msg = "Cluster ID secret is missing, but this deployment has already been registered.\n"
+            msg += "Because this secret is missing, we cannot verify that you are the owner of this cluster.\n"
+            msg += "Please call Jake at 508-320-8778, email jake@burla.dev, "
+            msg += "or DM @jake__z in our Discord to regain access!"
+            raise AuthError(msg)
+        elif response.status_code != 200:
             spinner.fail("✗")
             raise BackendError(f"Error registering cluster: {response.status_code} {response.text}")
+        cluster_id_token = response.json()["token"]
+
+    elif result.returncode != 0:
+        spinner.fail("✗")
+        raise VerboseCalledProcessError(cmd, result.stderr)
     else:
-        spinner.text = "Creating secrets ... Done."
-        spinner.ok("✓")
+        already_created = True
+        cluster_id_token = result.stdout.decode().strip()
+
+    # ensure installer is authorized
+    cmd = f'gcloud auth list --filter=status:ACTIVE --format="value(account)"'
+    cluster_owner_email = _run_command(cmd).stdout.decode().strip()
+    users_url = f"{_BURLA_BACKEND_URL}/v1/projects/{PROJECT_ID}/users"
+    headers = {"Authorization": f"Bearer {cluster_id_token}"}
+    response = requests.post(users_url, json={"new_user": cluster_owner_email}, headers=headers)
+    response.raise_for_status()
+
+    # save/update token as secret
+    cmd = f'printf "%s" "{cluster_id_token}" | gcloud secrets versions add burla-cluster-id-token --data-file=-'
+    _run_command(cmd)
+
+    if already_created:
+        spinner.text = "Creating secret ... Secret already exists."
+    else:
+        spinner.text = "Creating secret ... Done."
+    spinner.ok("✓")
 
     # create custom service account for main service
     spinner.text = "Creating service account ... "
     spinner.start()
     SERVICE_ACCOUNT_NAME = "burla-main-service"
     SA_EMAIL = f"{SERVICE_ACCOUNT_NAME}@{PROJECT_ID}.iam.gserviceaccount.com"
-    result = _run_command(
-        f"gcloud iam service-accounts create {SERVICE_ACCOUNT_NAME} --display-name='Burla Main Service'",
-        raise_error=False,
-    )
+    cmd = f"gcloud iam service-accounts create {SERVICE_ACCOUNT_NAME} --display-name='Burla Main Service'"
+    result = _run_command(cmd, raise_error=False)
     if result.returncode != 0 and "already exists" in result.stderr.decode():
-        spinner.text = "Creating service account ... Service account already exists."
-        spinner.ok("✓")
+        already_exists = True
     elif result.returncode != 0:
         spinner.fail("✗")
         raise VerboseCalledProcessError(cmd, result.stderr)
     else:
-        spinner.text = "Creating service account ... Done."
+        already_exists = False
 
-    for role in (
-        "roles/datastore.user",
-        "roles/secretmanager.secretAccessor",
-        "roles/logging.logWriter",
-        "roles/compute.instanceAdmin.v1",
-    ):
-        _run_command(
-            f"gcloud projects add-iam-policy-binding {PROJECT_ID} --member=serviceAccount:{SA_EMAIL} --role={role}",
-        )
+    # apply required roles to new svc account:
+    project_level_roles = ["datastore.user", "logging.logWriter", "compute.instanceAdmin.v1"]
+    for role in project_level_roles:
+        cmd = f"gcloud projects add-iam-policy-binding {PROJECT_ID} --member=serviceAccount:{SA_EMAIL} --role=roles/{role}"
+        _run_command(cmd)
+    cmd = f"gcloud secrets add-iam-policy-binding burla-cluster-id-token "
+    cmd += f"--member=serviceAccount:{SA_EMAIL} --role=roles/secretmanager.secretAccessor"
+    _run_command(cmd)
 
-    # Wait for compute engine service account to exist (if new project):
+    # Project number needed to reference the default Compute Engine service-account
+    result = _run_command(f"gcloud projects describe {PROJECT_ID} --format='value(projectNumber)'")
+    PROJECT_NUMBER = result.stdout.decode().strip()
+    COMPUTE_SA = f"{PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
+
+    # wait for compute engine default service account to exist:
     start = time()
     while time() - start < 30:
         cmd = f"gcloud iam service-accounts describe {COMPUTE_SA}"
@@ -268,15 +286,19 @@ def _install(spinner):
         spinner.fail("✗")
         raise Exception("Compute engine default service account not found after 30s.")
 
-    # Allow default compute engine service account to use burla token secret
-    _run_command(
-        f"gcloud projects add-iam-policy-binding {PROJECT_ID} "
-        f"--member=serviceAccount:{COMPUTE_SA} --role=roles/secretmanager.secretAccessor",
-    )
-    _run_command(
-        f"gcloud iam service-accounts add-iam-policy-binding {COMPUTE_SA} --member=serviceAccount:{SA_EMAIL} --role=roles/iam.serviceAccountUser",
-    )
-    spinner.text = "Creating service account ... Done."
+    # allow compute engine service account to use burla token secret
+    cmd = f"gcloud secrets add-iam-policy-binding burla-cluster-id-token "
+    cmd += f'--member="serviceAccount:{COMPUTE_SA}" --role="roles/secretmanager.secretAccessor"'
+    _run_command(cmd)
+    # allow dashboard to create vm instances having the default compute engine account.
+    cmd = f"gcloud iam service-accounts add-iam-policy-binding {COMPUTE_SA} "
+    cmd += f'--member="serviceAccount:{SA_EMAIL}" --role="roles/iam.serviceAccountUser"'
+    _run_command(cmd)
+
+    if already_exists:
+        spinner.text = "Creating service account ... Service account already exists."
+    else:
+        spinner.text = "Creating service account ... Done."
     spinner.ok("✓")
 
     # Create Firestore database
@@ -285,6 +307,8 @@ def _install(spinner):
     cmd = "gcloud firestore databases create --database=burla --location=us-central1 --type=firestore-native"
     result = _run_command(cmd, raise_error=False)
     if result.returncode != 0 and "already exists" in result.stderr.decode():
+        db = Client(database="burla")
+        db.collection("cluster_config").document("cluster_config").update(DEFAULT_CLUSTER_CONFIG)
         spinner.text = "Creating Firestore database ... Database already exists."
         spinner.ok("✓")
     elif result.returncode != 0:

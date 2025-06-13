@@ -60,7 +60,7 @@ GCE_DEFAULT_SVC = f"{project.name.split('/')[-1]}-compute@developer.gserviceacco
 
 NODE_BOOT_TIMEOUT = 60 * 6
 ACCEPTABLE_ZONES = ["us-central1-a", "us-central1-b", "us-central1-c", "us-central1-f"]
-NODE_SVC_VERSION = "1.0.20"  # <- this maps to a git tag/release or branch
+NODE_SVC_VERSION = "1.0.21"  # <- this maps to a git tag/release or branch
 
 
 class Node:
@@ -151,7 +151,7 @@ class Node:
         current_state = dict(self.__dict__)  # <- create copy to modify / save
         current_state["status"] = "BOOTING"
         current_state["containers"] = [container.to_dict() for container in containers]
-        attrs_to_not_save = ["db", "logger", "instance_client", "node_ref"]
+        attrs_to_not_save = ["db", "logger", "instance_client", "node_ref", "auth_headers"]
         current_state = {k: v for k, v in current_state.items() if k not in attrs_to_not_save}
         self.node_ref.set(current_state)
 

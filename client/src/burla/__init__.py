@@ -3,7 +3,7 @@ from fire import Fire
 
 
 # needed so main_service can associate a client version with a request
-__version__ = "1.0.20"
+__version__ = "1.0.21"
 _BURLA_BACKEND_URL = "https://backend.burla.dev"
 
 from burla._auth import login, dashboard

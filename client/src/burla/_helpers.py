@@ -60,19 +60,6 @@ def has_explicit_return(fn):
     return visitor.found
 
 
-# possible_gpu_values = Literal["a100", "h100"]
-
-# "1x A100"
-# "2x A100"
-# "4x A100"
-# "8x A100"
-# "1x H100"
-# "2x H100"
-# "4x H100"
-# "8x H100"
-# "8x H200"
-
-
 def parallelism_capacity(machine_type: str, func_cpu: int, func_ram: int):
     # Max number of workers this machine_type can run a job with the given resource requirements?
     if machine_type.startswith("n4-standard") and machine_type.split("-")[-1].isdigit():

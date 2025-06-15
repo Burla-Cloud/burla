@@ -91,6 +91,8 @@ class Worker:
                 apt-get update && apt-get install -y git
             fi
 
+            # TODO: update worker service if version is out of sync with this nodes version!
+
             # Install worker_service if missing
             $python_cmd -c "import worker_service" 2>/dev/null || (
                 echo "Installing worker_service..."

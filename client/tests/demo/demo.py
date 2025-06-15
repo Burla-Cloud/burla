@@ -1,19 +1,16 @@
 from time import sleep, time
-import burla
+from burla import remote_parallel_map
 
 
 def my_function(my_input):
 
-    sleep(0.1)
-
-    return my_input
+    return my_inputs * 2
 
 
-my_inputs = list(range(100))
+my_inputs = list(range(1_000_000))
 
-start = time()
-results = burla.remote_parallel_map(my_function, my_inputs)
-print(f"Time taken: {time() - start}")
+results = remote_parallel_map(my_function, my_inputs)
+
 
 # import os
 # import subprocess

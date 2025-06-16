@@ -179,6 +179,7 @@ async def _execute_job(
             "max_parallelism": max_parallelism,
             "target_parallelism": total_target_parallelism,
             "user": auth_headers["X-User-Email"],
+            "function_name": function_.__name__,
             "started_at": time(),
             "last_ping_from_client": time(),
             "is_background_job": background,

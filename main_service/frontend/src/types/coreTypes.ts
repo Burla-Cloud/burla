@@ -22,6 +22,7 @@ export interface BurlaJob {
     n_inputs: number;
     n_results: number;
     started_at?: Date; // parsed from UNIX timestamp in jobContext & jobs_paginated
+    function_name?: string;
 }
 
 export interface Settings {

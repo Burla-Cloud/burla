@@ -2,6 +2,8 @@ from time import time
 import requests
 from typing import Optional
 import concurrent.futures
+from contextlib import contextmanager
+
 
 import docker
 from fastapi import APIRouter, Depends, Response
@@ -34,6 +36,14 @@ def reboot_containers_endpoint(
     if SELF["BOOTING"]:
         return Response("Node already BOOTING, unable to satisfy request.", status_code=409)
     return reboot_containers(new_container_config, logger)
+
+
+def _call_docker_threadsafe(method, *args, **kwargs):
+    client = docker.APIClient(base_url="unix://var/run/docker.sock")
+    try:
+        getattr(client, method)(*args, **kwargs)
+    finally:
+        client.close()
 
 
 def reboot_containers(
@@ -87,19 +97,22 @@ def reboot_containers(
 
                 if is_old and belongs_to_current_node:
                     kwargs = dict(container=container["Id"], force=True)
-                    futures.append(executor.submit(docker_client.remove_container, **kwargs))
+                    future = executor.submit(_call_docker_threadsafe, "remove_container", **kwargs)
+                    futures.append(future)
 
                 elif belongs_to_current_node:
                     args = (container["Id"], f"OLD--{container['Names'][0][1:]}")
-                    futures.append(executor.submit(docker_client.rename, *args))
+                    futures.append(executor.submit(_call_docker_threadsafe, "rename", *args))
                     kwargs = dict(container=container["Id"], timeout=0)
-                    futures.append(executor.submit(docker_client.stop, **kwargs))
+                    futures.append(executor.submit(_call_docker_threadsafe, "stop", **kwargs))
         else:
             # remove all worker containers
             for container in docker_client.containers():
                 if "worker" in container["Names"][0]:
                     kwargs = dict(container=container["Id"], force=True)
-                    futures.append(executor.submit(docker_client.remove_container, **kwargs))
+                    future = executor.submit(_call_docker_threadsafe, "remove_container", **kwargs)
+                    futures.append(future)
+        docker_client.close()
 
         # Wait until all workers have been removed/marked old before starting new ones.
         try:
@@ -115,7 +128,7 @@ def reboot_containers(
             for i in range(num_workers):
                 # have just one worker send logs to gcl, too many will break gcl
                 send_logs_to_gcl = (i == 0) and (not IN_LOCAL_DEV_MODE)
-                args = (spec.python_version, spec.image, docker_client)
+                args = (spec.python_version, spec.image)
                 futures.append(executor.submit(Worker, *args, send_logs_to_gcl=send_logs_to_gcl))
 
         executor.shutdown(wait=True)

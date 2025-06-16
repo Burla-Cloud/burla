@@ -68,7 +68,7 @@ def parallelism_capacity(machine_type: str, func_cpu: int, func_ram: int):
         return min(vm_cpu // func_cpu, vm_ram // func_ram)
     elif machine_type.startswith("a") and machine_type.endswith("g"):
         return 1
-    raise ValueError(f"machine_type must be n4-standard-X")
+    raise ValueError(f"machine_type must be: n4-standard-X, a3-highgpu-Xg, or a3-ultragpu-8g")
 
 
 def get_db_clients():

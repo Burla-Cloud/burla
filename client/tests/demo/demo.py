@@ -4,12 +4,15 @@ from burla import remote_parallel_map
 
 def my_function(my_input):
 
-    return my_inputs * 2
+    print(f"Running {my_input} in it's own separate container in the cloud!")
+
+    return my_input * 2
 
 
-my_inputs = list(range(1_000_000))
+my_inputs = list(range(1000))
 
 results = remote_parallel_map(my_function, my_inputs)
+print(results)
 
 
 # import os

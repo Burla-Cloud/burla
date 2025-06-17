@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "worker_service"
-version = "1.0.23"
+version = "1.0.24"
 description = ""
 authors = ["Jacob Zuliani <jake@burla.dev>"]
 packages = [{include = "worker_service", from = "src"}]
@@ -18,7 +18,7 @@ aiohttp = ">=3.11"
 
 # These packages are not used by the worker service
 # These exist so that users can run code in burla that uses these packages
-burla = "1.0.23"
+burla = "1.0.24"
 pandas = ">=2.2"
 numpy = ">=2.1"
 scikit-learn = ">=1.5"

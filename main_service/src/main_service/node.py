@@ -137,11 +137,9 @@ class Node:
             self.num_gpus = int(machine_type.split("-")[-1][:-1])
 
         if machine_type.startswith("n4"):
-            self.disk_image = "projects/burla-test/global/images/burla-node-nogpu"
-        elif machine_type.startswith("a3"):
-            self.disk_image = "projects/burla-test/global/images/burla-node-hopper"
-        elif machine_type.startswith("a2"):
-            self.disk_image = "projects/burla-test/global/images/burla-node-ampere"
+            self.disk_image = "projects/burla-prod/global/images/burla-node-nogpu"
+        elif machine_type.startswith("a2") or machine_type.startswith("a3"):
+            self.disk_image = "projects/burla-prod/global/images/burla-node-gpu"
         else:
             raise ValueError(f"Invalid machine type: {machine_type}")
 

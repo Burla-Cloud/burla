@@ -7,21 +7,12 @@ from time import sleep
 import threading
 
 import docker
-from docker.errors import APIError
 from google.cloud import logging
-from google.auth.transport.requests import Request
 from docker.types import DeviceRequest
 
-from node_service import (
-    PROJECT_ID,
-    INSTANCE_NAME,
-    IN_LOCAL_DEV_MODE,
-    CREDENTIALS,
-    NUM_GPUS,
-    __version__,
-)
+from node_service import PROJECT_ID, INSTANCE_NAME, IN_LOCAL_DEV_MODE, NUM_GPUS, __version__
 
-LOGGER = logging.Client().logger("node_service")
+
 WORKER_INTERNAL_PORT = 8080
 
 
@@ -45,27 +36,6 @@ class Worker:
 
         # dont assign to self because must be closed after use or causes issues :(
         docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
-
-        try:
-            print(f"Pulling image {image} ...")
-            docker_client.pull(image)
-        except APIError as e:
-            if e.response.status_code == 401:
-                print("Image is not public, trying again with credentials ...")
-                CREDENTIALS.refresh(Request())
-                auth_config = {"username": "oauth2accesstoken", "password": CREDENTIALS.token}
-                docker_client.pull(image, auth_config=auth_config)
-            else:
-                raise
-        print(f"Image {image} pulled successfully.")
-
-        try:
-            # ODDLY, if docker_client.pull fails to pull the image, it will NOT throw any error >:(
-            # check here that the image was actually pulled and exists on disk,
-            docker_client.inspect_image(image)
-        except docker.errors.ImageNotFound:
-            msg = f"Image {image} not found after pulling!\nDid vm run out of disk space?"
-            raise Exception(msg)
 
         cmd_script = f"""    
             # Find python version:
@@ -242,7 +212,7 @@ class Worker:
                 "LOGS_FROM_FAILED_CONTAINER": logs,
                 "CONTAINERS INFO": info,
             }
-            LOGGER.log_struct(struct)
+            logging.Client().logger("node_service").log_struct(struct)
         finally:
             docker_client.close()
 

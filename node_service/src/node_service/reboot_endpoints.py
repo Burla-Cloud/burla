@@ -4,14 +4,17 @@ from typing import Optional
 import concurrent.futures
 
 import docker
+from docker.errors import APIError
 from fastapi import APIRouter, Depends, Response
 from google.cloud import firestore
 from google.cloud.compute_v1 import InstancesClient
+from google.auth.transport.requests import Request
 
 from node_service import (
     PROJECT_ID,
     SELF,
     REINIT_SELF,
+    CREDENTIALS,
     INSTANCE_N_CPUS,
     INSTANCE_NAME,
     IN_LOCAL_DEV_MODE,
@@ -34,6 +37,39 @@ def reboot_containers_endpoint(
     if SELF["BOOTING"]:
         return Response("Node already BOOTING, unable to satisfy request.", status_code=409)
     return reboot_containers(new_container_config, logger)
+
+
+def _call_docker_threadsafe(method, *args, **kwargs):
+    client = docker.APIClient(base_url="unix://var/run/docker.sock")
+    try:
+        getattr(client, method)(*args, **kwargs)
+    finally:
+        client.close()
+
+
+def _pull_image_if_missing(image: str, logger: Logger, docker_client: docker.APIClient):
+    try:
+        docker_client.inspect_image(image)
+    except docker.errors.ImageNotFound:
+        logger.log(f"Pulling image {image} ...")
+        try:
+            docker_client.pull(image)
+        except APIError as e:
+            if e.response.status_code == 401:
+                print("Image is not public, trying again with credentials ...")
+                CREDENTIALS.refresh(Request())
+                auth_config = {"username": "oauth2accesstoken", "password": CREDENTIALS.token}
+                docker_client.pull(image, auth_config=auth_config)
+            else:
+                raise
+        # ODDLY, if docker_client.pull fails to pull the image, it will NOT throw any error >:(
+        # check here that the image was actually pulled and exists on disk,
+        try:
+            docker_client.inspect_image(image)
+        except docker.errors.ImageNotFound:
+            msg = f"Image {image} not found after pulling!\nDid vm run out of disk space?"
+            raise Exception(msg)
+        logger.log(f"Image {image} pulled successfully.")
 
 
 def reboot_containers(
@@ -87,19 +123,21 @@ def reboot_containers(
 
                 if is_old and belongs_to_current_node:
                     kwargs = dict(container=container["Id"], force=True)
-                    futures.append(executor.submit(docker_client.remove_container, **kwargs))
+                    future = executor.submit(_call_docker_threadsafe, "remove_container", **kwargs)
+                    futures.append(future)
 
                 elif belongs_to_current_node:
                     args = (container["Id"], f"OLD--{container['Names'][0][1:]}")
-                    futures.append(executor.submit(docker_client.rename, *args))
+                    futures.append(executor.submit(_call_docker_threadsafe, "rename", *args))
                     kwargs = dict(container=container["Id"], timeout=0)
-                    futures.append(executor.submit(docker_client.stop, **kwargs))
+                    futures.append(executor.submit(_call_docker_threadsafe, "stop", **kwargs))
         else:
             # remove all worker containers
             for container in docker_client.containers():
                 if "worker" in container["Names"][0]:
                     kwargs = dict(container=container["Id"], force=True)
-                    futures.append(executor.submit(docker_client.remove_container, **kwargs))
+                    future = executor.submit(_call_docker_threadsafe, "remove_container", **kwargs)
+                    futures.append(future)
 
         # Wait until all workers have been removed/marked old before starting new ones.
         try:
@@ -111,13 +149,15 @@ def reboot_containers(
         # start new workers.
         futures = []
         for spec in SELF["current_container_config"]:
+            _pull_image_if_missing(spec.image, logger, docker_client)
             num_workers = INSTANCE_N_CPUS if NUM_GPUS == 0 else NUM_GPUS
             for i in range(num_workers):
                 # have just one worker send logs to gcl, too many will break gcl
                 send_logs_to_gcl = (i == 0) and (not IN_LOCAL_DEV_MODE)
-                args = (spec.python_version, spec.image, docker_client)
+                args = (spec.python_version, spec.image)
                 futures.append(executor.submit(Worker, *args, send_logs_to_gcl=send_logs_to_gcl))
 
+        docker_client.close()
         executor.shutdown(wait=True)
         SELF["workers"] = [future.result() for future in futures]
         SELF["BOOTING"] = False

@@ -4,8 +4,10 @@ import subprocess
 import traceback
 import requests
 from time import time, sleep
+
 from yaspin import yaspin
 from google.cloud.firestore import Client
+from google.api_core.exceptions import NotFound
 
 from burla import _BURLA_BACKEND_URL
 from burla._helpers import log_telemetry
@@ -307,16 +309,28 @@ def _install(spinner):
     cmd = "gcloud firestore databases create --database=burla --location=us-central1 --type=firestore-native"
     result = _run_command(cmd, raise_error=False)
     if result.returncode != 0 and "already exists" in result.stderr.decode():
-        db = Client(database="burla")
-        db.collection("cluster_config").document("cluster_config").update(DEFAULT_CLUSTER_CONFIG)
+        try:
+            collection = Client(database="burla").collection("cluster_config")
+            collection.document("cluster_config").update(DEFAULT_CLUSTER_CONFIG)
+        except NotFound:
+            collection.document("cluster_config").set(DEFAULT_CLUSTER_CONFIG)
         spinner.text = "Creating Firestore database ... Database already exists."
         spinner.ok("✓")
     elif result.returncode != 0:
         spinner.fail("✗")
         raise VerboseCalledProcessError(cmd, result.stderr)
     else:
-        db = Client(database="burla")
-        db.collection("cluster_config").document("cluster_config").set(DEFAULT_CLUSTER_CONFIG)
+        # wait for db to exist
+        start = time()
+        while True:
+            try:
+                collection = Client(database="burla").collection("cluster_config")
+                collection.document("cluster_config").set(DEFAULT_CLUSTER_CONFIG)
+                break
+            except NotFound as e:
+                sleep(1)
+                if time() - start >= 30:
+                    raise e
         spinner.text = "Creating Firestore database ... Done."
         spinner.ok("✓")
 

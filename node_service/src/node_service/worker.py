@@ -7,21 +7,12 @@ from time import sleep
 import threading
 
 import docker
-from docker.errors import APIError
 from google.cloud import logging
-from google.auth.transport.requests import Request
 from docker.types import DeviceRequest
 
-from node_service import (
-    PROJECT_ID,
-    INSTANCE_NAME,
-    IN_LOCAL_DEV_MODE,
-    CREDENTIALS,
-    NUM_GPUS,
-    __version__,
-)
+from node_service import PROJECT_ID, INSTANCE_NAME, IN_LOCAL_DEV_MODE, NUM_GPUS, __version__
 
-LOGGER = logging.Client().logger("node_service")
+
 WORKER_INTERNAL_PORT = 8080
 
 
@@ -32,7 +23,6 @@ class Worker:
         self,
         python_version: str,
         image: str,
-        docker_client: docker.APIClient,
         send_logs_to_gcl: bool = False,
     ):
         self.is_idle = False
@@ -42,29 +32,10 @@ class Worker:
         self.container_name = f"worker_{uuid4().hex[:8]}--node_{INSTANCE_NAME[11:]}"
         self.url = None
         self.host_port = None
-        self.docker_client = docker_client
         self.python_version = python_version
 
-        try:
-            print(f"Pulling image {image} ...")
-            docker_client.pull(image)
-        except APIError as e:
-            if e.response.status_code == 401:
-                print("Image is not public, trying again with credentials ...")
-                CREDENTIALS.refresh(Request())
-                auth_config = {"username": "oauth2accesstoken", "password": CREDENTIALS.token}
-                docker_client.pull(image, auth_config=auth_config)
-            else:
-                raise
-        print(f"Image {image} pulled successfully.")
-
-        try:
-            # ODDLY, if docker_client.pull fails to pull the image, it will NOT throw any error >:(
-            # check here that the image was actually pulled and exists on disk,
-            docker_client.inspect_image(image)
-        except docker.errors.ImageNotFound:
-            msg = f"Image {image} not found after pulling!\nDid vm run out of disk space?"
-            raise Exception(msg)
+        # dont assign to self because must be closed after use or causes issues :(
+        docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
 
         cmd_script = f"""    
             # Find python version:
@@ -90,6 +61,8 @@ class Worker:
                 echo "git not found, installing..."
                 apt-get update && apt-get install -y git
             fi
+
+            # TODO: update worker service if version is out of sync with this nodes version!
 
             # Install worker_service if missing
             $python_cmd -c "import worker_service" 2>/dev/null || (
@@ -168,6 +141,8 @@ class Worker:
         if IN_LOCAL_DEV_MODE:
             self.url = f"http://{self.container_name}:{WORKER_INTERNAL_PORT}"
 
+        docker_client.close()
+
         if send_logs_to_gcl:
             self._start_log_streaming()
 
@@ -178,7 +153,8 @@ class Worker:
     def _start_log_streaming(self):
         def stream_logs():
             try:
-                for log_line in self.docker_client.logs(
+                docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
+                for log_line in docker_client.logs(
                     self.container_id, stream=True, follow=True, stdout=True, stderr=True
                 ):
                     print(
@@ -186,6 +162,8 @@ class Worker:
                     )
             except Exception as e:
                 print(f"Log streaming stopped for {self.container_name}: {e}")
+            finally:
+                docker_client.close()
 
         log_thread = threading.Thread(target=stream_logs, daemon=True)
         log_thread.start()
@@ -194,32 +172,50 @@ class Worker:
         if not self.container_id:
             return False
         try:
-            self.docker_client.inspect_container(self.container_id)
+            docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
+            docker_client.inspect_container(self.container_id)
             return True
         except docker.errors.NotFound:
             return False
+        finally:
+            docker_client.close()
 
     def logs(self):
         if self.exists():
-            return self.docker_client.logs(self.container_id).decode("utf-8", errors="ignore")
+            docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
+            logs = docker_client.logs(self.container_id).decode("utf-8", errors="ignore")
+            docker_client.close()
+            return logs
         raise Exception("This worker no longer exists.")
 
     def remove(self):
         pass
         if self.exists():
             try:
-                self.docker_client.remove_container(self.container_id, force=True)
+                docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
+                docker_client.remove_container(self.container_id, force=True)
             except docker.errors.APIError as e:
                 if not "409 Client Error" in str(e):
                     raise e
+            finally:
+                docker_client.close()
 
     def log_debug_info(self):
-        logs = self.logs() if self.exists() else "Unable to retrieve container logs."
-        logs = f"\nERROR INSIDE CONTAINER:\n{logs}\n"
-        info = self.docker_client.containers(all=True)
-        info = json.loads(json.dumps(info, default=lambda thing: str(thing)))
-        struct = {"severity": "ERROR", "LOGS_FROM_FAILED_CONTAINER": logs, "CONTAINERS INFO": info}
-        LOGGER.log_struct(struct)
+        try:
+            logs = self.logs() if self.exists() else "Unable to retrieve container logs."
+            logs = f"\nERROR INSIDE CONTAINER:\n{logs}\n"
+            docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
+            info = docker_client.containers(all=True)
+            info = json.loads(json.dumps(info, default=lambda thing: str(thing)))
+            struct = {
+                "severity": "ERROR",
+                "LOGS_FROM_FAILED_CONTAINER": logs,
+                "CONTAINERS INFO": info,
+            }
+            logging.Client().logger("node_service").log_struct(struct)
+        finally:
+            docker_client.close()
+
         if IN_LOCAL_DEV_MODE:
             print(logs, file=sys.stderr)  # <- make local debugging easier
 

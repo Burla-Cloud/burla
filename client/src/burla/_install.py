@@ -262,6 +262,18 @@ def _install(spinner):
     else:
         already_exists = False
 
+    # wait for burla-main-service service account to exist:
+    start = time()
+    while time() - start < 30:
+        cmd = f"gcloud iam service-accounts describe {SA_EMAIL}"
+        if _run_command(cmd, raise_error=False).returncode == 0:
+            break
+        sleep(1)
+    result = _run_command(f"gcloud iam service-accounts describe {SA_EMAIL}", raise_error=False)
+    if result.returncode != 0:
+        spinner.fail("✗")
+        raise Exception("Burla-main-service service account not found after 30s.")
+
     # apply required roles to new svc account:
     project_level_roles = ["datastore.user", "logging.logWriter", "compute.instanceAdmin.v1"]
     for role in project_level_roles:

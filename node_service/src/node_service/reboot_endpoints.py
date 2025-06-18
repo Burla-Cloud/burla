@@ -55,7 +55,7 @@ def _pull_image_if_missing(image: str, logger: Logger, docker_client: docker.API
         try:
             docker_client.pull(image)
         except APIError as e:
-            if e.response.status_code == 401:
+            if "Unauthenticated request" in str(e):
                 print("Image is not public, trying again with credentials ...")
                 CREDENTIALS.refresh(Request())
                 auth_config = {"username": "oauth2accesstoken", "password": CREDENTIALS.token}

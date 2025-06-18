@@ -230,7 +230,7 @@ class Node:
         try:
             docker_client.pull(image)
         except APIError as e:
-            if e.response.status_code == 401:
+            if "Unauthenticated request" in str(e):
                 CREDENTIALS.refresh(Request())
                 auth_config = {"username": "oauth2accesstoken", "password": CREDENTIALS.token}
                 docker_client.pull(image, auth_config=auth_config)
@@ -252,6 +252,7 @@ class Node:
                 "INSTANCE_NAME": self.instance_name,
                 "CONTAINERS": json.dumps([c.to_dict() for c in self.containers]),
                 "INACTIVITY_SHUTDOWN_TIME_SEC": self.inactivity_shutdown_time_sec,
+                "NUM_GPUS": 0,
                 "BOOTING_FOR_FIRST_TIME": "True",
             },
             detach=True,

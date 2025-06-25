@@ -1,10 +1,11 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 
 export default function ProfilePicture() {
     const [profilePicUrl, setProfilePicUrl] = useState<string | null>(null);
     const [userName, setUserName] = useState<string | null>(null);
     const [userEmail, setUserEmail] = useState<string | null>(null);
     const [isOpen, setIsOpen] = useState<boolean>(false);
+    const containerRef = useRef<HTMLDivElement>(null);
     const firstName = userName?.split(" ")[0] || "";
 
     useEffect(() => {
@@ -25,10 +26,24 @@ export default function ProfilePicture() {
         fetchUserInfo();
     }, []);
 
+    useEffect(() => {
+        function handleClickOutside(event: MouseEvent) {
+            if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
+                setIsOpen(false);
+            }
+        }
+        if (isOpen) {
+            document.addEventListener("mousedown", handleClickOutside);
+        }
+        return () => {
+            document.removeEventListener("mousedown", handleClickOutside);
+        };
+    }, [isOpen]);
+
     if (!profilePicUrl) return null;
 
     return (
-        <div className="fixed top-6 right-6 z-50">
+        <div ref={containerRef} className="fixed top-6 right-6 z-50">
             <img
                 src={profilePicUrl}
                 alt="User profile"

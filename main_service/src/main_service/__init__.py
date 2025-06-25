@@ -157,6 +157,7 @@ app.include_router(jobs_router)
 async def get_user_info(request: Request):
     return {
         "email": request.session.get("X-User-Email"),
+        "name": request.session.get("name"),
         "profile_pic": request.session.get("profile_pic"),
     }
 
@@ -209,6 +210,7 @@ async def validate_requests(request: Request, call_next):
                     request.session["X-User-Email"] = data["email"]
                     request.session["Authorization"] = f"Bearer {data['token']}"
                     request.session["profile_pic"] = data["profile_pic"]
+                    request.session["name"] = data["name"]
 
         base_url = f"{request.url.scheme}://{request.url.netloc}{request.url.path}"
         response = RedirectResponse(url=base_url, status_code=303)

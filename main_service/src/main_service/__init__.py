@@ -153,6 +153,14 @@ app.include_router(settings_router)
 app.include_router(jobs_router)
 
 
+@app.get("/api/user")
+async def get_user_info(request: Request):
+    return {
+        "email": request.session.get("X-User-Email"),
+        "profile_pic": request.session.get("profile_pic"),
+    }
+
+
 # don't move this! must be declared before static files are mounted to the same path below.
 @app.get("/")
 @app.get("/jobs")
@@ -200,6 +208,7 @@ async def validate_requests(request: Request, call_next):
                     data = await response.json()
                     request.session["X-User-Email"] = data["email"]
                     request.session["Authorization"] = f"Bearer {data['token']}"
+                    request.session["profile_pic"] = data["profile_pic"]
 
         base_url = f"{request.url.scheme}://{request.url.netloc}{request.url.path}"
         response = RedirectResponse(url=base_url, status_code=303)

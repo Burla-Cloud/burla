@@ -40,6 +40,11 @@ export default function ProfilePicture() {
         };
     }, [isOpen]);
 
+    const handleLogout = async () => {
+        await fetch("/api/logout", { method: "POST", credentials: "include" });
+        window.location.reload();
+    };
+
     if (!profilePicUrl) return null;
 
     return (
@@ -61,7 +66,10 @@ export default function ProfilePicture() {
                     <p className="mt-2 font-semibold text-gray-800">Hi {firstName} !</p>
                     <p className="text-sm text-gray-600 mt-1">logged in as {userEmail}</p>
                     <hr className="border-t border-gray-200 mt-6 mb-2" />
-                    <button className="flex items-center w-full text-left px-2 py-1 hover:bg-gray-100 rounded-md">
+                    <button
+                        onClick={handleLogout}
+                        className="flex items-center w-full text-left px-2 py-1 hover:bg-gray-100 rounded-md"
+                    >
                         <svg
                             xmlns="http://www.w3.org/2000/svg"
                             className="h-5 w-5 text-gray-600 mr-2 stroke-current"

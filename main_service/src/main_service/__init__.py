@@ -12,7 +12,7 @@ from contextlib import asynccontextmanager
 import google.auth
 from google.cloud import firestore, logging, secretmanager
 from fastapi.responses import Response, FileResponse, RedirectResponse
-from fastapi import FastAPI, Request, BackgroundTasks, Depends
+from fastapi import FastAPI, Request, BackgroundTasks, Depends, status
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.datastructures import UploadFile
@@ -160,6 +160,13 @@ async def get_user_info(request: Request):
         "name": request.session.get("name"),
         "profile_pic": request.session.get("profile_pic"),
     }
+
+
+@app.post("/api/logout")
+async def logout(request: Request, response: Response):
+    request.session.clear()
+    response.delete_cookie(key="session", path="/")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 # don't move this! must be declared before static files are mounted to the same path below.

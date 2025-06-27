@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 
 import google.auth
 from google.cloud import firestore, logging, secretmanager
-from fastapi.responses import Response, FileResponse, RedirectResponse
+from fastapi.responses import Response, FileResponse, RedirectResponse, JSONResponse
 from fastapi import FastAPI, Request, BackgroundTasks, Depends, status
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
@@ -204,6 +204,11 @@ async def catch_errors(request: Request, call_next):
 
 @app.middleware("http")
 async def validate_requests(request: Request, call_next):
+    # allow static asset requests (js/css/images) to pass through
+    path = request.url.path
+    last_segment = path.rstrip("/").split("/")[-1]
+    if "." in last_segment:
+        return await call_next(request)
 
     # convert temporary client_id to email/token
     # client_id's are only valid once, and for a very short period of time
@@ -238,10 +243,14 @@ async def validate_requests(request: Request, call_next):
                 elif response.status != 401:
                     response.raise_for_status()
 
-    msg = "Unauthorized. Please run `burla dashboard` to login, "
-    msg += "or contact your cluster owner to be added to the list of approved users.\n"
-    msg += "If you believe this is an error, please email jake@burla.dev or call 508-320-8778."
-    return Response(status_code=401, content=msg)
+    if request.url.path.startswith("/api"):
+        return JSONResponse(status_code=401, content={"error": "Unauthorized"})
+    else:
+        return FileResponse(
+            "src/main_service/static/unauthorized.html",
+            status_code=401,
+            media_type="text/html",
+        )
 
 
 @app.middleware("http")

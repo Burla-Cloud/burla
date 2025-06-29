@@ -6,7 +6,7 @@ from fire import Fire
 __version__ = "1.0.24"
 _BURLA_BACKEND_URL = "https://backend.burla.dev"
 
-from burla._auth import login, dashboard
+from burla._auth import login
 from burla._install import install
 from burla._remote_parallel_map import remote_parallel_map
 
@@ -23,7 +23,6 @@ def init_cli():
         {
             "login": login,
             "install": install,
-            "dashboard": dashboard,
             "--version": version,
             "-v": version,
         }

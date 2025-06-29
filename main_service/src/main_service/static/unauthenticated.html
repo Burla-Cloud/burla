@@ -1,0 +1,83 @@
+<style>
+    body {
+        display: flex;
+        align-items: flex-start;
+        justify-content: center;
+        padding-top: 60px;
+        height: 100vh;
+        margin: 0;
+        font-family: sans-serif;
+        background-color: #f9fafb;
+    }
+    .card {
+        background: white;
+        padding: 40px;
+        border-radius: 8px;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+        text-align: center;
+        width: 320px;
+    }
+    .card img.logo {
+        width: 100px;
+        height: auto;
+        margin-bottom: 20px;
+    }
+    h1 {
+        margin: 0 0 10px 0;
+        font-size: 24px;
+        color: #333;
+    }
+    p.tagline {
+        margin: 0 0 30px 0;
+        font-size: 14px;
+        color: #666;
+    }
+    .google-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        height: 40px;
+        background-color: white;
+        border: 1px solid #dadce0;
+        border-radius: 4px;
+        cursor: pointer;
+        padding: 0 12px;
+        text-decoration: none;
+    }
+    .google-btn img {
+        width: 18px;
+        height: 18px;
+        margin-right: 8px;
+    }
+    .google-btn span {
+        color: #3c4043;
+        font-size: 14px;
+        font-weight: 500;
+        font-family: Roboto, sans-serif;
+    }
+    .google-btn:hover {
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+    }
+</style>
+
+<div class="card">
+    <img src="/assets/burla_logo-f7NrYSYk.png" alt="Burla Logo" class="logo" />
+    <h1>Welcome to Burla</h1>
+    <p class="tagline">The simplest way to scale Python.</p>
+    <a id="login-btn" class="google-btn">
+        <img src="https://developers.google.com/identity/images/g-logo.png" alt="Google logo" />
+        <span>Sign in with Google</span>
+    </a>
+</div>
+
+<script>
+    document.getElementById("login-btn").addEventListener("click", function (event) {
+        event.preventDefault();
+        const clientId = crypto.randomUUID();
+        const encodedDashboardUrl = encodeURIComponent(window.location.origin);
+        const baseUrl = `https://backend.burla.dev/v1/login/${clientId}`;
+        const queryParams = `?redirect_url=${encodedDashboardUrl}&generate_new_token=true`;
+        const loginUrl = baseUrl + queryParams;
+        window.location.href = loginUrl;
+    });
+</script>

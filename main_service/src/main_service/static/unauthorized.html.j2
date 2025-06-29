@@ -58,12 +58,21 @@
     .google-btn:hover {
         box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
     }
+    p.unauthorized-account-message {
+        color: red;
+        margin: 10px 0;
+        font-size: 14px;
+    }
 </style>
 
 <div class="card">
     <img src="/assets/burla_logo-f7NrYSYk.png" alt="Burla Logo" class="logo" />
     <h1>Welcome to Burla</h1>
     <p class="tagline">The simplest way to scale Python.</p>
+    <p class="unauthorized-account-message">
+        Your account {{ user_email }} is not authorized to access this deployment. 
+        Please contact your admin to be added to the list of authorized users.
+    </p>
     <a id="login-btn" class="google-btn">
         <img src="https://developers.google.com/identity/images/g-logo.png" alt="Google logo" />
         <span>Sign in with Google</span>
@@ -74,10 +83,10 @@
     document.getElementById("login-btn").addEventListener("click", function (event) {
         event.preventDefault();
         const clientId = crypto.randomUUID();
-        const dashboardUrl = window.location.origin;
-        const loginUrl = `https://backend.burla.dev/v1/login/${clientId}?redirect_url=${encodeURIComponent(
-            dashboardUrl
-        )}`;
+        const encodedDashboardUrl = encodeURIComponent(window.location.origin);
+        const baseUrl = `https://backend.burla.dev/v1/login/${clientId}`;
+        const queryParams = `?redirect_url=${encodedDashboardUrl}&generate_new_token=false`;
+        const loginUrl = baseUrl + queryParams;
         window.location.href = loginUrl;
     });
 </script>

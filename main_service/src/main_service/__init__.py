@@ -11,11 +11,12 @@ from contextlib import asynccontextmanager
 
 import google.auth
 from google.cloud import firestore, logging, secretmanager
-from fastapi.responses import Response, FileResponse, RedirectResponse, JSONResponse
+from fastapi.responses import Response, FileResponse, RedirectResponse
 from fastapi import FastAPI, Request, BackgroundTasks, Depends, status
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.datastructures import UploadFile
+from jinja2 import Environment, FileSystemLoader
 
 os.environ["GRPC_VERBOSITY"] = "ERROR"
 os.environ["GLOG_minloglevel"] = "2"
@@ -29,6 +30,7 @@ BURLA_BACKEND_URL = "https://backend.burla.dev"
 GCL_CLIENT = logging.Client().logger("main_service")
 DB = firestore.Client(database="burla")
 
+env = Environment(loader=FileSystemLoader("src/main_service/static"))
 secret_client = secretmanager.SecretManagerServiceClient()
 secret_name = f"projects/{PROJECT_ID}/secrets/burla-cluster-id-token/versions/latest"
 response = secret_client.access_secret_version(request={"name": secret_name})
@@ -169,6 +171,11 @@ async def logout(request: Request, response: Response):
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
+@app.get("/auth-success")
+def auth_success():
+    return FileResponse("src/main_service/static/authorized.html")
+
+
 # don't move this! must be declared before static files are mounted to the same path below.
 @app.get("/")
 @app.get("/jobs")
@@ -230,6 +237,12 @@ async def validate_requests(request: Request, call_next):
         response.set_cookie(key="session", value=session, httponly=True, samesite="lax")
         return response
 
+    no_email_header = request.session.get("X-User-Email") is None
+    no_token_header = request.session.get("Authorization") is None
+    if no_email_header or no_token_header:
+        unauthenticated_path = "src/main_service/static/unauthenticated.html"
+        return FileResponse(unauthenticated_path, status_code=401, media_type="text/html")
+
     # validate user is authorized
     email = request.session.get("X-User-Email")
     authorization = request.session.get("Authorization")
@@ -243,14 +256,8 @@ async def validate_requests(request: Request, call_next):
                 elif response.status != 401:
                     response.raise_for_status()
 
-    if request.url.path.startswith("/api"):
-        return JSONResponse(status_code=401, content={"error": "Unauthorized"})
-    else:
-        return FileResponse(
-            "src/main_service/static/unauthorized.html",
-            status_code=401,
-            media_type="text/html",
-        )
+    rendered_html = env.get_template("unauthorized.html.j2").render(user_email=email)
+    return Response(content=rendered_html, status_code=403, media_type="text/html")
 
 
 @app.middleware("http")

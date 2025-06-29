@@ -6,7 +6,7 @@ import inspect
 import requests
 import subprocess
 import textwrap
-from typing import Union, Literal
+from typing import Union
 from threading import Event
 
 import google.auth

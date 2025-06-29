@@ -240,10 +240,9 @@ async def validate_requests(request: Request, call_next):
     no_email_header = request.session.get("X-User-Email") is None
     no_token_header = request.session.get("Authorization") is None
     if no_email_header or no_token_header:
-        unauthenticated_path = "src/main_service/static/unauthenticated.html"
-        return FileResponse(unauthenticated_path, status_code=401, media_type="text/html")
+        rendered = env.get_template("login.html.j2").render(user_email=None)
+        return Response(content=rendered, status_code=401, media_type="text/html")
 
-    # validate user is authorized
     email = request.session.get("X-User-Email")
     authorization = request.session.get("Authorization")
     if email and authorization:
@@ -256,8 +255,8 @@ async def validate_requests(request: Request, call_next):
                 elif response.status != 401:
                     response.raise_for_status()
 
-    rendered_html = env.get_template("unauthorized.html.j2").render(user_email=email)
-    return Response(content=rendered_html, status_code=403, media_type="text/html")
+    rendered = env.get_template("login.html.j2").render(user_email=email)
+    return Response(content=rendered, status_code=403, media_type="text/html")
 
 
 @app.middleware("http")

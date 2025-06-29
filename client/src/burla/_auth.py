@@ -7,6 +7,7 @@ from uuid import uuid4
 from pathlib import Path
 from typing import Tuple
 
+import google.auth
 from appdirs import user_config_dir
 
 from burla import _BURLA_BACKEND_URL
@@ -63,6 +64,7 @@ def login():
 
     client_id = uuid4().hex
     login_url = f"{_BURLA_BACKEND_URL}/v1/login/{client_id}?redirect_url={dashboard_url}"
+    _, PROJECT_ID = google.auth.default()
 
     if IN_COLAB:
         print(f"Please navigate to the following URL to login:\n\n    {login_url}\n")
@@ -72,9 +74,18 @@ def login():
         webbrowser.open(login_url)
 
     auth_token, email = _get_login_response(client_id)
-    message = f"You are now logged in as [{email}].\n"
-    message += "Please email jake@burla.dev with any questions!\n"
-    print(message)
+    validate_url = f"{_BURLA_BACKEND_URL}/v1/projects/{PROJECT_ID}/users:validate"
+    headers = {"Authorization": f"Bearer {auth_token}", "X-User-Email": email}
+    response = requests.get(validate_url, headers=headers)
+    if response.status_code == 200:
+        print(f"You are now logged in as [{email}].")
+        print("Please email jake@burla.dev with any questions!\n")
+    elif response.status_code == 401:
+        print("Access denied.")
+        print(f"[{email}] is not authorized to access the deployment in project: [{PROJECT_ID}]")
+        print(f"Contact your admin to request access, then login again.\n")
+    else:
+        response.raise_for_status()
 
     if not CONFIG_PATH.exists():
         CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)

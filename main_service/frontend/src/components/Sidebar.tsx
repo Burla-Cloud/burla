@@ -9,7 +9,7 @@ const Sidebar = () => {
                 <Link to="/">
                     <img
                         src={clusterImage}
-                        style={{ width: "132px", height: "auto" }}
+                        style={{ width: "128px", height: "auto" }}
                         className="ml-2"
                     />
                 </Link>

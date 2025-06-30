@@ -18,19 +18,6 @@ export const SettingsForm = ({ isEditing }) => {
     const { settings, setSettings } = useSettings();
     const [newUser, setNewUser] = useState("");
 
-    const gpuOptions = [
-        "None",
-        "1x A100 80G",
-        "2x A100 80G",
-        "4x A100 80G",
-        "8x A100 80G",
-        "1x H100 80G",
-        "2x H100 80G",
-        "4x H100 80G",
-        "8x H100 80G",
-        "8x H200 141G",
-    ];
-
     const cpuOptions = [
         { label: "2CPU / 8G RAM", value: "n4-standard-2" },
         { label: "4CPU / 16G RAM", value: "n4-standard-4" },
@@ -53,24 +40,45 @@ export const SettingsForm = ({ isEditing }) => {
         "8x H200 141G": { label: "224CPU / 2952G RAM", value: "a3-ultragpu-8g" },
     };
 
-    const [selectedGpu, setSelectedGpu] = useState(() => {
-        const entry = Object.entries(gpuCpuMap).find(([, v]) => v.value === settings.machineType);
-        return entry ? entry[0] : "None";
+    const gpuModels = [
+        "None",
+        ...Array.from(new Set(Object.keys(gpuCpuMap).map((k) => k.split(" ")[1]))),
+    ];
+    const GPU_COUNTS = {};
+    const GPU_VRAM = {};
+    Object.entries(gpuCpuMap).forEach(([display]) => {
+        const [countWithX, model, vramWithG] = display.split(" ");
+        const count = parseInt(countWithX.slice(0, -1), 10);
+        GPU_COUNTS[model] = Math.max(GPU_COUNTS[model] || 0, count);
+        GPU_VRAM[model] = parseInt(vramWithG.slice(0, -1), 10);
     });
 
-    const [selectedCpu, setSelectedCpu] = useState(() => {
-        if (selectedGpu !== "None") return gpuCpuMap[selectedGpu].value;
-        const cpu = cpuOptions.find((c) => c.value === settings.machineType);
-        return cpu ? cpu.value : cpuOptions[1].value;
+    const [gpuModel, setGpuModel] = useState(() => {
+        const entry = Object.entries(gpuCpuMap).find(([, v]) => v.value === settings.machineType);
+        return entry ? entry[0].split(" ")[1] : "None";
+    });
+    const [gpusPerVm, setGpusPerVm] = useState(() => {
+        const entry = Object.entries(gpuCpuMap).find(([, v]) => v.value === settings.machineType);
+        return entry ? parseInt(entry[0].split("x")[0], 10) : 1;
+    });
+    const [cpuChoice, setCpuChoice] = useState(() => {
+        if (gpuModel === "None") {
+            const cpu = cpuOptions.find((c) => c.value === settings.machineType);
+            return cpu ? cpu.value : cpuOptions[1].value;
+        }
+        return cpuOptions[1].value;
     });
 
     React.useEffect(() => {
-        if (selectedGpu === "None") {
-            handleInputChange("machineType", selectedCpu);
+        if (gpuModel === "None") {
+            handleInputChange("machineType", cpuChoice);
         } else {
-            handleInputChange("machineType", gpuCpuMap[selectedGpu].value);
+            const vramGb = GPU_VRAM[gpuModel];
+            const displayKey = `${gpusPerVm}x ${gpuModel} ${vramGb}G`;
+            const machineValue = gpuCpuMap[displayKey].value;
+            handleInputChange("machineType", machineValue);
         }
-    }, [selectedGpu, selectedCpu]);
+    }, [gpuModel, gpusPerVm, cpuChoice]);
 
     const handleInputChange = (key, value) => {
         setSettings((prev) => ({ ...prev, [key]: value }));
@@ -169,52 +177,84 @@ export const SettingsForm = ({ isEditing }) => {
 
                     <div className="space-y-2">
                         <h2 className="text-xl font-semibold text-primary">Virtual Machines</h2>
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                             <div>
-                                <label className={labelClass}>GPU</label>
+                                <label className={labelClass}>GPU model</label>
                                 <Select
                                     disabled={!isEditing}
-                                    value={selectedGpu}
+                                    value={gpuModel}
                                     onValueChange={(val) => {
-                                        setSelectedGpu(val);
-                                        if (val === "None") {
-                                            const fallback = cpuOptions[1].value;
-                                            setSelectedCpu(fallback);
-                                        } else {
-                                            setSelectedCpu(gpuCpuMap[val].value);
-                                        }
+                                        setGpuModel(val);
+                                        // Determine valid per-VM GPU counts for the selected model
+                                        const validCounts =
+                                            val === "None"
+                                                ? [1]
+                                                : val === "H200"
+                                                ? [GPU_COUNTS[val]]
+                                                : [1, 2, 4, 8];
+                                        // If current count is invalid, default to first valid option
+                                        setGpusPerVm((prev) =>
+                                            validCounts.includes(prev) ? prev : validCounts[0]
+                                        );
                                     }}
                                 >
                                     <SelectTrigger className="w-full">
                                         <SelectValue />
                                     </SelectTrigger>
                                     <SelectContent>
-                                        {gpuOptions.map((o) => (
-                                            <SelectItem key={o} value={o}>
-                                                {o}
+                                        {gpuModels.map((model) => (
+                                            <SelectItem key={model} value={model}>
+                                                {model}
                                             </SelectItem>
                                         ))}
                                     </SelectContent>
                                 </Select>
                             </div>
+                            {gpuModel !== "None" && (
+                                <div>
+                                    <label className={labelClass}>GPUs per VM</label>
+                                    <Select
+                                        disabled={!isEditing}
+                                        value={gpusPerVm.toString()}
+                                        onValueChange={(val) => setGpusPerVm(parseInt(val, 10))}
+                                    >
+                                        <SelectTrigger className="w-full">
+                                            <SelectValue />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            {(gpuModel === "H200" ? [8] : [1, 2, 4, 8]).map((n) => (
+                                                <SelectItem key={n} value={n.toString()}>
+                                                    {n}
+                                                </SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                </div>
+                            )}
                             <div>
                                 <label className={labelClass}>CPU / RAM</label>
                                 <Select
-                                    disabled={!isEditing || selectedGpu !== "None"}
+                                    disabled={!isEditing || gpuModel !== "None"}
                                     value={
-                                        selectedGpu === "None"
-                                            ? selectedCpu
-                                            : gpuCpuMap[selectedGpu].value
+                                        gpuModel === "None"
+                                            ? cpuChoice
+                                            : gpuCpuMap[
+                                                  `${gpusPerVm}x ${gpuModel} ${GPU_VRAM[gpuModel]}G`
+                                              ].value
                                     }
-                                    onValueChange={(val) => setSelectedCpu(val)}
+                                    onValueChange={(val) => setCpuChoice(val)}
                                 >
                                     <SelectTrigger className="w-full">
                                         <SelectValue />
                                     </SelectTrigger>
                                     <SelectContent>
-                                        {(selectedGpu === "None"
+                                        {(gpuModel === "None"
                                             ? cpuOptions
-                                            : [gpuCpuMap[selectedGpu]]
+                                            : [
+                                                  gpuCpuMap[
+                                                      `${gpusPerVm}x ${gpuModel} ${GPU_VRAM[gpuModel]}G`
+                                                  ],
+                                              ]
                                         ).map((o) => (
                                             <SelectItem key={o.value} value={o.value}>
                                                 {o.label}
@@ -294,15 +334,15 @@ export const SettingsForm = ({ isEditing }) => {
                             {settings.users.map((user) => (
                                 <span
                                     key={user}
-                                    className="bg-primary text-primary-foreground px-3 py-1 rounded-full flex items-center"
+                                    className="bg-gray-100 border border-gray-300 text-gray-800 px-2 py-1 rounded-md flex items-center gap-1"
                                 >
                                     {user}
                                     {isEditing && (
                                         <button
                                             onClick={() => removeUser(user)}
-                                            className="ml-2 text-white hover:text-red-400"
+                                            className="text-gray-500 hover:text-gray-700 text-xl leading-none"
                                         >
-                                            x
+                                            ×
                                         </button>
                                     )}
                                 </span>

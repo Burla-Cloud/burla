@@ -44,7 +44,7 @@ export const JobsList = () => {
                 <CardContent>
                     {isLoading ? (
                         <div className="flex justify-center py-8">
-                            <div className="w-5 h-5 border-2 border-[#3b5a64] border-t-transparent rounded-full animate-spin" />
+                            <div className="w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin" />
                         </div>
                     ) : jobs.length === 0 ? (
                         <div className="text-center text-gray-500 py-4">No jobs</div>
@@ -58,7 +58,7 @@ export const JobsList = () => {
                                                 type="checkbox"
                                                 checked={jobs.every((j) => j.checked)}
                                                 onChange={handleSelectAllChange}
-                                                className="w-4 h-4 border-2 border-gray-400 rounded-none appearance-none checked:bg-[#3b5a64] checked:border-[#3b5a64] cursor-pointer"
+                                                className="w-4 h-4 border-2 border-gray-400 rounded-none appearance-none checked:bg-primary checked:border-primary cursor-pointer"
                                             />
                                         </TableHead>
                                         <TableHead>Status</TableHead>
@@ -78,7 +78,7 @@ export const JobsList = () => {
                                                     type="checkbox"
                                                     checked={job.checked}
                                                     onChange={() => handleCheckboxChange(job.id)}
-                                                    className="w-4 h-4 border-2 border-gray-400 rounded-none appearance-none checked:bg-[#3b5a64] checked:border-[#3b5a64] cursor-pointer"
+                                                    className="w-4 h-4 border-2 border-gray-400 rounded-none appearance-none checked:bg-primary checked:border-primary cursor-pointer"
                                                 />
                                             </TableCell>
                                             <TableCell>
@@ -105,7 +105,7 @@ export const JobsList = () => {
                                                     </div>
                                                     <div className="w-full bg-gray-200 rounded h-1.5 overflow-hidden">
                                                         <div
-                                                            className="bg-[#3b5a64] h-1.5 transition-all"
+                                                            className="bg-primary h-1.5 transition-all"
                                                             style={{
                                                                 width: `${
                                                                     job.n_inputs
@@ -147,7 +147,7 @@ export const JobsList = () => {
                                 {page > 0 && (
                                     <button
                                         onClick={() => setPage(page - 1)}
-                                        className="px-3 py-1 text-sm text-[#3b5a64] hover:underline"
+                                        className="px-3 py-1 text-sm text-primary hover:underline"
                                     >
                                         ‹ Prev
                                     </button>
@@ -157,7 +157,7 @@ export const JobsList = () => {
                                     onClick={() => setPage(0)}
                                     className={`px-3 py-1 rounded text-sm border ${
                                         page === 0
-                                            ? "bg-[#3b5a64] text-white"
+                                            ? "bg-primary text-primary-foreground"
                                             : "bg-white text-gray-700 hover:bg-gray-100"
                                     }`}
                                 >
@@ -179,7 +179,7 @@ export const JobsList = () => {
                                             onClick={() => setPage(i)}
                                             className={`px-3 py-1 rounded text-sm border ${
                                                 page === i
-                                                    ? "bg-[#3b5a64] text-white"
+                                                    ? "bg-primary text-primary-foreground"
                                                     : "bg-white text-gray-700 hover:bg-gray-100"
                                             }`}
                                         >
@@ -194,7 +194,7 @@ export const JobsList = () => {
                                         onClick={() => setPage(totalPages - 1)}
                                         className={`px-3 py-1 rounded text-sm border ${
                                             page === totalPages - 1
-                                                ? "bg-[#3b5a64] text-white"
+                                                ? "bg-primary text-primary-foreground"
                                                 : "bg-white text-gray-700 hover:bg-gray-100"
                                         }`}
                                     >
@@ -205,7 +205,7 @@ export const JobsList = () => {
                                 {page < totalPages - 1 && (
                                     <button
                                         onClick={() => setPage(page + 1)}
-                                        className="px-3 py-1 text-sm text-[#3b5a64] hover:underline"
+                                        className="px-3 py-1 text-sm text-primary hover:underline"
                                     >
                                         Next ›
                                     </button>

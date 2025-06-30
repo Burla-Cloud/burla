@@ -31,8 +31,7 @@ export const ClusterControls = ({ status, onReboot, onStop }: ClusterControlsPro
                 size="lg"
                 onClick={onReboot}
                 disabled={isStarting || isStopping || isRebooting}
-                className="w-32 text-white disabled:bg-gray-400"
-                style={{ backgroundColor: "#3b5a64" }}
+                className="w-32 text-white bg-primary hover:bg-primary/90 disabled:bg-gray-400"
             >
                 {startButtonIcon}
                 {startButtonText}

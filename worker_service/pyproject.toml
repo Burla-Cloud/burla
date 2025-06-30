@@ -16,15 +16,6 @@ uvicorn = ">=0.34"
 python-multipart = ">=0.0.20"
 aiohttp = ">=3.11"
 
-# These packages are not used by the worker service
-# These exist so that users can run code in burla that uses these packages
-# burla = "1.0.24"
-# pandas = ">=2.2"
-# numpy = ">=2.1"
-# scikit-learn = ">=1.5"
-# google-cloud-storage = ">=2.18"
-# ---------------------------------------------
-
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"

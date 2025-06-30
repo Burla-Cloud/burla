@@ -123,6 +123,9 @@ export const SettingsForm = ({ isEditing }) => {
                                                 <p>
                                                     URI of the Docker image to run your code inside.
                                                     <br />
+                                                    This can be any image, as long as it has Python
+                                                    installed.
+                                                    <br />
                                                     Private images are pulled using the host VM's
                                                     service account credentials.
                                                 </p>

@@ -29,6 +29,11 @@ export const SettingsForm = ({ isEditing }) => {
     ];
 
     const gpuCpuMap = {
+        "1x A100 40G": { label: "12CPU / 85G RAM", value: "a2-highgpu-1g" },
+        "2x A100 40G": { label: "24CPU / 170G RAM", value: "a2-highgpu-2g" },
+        "4x A100 40G": { label: "48CPU / 340G RAM", value: "a2-highgpu-4g" },
+        "8x A100 40G": { label: "96CPU / 680G RAM", value: "a2-highgpu-8g" },
+        "16x A100 40G": { label: "96CPU / 1360G RAM", value: "a2-megagpu-16g" },
         "1x A100 80G": { label: "12CPU / 170G RAM", value: "a2-ultragpu-1g" },
         "2x A100 80G": { label: "24CPU / 340G RAM", value: "a2-ultragpu-2g" },
         "4x A100 80G": { label: "48CPU / 680G RAM", value: "a2-ultragpu-4g" },
@@ -40,45 +45,44 @@ export const SettingsForm = ({ isEditing }) => {
         "8x H200 141G": { label: "224CPU / 2952G RAM", value: "a3-ultragpu-8g" },
     };
 
-    const gpuModels = [
-        "None",
-        ...Array.from(new Set(Object.keys(gpuCpuMap).map((k) => k.split(" ")[1]))),
-    ];
-    const GPU_COUNTS = {};
-    const GPU_VRAM = {};
+    // Build variant -> supported counts (e.g., "A100 40G" -> [1,2,4,8,16])
+    const VARIANT_INFO: Record<string, number[]> = {};
     Object.entries(gpuCpuMap).forEach(([display]) => {
         const [countWithX, model, vramWithG] = display.split(" ");
         const count = parseInt(countWithX.slice(0, -1), 10);
-        GPU_COUNTS[model] = Math.max(GPU_COUNTS[model] || 0, count);
-        GPU_VRAM[model] = parseInt(vramWithG.slice(0, -1), 10);
+        const vram = vramWithG; // include the trailing 'G'
+        const variant = `${model} ${vram}`; // e.g., "A100 40G"
+        if (!VARIANT_INFO[variant]) VARIANT_INFO[variant] = [];
+        if (!VARIANT_INFO[variant].includes(count)) VARIANT_INFO[variant].push(count);
     });
+    // sort counts ascending
+    Object.values(VARIANT_INFO).forEach((arr) => arr.sort((a, b) => a - b));
 
-    const [gpuModel, setGpuModel] = useState(() => {
-        const entry = Object.entries(gpuCpuMap).find(([, v]) => v.value === settings.machineType);
-        return entry ? entry[0].split(" ")[1] : "None";
-    });
-    const [gpusPerVm, setGpusPerVm] = useState(() => {
-        const entry = Object.entries(gpuCpuMap).find(([, v]) => v.value === settings.machineType);
-        return entry ? parseInt(entry[0].split("x")[0], 10) : 1;
-    });
-    const [cpuChoice, setCpuChoice] = useState(() => {
-        if (gpuModel === "None") {
-            const cpu = cpuOptions.find((c) => c.value === settings.machineType);
-            return cpu ? cpu.value : cpuOptions[1].value;
-        }
-        return cpuOptions[1].value;
-    });
+    const gpuVariants = ["None", ...Object.keys(VARIANT_INFO)];
+
+    // Initialize GPU state from settings
+    const initialEntry = Object.entries(gpuCpuMap).find(
+        ([, v]) => v.value === settings.machineType
+    );
+    const initialDisplay = initialEntry ? initialEntry[0] : ""; // e.g., '4x A100 40G'
+    const initialVariant = initialEntry ? initialDisplay.split(" ").slice(1).join(" ") : "None"; // A100 40G
+    const initialGpuCount = initialEntry ? parseInt(initialDisplay.split("x")[0], 10) : 1;
+
+    const [gpuVariant, setGpuVariant] = useState(initialVariant);
+    const [gpusPerVm, setGpusPerVm] = useState(initialGpuCount);
+    const [cpuChoice, setCpuChoice] = useState(
+        initialVariant === "None" ? settings.machineType : cpuOptions[1].value
+    );
 
     React.useEffect(() => {
-        if (gpuModel === "None") {
+        if (gpuVariant === "None") {
             handleInputChange("machineType", cpuChoice);
         } else {
-            const vramGb = GPU_VRAM[gpuModel];
-            const displayKey = `${gpusPerVm}x ${gpuModel} ${vramGb}G`;
+            const displayKey = `${gpusPerVm}x ${gpuVariant}`; // variant already includes memory G
             const machineValue = gpuCpuMap[displayKey].value;
             handleInputChange("machineType", machineValue);
         }
-    }, [gpuModel, gpusPerVm, cpuChoice]);
+    }, [gpuVariant, gpusPerVm, cpuChoice]);
 
     const handleInputChange = (key, value) => {
         setSettings((prev) => ({ ...prev, [key]: value }));
@@ -179,30 +183,25 @@ export const SettingsForm = ({ isEditing }) => {
                         <h2 className="text-xl font-semibold text-primary">Virtual Machines</h2>
                         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                             <div>
-                                <label className={labelClass}>GPU model</label>
+                                <label className={labelClass}>GPU</label>
                                 <Select
                                     disabled={!isEditing}
-                                    value={gpuModel}
+                                    value={gpuVariant}
                                     onValueChange={(val) => {
-                                        setGpuModel(val);
-                                        // Determine valid per-VM GPU counts for the selected model
-                                        const validCounts =
-                                            val === "None"
-                                                ? [1]
-                                                : val === "H200"
-                                                ? [GPU_COUNTS[val]]
-                                                : [1, 2, 4, 8];
-                                        // If current count is invalid, default to first valid option
-                                        setGpusPerVm((prev) =>
-                                            validCounts.includes(prev) ? prev : validCounts[0]
-                                        );
+                                        setGpuVariant(val);
+                                        if (val === "None") {
+                                            setGpusPerVm(1);
+                                        } else {
+                                            const counts = VARIANT_INFO[val];
+                                            setGpusPerVm(counts[0]);
+                                        }
                                     }}
                                 >
                                     <SelectTrigger className="w-full">
                                         <SelectValue />
                                     </SelectTrigger>
                                     <SelectContent>
-                                        {gpuModels.map((model) => (
+                                        {gpuVariants.map((model) => (
                                             <SelectItem key={model} value={model}>
                                                 {model}
                                             </SelectItem>
@@ -210,7 +209,7 @@ export const SettingsForm = ({ isEditing }) => {
                                     </SelectContent>
                                 </Select>
                             </div>
-                            {gpuModel !== "None" && (
+                            {gpuVariant !== "None" && (
                                 <div>
                                     <label className={labelClass}>GPUs per VM</label>
                                     <Select
@@ -222,7 +221,7 @@ export const SettingsForm = ({ isEditing }) => {
                                             <SelectValue />
                                         </SelectTrigger>
                                         <SelectContent>
-                                            {(gpuModel === "H200" ? [8] : [1, 2, 4, 8]).map((n) => (
+                                            {VARIANT_INFO[gpuVariant].map((n) => (
                                                 <SelectItem key={n} value={n.toString()}>
                                                     {n}
                                                 </SelectItem>
@@ -234,13 +233,11 @@ export const SettingsForm = ({ isEditing }) => {
                             <div>
                                 <label className={labelClass}>CPU / RAM</label>
                                 <Select
-                                    disabled={!isEditing || gpuModel !== "None"}
+                                    disabled={!isEditing || gpuVariant !== "None"}
                                     value={
-                                        gpuModel === "None"
+                                        gpuVariant === "None"
                                             ? cpuChoice
-                                            : gpuCpuMap[
-                                                  `${gpusPerVm}x ${gpuModel} ${GPU_VRAM[gpuModel]}G`
-                                              ].value
+                                            : gpuCpuMap[`${gpusPerVm}x ${gpuVariant}`].value
                                     }
                                     onValueChange={(val) => setCpuChoice(val)}
                                 >
@@ -248,13 +245,9 @@ export const SettingsForm = ({ isEditing }) => {
                                         <SelectValue />
                                     </SelectTrigger>
                                     <SelectContent>
-                                        {(gpuModel === "None"
+                                        {(gpuVariant === "None"
                                             ? cpuOptions
-                                            : [
-                                                  gpuCpuMap[
-                                                      `${gpusPerVm}x ${gpuModel} ${GPU_VRAM[gpuModel]}G`
-                                                  ],
-                                              ]
+                                            : [gpuCpuMap[`${gpusPerVm}x ${gpuVariant}`]]
                                         ).map((o) => (
                                             <SelectItem key={o.value} value={o.value}>
                                                 {o.label}

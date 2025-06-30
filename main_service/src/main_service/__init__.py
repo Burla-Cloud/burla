@@ -173,7 +173,8 @@ async def logout(request: Request, response: Response):
 
 @app.get("/auth-success")
 def auth_success():
-    return FileResponse("src/main_service/static/authorized.html")
+    rendered = env.get_template("authorized.html.j2").render()
+    return Response(content=rendered, status_code=200, media_type="text/html")
 
 
 # don't move this! must be declared before static files are mounted to the same path below.

@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <title>Burla – Quickstart</title>
+        <link rel="icon" type="image/png" href="/favicon.png" />
+        <style>
+            body {
+                display: flex;
+                align-items: flex-start;
+                justify-content: center;
+                padding-top: 60px;
+                height: 100vh;
+                margin: 0;
+                font-family: sans-serif;
+                background-color: #f9fafb;
+            }
+            .card {
+                background: white;
+                padding: 40px;
+                border-radius: 8px;
+                box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+                text-align: center;
+                width: 520px;
+            }
+            .card img.logo {
+                width: 100px;
+                height: auto;
+                margin-bottom: 20px;
+            }
+            h1 {
+                margin: 0 0 10px 0;
+                font-size: 24px;
+                color: #333;
+            }
+            p.tagline {
+                margin: 0 0 30px 0;
+                font-size: 14px;
+                color: #666;
+            }
+            .dashboard-btn {
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                height: 40px;
+                background-color: white;
+                border: 1px solid #dadce0;
+                border-radius: 4px;
+                cursor: pointer;
+                padding: 0 12px;
+                text-decoration: none;
+                margin-bottom: 30px;
+            }
+            .dashboard-btn span {
+                color: #3c4043;
+                font-size: 14px;
+                font-weight: 500;
+                font-family: Roboto, sans-serif;
+            }
+            .dashboard-btn:hover {
+                box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+            }
+            .quickstart-instructions {
+                text-align: left;
+                font-size: 14px;
+                color: #333;
+                margin-bottom: 10px;
+            }
+            .quickstart-header {
+                text-align: left;
+                font-size: 16px;
+                color: #333;
+                margin: 0 0 10px 0;
+            }
+            .code-container {
+                position: relative;
+                text-align: left;
+            }
+            pre {
+                margin: 0;
+                background: #f5f5f5;
+                padding: 16px;
+                border-radius: 6px;
+                overflow: auto;
+                font-size: 13px;
+            }
+            .copy-btn {
+                position: absolute;
+                top: 8px;
+                right: 8px;
+                border: 1px solid #dadce0;
+                background: white;
+                color: #3c4043;
+                border-radius: 4px;
+                padding: 4px 8px;
+                font-size: 12px;
+                cursor: pointer;
+                z-index: 1;
+            }
+            .copy-btn:hover {
+                background: #f3f3f3;
+            }
+            .copy-btn:active {
+                transform: scale(0.96);
+            }
+        </style>
+
+        <link
+            rel="stylesheet"
+            href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css"
+        />
+    </head>
+    <body>
+        <div class="card">
+            <img src="/assets/burla_logo-f7NrYSYk.png" alt="Burla Logo" class="logo" />
+            <h1>Thank you for logging in!</h1>
+            <p class="tagline">
+                You are now authorized to call <code>remote_parallel_map</code>.            
+            </p>
+            <a id="dashboard-btn" class="dashboard-btn" href="/" target="_blank">
+                <span>Continue to Dashboard</span>
+            </a>
+
+            <h2 class="quickstart-header">Quickstart:</h2>
+            <p class="quickstart-instructions">
+                1. Hit the <strong>⏻ Start</strong> button in the dashboard.<br>
+                2. Run the code snippet below!
+            </p>
+            <div class="code-container">
+                <button class="copy-btn" onclick="copyQuickstart()">Copy</button>
+                <pre><code id="quickstart-code" class="language-python">from burla import remote_parallel_map
+
+def my_function(my_input):
+    print("I'm running on a remote computer in the cloud!")
+
+remote_parallel_map(my_function, [1, 2, 3])</code></pre>
+            </div>
+        </div>
+
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+        <script>
+            hljs.highlightAll();
+        </script>
+        <script>
+            function copyQuickstart() {
+                const codeText = document.getElementById("quickstart-code").innerText;
+                navigator.clipboard.writeText(codeText).then(() => {
+                    const button = document.querySelector(".copy-btn");
+                    const originalText = button.textContent;
+                    button.textContent = "Copied!";
+                    setTimeout(() => {
+                        button.textContent = originalText;
+                    }, 1500);
+                });
+            }
+        </script>
+    </body>
+</html>

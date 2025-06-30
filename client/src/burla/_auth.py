@@ -80,14 +80,13 @@ def login():
     if response.status_code == 200:
         print(f"You are now logged in as [{email}].")
         print("Please email jake@burla.dev with any questions!\n")
+        if not CONFIG_PATH.exists():
+            CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+            CONFIG_PATH.touch()
+        CONFIG_PATH.write_text(json.dumps({"auth_token": auth_token, "email": email}))
     elif response.status_code == 401:
         print("Access denied.")
         print(f"[{email}] is not authorized to access the deployment in project: [{PROJECT_ID}]")
         print(f"Contact your admin to request access, then login again.\n")
     else:
         response.raise_for_status()
-
-    if not CONFIG_PATH.exists():
-        CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        CONFIG_PATH.touch()
-    CONFIG_PATH.write_text(json.dumps({"auth_token": auth_token, "email": email}))

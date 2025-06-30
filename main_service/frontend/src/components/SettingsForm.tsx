@@ -98,7 +98,7 @@ export const SettingsForm: React.FC<SettingsFormProps> = ({ isEditing }) => {
                 <CardContent className="space-y-12 pt-6">
                     {/* Section: Container Config */}
                     <div className="space-y-2">
-                        <h2 className="text-xl font-semibold" style={{ color: "#3b5a64" }}>
+                        <h2 className="text-xl font-semibold text-primary">
                             Container Image
                         </h2>
                         <div className="space-y-4">
@@ -178,7 +178,7 @@ export const SettingsForm: React.FC<SettingsFormProps> = ({ isEditing }) => {
 
                     {/* Section: Compute Resources */}
                     <div className="space-y-2">
-                        <h2 className="text-xl font-semibold" style={{ color: "#3b5a64" }}>
+                        <h2 className="text-xl font-semibold text-primary">
                             Virtual Machines
                         </h2>
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -261,7 +261,7 @@ export const SettingsForm: React.FC<SettingsFormProps> = ({ isEditing }) => {
 
                     {/* Section: Users */}
                     <div className="space-y-2">
-                        <h2 className="text-xl font-semibold" style={{ color: "#3b5a64" }}>
+                        <h2 className="text-xl font-semibold text-primary">
                             Authorized Users
                         </h2>
                         <div>
@@ -308,7 +308,7 @@ export const SettingsForm: React.FC<SettingsFormProps> = ({ isEditing }) => {
                             {settings.users.map((user) => (
                                 <span
                                     key={user}
-                                    className="bg-[#3b5a64] text-white px-3 py-1 rounded-full flex items-center"
+                                    className="bg-primary text-primary-foreground px-3 py-1 rounded-full flex items-center"
                                 >
                                     {user}
                                     {isEditing && (

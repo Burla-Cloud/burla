@@ -60,7 +60,7 @@ export const NodesList = ({ nodes }: NodesListProps) => {
                         <X className="h-4 w-4" />
                     </button>
                     <CardHeader>
-                        <CardTitle className="text-xl font-semibold text-[#3b5a64]">
+                        <CardTitle className="text-xl font-semibold text-primary">
                             Welcome to Burla!
                         </CardTitle>
                     </CardHeader>
@@ -102,7 +102,7 @@ export const NodesList = ({ nodes }: NodesListProps) => {
 
             <Card className="w-full">
                 <CardHeader className="flex flex-row items-center justify-between">
-                    <CardTitle className="text-xl font-semibold text-[#3b5a64]">Nodes</CardTitle>
+                    <CardTitle className="text-xl font-semibold text-primary">Nodes</CardTitle>
                 </CardHeader>
                 <CardContent>
                     <Table className="table-fixed w-full">

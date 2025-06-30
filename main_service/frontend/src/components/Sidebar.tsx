@@ -18,19 +18,19 @@ const Sidebar = () => {
             <nav className="space-y-1">
                 <Link
                     to="/"
-                    className="flex items-center space-x-1 text-gray-700 hover:text-black hover:bg-gray-200 p-2 rounded-md"
+                    className="flex items-center space-x-1 text-gray-700 hover:text-primary hover:bg-primary/10 p-2 rounded-md"
                 >
                     <span>Dashboard</span>
                 </Link>
                 <Link
                     to="/jobs"
-                    className="flex items-center space-x-1 text-gray-700 hover:text-black hover:bg-gray-200 p-2 rounded-md"
+                    className="flex items-center space-x-1 text-gray-700 hover:text-primary hover:bg-primary/10 p-2 rounded-md"
                 >
                     <span>Jobs</span>
                 </Link>
                 <Link
                     to="/settings"
-                    className="flex items-center space-x-1 text-gray-700 hover:text-black hover:bg-gray-200 p-2 rounded-md"
+                    className="flex items-center space-x-1 text-gray-700 hover:text-primary hover:bg-primary/10 p-2 rounded-md"
                 >
                     <span>Settings</span>
                 </Link>

@@ -5,7 +5,7 @@ const Sidebar = () => {
     return (
         <div className="w-60 min-h-screen bg-gray-100 border-r p-4 flex flex-col">
             {/* Logo Container (Lowered a bit using `mt-2`) */}
-            <div className="flex justify-left mt-5 mb-4">
+            <div className="flex justify-left mb-4">
                 <Link to="/">
                     <img
                         src={clusterImage}

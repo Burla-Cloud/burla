@@ -17,10 +17,10 @@ export const SettingsForm: React.FC<SettingsFormProps> = ({ isEditing }) => {
 
     const gpuOptions = [
         "None",
-        // "1x A100 80G",
-        // "2x A100 80G",
-        // "4x A100 80G",
-        // "8x A100 80G",
+        "1x A100 80G",
+        "2x A100 80G",
+        "4x A100 80G",
+        "8x A100 80G",
         "1x H100 80G",
         "2x H100 80G",
         "4x H100 80G",
@@ -98,10 +98,8 @@ export const SettingsForm: React.FC<SettingsFormProps> = ({ isEditing }) => {
                 <CardContent className="space-y-12 pt-6">
                     {/* Section: Container Config */}
                     <div className="space-y-2">
-                        <h2 className="text-xl font-semibold text-primary">
-                            Container Image
-                        </h2>
-                        <div className="space-y-4">
+                        <h2 className="text-xl font-semibold text-primary">Container Image</h2>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div>
                                 <div className="flex items-center gap-1">
                                     <label className={labelClass}>Image URI</label>
@@ -136,51 +134,47 @@ export const SettingsForm: React.FC<SettingsFormProps> = ({ isEditing }) => {
                             </div>
 
                             {/* Python Version */}
-                            <div className="grid grid-cols-1 gap-4">
-                                <div>
-                                    <div className="flex items-center gap-1">
-                                        <label className={labelClass}>Python Version</label>
-                                        <TooltipProvider>
-                                            <Tooltip>
-                                                <TooltipTrigger asChild>
-                                                    <InfoIcon className="h-4 w-4 text-gray-400 hover:text-gray-600 cursor-help -mt-2" />
-                                                </TooltipTrigger>
-                                                <TooltipContent>
-                                                    <p>
-                                                        Python version inside the container image to
-                                                        use to run your code.
-                                                        <br />
-                                                        This should be the same as your local python
-                                                        version.
-                                                    </p>
-                                                </TooltipContent>
-                                            </Tooltip>
-                                        </TooltipProvider>
-                                    </div>
-                                    <select
-                                        disabled={!isEditing}
-                                        className={selectClass}
-                                        value={settings.pythonVersion}
-                                        onChange={(e) =>
-                                            handleInputChange("pythonVersion", e.target.value)
-                                        }
-                                    >
-                                        {PYTHON_VERSIONS.map((v) => (
-                                            <option key={v} value={v}>
-                                                {v}
-                                            </option>
-                                        ))}
-                                    </select>
+                            <div>
+                                <div className="flex items-center gap-1">
+                                    <label className={labelClass}>Python Version</label>
+                                    <TooltipProvider>
+                                        <Tooltip>
+                                            <TooltipTrigger asChild>
+                                                <InfoIcon className="h-4 w-4 text-gray-400 hover:text-gray-600 cursor-help -mt-2" />
+                                            </TooltipTrigger>
+                                            <TooltipContent>
+                                                <p>
+                                                    Python version inside the container image to use
+                                                    to run your code.
+                                                    <br />
+                                                    This should be the same as your local python
+                                                    version.
+                                                </p>
+                                            </TooltipContent>
+                                        </Tooltip>
+                                    </TooltipProvider>
                                 </div>
+                                <select
+                                    disabled={!isEditing}
+                                    className={selectClass}
+                                    value={settings.pythonVersion}
+                                    onChange={(e) =>
+                                        handleInputChange("pythonVersion", e.target.value)
+                                    }
+                                >
+                                    {PYTHON_VERSIONS.map((v) => (
+                                        <option key={v} value={v}>
+                                            {v}
+                                        </option>
+                                    ))}
+                                </select>
                             </div>
                         </div>
                     </div>
 
                     {/* Section: Compute Resources */}
                     <div className="space-y-2">
-                        <h2 className="text-xl font-semibold text-primary">
-                            Virtual Machines
-                        </h2>
+                        <h2 className="text-xl font-semibold text-primary">Virtual Machines</h2>
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                             <div>
                                 <label className={labelClass}>GPU</label>
@@ -261,9 +255,7 @@ export const SettingsForm: React.FC<SettingsFormProps> = ({ isEditing }) => {
 
                     {/* Section: Users */}
                     <div className="space-y-2">
-                        <h2 className="text-xl font-semibold text-primary">
-                            Authorized Users
-                        </h2>
+                        <h2 className="text-xl font-semibold text-primary">Authorized Users</h2>
                         <div>
                             <div className="flex items-center gap-1">
                                 <label className={labelClass}>Add User Email</label>

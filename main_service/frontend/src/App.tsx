@@ -26,7 +26,7 @@ const App = () => (
                             <LogsProvider>
                                 <AppDataLoader />
                                 <Router>
-                                    <div className="flex min-h-screen bg-gray-50">
+                                    <div className="flex min-h-screen items-baseline bg-gray-50">
                                         <ProfilePicture />
                                         <Sidebar />
                                         <div className="flex-1 py-10 px-12 flex items-start">

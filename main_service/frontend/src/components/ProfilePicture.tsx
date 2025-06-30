@@ -52,7 +52,7 @@ export default function ProfilePicture() {
             <img
                 src={profilePicUrl}
                 alt="User profile"
-                className="h-8 w-8 rounded-full border-2 border-gray-200 shadow-md object-cover cursor-pointer"
+                className="h-9 w-9 rounded-full border-2 border-gray-200 shadow-md object-cover cursor-pointer"
                 onClick={() => setIsOpen(!isOpen)}
             />
 

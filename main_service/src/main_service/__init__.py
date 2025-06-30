@@ -12,10 +12,11 @@ from contextlib import asynccontextmanager
 import google.auth
 from google.cloud import firestore, logging, secretmanager
 from fastapi.responses import Response, FileResponse, RedirectResponse
-from fastapi import FastAPI, Request, BackgroundTasks, Depends
+from fastapi import FastAPI, Request, BackgroundTasks, Depends, status
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.datastructures import UploadFile
+from jinja2 import Environment, FileSystemLoader
 
 os.environ["GRPC_VERBOSITY"] = "ERROR"
 os.environ["GLOG_minloglevel"] = "2"
@@ -29,6 +30,7 @@ BURLA_BACKEND_URL = "https://backend.burla.dev"
 GCL_CLIENT = logging.Client().logger("main_service")
 DB = firestore.Client(database="burla")
 
+env = Environment(loader=FileSystemLoader("src/main_service/static"))
 secret_client = secretmanager.SecretManagerServiceClient()
 secret_name = f"projects/{PROJECT_ID}/secrets/burla-cluster-id-token/versions/latest"
 response = secret_client.access_secret_version(request={"name": secret_name})
@@ -153,6 +155,28 @@ app.include_router(settings_router)
 app.include_router(jobs_router)
 
 
+@app.get("/api/user")
+async def get_user_info(request: Request):
+    return {
+        "email": request.session.get("X-User-Email"),
+        "name": request.session.get("name"),
+        "profile_pic": request.session.get("profile_pic"),
+    }
+
+
+@app.post("/api/logout")
+async def logout(request: Request, response: Response):
+    request.session.clear()
+    response.delete_cookie(key="session", path="/")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@app.get("/auth-success")
+def auth_success():
+    rendered = env.get_template("authorized.html.j2").render()
+    return Response(content=rendered, status_code=200, media_type="text/html")
+
+
 # don't move this! must be declared before static files are mounted to the same path below.
 @app.get("/")
 @app.get("/jobs")
@@ -188,6 +212,11 @@ async def catch_errors(request: Request, call_next):
 
 @app.middleware("http")
 async def validate_requests(request: Request, call_next):
+    # allow static asset requests (js/css/images) to pass through
+    path = request.url.path
+    last_segment = path.rstrip("/").split("/")[-1]
+    if "." in last_segment:
+        return await call_next(request)
 
     # convert temporary client_id to email/token
     # client_id's are only valid once, and for a very short period of time
@@ -200,6 +229,8 @@ async def validate_requests(request: Request, call_next):
                     data = await response.json()
                     request.session["X-User-Email"] = data["email"]
                     request.session["Authorization"] = f"Bearer {data['token']}"
+                    request.session["profile_pic"] = data["profile_pic"]
+                    request.session["name"] = data["name"]
 
         base_url = f"{request.url.scheme}://{request.url.netloc}{request.url.path}"
         response = RedirectResponse(url=base_url, status_code=303)
@@ -207,7 +238,12 @@ async def validate_requests(request: Request, call_next):
         response.set_cookie(key="session", value=session, httponly=True, samesite="lax")
         return response
 
-    # validate user is authorized
+    no_email_header = request.session.get("X-User-Email") is None
+    no_token_header = request.session.get("Authorization") is None
+    if no_email_header or no_token_header:
+        rendered = env.get_template("login.html.j2").render(user_email=None)
+        return Response(content=rendered, status_code=401, media_type="text/html")
+
     email = request.session.get("X-User-Email")
     authorization = request.session.get("Authorization")
     if email and authorization:
@@ -220,10 +256,8 @@ async def validate_requests(request: Request, call_next):
                 elif response.status != 401:
                     response.raise_for_status()
 
-    msg = "Unauthorized. Please run `burla dashboard` to login, "
-    msg += "or contact your cluster owner to be added to the list of approved users.\n"
-    msg += "If you believe this is an error, please email jake@burla.dev or call 508-320-8778."
-    return Response(status_code=401, content=msg)
+    rendered = env.get_template("login.html.j2").render(user_email=email)
+    return Response(content=rendered, status_code=403, media_type="text/html")
 
 
 @app.middleware("http")

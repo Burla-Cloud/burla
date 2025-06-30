@@ -19,7 +19,7 @@ DEFAULT_CLUSTER_CONFIG = {
         {
             "containers": [
                 {
-                    "image": f"burlacloud/default-image-py{python_version}:latest",
+                    "image": f"python:{python_version}",
                     "python_version": python_version,
                 }
             ],

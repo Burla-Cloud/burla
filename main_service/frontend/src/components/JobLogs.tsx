@@ -111,7 +111,7 @@ const JobLogs = ({ jobId, jobStatus }: JobLogsProps) => {
     return (
       <div className="mt-4 mb-4 flex flex-col">
         <div className="flex items-center justify-between mb-3">
-          <h2 className="text-lg font-semibold text-[#3b5a64]">Logs</h2>
+          <h2 className="text-lg font-semibold text-primary">Logs</h2>
           <Button variant="outline" disabled>
             Refresh
           </Button>
@@ -126,7 +126,7 @@ const JobLogs = ({ jobId, jobStatus }: JobLogsProps) => {
   return (
     <div className="mt-4 mb-4 flex flex-col" style={{ maxHeight: "calc(100vh - 140px)", overflow: "hidden" }}>
       <div className="flex items-center justify-between mb-3">
-        <h2 className="text-lg font-semibold text-[#3b5a64]">Logs</h2>
+        <h2 className="text-lg font-semibold text-primary">Logs</h2>
         <Button onClick={handleManualRefresh} variant="outline" disabled={refreshDisabled}>
           {initialLoading ? (
             <>
@@ -141,7 +141,7 @@ const JobLogs = ({ jobId, jobStatus }: JobLogsProps) => {
       <div className="flex-1 bg-white border border-gray-200 rounded-lg shadow-sm relative">
         {initialLoading ? (
           <div className="flex h-full items-center justify-center py-10">
-            <Loader2 className="h-6 w-6 animate-spin text-[#3b5a64]" />
+            <Loader2 className="h-6 w-6 animate-spin text-primary" />
           </div>
         ) : logs.length === 0 ? (
           <ul className="font-mono text-xs text-gray-800">
@@ -173,7 +173,7 @@ const JobLogs = ({ jobId, jobStatus }: JobLogsProps) => {
                     <div style={style} className="text-center px-4 py-2 text-gray-400">
                       {!hasMoreByJobId[jobId] ? "No more logs" : isFetchInFlight.current ? (
                         <div className="flex justify-center items-center gap-2">
-                          <Loader2 className="h-4 w-4 animate-spin text-[#3b5a64]" /> Loading more…
+                          <Loader2 className="h-4 w-4 animate-spin text-primary" /> Loading more…
                         </div>
                       ) : null}
                     </div>

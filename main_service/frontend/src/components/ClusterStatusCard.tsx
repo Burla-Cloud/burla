@@ -21,7 +21,7 @@ export const ClusterStatusCard = ({ status, parallelism }: ClusterStatusCardProp
   return (
     <Card className="w-full">
       <CardHeader className="pb-2">
-        <CardTitle className="text-xl font-semibold text-[#3b5a64]">
+        <CardTitle className="text-xl font-semibold text-primary">
           Cluster Status
         </CardTitle>
       </CardHeader>

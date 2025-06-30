@@ -202,6 +202,8 @@ async def _execute_job(
         async with session.post(url, data=data, headers=auth_headers) as response:
             if response.status == 200:
                 return node
+            elif response.status == 401:
+                raise Exception("Unauthorized! Please run `burla login` to authenticate.")
             elif response.status == 409:
                 raise NodeConflict(f"ERROR from {node['instance_name']}: {await response.text()}")
             else:

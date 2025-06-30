@@ -7,6 +7,7 @@ from uuid import uuid4
 from pathlib import Path
 from typing import Tuple
 
+import google.auth
 from appdirs import user_config_dir
 
 from burla import _BURLA_BACKEND_URL
@@ -56,11 +57,14 @@ def _get_login_response(client_id, attempt=0):
 
 
 def login():
-    """Login to Burla using your Google account.
-    Allows you to call `remote_paralell_map` on clusters where you're authorized to do so.
-    """
+    if os.getenv("BURLA_DASHBOARD_URL"):
+        dashboard_url = f"{os.getenv('BURLA_DASHBOARD_URL')}/auth-success"
+    else:
+        dashboard_url = main_service_url()
+
     client_id = uuid4().hex
-    login_url = f"{_BURLA_BACKEND_URL}/v1/login/{client_id}"
+    login_url = f"{_BURLA_BACKEND_URL}/v1/login/{client_id}?redirect_url={dashboard_url}"
+    _, PROJECT_ID = google.auth.default()
 
     if IN_COLAB:
         print(f"Please navigate to the following URL to login:\n\n    {login_url}\n")
@@ -68,37 +72,21 @@ def login():
     else:
         print(f"Your browser has been opened to visit:\n\n    {login_url}\n")
         webbrowser.open(login_url)
-    auth_token, email = _get_login_response(client_id)
-
-    message = f"Thank you for registering with Burla! You are now logged in as [{email}].\n"
-    message += "Please email jake@burla.dev with any questions!\n"
-    print(message)
-
-    if not CONFIG_PATH.exists():
-        CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        CONFIG_PATH.touch()
-    CONFIG_PATH.write_text(json.dumps({"auth_token": auth_token, "email": email}))
-
-
-def dashboard():
-    """Open your Burla dashboard in your browser."""
-
-    if os.getenv("BURLA_DASHBOARD_URL"):
-        dashboard_url = os.getenv("BURLA_DASHBOARD_URL")
-    else:
-        dashboard_url = main_service_url()
-
-    client_id = uuid4().hex
-    login_url = f"{_BURLA_BACKEND_URL}/v1/login/{client_id}?redirect_url={dashboard_url}"
-
-    if IN_COLAB:
-        print(f"Please navigate to the following URL to open your dashboard:\n\n    {login_url}\n")
-        print(f"(We are unable to automatically open this from a Google Colab notebook)")
-    else:
-        webbrowser.open(login_url)
 
     auth_token, email = _get_login_response(client_id)
-    if not CONFIG_PATH.exists():
-        CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        CONFIG_PATH.touch()
-    CONFIG_PATH.write_text(json.dumps({"auth_token": auth_token, "email": email}))
+    validate_url = f"{_BURLA_BACKEND_URL}/v1/projects/{PROJECT_ID}/users:validate"
+    headers = {"Authorization": f"Bearer {auth_token}", "X-User-Email": email}
+    response = requests.get(validate_url, headers=headers)
+    if response.status_code == 200:
+        print(f"You are now logged in as [{email}].")
+        print("Please email jake@burla.dev with any questions!\n")
+        if not CONFIG_PATH.exists():
+            CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+            CONFIG_PATH.touch()
+        CONFIG_PATH.write_text(json.dumps({"auth_token": auth_token, "email": email}))
+    elif response.status_code == 401:
+        print("Access denied.")
+        print(f"[{email}] is not authorized to access the deployment in project: [{PROJECT_ID}]")
+        print(f"Contact your admin to request access, then login again.\n")
+    else:
+        response.raise_for_status()

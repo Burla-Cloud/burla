@@ -5,7 +5,6 @@ import { useClusterControl } from "@/hooks/useClusterControl";
 import { useNodes } from "@/contexts/NodesContext";
 import { useCluster } from "@/contexts/ClusterContext";
 
-
 const Dashboard = () => {
     const { rebootCluster, stopCluster } = useClusterControl();
     const { nodes } = useNodes();
@@ -14,28 +13,25 @@ const Dashboard = () => {
     const extractCpuCount = (type: string): number | null => {
         const customMatch = type.match(/^custom-(\d+)-/);
         if (customMatch) return parseInt(customMatch[1], 10);
-    
+
         const standardMatch = type.match(/-(\d+)$/);
         return standardMatch ? parseInt(standardMatch[1], 10) : null;
-      };
-    
-      const parallelism = nodes.reduce((sum, node) => {
+    };
+
+    const parallelism = nodes.reduce((sum, node) => {
         const cpus = node.cpus ?? extractCpuCount(node.type) ?? 0;
         return sum + cpus;
-      }, 0);
-    
+    }, 0);
 
     return (
         <div className="flex-1 flex flex-col justify-start px-12 pt-0">
             <div className="max-w-6xl mx-auto w-full">
                 {/* Move Dashboard Heading Up Precisely */}
-                <h1 className="text-3xl font-bold mt-[-4px] mb-4" style={{ color: "#3b5a64" }}>
-                    Dashboard
-                </h1>
+                <h1 className="text-3xl font-bold mt-[-4px] mb-4 text-primary">Dashboard</h1>
 
                 <div className="space-y-6">
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        <ClusterStatusCard status={clusterStatus} parallelism={parallelism}/>
+                        <ClusterStatusCard status={clusterStatus} parallelism={parallelism} />
                         <div className="flex items-center justify-center">
                             <ClusterControls
                                 status={clusterStatus}
@@ -60,4 +56,3 @@ const Dashboard = () => {
 };
 
 export default Dashboard;
-

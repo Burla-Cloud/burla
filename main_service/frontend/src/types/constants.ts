@@ -1,6 +1,6 @@
 // constants.ts
 
-export const PYTHON_VERSIONS = ["3.9", "3.10", "3.11", "3.12", "3.13"];
+export const PYTHON_VERSIONS = ["3.10", "3.11", "3.12", "3.13"];
 
 export const MACHINE_TYPES = [
     "n4-standard-2",

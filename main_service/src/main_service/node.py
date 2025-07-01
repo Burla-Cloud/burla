@@ -13,7 +13,7 @@ import docker
 from docker.errors import APIError
 from google.cloud import resourcemanager_v3
 from google.auth.transport.requests import Request
-from google.api_core.exceptions import NotFound, ServiceUnavailable, Conflict
+from google.api_core.exceptions import NotFound, ServiceUnavailable, Conflict, BadRequest
 from google.cloud import firestore
 from google.cloud.firestore import DocumentSnapshot
 from google.cloud.compute_v1 import (
@@ -306,7 +306,11 @@ class Node:
                 ).result()
                 instance_created = True
                 break
-
+            except BadRequest as e:
+                if "does not exist in zone" in str(e):
+                    instance_created = False
+                else:
+                    raise e
             except ServiceUnavailable:  # <- not enough instances in this zone, try next zone.
                 instance_created = False
             except Conflict:

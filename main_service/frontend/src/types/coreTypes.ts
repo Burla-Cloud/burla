@@ -1,5 +1,5 @@
 export type ClusterStatus = "ON" | "OFF" | "BOOTING" | "REBOOTING" | "STOPPING";
-export type NodeStatus = "READY" | "RUNNING" | "BOOTING" | "STOPPING";
+export type NodeStatus = "READY" | "RUNNING" | "BOOTING" | "STOPPING" | "FAILED";
 export type JobsStatus = "PENDING" | "RUNNING" | "FAILED" | "COMPLETED";
 
 // If we simply name it `Node`, it will conflict with the Node type in React.
@@ -12,6 +12,7 @@ export interface BurlaNode {
     gpus?: number;
     memory?: string;
     age?: string;
+    errorMessage?: string;
 }
 
 export interface BurlaJob {
@@ -30,6 +31,8 @@ export interface Settings {
     pythonVersion: string;
     machineType: string;
     machineQuantity: number;
+    diskSize: number; // in GB
+    inactivityTimeout: number; // in minutes
     users: string[];
 }
 

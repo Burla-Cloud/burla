@@ -59,7 +59,7 @@ project = client.get_project(name=f"projects/{PROJECT_ID}")
 GCE_DEFAULT_SVC = f"{project.name.split('/')[-1]}-compute@developer.gserviceaccount.com"
 
 NODE_BOOT_TIMEOUT = 60 * 6
-ACCEPTABLE_ZONES = ["us-central1-a", "us-central1-b", "us-central1-c", "us-central1-f"]
+ACCEPTABLE_ZONES = ["us-central1-b", "us-central1-a", "us-central1-c", "us-central1-f"]
 NODE_SVC_VERSION = "1.0.25"  # <- this maps to a git tag/release or branch
 
 
@@ -153,22 +153,26 @@ class Node:
         current_state = {k: v for k, v in current_state.items() if k not in attrs_to_not_save}
         self.node_ref.set(current_state)
 
-        if as_local_container:
-            self.__start_svc_in_local_container()
-        else:
-            self.__start_svc_in_vm(disk_image=self.disk_image, disk_size=self.disk_size)
+        try:
+            if as_local_container:
+                self.__start_svc_in_local_container()
+            else:
+                self.__start_svc_in_vm(disk_image=self.disk_image, disk_size=self.disk_size)
 
-        start = time()
-        status = self.status()
-        while status != "READY":
-            sleep(1)
-            booting_too_long = (time() - start) > NODE_BOOT_TIMEOUT
+            start = time()
             status = self.status()
+            while status != "READY":
+                sleep(1)
+                booting_too_long = (time() - start) > NODE_BOOT_TIMEOUT
+                status = self.status()
 
-            if status == "FAILED" or booting_too_long:
-                self.delete()
-                msg = f"Node {self.instance_name} Failed to start! (timeout={booting_too_long})"
-                raise Exception(msg)
+                if status == "FAILED" or booting_too_long:
+                    self.delete()
+                    msg = f"Node {self.instance_name} Failed to start! (timeout={booting_too_long})"
+                    raise Exception(msg)
+        except Exception as e:
+            self.node_ref.update(dict(status="FAILED", error_message=traceback.format_exc()))
+            raise e
 
         self.node_ref.update(dict(host=self.host, zone=self.zone))  # node svc marks itself as ready
         self.is_booting = False
@@ -289,6 +293,8 @@ class Node:
         shutdown_script = self.__get_shutdown_script()
         startup_script_metadata = Items(key="startup-script", value=startup_script)
         shutdown_script_metadata = Items(key="shutdown-script", value=shutdown_script)
+        exhausted_zones = []
+        unavailable_zones = []
         for zone in ACCEPTABLE_ZONES:
             try:
                 instance = Instance(
@@ -308,16 +314,26 @@ class Node:
                 break
             except BadRequest as e:
                 if "does not exist in zone" in str(e):
+                    unavailable_zones.append(zone)
                     instance_created = False
                 else:
                     raise e
-            except ServiceUnavailable:  # <- not enough instances in this zone, try next zone.
+            except ServiceUnavailable:  # not enough instances in this zone, try next zone.
+                exhausted_zones.append(zone)
                 instance_created = False
             except Conflict:
                 raise Exception(f"Node {self.instance_name} deleted while starting.")
 
         if not instance_created:
-            raise Exception(f"Unable to provision {instance} in any of: {ACCEPTABLE_ZONES}")
+            msg = ""
+            if exhausted_zones:
+                msg += f"Recieved ZONE_RESOURCE_POOL_EXHAUSTED trying to provision VM"
+                msg += f" of type {self.machine_type} in the following zones: {exhausted_zones}\n"
+            if unavailable_zones:
+                msg += f"VM type {self.machine_type} is unavailable in the following zones: "
+                msg += f"{unavailable_zones}\n"
+            if unavailable_zones or exhausted_zones:
+                raise Exception(msg)
 
         kw = dict(project=PROJECT_ID, zone=zone, instance=self.instance_name)
         external_ip = self.instance_client.get(**kw).network_interfaces[0].access_configs[0].nat_i_p

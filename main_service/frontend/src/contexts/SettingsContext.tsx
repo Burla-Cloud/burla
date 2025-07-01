@@ -12,6 +12,8 @@ const defaultSettings: SettingsData = {
     pythonVersion: "3.12",
     machineType: "n4-standard-4",
     machineQuantity: 1,
+    diskSize: 50,
+    inactivityTimeout: 10,
     users: [],
 };
 

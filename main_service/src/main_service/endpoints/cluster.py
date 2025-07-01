@@ -171,16 +171,22 @@ async def cluster_info(logger: Logger = Depends(get_logger)):
                 if change.type.name == "REMOVED":
                     event_data = {"nodeId": instance_name, "deleted": True}
                 else:
+                    # always send status and type, and include the errorMessage if present so the UI can surface it
                     event_data = {
                         "nodeId": instance_name,
                         "status": doc_data.get("status"),
                         "type": doc_data.get("machine_type"),
                     }
 
+                    error_message = doc_data.get("error_message")
+                    if error_message:
+                        event_data["errorMessage"] = error_message
+
                 current_loop.call_soon_threadsafe(queue.put_nowait, event_data)
                 logger.log(f"Firestore event detected: {event_data}")
 
-        status_filter = FieldFilter("status", "in", ["READY", "BOOTING", "RUNNING"])
+        # include "FAILED" so the frontend is notified when a node fails
+        status_filter = FieldFilter("status", "in", ["READY", "BOOTING", "RUNNING", "FAILED"])
         query = DB.collection("nodes").where(filter=status_filter)
         node_watch = query.on_snapshot(on_snapshot)
 
@@ -192,3 +198,31 @@ async def cluster_info(logger: Logger = Depends(get_logger)):
             node_watch.unsubscribe()
 
     return StreamingResponse(node_stream(), media_type="text/event-stream")
+
+
+@router.delete("/v1/cluster/{node_id}")
+def delete_node(node_id: str, request: Request, logger: Logger = Depends(get_logger)):
+    """Delete a single node and its Firestore document so users can dismiss failures.
+
+    This is intentionally lightweight: if the VM/container is still running the
+    :py:meth:`Node.delete` helper will attempt to terminate it; otherwise the
+    Firestore document is simply removed so the SSE stream emits a *REMOVED*
+    event that the frontend already handles.
+    """
+
+    instance_client = InstancesClient()
+
+    email = request.session.get("X-User-Email")
+    authorization = request.session.get("Authorization")
+    auth_headers = {"Authorization": authorization, "X-User-Email": email}
+
+    node_doc = DB.collection("nodes").document(node_id).get()
+    if not node_doc.exists:
+        logger.log(f"Node {node_id} already deleted.")
+        return {"status": "not_found"}
+
+    node = Node.from_snapshot(DB, logger, node_doc, auth_headers, instance_client)
+    node.delete()
+
+    logger.log(f"Node {node_id} deleted by user request.")
+    return {"status": "deleted"}

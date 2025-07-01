@@ -9,9 +9,10 @@ import {
     TableRow,
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
-import { Cpu, X } from "lucide-react";
+import { Cpu, X, ChevronRight } from "lucide-react";
 import { NodeStatus, BurlaNode } from "@/types/coreTypes";
 import { useEffect, useState } from "react";
+import React from "react";
 
 interface NodesListProps {
     nodes: BurlaNode[];
@@ -36,6 +37,7 @@ export const NodesList = ({ nodes }: NodesListProps) => {
             RUNNING: "bg-green-500 animate-pulse",
             BOOTING: "bg-yellow-500 animate-pulse",
             STOPPING: "bg-gray-300 animate-pulse",
+            FAILED: "bg-red-500",
         };
         return cn("w-2 h-2 rounded-full", nodeStatus ? statusClasses[nodeStatus] : "bg-gray-300");
     };
@@ -121,6 +123,21 @@ export const NodesList = ({ nodes }: NodesListProps) => {
         return "-";
     };
 
+    // track which node row is currently expanded to show the error message
+    const [expandedNodeId, setExpandedNodeId] = useState<string | null>(null);
+
+    const toggleExpanded = (nodeId: string) => {
+        setExpandedNodeId((prev) => (prev === nodeId ? null : nodeId));
+    };
+
+    const deleteNode = async (nodeId: string) => {
+        try {
+            await fetch(`/v1/cluster/${nodeId}`, { method: "DELETE" });
+        } catch (error) {
+            console.error("Failed to delete node", error);
+        }
+    };
+
     return (
         <div className="space-y-6">
             {showWelcome && (
@@ -180,11 +197,12 @@ export const NodesList = ({ nodes }: NodesListProps) => {
                 <CardContent>
                     <Table className="table-fixed w-full">
                         <colgroup>
-                            <col className="w-1/5" />
-                            <col className="w-1/5" />
-                            <col className="w-1/5" />
-                            <col className="w-1/5" />
-                            <col className="w-1/5" />
+                            <col className="w-[16%]" />
+                            <col className="w-[20%]" />
+                            <col className="w-[20%]" />
+                            <col className="w-[16%]" />
+                            <col className="w-[16%]" />
+                            <col className="w-[12%]" />
                         </colgroup>
                         <TableHeader>
                             <TableRow>
@@ -193,35 +211,97 @@ export const NodesList = ({ nodes }: NodesListProps) => {
                                 <TableHead className="px-4 py-2">GPUs</TableHead>
                                 <TableHead className="px-4 py-2 text-center">CPUs</TableHead>
                                 <TableHead className="px-4 py-2 text-center">RAM</TableHead>
+                                <TableHead className="px-2 py-2" />
                             </TableRow>
                         </TableHeader>
                         <TableBody>
                             {nodes.map((node) => (
-                                <TableRow key={node.id}>
-                                    <TableCell className="px-4 py-2">
-                                        <div className="flex items-center space-x-2">
-                                            <div className={getStatusClass(node.status)} />
-                                            <span className={cn("text-sm capitalize", node.status)}>
-                                                {node.status}
-                                            </span>
-                                        </div>
-                                    </TableCell>
-                                    <TableCell className="px-4 py-2">{node.name}</TableCell>
-                                    <TableCell className="px-4 py-2">
-                                        {parseGpuDisplay(node.type)}
-                                    </TableCell>
-                                    <TableCell className="px-4 py-2 text-center">
-                                        <div className="inline-flex items-center space-x-1 justify-center">
-                                            <Cpu className="h-4 w-4" />
-                                            <span>
-                                                {node.cpus ?? extractCpuCount(node.type) ?? "?"}
-                                            </span>
-                                        </div>
-                                    </TableCell>
-                                    <TableCell className="px-4 py-2 text-center">
-                                        {parseRamDisplay(node.type)}
-                                    </TableCell>
-                                </TableRow>
+                                <React.Fragment key={node.id}>
+                                    <TableRow
+                                        onClick={() => node.errorMessage && toggleExpanded(node.id)}
+                                        className={cn({ "cursor-pointer": node.errorMessage })}
+                                    >
+                                        <TableCell className="px-4 py-2">
+                                            <div className="flex items-center space-x-2">
+                                                {node.errorMessage && (
+                                                    <ChevronRight
+                                                        className={cn(
+                                                            "h-4 w-4 transition-transform duration-200",
+                                                            {
+                                                                "rotate-90":
+                                                                    expandedNodeId === node.id,
+                                                            }
+                                                        )}
+                                                    />
+                                                )}
+                                                <div className={getStatusClass(node.status)} />
+                                                <span
+                                                    className={cn(
+                                                        "text-sm capitalize",
+                                                        node.status
+                                                    )}
+                                                >
+                                                    {node.status}
+                                                </span>
+                                            </div>
+                                        </TableCell>
+                                        <TableCell className="px-4 py-2">{node.name}</TableCell>
+                                        <TableCell className="px-4 py-2">
+                                            {parseGpuDisplay(node.type)}
+                                        </TableCell>
+                                        <TableCell className="px-4 py-2 text-center">
+                                            <div className="inline-flex items-center space-x-1 justify-center">
+                                                <Cpu className="h-4 w-4" />
+                                                <span>
+                                                    {node.cpus ?? extractCpuCount(node.type) ?? "?"}
+                                                </span>
+                                            </div>
+                                        </TableCell>
+                                        <TableCell className="px-4 py-2 text-center">
+                                            {parseRamDisplay(node.type)}
+                                        </TableCell>
+                                        <TableCell className="px-2 py-2 text-center">
+                                            {node.errorMessage && (
+                                                <button
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        deleteNode(node.id);
+                                                    }}
+                                                    className="text-gray-400 hover:text-red-600"
+                                                    aria-label="Dismiss node"
+                                                >
+                                                    <X className="h-4 w-4" />
+                                                </button>
+                                            )}
+                                        </TableCell>
+                                    </TableRow>
+
+                                    {node.errorMessage && (
+                                        <TableRow
+                                            key={`${node.id}-error`}
+                                            className={cn("transition-all duration-300", {
+                                                "bg-red-50": expandedNodeId === node.id,
+                                            })}
+                                        >
+                                            <TableCell colSpan={6} className="p-0">
+                                                <div
+                                                    className={cn(
+                                                        "overflow-y-auto transition-all duration-300",
+                                                        {
+                                                            "max-h-0": expandedNodeId !== node.id,
+                                                            "max-h-[400px] py-2 px-4":
+                                                                expandedNodeId === node.id,
+                                                        }
+                                                    )}
+                                                >
+                                                    <pre className="whitespace-pre-wrap text-red-600 text-sm">
+                                                        {node.errorMessage}
+                                                    </pre>
+                                                </div>
+                                            </TableCell>
+                                        </TableRow>
+                                    )}
+                                </React.Fragment>
                             ))}
                         </TableBody>
                     </Table>

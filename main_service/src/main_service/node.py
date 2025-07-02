@@ -58,7 +58,7 @@ client = resourcemanager_v3.ProjectsClient(credentials=CREDENTIALS)
 project = client.get_project(name=f"projects/{PROJECT_ID}")
 GCE_DEFAULT_SVC = f"{project.name.split('/')[-1]}-compute@developer.gserviceaccount.com"
 
-NODE_BOOT_TIMEOUT = 60 * 6
+NODE_BOOT_TIMEOUT = 60 * 10
 ACCEPTABLE_ZONES = ["us-central1-b", "us-central1-a", "us-central1-c", "us-central1-f"]
 NODE_SVC_VERSION = "1.0.25"  # <- this maps to a git tag/release or branch
 
@@ -167,18 +167,19 @@ class Node:
                 status = self.status()
 
                 if status == "FAILED" or booting_too_long:
+                    self.node_ref.update(dict(status="FAILED"))
                     self.delete()
                     msg = f"Node {self.instance_name} Failed to start! (timeout={booting_too_long})"
                     raise Exception(msg)
         except Exception as e:
-            self.node_ref.update(dict(status="FAILED", error_message=traceback.format_exc()))
+            self.delete(error_message=traceback.format_exc())
             raise e
 
         self.node_ref.update(dict(host=self.host, zone=self.zone))  # node svc marks itself as ready
         self.is_booting = False
         return self
 
-    def delete(self):
+    def delete(self, error_message: Optional[str] = None):
         """
         An `instance_client.delete` request creates an `operation` that runs in the background.
         """
@@ -190,7 +191,14 @@ class Node:
             self.instance_client.delete(**kwargs)
         except (NotFound, ValueError):
             pass  # these errors mean it was already deleted.
-        self.node_ref.delete()  # Delete the document instead of marking as deleted
+        if error_message:
+            # only add the error message if one isn't already there.
+            update_fields = {"status": "FAILED"}
+            if not self.node_ref.get().to_dict().get("error_message"):
+                update_fields["error_message"] = traceback.format_exc()
+            self.node_ref.update(update_fields)
+        else:
+            self.node_ref.delete()
 
     def status(self):
         """Returns one of: `BOOTING`, `RUNNING`, `READY`, `FAILED`"""

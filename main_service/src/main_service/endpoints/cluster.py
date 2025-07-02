@@ -202,14 +202,7 @@ async def cluster_info(logger: Logger = Depends(get_logger)):
 
 @router.delete("/v1/cluster/{node_id}")
 def delete_node(node_id: str, request: Request, logger: Logger = Depends(get_logger)):
-    """Delete a single node and its Firestore document so users can dismiss failures.
-
-    This is intentionally lightweight: if the VM/container is still running the
-    :py:meth:`Node.delete` helper will attempt to terminate it; otherwise the
-    Firestore document is simply removed so the SSE stream emits a *REMOVED*
-    event that the frontend already handles.
-    """
-
+    """Delete a single node and its Firestore document so users can dismiss failures."""
     instance_client = InstancesClient()
 
     email = request.session.get("X-User-Email")
@@ -221,8 +214,7 @@ def delete_node(node_id: str, request: Request, logger: Logger = Depends(get_log
         logger.log(f"Node {node_id} already deleted.")
         return {"status": "not_found"}
 
-    node = Node.from_snapshot(DB, logger, node_doc, auth_headers, instance_client)
-    node.delete()
+    node_doc.reference.delete()
 
     logger.log(f"Node {node_id} deleted by user request.")
     return {"status": "deleted"}

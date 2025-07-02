@@ -2,13 +2,16 @@ from time import time
 import requests
 from typing import Optional
 import concurrent.futures
+import traceback
 
+import aiohttp
 import docker
 from docker.errors import APIError
 from fastapi import APIRouter, Depends, Response
 from google.cloud import firestore
 from google.cloud.compute_v1 import InstancesClient
 from google.auth.transport.requests import Request
+from google.cloud.firestore import AsyncClient
 
 from node_service import (
     PROJECT_ID,
@@ -28,6 +31,33 @@ from node_service.helpers import Logger
 from node_service.worker import Worker
 
 router = APIRouter()
+
+
+@router.post("/shutdown")
+async def shutdown_node(logger: Logger = Depends(get_logger)):
+    SELF["SHUTTING_DOWN"] = True
+    SELF["job_watcher_stop_event"].set()
+
+    try:
+        url = "http://metadata.google.internal/computeMetadata/v1/instance/preempted"
+        async with aiohttp.ClientSession(headers={"Metadata-Flavor": "Google"}) as session:
+            async with session.get(url, timeout=1) as response:
+                response.raise_for_status()
+                preempted = (await response.text()).strip() == "TRUE"
+    except Exception as e:
+        logger.log(f"Error checking if node {INSTANCE_NAME} was preempted: {e}", severity="WARNING")
+        preempted = False
+
+    if preempted:
+        logger.log(f"Node {INSTANCE_NAME} was preempted!")
+    else:
+        logger.log(f"Received shutdown request for node {INSTANCE_NAME}.")
+
+    async_db = AsyncClient(project=PROJECT_ID, database="burla")
+    doc_ref = async_db.collection("nodes").document(INSTANCE_NAME)
+    snapshot = await doc_ref.get()
+    if snapshot.to_dict().get("status") != "FAILED":
+        await doc_ref.delete()
 
 
 @router.post("/reboot")
@@ -167,12 +197,16 @@ def reboot_containers(
         SELF["FAILED"] = True
         try:
             logger.log("Node failed to boot!! deleting node.")
+            node_doc.update(dict(status="FAILED", error_message=traceback.format_exc()))
+            update_fields = {"status": "FAILED"}
+            if not node_doc.get().to_dict().get("error_message"):
+                update_fields["error_message"] = traceback.format_exc()
+            node_doc.update(update_fields)
+
             if not IN_LOCAL_DEV_MODE:
                 instance_client = InstancesClient()
-                silly_response = instance_client.aggregated_list(project=PROJECT_ID)
-                vms_per_zone = [
-                    getattr(vms_in_zone, "instances", []) for _, vms_in_zone in silly_response
-                ]
+                silly = instance_client.aggregated_list(project=PROJECT_ID)
+                vms_per_zone = [getattr(vms_in_zone, "instances", []) for _, vms_in_zone in silly]
                 vms = [vm for vms_in_zone in vms_per_zone for vm in vms_in_zone]
                 vm = next((vm for vm in vms if vm.name == INSTANCE_NAME), None)
                 if vm:

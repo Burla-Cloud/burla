@@ -1,8 +1,9 @@
 from time import time
 import requests
-from typing import Optional
+from typing import Optional, Callable
 import concurrent.futures
 import traceback
+import threading
 
 import aiohttp
 import docker
@@ -26,6 +27,7 @@ from node_service import (
     NUM_GPUS,
     get_logger,
     Container,
+    get_add_background_task_function,
 )
 from node_service.helpers import Logger
 from node_service.worker import Worker
@@ -62,11 +64,13 @@ async def shutdown_node(logger: Logger = Depends(get_logger)):
 
 @router.post("/reboot")
 def reboot_containers_endpoint(
-    new_container_config: Optional[list[Container]] = None, logger: Logger = Depends(get_logger)
+    new_container_config: Optional[list[Container]] = None,
+    logger: Logger = Depends(get_logger),
+    add_background_task: Callable = Depends(get_add_background_task_function),
 ):
     if SELF["BOOTING"]:
         return Response("Node already BOOTING, unable to satisfy request.", status_code=409)
-    return reboot_containers(new_container_config, logger)
+    return reboot_containers(new_container_config, logger, add_background_task)
 
 
 def _call_docker_threadsafe(method, *args, **kwargs):
@@ -102,9 +106,36 @@ def _pull_image_if_missing(image: str, logger: Logger, docker_client: docker.API
         logger.log(f"Image {image} pulled successfully.")
 
 
+# Removing large GPU containers can take several minutes. The node should not block on the full
+# deletion – it only needs the process to be gone. A quick `kill` is enough for that. We then
+# queue the slower `remove_container` call as a FastAPI background task when available. When the
+# reboot function is executed outside of a request context (e.g. during lifespan startup), it
+# falls back to running the removal in a daemon thread so behaviour remains unchanged.
+def _remove_container_task(container_id: str, logger: Logger):
+    client = docker.APIClient(base_url="unix://var/run/docker.sock", timeout=600)
+    try:
+        client.remove_container(container=container_id, force=True)
+    except Exception as e:
+        logger.log(f"Failed to remove container {container_id}: {e}", severity="WARNING")
+    finally:
+        client.close()
+
+
+def _schedule_container_removal(
+    container_id: str, logger: Logger, add_background_task: Optional[Callable] = None
+):
+    if add_background_task is not None:
+        add_background_task(_remove_container_task, container_id, logger)
+    else:
+        threading.Thread(
+            target=_remove_container_task, args=(container_id, logger), daemon=True
+        ).start()
+
+
 def reboot_containers(
     new_container_config: Optional[list[Container]] = None,
     logger: Logger = Depends(get_logger),
+    add_background_task: Optional[Callable] = None,
 ):
     """
     Rebooting will reboot the containers that are currently/ were previously running.
@@ -152,9 +183,11 @@ def reboot_containers(
                 belongs_to_current_node = f"node_{INSTANCE_NAME[11:]}" in container["Names"][0]
 
                 if is_old and belongs_to_current_node:
-                    kwargs = dict(container=container["Id"], force=True)
-                    future = executor.submit(_call_docker_threadsafe, "remove_container", **kwargs)
-                    futures.append(future)
+                    try:
+                        docker_client.kill(container["Id"])
+                    except Exception:
+                        pass  # container might already be stopped
+                    _schedule_container_removal(container["Id"], logger, add_background_task)
 
                 elif belongs_to_current_node:
                     args = (container["Id"], f"OLD--{container['Names'][0][1:]}")
@@ -165,9 +198,11 @@ def reboot_containers(
             # remove all worker containers
             for container in docker_client.containers():
                 if "worker" in container["Names"][0]:
-                    kwargs = dict(container=container["Id"], force=True)
-                    future = executor.submit(_call_docker_threadsafe, "remove_container", **kwargs)
-                    futures.append(future)
+                    try:
+                        docker_client.kill(container["Id"])
+                    except Exception:
+                        pass
+                    _schedule_container_removal(container["Id"], logger, add_background_task)
 
         # Wait until all workers have been removed/marked old before starting new ones.
         try:

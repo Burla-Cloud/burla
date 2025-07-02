@@ -59,7 +59,7 @@ project = client.get_project(name=f"projects/{PROJECT_ID}")
 GCE_DEFAULT_SVC = f"{project.name.split('/')[-1]}-compute@developer.gserviceaccount.com"
 
 NODE_BOOT_TIMEOUT = 60 * 10
-ACCEPTABLE_ZONES = ["us-central1-b", "us-central1-a", "us-central1-c", "us-central1-f"]
+ACCEPTABLE_ZONES = ["us-central1-a", "us-central1-b", "us-central1-c", "us-central1-f"]
 NODE_SVC_VERSION = "1.0.25"  # <- this maps to a git tag/release or branch
 
 
@@ -335,11 +335,11 @@ class Node:
         if not instance_created:
             msg = ""
             if exhausted_zones:
-                msg += f"Recieved ZONE_RESOURCE_POOL_EXHAUSTED trying to provision VM"
-                msg += f" of type {self.machine_type} in the following zones: {exhausted_zones}\n"
+                msg += f"ZONE_RESOURCE_POOL_EXHAUSTED: {exhausted_zones} currently have no "
+                msg += f"available capacity for VM {self.machine_type}\n"
             if unavailable_zones:
-                msg += f"VM type {self.machine_type} is unavailable in the following zones: "
-                msg += f"{unavailable_zones}\n"
+                msg += f"VM type {self.machine_type} is not offered in remaining zones: "
+                msg += f"{unavailable_zones}\n\n"
             if unavailable_zones or exhausted_zones:
                 raise Exception(msg)
 

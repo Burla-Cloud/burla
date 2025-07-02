@@ -9,7 +9,7 @@ def my_function(my_input):
     return my_input  # list(range(100000))
 
 
-my_inputs = list(range(100_000))
+my_inputs = list(range(1000))
 
 result_generator = remote_parallel_map(my_function, my_inputs, generator=True)
 

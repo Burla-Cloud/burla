@@ -214,7 +214,8 @@ def delete_node(node_id: str, request: Request, logger: Logger = Depends(get_log
         logger.log(f"Node {node_id} already deleted.")
         return {"status": "not_found"}
 
-    node_doc.reference.delete()
+    node = Node.from_snapshot(DB, logger, node_doc, auth_headers, instance_client)
+    node.delete()
 
     logger.log(f"Node {node_id} deleted by user request.")
     return {"status": "deleted"}

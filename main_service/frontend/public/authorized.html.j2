@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Burla – Quickstart</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <link rel="icon" type="image/png" href="/favicon.png"/>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css"/>
+  <style>
+    body { margin:0; padding:96px 16px; display:flex; justify-content:center; font-family:'Inter',sans-serif; background:#ffffff; color:#36555c; }
+    .card { width:100%; max-width:600px; background:white; border:1px solid #36555c33; border-radius:12px; box-shadow:0 4px 24px rgba(0,0,0,.06); padding:48px; display:flex; flex-direction:column; align-items:center; }
+    .card img.logo { width:120px; margin-bottom:32px; }
+    h1 { margin:0 0 8px; font-size:24px; font-weight:600; text-align:center; color:#36555c; }
+    p.tagline { margin:0 0 32px; font-size:15px; color:#36555c; text-align:center; }
+    .dashboard-btn { display:inline-flex; align-items:center; justify-content:center; gap:8px; height:44px; padding:0 20px; font-size:15px; font-weight:500; color:white; background:#36555c; border:none; border-radius:6px; text-decoration:none; transition:background .14s, box-shadow .14s; }
+    .dashboard-btn:hover { background:#2a4449; box-shadow:0 2px 8px rgba(54,85,92,.3); }
+    .quickstart-header { margin:48px 0 8px; font-size:17px; font-weight:600; width:100%; color:#36555c; }
+    .quickstart-instructions { margin:0 0 16px; font-size:15px; color:#36555c; line-height:1.6; width:100%; }
+    .code-container { position:relative; width:100%; }
+    pre { margin:0; padding:20px; overflow-x:auto; background:#f6f8fa; border:1px solid #36555c33; border-radius:8px; font-size:13px; line-height:1.5; white-space:pre; word-break:normal; color:#36555c; }
+    .copy-btn { position:absolute; top:12px; right:12px; display:flex; align-items:center; gap:6px; padding:6px 10px; font-size:13px; font-weight:500; border:1px solid #36555c33; background:white; color:#36555c; border-radius:6px; cursor:pointer; transition:background .14s, box-shadow .14s; }
+    .copy-btn:hover { background:#f6f8fa; box-shadow:0 1px 4px rgba(0,0,0,.04); }
+    .copy-btn:active { transform:translateY(1px); }
+    .copy-btn svg { width:16px; height:16px; stroke:#36555c; }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <img src="/assets/burla_logo-f7NrYSYk.png" alt="Burla logo" class="logo" />
+    <h1>Thanks for logging in!</h1>
+    <p class="tagline">You can now call <code>remote_parallel_map</code>.</p>
+    <a class="dashboard-btn" href="/" target="_blank">Continue to dashboard</a>
+    <h2 class="quickstart-header">Quickstart</h2>
+    <p class="quickstart-instructions">1. Hit the <strong>⏻ Start</strong> button in the dashboard.<br>2. Run the code snippet below!</p>
+    <div class="code-container">
+      <button class="copy-btn" onclick="copyQuickstart()">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+        Copy
+      </button>
+      <pre><code id="quickstart-code" class="language-python">from burla import remote_parallel_map
+
+def my_function(my_input):
+    print("I'm running on a remote computer in the cloud!")
+
+remote_parallel_map(my_function, [1, 2, 3])</code></pre>
+    </div>
+  </main>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+  <script>hljs.highlightAll();</script>
+  <script>
+    function copyQuickstart() {
+      const codeText = document.getElementById('quickstart-code').innerText;
+      navigator.clipboard.writeText(codeText).then(() => {
+        const button = document.querySelector('.copy-btn');
+        const original = button.innerHTML;
+        button.textContent = 'Copied!';
+        setTimeout(() => { button.innerHTML = original; }, 1600);
+      });
+    }
+  </script>
+</body>
+</html>

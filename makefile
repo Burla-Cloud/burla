@@ -10,6 +10,9 @@ MAIN_SVC_IMAGE_NAME := us-docker.pkg.dev/$(PROJECT_ID)/burla-main-service/burla-
 local-login:
 	BURLA_DASHBOARD_URL=http://localhost:5001 poetry -C ./client run burla login
 
+batch-demo:
+	poetry -C ./client run python client/tests/demo/batch_inference.py
+
 demo:
 	poetry -C ./client run python client/tests/demo/demo.py
 

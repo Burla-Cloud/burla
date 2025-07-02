@@ -6,12 +6,9 @@ from time import time
 import asyncio
 import aiohttp
 from fastapi import APIRouter, Path, Depends, Response, Request
-from google.cloud.firestore import AsyncClient
 
 from node_service import (
-    PROJECT_ID,
     SELF,
-    INSTANCE_NAME,
     get_request_json,
     get_logger,
     get_request_files,
@@ -115,30 +112,6 @@ async def get_results(job_id: str = Path(...)):
     await asyncio.sleep(0)
     headers = {"Content-Disposition": 'attachment; filename="results.pkl"'}
     return Response(content=data, media_type="application/octet-stream", headers=headers)
-
-
-@router.post("/shutdown")
-async def shutdown_node(logger: Logger = Depends(get_logger)):
-    SELF["SHUTTING_DOWN"] = True
-    SELF["job_watcher_stop_event"].set()
-
-    try:
-        url = "http://metadata.google.internal/computeMetadata/v1/instance/preempted"
-        async with aiohttp.ClientSession(headers={"Metadata-Flavor": "Google"}) as session:
-            async with session.get(url, timeout=1) as response:
-                response.raise_for_status()
-                preempted = (await response.text()).strip() == "TRUE"
-    except Exception as e:
-        logger.log(f"Error checking if node {INSTANCE_NAME} was preempted: {e}", severity="WARNING")
-        preempted = False
-
-    if preempted:
-        logger.log(f"Node {INSTANCE_NAME} was preempted!")
-    else:
-        logger.log(f"Received shutdown request for node {INSTANCE_NAME}.")
-
-    async_db = AsyncClient(project=PROJECT_ID, database="burla")
-    await async_db.collection("nodes").document(INSTANCE_NAME).delete()
 
 
 @router.post("/jobs/{job_id}")

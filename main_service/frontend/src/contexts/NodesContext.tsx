@@ -16,11 +16,22 @@ export const NodesProvider = ({ children }: { children: React.ReactNode }) => {
                 return prevNodes.filter((node) => node.id !== data.nodeId);
             }
             const existingNode = prevNodes.find((node) => node.id === data.nodeId);
+
+            // create a new node entry if one does not exist yet
             if (!existingNode) {
                 return [...prevNodes, createNewNode(data)];
             }
+
+            // merge updated fields into the existing node (status and errorMessage)
             return prevNodes.map((node) =>
-                node.id === data.nodeId ? { ...node, status: data.status as NodeStatus } : node
+                node.id === data.nodeId
+                    ? {
+                          ...node,
+                          status: data.status as NodeStatus,
+                          // bring in a new errorMessage but keep existing if the backend removed it
+                          errorMessage: data.errorMessage ?? node.errorMessage,
+                      }
+                    : node
             );
         });
     };
@@ -44,6 +55,7 @@ const createNewNode = (data: any): BurlaNode => ({
     gpus: data.gpus,
     memory: data.memory,
     age: data.age,
+    errorMessage: data.errorMessage,
 });
 
 export const useNodes = () => useContext(NodesContext);

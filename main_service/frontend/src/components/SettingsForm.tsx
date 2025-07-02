@@ -182,89 +182,18 @@ export const SettingsForm = ({ isEditing }) => {
                         </div>
                     </div>
 
-                    <div className="space-y-2">
+                    <div className="space-y-4">
                         <h2 className="text-xl font-semibold text-primary">Virtual Machines</h2>
+
+                        {/* First row: four equal columns */}
                         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                            <div>
-                                <label className={labelClass}>GPU</label>
-                                <Select
-                                    disabled={!isEditing}
-                                    value={gpuVariant}
-                                    onValueChange={(val) => {
-                                        setGpuVariant(val);
-                                        if (val === "None") {
-                                            setGpusPerVm(1);
-                                        } else {
-                                            const counts = VARIANT_INFO[val];
-                                            setGpusPerVm(counts[0]);
-                                        }
-                                    }}
-                                >
-                                    <SelectTrigger className="w-full">
-                                        <SelectValue />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        {gpuVariants.map((model) => (
-                                            <SelectItem key={model} value={model}>
-                                                {model}
-                                            </SelectItem>
-                                        ))}
-                                    </SelectContent>
-                                </Select>
-                            </div>
-                            {gpuVariant !== "None" && (
-                                <div>
-                                    <label className={labelClass}>GPUs per VM</label>
-                                    <Select
-                                        disabled={!isEditing}
-                                        value={gpusPerVm.toString()}
-                                        onValueChange={(val) => setGpusPerVm(parseInt(val, 10))}
-                                    >
-                                        <SelectTrigger className="w-full">
-                                            <SelectValue />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                            {VARIANT_INFO[gpuVariant].map((n) => (
-                                                <SelectItem key={n} value={n.toString()}>
-                                                    {n}
-                                                </SelectItem>
-                                            ))}
-                                        </SelectContent>
-                                    </Select>
-                                </div>
-                            )}
-                            <div>
-                                <label className={labelClass}>CPU / RAM</label>
-                                <Select
-                                    disabled={!isEditing || gpuVariant !== "None"}
-                                    value={
-                                        gpuVariant === "None"
-                                            ? cpuChoice
-                                            : gpuCpuMap[`${gpusPerVm}x ${gpuVariant}`].value
-                                    }
-                                    onValueChange={(val) => setCpuChoice(val)}
-                                >
-                                    <SelectTrigger className="w-full">
-                                        <SelectValue />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        {(gpuVariant === "None"
-                                            ? cpuOptions
-                                            : [gpuCpuMap[`${gpusPerVm}x ${gpuVariant}`]]
-                                        ).map((o) => (
-                                            <SelectItem key={o.value} value={o.value}>
-                                                {o.label}
-                                            </SelectItem>
-                                        ))}
-                                    </SelectContent>
-                                </Select>
-                            </div>
-                            <div>
+                            {/* Quantity */}
+                            <div className="flex flex-col space-y-2">
                                 <label className={labelClass}>Quantity</label>
                                 <Input
                                     type="number"
                                     disabled={!isEditing}
-                                    className="w-full h-9.5"
+                                    className="h-9.5 w-full"
                                     min={1}
                                     max={1000}
                                     value={settings.machineQuantity || ""}
@@ -283,6 +212,152 @@ export const SettingsForm = ({ isEditing }) => {
                                             handleInputChange("machineQuantity", 1);
                                         } else if (val > 1000) {
                                             handleInputChange("machineQuantity", 1000);
+                                        }
+                                    }}
+                                />
+                            </div>
+
+                            {/* CPU / RAM */}
+                            <div className="flex flex-col space-y-2">
+                                <label className={labelClass}>CPU / RAM</label>
+                                <Select
+                                    disabled={!isEditing || gpuVariant !== "None"}
+                                    value={
+                                        gpuVariant === "None"
+                                            ? cpuChoice
+                                            : gpuCpuMap[`${gpusPerVm}x ${gpuVariant}`].value
+                                    }
+                                    onValueChange={(val) => setCpuChoice(val)}
+                                >
+                                    <SelectTrigger className="w-full h-9.5">
+                                        <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        {(gpuVariant === "None"
+                                            ? cpuOptions
+                                            : [gpuCpuMap[`${gpusPerVm}x ${gpuVariant}`]]
+                                        ).map((o) => (
+                                            <SelectItem key={o.value} value={o.value}>
+                                                {o.label}
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                            </div>
+
+                            {/* GPU */}
+                            <div className="flex flex-col space-y-2">
+                                <label className={labelClass}>GPU</label>
+                                <Select
+                                    disabled={!isEditing}
+                                    value={gpuVariant}
+                                    onValueChange={(val) => {
+                                        setGpuVariant(val);
+                                        if (val === "None") {
+                                            setGpusPerVm(1);
+                                        } else {
+                                            const counts = VARIANT_INFO[val];
+                                            setGpusPerVm(counts[0]);
+                                        }
+                                    }}
+                                >
+                                    <SelectTrigger className="w-full h-9.5">
+                                        <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        {gpuVariants.map((model) => (
+                                            <SelectItem key={model} value={model}>
+                                                {model}
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                            </div>
+
+                            {/* GPUs per VM (hidden when None) */}
+                            {gpuVariant !== "None" ? (
+                                <div className="flex flex-col space-y-2">
+                                    <label className={labelClass}>GPUs per VM</label>
+                                    <Select
+                                        disabled={!isEditing}
+                                        value={gpusPerVm.toString()}
+                                        onValueChange={(val) => setGpusPerVm(parseInt(val, 10))}
+                                    >
+                                        <SelectTrigger className="w-full h-9.5">
+                                            <SelectValue />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            {VARIANT_INFO[gpuVariant].map((n) => (
+                                                <SelectItem key={n} value={n.toString()}>
+                                                    {n}
+                                                </SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                </div>
+                            ) : (
+                                // placeholder to maintain grid alignment
+                                <div className="hidden md:block" />
+                            )}
+                        </div>
+
+                        {/* Second row: two equal columns */}
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-6">
+                            {/* Disk Size */}
+                            <div className="flex flex-col space-y-2">
+                                <label className={labelClass}>Disk Size (GB)</label>
+                                <Input
+                                    type="number"
+                                    disabled={!isEditing}
+                                    className="w-full h-9.5"
+                                    min={10}
+                                    max={2000}
+                                    value={settings.diskSize || ""}
+                                    onChange={(e) => {
+                                        const raw = e.target.value;
+                                        const num = parseInt(raw, 10);
+                                        if (!isNaN(num)) {
+                                            handleInputChange("diskSize", num);
+                                        } else if (raw === "") {
+                                            handleInputChange("diskSize", 0);
+                                        }
+                                    }}
+                                    onBlur={(e) => {
+                                        const val = parseInt(e.target.value, 10);
+                                        if (val < 10) {
+                                            handleInputChange("diskSize", 10);
+                                        } else if (val > 2000) {
+                                            handleInputChange("diskSize", 2000);
+                                        }
+                                    }}
+                                />
+                            </div>
+
+                            {/* Inactivity Timeout */}
+                            <div className="flex flex-col space-y-2">
+                                <label className={labelClass}>Inactivity Timeout (minutes)</label>
+                                <Input
+                                    type="number"
+                                    disabled={!isEditing}
+                                    className="w-full h-9.5"
+                                    min={1}
+                                    max={1440}
+                                    value={settings.inactivityTimeout || ""}
+                                    onChange={(e) => {
+                                        const raw = e.target.value;
+                                        const num = parseInt(raw, 10);
+                                        if (!isNaN(num)) {
+                                            handleInputChange("inactivityTimeout", num);
+                                        } else if (raw === "") {
+                                            handleInputChange("inactivityTimeout", 0);
+                                        }
+                                    }}
+                                    onBlur={(e) => {
+                                        const val = parseInt(e.target.value, 10);
+                                        if (val < 1) {
+                                            handleInputChange("inactivityTimeout", 1);
+                                        } else if (val > 1440) {
+                                            handleInputChange("inactivityTimeout", 1440);
                                         }
                                     }}
                                 />

@@ -25,6 +25,8 @@ def get_settings(request: Request, logger: Logger = Depends(get_logger)):
         "pythonVersion": container.get("python_version", ""),
         "machineType": node.get("machine_type", ""),
         "machineQuantity": node.get("quantity", 1),
+        "diskSize": node.get("disk_size_gb", 50),
+        "inactivityTimeout": int(node.get("inactivity_shutdown_time_sec", 600) // 60),
         "users": user_emails,
     }
 
@@ -49,6 +51,12 @@ async def update_settings(request: Request, logger: Logger = Depends(get_logger)
         {
             "machine_type": request_json.get("machineType", node.get("machine_type")),
             "quantity": request_json.get("machineQuantity", node.get("quantity")),
+            "disk_size_gb": request_json.get("diskSize", node.get("disk_size_gb")),
+            "inactivity_shutdown_time_sec": (
+                request_json.get("inactivityTimeout", node.get("inactivity_shutdown_time_sec")) * 60
+                if isinstance(request_json.get("inactivityTimeout"), int)
+                else node.get("inactivity_shutdown_time_sec")
+            ),
         }
     )
     nodes[0]["containers"] = [container]

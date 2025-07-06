@@ -232,22 +232,22 @@ def reboot_containers(
     except Exception as parent_exception:
         SELF["FAILED"] = True
         try:
-            logger.log("Node failed to boot!! deleting node.")
+            logger.log("Node failed to boot!")
             node_doc.update(dict(status="FAILED", error_message=traceback.format_exc()))
             update_fields = {"status": "FAILED"}
             if not node_doc.get().to_dict().get("error_message"):
                 update_fields["error_message"] = traceback.format_exc()
             node_doc.update(update_fields)
 
-            if not IN_LOCAL_DEV_MODE:
-                instance_client = InstancesClient()
-                silly = instance_client.aggregated_list(project=PROJECT_ID)
-                vms_per_zone = [getattr(vms_in_zone, "instances", []) for _, vms_in_zone in silly]
-                vms = [vm for vms_in_zone in vms_per_zone for vm in vms_in_zone]
-                vm = next((vm for vm in vms if vm.name == INSTANCE_NAME), None)
-                if vm:
-                    zone = vm.zone.split("/")[-1]
-                    instance_client.delete(project=PROJECT_ID, zone=zone, instance=INSTANCE_NAME)
+            # if not IN_LOCAL_DEV_MODE:
+            #     instance_client = InstancesClient()
+            #     silly = instance_client.aggregated_list(project=PROJECT_ID)
+            #     vms_per_zone = [getattr(vms_in_zone, "instances", []) for _, vms_in_zone in silly]
+            #     vms = [vm for vms_in_zone in vms_per_zone for vm in vms_in_zone]
+            #     vm = next((vm for vm in vms if vm.name == INSTANCE_NAME), None)
+            #     if vm:
+            #         zone = vm.zone.split("/")[-1]
+            #         instance_client.delete(project=PROJECT_ID, zone=zone, instance=INSTANCE_NAME)
         except Exception as e:
             raise e from parent_exception
         raise parent_exception

@@ -130,7 +130,10 @@ def get_add_background_task_function(
 
 from node_service.helpers import Logger, format_traceback
 from node_service.job_endpoints import router as job_endpoints_router
-from node_service.reboot_endpoints import reboot_containers, router as reboot_endpoints_router
+from node_service.src.node_service.lifecycle_endpoints import (
+    reboot_containers,
+    router as lifecycle_endpoints_router,
+)
 
 
 async def shutdown_if_idle_for_too_long(logger: Logger):
@@ -189,7 +192,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None)
 app.include_router(job_endpoints_router)
-app.include_router(reboot_endpoints_router)
+app.include_router(lifecycle_endpoints_router)
 
 
 @app.get("/")

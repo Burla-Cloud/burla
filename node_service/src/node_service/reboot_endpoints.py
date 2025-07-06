@@ -58,8 +58,9 @@ async def shutdown_node(logger: Logger = Depends(get_logger)):
     async_db = AsyncClient(project=PROJECT_ID, database="burla")
     doc_ref = async_db.collection("nodes").document(INSTANCE_NAME)
     snapshot = await doc_ref.get()
-    if snapshot.to_dict().get("status") != "FAILED":
-        await doc_ref.delete()
+    if snapshot.exists:
+        if snapshot.to_dict().get("status") != "FAILED":
+            await doc_ref.delete()
 
 
 @router.post("/reboot")

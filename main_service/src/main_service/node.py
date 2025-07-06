@@ -194,7 +194,8 @@ class Node:
         if error_message:
             # only add the error message if one isn't already there.
             update_fields = {"status": "FAILED"}
-            if not self.node_ref.get().to_dict().get("error_message"):
+            node_snapshot = self.node_ref.get()
+            if node_snapshot.exists and (not node_snapshot.to_dict().get("error_message")):
                 update_fields["error_message"] = traceback.format_exc()
             self.node_ref.update(update_fields)
         else:

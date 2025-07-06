@@ -170,14 +170,33 @@ class Node:
                     msg = f"Node {self.instance_name} Failed to start! (timeout={booting_too_long})"
                     raise Exception(msg)
         except Exception as e:
-            snapshot = self.node_ref.get()
-            node_has_error_message = snapshot.exists and snapshot.to_dict().get("error_message")
-            if not node_has_error_message:
-                self.node_ref.update({"status": "FAILED", "error_message": traceback.format_exc()})
+            self.delete(error_message=traceback.format_exc())
             raise e
 
+        self.node_ref.update(dict(host=self.host, zone=self.zone))  # node svc marks itself as ready
         self.is_booting = False
         return self
+
+    def delete(self, error_message: Optional[str] = None):
+        """
+        An `instance_client.delete` request creates an `operation` that runs in the background.
+        """
+        # update db
+        snapshot = self.node_ref.get()
+        node_has_error_message = snapshot.exists and snapshot.to_dict().get("error_message")
+        if error_message and (not node_has_error_message):
+            self.node_ref.update({"status": "FAILED", "error_message": error_message})
+        else:
+            self.node_ref.delete()
+
+        # delete vm
+        if not self.instance_client:
+            self.instance_client = InstancesClient()
+        try:
+            kwargs = dict(project=PROJECT_ID, zone=self.zone, instance=self.instance_name)
+            self.instance_client.delete(**kwargs)
+        except (NotFound, ValueError):
+            pass  # these errors mean it was already deleted.
 
     def status(self):
         """Returns one of: `BOOTING`, `RUNNING`, `READY`, `FAILED`"""

@@ -4,7 +4,7 @@ import docker
 import requests
 from time import time
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Request, HTTPException
 from google.cloud.firestore_v1 import FieldFilter
 from google.cloud.compute_v1 import InstancesClient
 from starlette.responses import StreamingResponse
@@ -201,21 +201,11 @@ async def cluster_info(logger: Logger = Depends(get_logger)):
 
 
 @router.delete("/v1/cluster/{node_id}")
-def delete_node(node_id: str, request: Request, logger: Logger = Depends(get_logger)):
-    """Delete a single node and its Firestore document so users can dismiss failures."""
-    instance_client = InstancesClient()
-
-    email = request.session.get("X-User-Email")
-    authorization = request.session.get("Authorization")
-    auth_headers = {"Authorization": authorization, "X-User-Email": email}
+def delete_node(node_id: str):
+    """deletes the firestore doc, used to dismiss failed nodes from dashboard"""
 
     node_doc = DB.collection("nodes").document(node_id).get()
-    if not node_doc.exists:
-        logger.log(f"Node {node_id} already deleted.")
-        return {"status": "not_found"}
-
-    node = Node.from_snapshot(DB, logger, node_doc, auth_headers, instance_client)
-    node.delete()
-
-    logger.log(f"Node {node_id} deleted by user request.")
-    return {"status": "deleted"}
+    if node_doc.exists:
+        node_doc.reference.delete()
+    else:
+        raise HTTPException(status_code=404, detail=f"Node {node_id} not found")

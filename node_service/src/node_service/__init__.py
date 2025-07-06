@@ -130,7 +130,7 @@ def get_add_background_task_function(
 
 from node_service.helpers import Logger, format_traceback
 from node_service.job_endpoints import router as job_endpoints_router
-from node_service.src.node_service.lifecycle_endpoints import (
+from node_service.lifecycle_endpoints import (
     reboot_containers,
     router as lifecycle_endpoints_router,
 )

@@ -33,7 +33,7 @@ const SettingsPage = () => {
                     </Button>
                 </div>
                 <div className="space-y-6">
-                    <SettingsForm isEditing={isEditing} />
+                    <SettingsForm key={settings.machineType} isEditing={isEditing} />
                 </div>
             </div>
         </div>

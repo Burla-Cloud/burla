@@ -138,9 +138,7 @@ async def _select_nodes_to_assign_to_job(
     # When running locally the node service hostname is it's container name. This only works from
     # inside the docker network, not from the host machine (here). If detected, swap to localhost.
     for node in nodes_to_assign:
-        if not node.get("host"):
-            nodes_to_assign.remove(node)
-        elif node["host"].startswith("http://node_"):
+        if node["host"].startswith("http://node_"):
             node["host"] = f"http://localhost:{node['host'].split(':')[-1]}"
 
     return nodes_to_assign, planned_initial_job_parallelism
@@ -197,7 +195,6 @@ async def _execute_job(
         data = aiohttp.FormData()
         data.add_field("request_json", json.dumps(request_json))
         data.add_field("function_pkl", function_pkl)
-
         url = f"{node['host']}/jobs/{job_id}"
         async with session.post(url, data=data, headers=auth_headers) as response:
             if response.status == 200:

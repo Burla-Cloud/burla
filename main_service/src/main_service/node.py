@@ -167,39 +167,17 @@ class Node:
                 status = self.status()
 
                 if status == "FAILED" or booting_too_long:
-                    self.node_ref.update(dict(status="FAILED"))
-                    self.delete()
                     msg = f"Node {self.instance_name} Failed to start! (timeout={booting_too_long})"
                     raise Exception(msg)
         except Exception as e:
-            self.delete(error_message=traceback.format_exc())
+            snapshot = self.node_ref.get()
+            node_has_error_message = snapshot.exists and snapshot.to_dict().get("error_message")
+            if not node_has_error_message:
+                self.node_ref.update({"status": "FAILED", "error_message": traceback.format_exc()})
             raise e
 
-        self.node_ref.update(dict(host=self.host, zone=self.zone))  # node svc marks itself as ready
         self.is_booting = False
         return self
-
-    def delete(self, error_message: Optional[str] = None):
-        """
-        An `instance_client.delete` request creates an `operation` that runs in the background.
-        """
-        if not self.instance_client:
-            self.instance_client = InstancesClient()
-
-        try:
-            kwargs = dict(project=PROJECT_ID, zone=self.zone, instance=self.instance_name)
-            self.instance_client.delete(**kwargs)
-        except (NotFound, ValueError):
-            pass  # these errors mean it was already deleted.
-        if error_message:
-            # only add the error message if one isn't already there.
-            update_fields = {"status": "FAILED"}
-            node_snapshot = self.node_ref.get()
-            if node_snapshot.exists and (not node_snapshot.to_dict().get("error_message")):
-                update_fields["error_message"] = traceback.format_exc()
-            self.node_ref.update(update_fields)
-        else:
-            self.node_ref.delete()
 
     def status(self):
         """Returns one of: `BOOTING`, `RUNNING`, `READY`, `FAILED`"""
@@ -272,6 +250,7 @@ class Node:
         )
         docker_client.start(container=container.get("Id"))
         self.host = f"http://{container_name}:{self.port}"
+        self.node_ref.update(dict(host=self.host))
 
     def __start_svc_in_vm(self, disk_image: str, disk_size: int):
         disk_params = AttachedDiskInitializeParams(source_image=disk_image, disk_size_gb=disk_size)
@@ -316,9 +295,8 @@ class Node:
                     tags=Tags(items=["burla-cluster-node"]),
                     scheduling=scheduling,
                 )
-                self.instance_client.insert(
-                    project=PROJECT_ID, zone=zone, instance_resource=instance
-                ).result()
+                kw = dict(project=PROJECT_ID, zone=zone, instance_resource=instance)
+                self.instance_client.insert(**kw).result()
                 instance_created = True
                 break
             except BadRequest as e:
@@ -349,6 +327,7 @@ class Node:
 
         self.host = f"http://{external_ip}:{self.port}"
         self.zone = zone
+        self.node_ref.update(dict(host=self.host, zone=self.zone))
 
     def __get_startup_script(self):
         return f"""

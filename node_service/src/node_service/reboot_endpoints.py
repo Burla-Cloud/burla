@@ -233,9 +233,8 @@ def reboot_containers(
         SELF["FAILED"] = True
         try:
             logger.log("Node failed to boot!")
-            node_doc.update(dict(status="FAILED", error_message=traceback.format_exc()))
             update_fields = {"status": "FAILED"}
-            if not node_doc.get().to_dict().get("error_message"):
+            if node_doc.get().exists and not node_doc.get().to_dict().get("error_message"):
                 update_fields["error_message"] = traceback.format_exc()
             node_doc.update(update_fields)
 

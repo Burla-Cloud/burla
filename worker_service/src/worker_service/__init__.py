@@ -31,19 +31,25 @@ from worker_service.helpers import VerboseList  # <- same as a list but prints/l
 # By adding them to a list we can write the logs out if an an error occurs,
 # or simply do nothing with them when there is no error.
 verbose_list = VerboseList(log_on_append=SEND_LOGS_TO_GCL, print_on_append=IN_LOCAL_DEV_MODE)
-SELF = {
-    "STARTED": False,
-    "IDLE": False,
-    "job_id": None,
-    "udf_executor_thread": None,
-    "inputs_queue": Queue(),
-    "in_progress_input": None,  # needed so we can send ALL inputs elsewhere on shutdown
-    "results_queue": Queue(),
-    "started_at": None,
-    "logs": verbose_list,
-    "STOP_PROCESSING_EVENT": Event(),
-    "INPUT_UPLOAD_IN_PROGRESS": False,
-}
+
+
+def REINIT_SELF(SELF):
+    SELF["STARTED"] = False
+    SELF["IDLE"] = False
+    SELF["job_id"] = None
+    SELF["udf_executor_thread"] = None
+    SELF["inputs_queue"] = Queue()
+    SELF["in_progress_input"] = None  # needed so we can send ALL inputs elsewhere on shutdown
+    SELF["results_queue"] = Queue()
+    SELF["started_at"] = None
+    SELF["logs"] = verbose_list
+    SELF["logs"].clear()  # <- clear the list so we can re-use it
+    SELF["STOP_PROCESSING_EVENT"] = Event()
+    SELF["INPUT_UPLOAD_IN_PROGRESS"] = False
+
+
+SELF = {}
+REINIT_SELF(SELF)
 
 
 # Silence fastapi logs coming from the /results endpoint, there are so many it slows stuff down.

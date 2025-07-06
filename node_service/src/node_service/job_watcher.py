@@ -10,8 +10,7 @@ from google.cloud.firestore import FieldFilter, And
 from google.cloud.firestore_v1.field_path import FieldPath
 from google.cloud.firestore_v1.async_client import AsyncClient
 
-from node_service import PROJECT_ID, SELF, INSTANCE_NAME
-from node_service.reboot_endpoints import reboot_containers
+from node_service import PROJECT_ID, SELF, INSTANCE_NAME, REINIT_SELF
 from node_service.helpers import Logger, format_traceback
 
 
@@ -194,9 +193,13 @@ async def job_watcher_logged(n_inputs: int, is_background_job: bool, auth_header
         tb_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
         traceback_str = format_traceback(tb_details)
         logger.log(str(e), "ERROR", traceback=traceback_str)
-    # finally:
-    #     if not SELF["SHUTTING_DOWN"]:
-    #         reboot_containers(logger=logger)
+    finally:
+        # reset node so it can run a new job
+        current_container_config = SELF["current_container_config"]
+        current_workers = SELF["workers"]
+        REINIT_SELF(SELF)
+        SELF["current_container_config"] = current_container_config
+        SELF["workers"] = current_workers
 
 
 async def send_inputs_to_workers(session: aiohttp.ClientSession, inputs_pkl_with_idx: list):

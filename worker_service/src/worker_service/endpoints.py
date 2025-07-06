@@ -5,7 +5,7 @@ from typing import Optional
 from queue import Empty
 from fastapi import APIRouter, Path, Response, Depends, Query
 
-from worker_service import SELF, get_request_json, get_request_files
+from worker_service import SELF, REINIT_SELF, get_request_json, get_request_files
 from worker_service.udf_executor import execute_job
 from worker_service.helpers import ThreadWithExc
 
@@ -108,13 +108,7 @@ async def start_job(
     job_id: str = Path(...),
     request_files: Optional[dict] = Depends(get_request_files),
 ):
-    # only one job should ever be executed by this service
-    # then it should be restarted (to clear/reset the filesystem)
-    if SELF["STARTED"]:
-        msg = f"ERROR: Received request to start job {job_id}, but this worker was previously "
-        SELF["logs"].append(msg + f"assigned to job {SELF['job_id']}! Returning 409.")
-        return Response("Already started.", status_code=409)
-
+    REINIT_SELF(SELF)
     SELF["logs"].append(f"Assigned to job {job_id}.")
     function_pkl = request_files["function_pkl"]
     thread = ThreadWithExc(target=execute_job, args=(job_id, function_pkl), daemon=True)

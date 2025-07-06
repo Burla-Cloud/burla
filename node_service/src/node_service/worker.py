@@ -24,6 +24,7 @@ class Worker:
         python_version: str,
         image: str,
         send_logs_to_gcl: bool = False,
+        boot_timeout_sec: int = 120,
     ):
         self.is_idle = False
         self.is_empty = False
@@ -33,6 +34,7 @@ class Worker:
         self.url = None
         self.host_port = None
         self.python_version = python_version
+        self.boot_timeout_sec = boot_timeout_sec
 
         # dont assign to self because must be closed after use or causes issues :(
         docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
@@ -228,8 +230,8 @@ class Worker:
             response.raise_for_status()
             status = response.json()["status"]  # will be one of: READY, BUSY
         except requests.exceptions.ConnectionError as e:
-            if attempt < 10:
-                sleep(3)
+            if attempt < self.boot_timeout_sec:
+                sleep(1)
                 return self.status(attempt + 1)
             else:
                 status = "FAILED"

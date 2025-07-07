@@ -208,7 +208,7 @@ async def job_watcher_logged(n_inputs: int, is_background_job: bool, auth_header
         SELF["current_container_config"] = current_container_config
         SELF["workers"] = current_workers
         SELF["authorized_users"] = authorized_users
-        async_db.collection("nodes").document(INSTANCE_NAME).update({"status": "READY"})
+        await async_db.collection("nodes").document(INSTANCE_NAME).update({"status": "READY"})
 
 
 async def send_inputs_to_workers(session: aiohttp.ClientSession, inputs_pkl_with_idx: list):

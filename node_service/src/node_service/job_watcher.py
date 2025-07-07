@@ -78,8 +78,13 @@ async def result_check_all_workers(session: aiohttp.ClientSession, logger: Logge
     return await asyncio.gather(*tasks)
 
 
-async def _job_watcher(n_inputs: int, is_background_job: bool, logger: Logger, auth_headers: dict):
-    async_db = AsyncClient(project=PROJECT_ID, database="burla")
+async def _job_watcher(
+    n_inputs: int,
+    is_background_job: bool,
+    logger: Logger,
+    auth_headers: dict,
+    async_db: AsyncClient,
+):
     sync_db = firestore.Client(project=PROJECT_ID, database="burla")
     job_doc = async_db.collection("jobs").document(SELF["current_job"])
     node_doc = async_db.collection("nodes").document(INSTANCE_NAME)
@@ -187,7 +192,8 @@ async def _job_watcher(n_inputs: int, is_background_job: bool, logger: Logger, a
 async def job_watcher_logged(n_inputs: int, is_background_job: bool, auth_headers: dict):
     logger = Logger()  # new logger has no request attached like the one in execute job did.
     try:
-        await _job_watcher(n_inputs, is_background_job, logger, auth_headers)
+        async_db = AsyncClient(project=PROJECT_ID, database="burla")
+        await _job_watcher(n_inputs, is_background_job, logger, auth_headers, async_db)
     except Exception as e:
         exc_type, exc_value, exc_traceback = sys.exc_info()
         tb_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
@@ -197,9 +203,12 @@ async def job_watcher_logged(n_inputs: int, is_background_job: bool, auth_header
         # reset node so it can run a new job
         current_container_config = SELF["current_container_config"]
         current_workers = SELF["workers"]
+        authorized_users = SELF["authorized_users"]
         REINIT_SELF(SELF)
         SELF["current_container_config"] = current_container_config
         SELF["workers"] = current_workers
+        SELF["authorized_users"] = authorized_users
+        async_db.collection("nodes").document(INSTANCE_NAME).update({"status": "READY"})
 
 
 async def send_inputs_to_workers(session: aiohttp.ClientSession, inputs_pkl_with_idx: list):

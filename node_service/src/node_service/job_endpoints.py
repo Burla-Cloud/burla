@@ -123,7 +123,6 @@ async def execute(
     logger: Logger = Depends(get_logger),
     add_background_task: Callable = Depends(get_add_background_task_function),
 ):
-    start = time()
     if SELF["RUNNING"] or SELF["BOOTING"]:
         return Response("Node currently running or booting, request refused.", status_code=409)
 
@@ -187,5 +186,3 @@ async def execute(
         request_json["n_inputs"], is_background_job, auth_headers
     )
     SELF["job_watcher_task"] = asyncio.create_task(job_watcher_coroutine)
-
-    print(f"TIME TAKEN: {time() - start:.2f}s")

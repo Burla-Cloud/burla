@@ -24,6 +24,7 @@ class Worker:
         python_version: str,
         image: str,
         send_logs_to_gcl: bool = False,
+        install_worker_if_missing: bool = False,
         boot_timeout_sec: int = 120,
     ):
         self.is_idle = False
@@ -58,25 +59,29 @@ class Worker:
                 exit 1
             fi
 
-            # Ensure git is installed
-            if ! command -v git >/dev/null 2>&1; then
-                echo "git not found, installing..."
-                apt-get update && apt-get install -y git
-            fi
-
             # TODO: update worker service if version is out of sync with this nodes version!
 
             # Install worker_service if missing
-            $python_cmd -c "import worker_service" 2>/dev/null || (
+            if ! $python_cmd -c "import worker_service" 2>/dev/null; then
                 echo "Installing worker_service..."
-                git clone --depth 1 --branch {__version__} https://github.com/Burla-Cloud/burla.git --no-checkout
-                cd burla
-                git sparse-checkout init --cone
-                git sparse-checkout set worker_service
-                git checkout {__version__}
-                cd worker_service
-                $python_cmd -m pip install --break-system-packages .
-            )
+                # use tarball if available because faster
+                if curl -Ls -o burla.tar.gz https://github.com/Burla-Cloud/burla/archive/{__version__}.tar.gz; then
+                    tar -xzf burla.tar.gz
+                    cd burla-{__version__}/worker_service
+                else
+                    echo "Tarball not found, falling back to git..."
+                    # Ensure git is installed
+                    if ! command -v git >/dev/null 2>&1; then
+                        echo "git not found, installing..."
+                        apt-get update && apt-get install -y git
+                    fi
+                    git clone --depth 1 --filter=blob:none --sparse --branch {__version__} https://github.com/Burla-Cloud/burla.git
+                    cd burla
+                    git sparse-checkout set worker_service
+                    cd worker_service
+                fi
+                $python_cmd -m pip install --break-system-packages --no-cache-dir --only-binary=:all: .
+            fi
 
             # If local dev mode, run in reload mode
             reload_flag=""

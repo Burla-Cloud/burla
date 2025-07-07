@@ -133,14 +133,6 @@ def _schedule_container_removal(
         ).start()
 
 
-def reset_node():
-    current_container_config = SELF["current_container_config"]
-    current_workers = SELF["workers"]
-    REINIT_SELF(SELF)
-    SELF["current_container_config"] = current_container_config
-    SELF["workers"] = current_workers
-
-
 def reboot_containers(
     new_container_config: Optional[list[Container]] = None,
     logger: Logger = Depends(get_logger),

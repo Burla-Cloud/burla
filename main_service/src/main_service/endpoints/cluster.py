@@ -231,7 +231,9 @@ async def node_log_stream(node_id: str, request: Request):
                 msg = f"{'-' * padding_size} {current_date_str} {'-' * padding_size}"
                 current_loop.call_soon_threadsafe(queue.put_nowait, {"message": msg})
                 last_date_str = current_date_str
-            message = f"{ts_to_str(timestamp)} {log_doc_dict.get('msg').strip()}"
+
+            msg_cleaned = log_doc_dict.get("msg").strip().replace("\n", "\n\t")
+            message = f"{ts_to_str(timestamp)} {msg_cleaned}"
             current_loop.call_soon_threadsafe(queue.put_nowait, {"message": message})
 
     logs_ref = DB.collection("nodes").document(node_id).collection("logs")

@@ -302,7 +302,7 @@ export const NodesList = ({ nodes }: NodesListProps) => {
                                                         "overflow-y-auto transition-all duration-300",
                                                         {
                                                             "max-h-0": expandedNodeId !== node.id,
-                                                            "max-h-[400px] py-2 px-4":
+                                                            "h-[400px] resize-y py-2 px-4":
                                                                 expandedNodeId === node.id,
                                                         }
                                                     )}

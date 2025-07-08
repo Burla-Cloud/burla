@@ -93,7 +93,7 @@ class ResultsEndpointFilter(python_logging.Filter):
 class FirestoreLogHandler(python_logging.Handler):
     def __init__(self):
         super().__init__()
-        client = Client(project=PROJECT_ID)
+        client = Client(project=PROJECT_ID, database="burla")
         self.log_collection = client.collection("nodes").document(INSTANCE_NAME).collection("logs")
 
     def emit(self, record):

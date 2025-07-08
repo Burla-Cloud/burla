@@ -3,6 +3,7 @@ import sys
 import requests
 from uuid import uuid4
 from time import sleep, time
+import traceback
 import threading
 
 import docker
@@ -162,17 +163,18 @@ class Worker:
                 docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
                 firestore_client = firestore.Client(project=PROJECT_ID, database="burla")
                 node_ref = firestore_client.collection("nodes").document(INSTANCE_NAME)
-
-                kw = dict(self.container_id, stream=True, follow=True, stdout=True, stderr=True)
-                for log_line in docker_client.logs(**kw):
+                log_generator = docker_client.logs(
+                    container=self.container_id, stream=True, follow=True, stdout=True, stderr=True
+                )
+                for log_line in log_generator:
                     msg = log_line.decode("utf-8", errors="ignore").rstrip()
                     print(f"[{self.container_name}] {msg}")
                     log = {"msg": f"[{self.container_name}] {msg}", "ts": time()}
                     node_ref.collection("logs").document().set(log)
             except Exception as e:
-                print(f"Log streaming stopped for {self.container_name}: {e}")
-                log = {"msg": f"[{self.container_name}] Log streaming stopped: {e}", "ts": time()}
-                node_ref.collection("logs").document().set(log)
+                msg = f"Log streaming stopped for {self.container_name}: {traceback.format_exc()}"
+                print(msg)
+                node_ref.collection("logs").document().set({"msg": msg, "ts": time()})
             finally:
                 docker_client.close()
 
@@ -219,7 +221,7 @@ class Worker:
             logging.Client().logger("node_service").log_struct(struct)
 
             error_title = f"Container {self.container_name} has FAILED! Logs from container:"
-            log = {"msg": f"{error_title}\n{'-' * 120}\n{logs}\n{'-' * 120}", "ts": time()}
+            log = {"msg": f"{error_title}\n{'-' * 120}\n{logs.strip()}\n{'-' * 120}", "ts": time()}
             firestore_client = firestore.Client(project=PROJECT_ID, database="burla")
             node_ref = firestore_client.collection("nodes").document(INSTANCE_NAME)
             node_ref.collection("logs").document().set(log)

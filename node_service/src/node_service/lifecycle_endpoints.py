@@ -8,6 +8,7 @@ import threading
 import aiohttp
 import docker
 from docker.errors import APIError
+from pydantic import BaseModel
 from fastapi import APIRouter, Depends, Response
 from google.cloud import firestore
 from google.cloud.compute_v1 import InstancesClient
@@ -26,13 +27,17 @@ from node_service import (
     CLUSTER_ID_TOKEN,
     NUM_GPUS,
     get_logger,
-    Container,
     get_add_background_task_function,
 )
 from node_service.helpers import Logger
 from node_service.worker import Worker
 
 router = APIRouter()
+
+
+class Container(BaseModel):
+    image: str
+    python_version: str
 
 
 @router.post("/shutdown")
@@ -60,7 +65,7 @@ async def shutdown_node(logger: Logger = Depends(get_logger)):
     snapshot = await doc_ref.get()
     if snapshot.exists:
         if snapshot.to_dict().get("status") != "FAILED":
-            await doc_ref.delete()
+            doc_ref.update({"display_in_dashboard": False, "reason_hidden": "/shutdown"})
 
 
 @router.post("/reboot")

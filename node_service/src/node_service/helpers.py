@@ -3,8 +3,11 @@ import requests
 from itertools import groupby
 from typing import Optional
 import logging as python_logging
+
 from fastapi import Request
-from node_service import IN_LOCAL_DEV_MODE, GCL_CLIENT, PROJECT_ID, BURLA_BACKEND_URL
+from google.cloud.firestore import Client
+
+from node_service import IN_LOCAL_DEV_MODE, GCL_CLIENT, PROJECT_ID, BURLA_BACKEND_URL, INSTANCE_NAME
 
 
 def format_traceback(traceback_details: list):
@@ -80,3 +83,43 @@ class Logger:
                 requests.post(f"{BURLA_BACKEND_URL}/v1/telemetry/log/ERROR", json=json, timeout=1)
             except Exception:
                 pass
+
+
+class ResultsEndpointFilter(python_logging.Filter):
+    def filter(self, record):
+        return not record.args[2].endswith("/results")
+
+
+class FirestoreLogHandler(python_logging.Handler):
+    def __init__(self):
+        super().__init__()
+        client = Client(project=PROJECT_ID)
+        self.log_collection = client.collection("nodes").document(INSTANCE_NAME).collection("logs")
+
+    def emit(self, record):
+        try:
+            self.log_collection.document().set({"msg": record.getMessage()})
+        except Exception:
+            pass
+
+
+class StdStreamLogger:
+    def __init__(self, logger: python_logging.Logger, level: int):
+        self.logger = logger
+        self.level = level
+
+    def write(self, message):
+        message = message.rstrip()
+        if message:
+            self.logger.log(self.level, message)
+
+    def flush(self):
+        pass
+
+
+def setup_remote_logging():
+    root_logger = python_logging.getLogger()
+    root_logger.setLevel(python_logging.INFO)
+    root_logger.addHandler(FirestoreLogHandler())
+    sys.stdout = StdStreamLogger(root_logger, python_logging.INFO)
+    sys.stderr = StdStreamLogger(root_logger, python_logging.ERROR)

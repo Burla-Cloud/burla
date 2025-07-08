@@ -185,9 +185,9 @@ async def cluster_info(logger: Logger = Depends(get_logger)):
                 current_loop.call_soon_threadsafe(queue.put_nowait, event_data)
                 logger.log(f"Firestore event detected: {event_data}")
 
-        # include "FAILED" so the frontend is notified when a node fails
-        status_filter = FieldFilter("status", "in", ["READY", "BOOTING", "RUNNING", "FAILED"])
-        query = DB.collection("nodes").where(filter=status_filter)
+        # must be `!= False` instead of `== True` because the field is not set for new nodes
+        display_in_dashboard_filter = FieldFilter("display_in_dashboard", "!=", False)
+        query = DB.collection("nodes").where(filter=display_in_dashboard_filter)
         node_watch = query.on_snapshot(on_snapshot)
 
         try:
@@ -206,6 +206,6 @@ def delete_node(node_id: str):
 
     node_doc = DB.collection("nodes").document(node_id).get()
     if node_doc.exists:
-        node_doc.reference.delete()
+        node_doc.reference.update({"display_in_dashboard": False, "reason_hidden": "/delete"})
     else:
         raise HTTPException(status_code=404, detail=f"Node {node_id} not found")

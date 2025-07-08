@@ -161,12 +161,10 @@ class Worker:
         def stream_logs():
             try:
                 docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
-                for log_line in docker_client.logs(
-                    self.container_id, stream=True, follow=True, stdout=True, stderr=True
-                ):
-                    print(
-                        f"[{self.container_name}] {log_line.decode('utf-8', errors='ignore').rstrip()}"
-                    )
+                kw = dict(self.container_id, stream=True, follow=True, stdout=True, stderr=True)
+                for log_line in docker_client.logs(**kw):
+                    msg = log_line.decode("utf-8", errors="ignore").rstrip()
+                    print(f"[{self.container_name}] {msg}")
             except Exception as e:
                 print(f"Log streaming stopped for {self.container_name}: {e}")
             finally:

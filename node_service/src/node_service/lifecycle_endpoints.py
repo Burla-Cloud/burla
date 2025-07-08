@@ -65,7 +65,7 @@ async def shutdown_node(logger: Logger = Depends(get_logger)):
     snapshot = await doc_ref.get()
     if snapshot.exists:
         if snapshot.to_dict().get("status") != "FAILED":
-            doc_ref.update({"display_in_dashboard": False, "reason_hidden": "/shutdown"})
+            doc_ref.update({"status": "DELETED", "display_in_dashboard": False})
 
 
 @router.post("/reboot")

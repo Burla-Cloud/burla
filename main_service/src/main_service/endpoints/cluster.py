@@ -204,7 +204,9 @@ def delete_node(node_id: str):
     """deletes the firestore doc, used to dismiss failed nodes from dashboard"""
 
     node_doc = DB.collection("nodes").document(node_id).get()
-    if node_doc.exists:
-        node_doc.reference.update({"display_in_dashboard": False, "reason_hidden": "/delete"})
+    if node_doc.exists and node_doc.to_dict().get("status") == "FAILED":
+        node_doc.reference.update({"display_in_dashboard": False})
+    elif node_doc.exists:
+        node_doc.reference.update({"status": "DELETED", "display_in_dashboard": False})
     else:
         raise HTTPException(status_code=404, detail=f"Node {node_id} not found")

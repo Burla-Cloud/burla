@@ -186,8 +186,8 @@ class Node:
             self.node_ref.update({"status": "FAILED", "error_message": error_message})
         elif node_dosent_have_error:
             error_exists = error_message is not None
-            reason = f"`Node.delete` in main service. Deleted with error = {error_exists}"
-            self.node_ref.update({"display_in_dashboard": False, "reason_hidden": reason})
+            new_attrs = dict(status="DELETED", display_in_dashboard=False)
+            self.node_ref.update(new_attrs)
         else:
             pass  # means node already has error message and is already marked FAILED
 

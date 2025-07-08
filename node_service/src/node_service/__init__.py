@@ -69,6 +69,9 @@ from node_service.helpers import setup_remote_logging, ResultsEndpointFilter, Lo
 python_logging.getLogger("uvicorn.access").addFilter(ResultsEndpointFilter())
 setup_remote_logging()
 
+for _ in range(10):
+    print("HELLO THIS IS A TEST")
+
 
 async def get_request_json(request: Request):
     try:

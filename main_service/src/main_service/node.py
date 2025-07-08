@@ -179,20 +179,18 @@ class Node:
         return self
 
     def delete(self, error_message: Optional[str] = None):
-        """
-        An `instance_client.delete` request creates an `operation` that runs in the background.
-        """
-        # update db
         snapshot = self.node_ref.get()
-        node_has_error_message = snapshot.exists and snapshot.to_dict().get("error_message")
-        if error_message and (not node_has_error_message):
+        node_dosent_have_error = not (snapshot.exists and snapshot.to_dict().get("error_message"))
+
+        if error_message and node_dosent_have_error:
             self.node_ref.update({"status": "FAILED", "error_message": error_message})
-        else:
+        elif node_dosent_have_error:
             error_exists = error_message is not None
             reason = f"`Node.delete` in main service. Deleted with error = {error_exists}"
             self.node_ref.update({"display_in_dashboard": False, "reason_hidden": reason})
+        else:
+            pass  # means node already has error message and is already marked FAILED
 
-        # delete vm
         if not self.instance_client:
             self.instance_client = InstancesClient()
         try:

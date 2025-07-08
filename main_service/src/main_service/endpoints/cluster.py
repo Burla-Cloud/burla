@@ -185,9 +185,8 @@ async def cluster_info(logger: Logger = Depends(get_logger)):
                 current_loop.call_soon_threadsafe(queue.put_nowait, event_data)
                 logger.log(f"Firestore event detected: {event_data}")
 
-        # must be `!= False` instead of `== True` because the field is not set for new nodes
-        display_in_dashboard_filter = FieldFilter("display_in_dashboard", "!=", False)
-        query = DB.collection("nodes").where(filter=display_in_dashboard_filter)
+        display_filter = FieldFilter("display_in_dashboard", "==", True)
+        query = DB.collection("nodes").where(filter=display_filter)
         node_watch = query.on_snapshot(on_snapshot)
 
         try:

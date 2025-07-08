@@ -208,7 +208,7 @@ def delete_node(node_id: str):
 
 
 @router.get("/v1/cluster/{node_id}/logs")
-async def node_log_stream(node_id: str, request: Request, logger: Logger = Depends(get_logger)):
+async def node_log_stream(node_id: str, request: Request):
     queue = asyncio.Queue()
     current_loop = asyncio.get_running_loop()
     tz = pytz.timezone(request.cookies.get("timezone", "UTC"))
@@ -217,7 +217,6 @@ async def node_log_stream(node_id: str, request: Request, logger: Logger = Depen
     date_str = datetime.now(tz).strftime("%B %d, %Y (%Z)")
     padding_size = (120 - 2 - len(date_str)) // 2
     queue.put_nowait({"message": f"{'-' * padding_size} {date_str} {'-' * padding_size}"})
-    queue.put_nowait({"message": f"{ts_to_str(time())} Booting Node: {node_id} ..."})
     last_date_str = date_str
 
     def on_snapshot(query_snapshot, changes, read_time):
@@ -232,7 +231,7 @@ async def node_log_stream(node_id: str, request: Request, logger: Logger = Depen
                 msg = f"{'-' * padding_size} {current_date_str} {'-' * padding_size}"
                 current_loop.call_soon_threadsafe(queue.put_nowait, {"message": msg})
                 last_date_str = current_date_str
-            message = f"{ts_to_str(timestamp)} {log_doc_dict.get('msg')}"
+            message = f"{ts_to_str(timestamp)} {log_doc_dict.get('msg').strip()}"
             current_loop.call_soon_threadsafe(queue.put_nowait, {"message": message})
 
     logs_ref = DB.collection("nodes").document(node_id).collection("logs")

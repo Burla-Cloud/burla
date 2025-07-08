@@ -363,11 +363,12 @@ class Node:
         echo "$ACCESS_TOKEN" | docker login -u oauth2accesstoken --password-stdin https://us-docker.pkg.dev
 
         MSG="Installing Burla node service v{NODE_SVC_VERSION} ..."
-        echo $MSG
-        curl -sS -X POST "$DB_BASE_URL/nodes/{self.instance_name}/logs" \\
-            -H "Authorization: Bearer $ACCESS_TOKEN" \\
-            -H "Content-Type: application/json" \\
-            -d '{{"fields":{{"msg":{{"stringValue":"'$MSG'"}}, "ts":{{"integerValue":'$(date +%s)'}}}}}}'
+        DB_BASE_URL="https://firestore.googleapis.com/v1/projects/{PROJECT_ID}/databases/burla/documents"
+        payload=$(jq -n --arg msg "$MSG" --arg ts "$(date +%s)" '{{"fields":{{"msg":{{"stringValue":$msg}},"ts":{{"integerValue":$ts}}}}}}')
+        curl -sS -X POST "$DB_BASE_URL/nodes/{self.instance_name}/logs" \
+            -H "Authorization: Bearer $ACCESS_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "$payload"
 
         git clone --depth 1 --branch {NODE_SVC_VERSION} https://github.com/Burla-Cloud/burla.git  --no-checkout
         cd burla
@@ -377,12 +378,12 @@ class Node:
         cd node_service
         python -m pip install --break-system-packages .
 
-        MSG="Successfully installed. Starting node service ..."
-        echo $MSG
-        curl -sS -X POST "$DB_BASE_URL/nodes/{self.instance_name}/logs" \\
-            -H "Authorization: Bearer $ACCESS_TOKEN" \\
-            -H "Content-Type: application/json" \\
-            -d '{{"fields":{{"msg":{{"stringValue":"'$MSG'"}}, "ts":{{"integerValue":'$(date +%s)'}}}}}}'
+        MSG="Successfully installed node service."
+        payload=$(jq -n --arg msg "$MSG" --arg ts "$(date +%s)" '{{"fields":{{"msg":{{"stringValue":$msg}},"ts":{{"integerValue":$ts}}}}}}')
+        curl -sS -X POST "$DB_BASE_URL/nodes/{self.instance_name}/logs" \
+            -H "Authorization: Bearer $ACCESS_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "$payload"
 
         export NUM_GPUS="{self.num_gpus}"
         export INSTANCE_NAME="{self.instance_name}"

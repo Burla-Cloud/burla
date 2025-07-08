@@ -221,7 +221,7 @@ class Worker:
             logging.Client().logger("node_service").log_struct(struct)
 
             error_title = f"Container {self.container_name} has FAILED! Logs from container:"
-            log = {"msg": f"{error_title}\n{'-' * 120}\n{logs.strip()}\n{'-' * 120}", "ts": time()}
+            log = {"msg": f"{error_title}\n{'-' * 120}\n{logs.strip()}{'-' * 120}", "ts": time()}
             firestore_client = firestore.Client(project=PROJECT_ID, database="burla")
             node_ref = firestore_client.collection("nodes").document(INSTANCE_NAME)
             node_ref.collection("logs").document().set(log)

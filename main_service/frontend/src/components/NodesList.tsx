@@ -218,12 +218,12 @@ export const NodesList = ({ nodes }: NodesListProps) => {
                             {nodes.map((node) => (
                                 <React.Fragment key={node.id}>
                                     <TableRow
-                                        onClick={() => node.errorMessage && toggleExpanded(node.id)}
-                                        className={cn({ "cursor-pointer": node.errorMessage })}
+                                        onClick={() => node.logs?.length && toggleExpanded(node.id)}
+                                        className={cn({ "cursor-pointer": node.logs?.length })}
                                     >
                                         <TableCell className="px-4 py-2">
                                             <div className="flex items-center space-x-2">
-                                                {node.errorMessage && (
+                                                {node.logs?.length && (
                                                     <ChevronRight
                                                         className={cn(
                                                             "h-4 w-4 transition-transform duration-200",
@@ -261,7 +261,7 @@ export const NodesList = ({ nodes }: NodesListProps) => {
                                             {parseRamDisplay(node.type)}
                                         </TableCell>
                                         <TableCell className="px-2 py-2 text-center">
-                                            {node.errorMessage && (
+                                            {node.logs?.length && (
                                                 <button
                                                     onClick={(e) => {
                                                         e.stopPropagation();
@@ -276,7 +276,7 @@ export const NodesList = ({ nodes }: NodesListProps) => {
                                         </TableCell>
                                     </TableRow>
 
-                                    {node.errorMessage && (
+                                    {node.logs?.length && (
                                         <TableRow
                                             key={`${node.id}-error`}
                                             className={cn("transition-all duration-300", {
@@ -295,7 +295,7 @@ export const NodesList = ({ nodes }: NodesListProps) => {
                                                     )}
                                                 >
                                                     <pre className="whitespace-pre-wrap text-red-600 text-sm">
-                                                        {node.errorMessage}
+                                                        {node.logs?.join("\n")}
                                                     </pre>
                                                 </div>
                                             </TableCell>

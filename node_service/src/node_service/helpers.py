@@ -97,11 +97,10 @@ class FirestoreLogHandler(python_logging.Handler):
         self.log_collection = client.collection("nodes").document(INSTANCE_NAME).collection("logs")
 
     def emit(self, record):
-        self.log_collection.document().set({"msg": record.getMessage()})
-        # try:
-        #     self.log_collection.document().set({"msg": record.getMessage()})
-        # except Exception as e:
-        #     print(f"Error logging to firestore: {e}")
+        try:
+            self.log_collection.document().set({"msg": record.getMessage()})
+        except Exception as e:
+            print(f"Error logging to firestore: {e}")
 
 
 class StdStreamLogger:

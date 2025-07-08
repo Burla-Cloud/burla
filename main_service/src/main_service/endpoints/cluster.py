@@ -171,16 +171,14 @@ async def cluster_info(logger: Logger = Depends(get_logger)):
                 if change.type.name == "REMOVED":
                     event_data = {"nodeId": instance_name, "deleted": True}
                 else:
-                    # always send status and type, and include the errorMessage if present so the UI can surface it
                     event_data = {
                         "nodeId": instance_name,
                         "status": doc_data.get("status"),
                         "type": doc_data.get("machine_type"),
                     }
-
-                    error_message = doc_data.get("error_message")
-                    if error_message:
-                        event_data["errorMessage"] = error_message
+                    event_data["logs"] = []
+                    for log_doc in change.document.reference.collection("logs").stream():
+                        event_data["logs"].append(log_doc.to_dict()["msg"])
 
                 current_loop.call_soon_threadsafe(queue.put_nowait, event_data)
                 logger.log(f"Firestore event detected: {event_data}")

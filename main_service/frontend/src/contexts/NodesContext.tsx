@@ -22,14 +22,14 @@ export const NodesProvider = ({ children }: { children: React.ReactNode }) => {
                 return [...prevNodes, createNewNode(data)];
             }
 
-            // merge updated fields into the existing node (status and errorMessage)
+            // merge updated fields into the existing node (status and logs)
             return prevNodes.map((node) =>
                 node.id === data.nodeId
                     ? {
                           ...node,
                           status: data.status as NodeStatus,
-                          // bring in a new errorMessage but keep existing if the backend removed it
-                          errorMessage: data.errorMessage ?? node.errorMessage,
+                          // bring in new logs but keep existing logs if the backend removed them
+                          logs: data.logs ?? node.logs,
                       }
                     : node
             );
@@ -55,7 +55,7 @@ const createNewNode = (data: any): BurlaNode => ({
     gpus: data.gpus,
     memory: data.memory,
     age: data.age,
-    errorMessage: data.errorMessage,
+    logs: data.logs,
 });
 
 export const useNodes = () => useContext(NodesContext);

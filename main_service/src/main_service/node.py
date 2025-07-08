@@ -171,25 +171,20 @@ class Node:
                     msg = f"Node {self.instance_name} Failed to start! (timeout={booting_too_long})"
                     raise Exception(msg)
         except Exception as e:
-            self.delete(error_message=traceback.format_exc())
+            self.node_ref.update({"status": "FAILED"})
+            self.node_ref.collection("logs").document().set({"msg": traceback.format_exc()})
+            self.delete()
             raise e
 
         self.node_ref.update(dict(host=self.host, zone=self.zone))  # node svc marks itself as ready
         self.is_booting = False
         return self
 
-    def delete(self, error_message: Optional[str] = None):
-        snapshot = self.node_ref.get()
-        node_dosent_have_error = not (snapshot.exists and snapshot.to_dict().get("error_message"))
-
-        if error_message and node_dosent_have_error:
-            self.node_ref.update({"status": "FAILED", "error_message": error_message})
-        elif node_dosent_have_error:
-            error_exists = error_message is not None
+    def delete(self):
+        node_snapshot = self.node_ref.get()
+        if node_snapshot.exists and node_snapshot.to_dict().get("status") != "FAILED":
             new_attrs = dict(status="DELETED", display_in_dashboard=False)
             self.node_ref.update(new_attrs)
-        else:
-            pass  # means node already has error message and is already marked FAILED
 
         if not self.instance_client:
             self.instance_client = InstancesClient()

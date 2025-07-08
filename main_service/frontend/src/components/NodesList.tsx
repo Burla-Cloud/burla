@@ -216,23 +216,16 @@ export const NodesList = ({ nodes }: NodesListProps) => {
                     <CardTitle className="text-xl font-semibold text-primary">Nodes</CardTitle>
                 </CardHeader>
                 <CardContent>
-                    <Table className="table-fixed w-full">
-                        <colgroup>
-                            <col className="w-1/6" />
-                            <col className="w-1/6" />
-                            <col className="w-1/6" />
-                            <col className="w-1/6" />
-                            <col className="w-1/6" />
-                            <col className="w-1/6" />
-                        </colgroup>
+                    <Table className="table-auto w-full">
                         <TableHeader>
                             <TableRow>
-                                <TableHead className="pl-10 pr-4 py-2">Status</TableHead>
-                                <TableHead className="px-4 py-2">Name</TableHead>
-                                <TableHead className="px-4 py-2">GPUs</TableHead>
-                                <TableHead className="px-4 py-2 text-center">CPUs</TableHead>
-                                <TableHead className="px-4 py-2 text-center">RAM</TableHead>
-                                <TableHead className="px-2 py-2" />
+                                <TableHead className="pl-6 pr-4 py-2" />
+                                <TableHead className="pl-6 pr-4 py-2">Status</TableHead>
+                                <TableHead className="pl-6 pr-4 py-2">Name</TableHead>
+                                <TableHead className="pl-6 pr-4 py-2">CPUs</TableHead>
+                                <TableHead className="pl-6 pr-4 py-2">RAM</TableHead>
+                                <TableHead className="pl-6 pr-4 py-2">GPUs</TableHead>
+                                <TableHead className="pl-6 pr-2 py-2" />
                             </TableRow>
                         </TableHeader>
                         <TableBody>
@@ -242,14 +235,16 @@ export const NodesList = ({ nodes }: NodesListProps) => {
                                         onClick={() => toggleExpanded(node.id)}
                                         className="cursor-pointer"
                                     >
-                                        <TableCell className="px-4 py-2">
+                                        <TableCell className="pl-6 pr-4 py-2">
+                                            <ChevronRight
+                                                className={cn(
+                                                    "h-4 w-4 transition-transform duration-200",
+                                                    { "rotate-90": expandedNodeId === node.id }
+                                                )}
+                                            />
+                                        </TableCell>
+                                        <TableCell className="pl-6 pr-4 py-2">
                                             <div className="flex items-center space-x-2">
-                                                <ChevronRight
-                                                    className={cn(
-                                                        "h-4 w-4 transition-transform duration-200",
-                                                        { "rotate-90": expandedNodeId === node.id }
-                                                    )}
-                                                />
                                                 <div className={getStatusClass(node.status)} />
                                                 <span
                                                     className={cn(
@@ -261,11 +256,10 @@ export const NodesList = ({ nodes }: NodesListProps) => {
                                                 </span>
                                             </div>
                                         </TableCell>
-                                        <TableCell className="px-4 py-2">{node.name}</TableCell>
-                                        <TableCell className="px-4 py-2">
-                                            {parseGpuDisplay(node.type)}
+                                        <TableCell className="pl-6 pr-4 py-2 whitespace-nowrap">
+                                            {node.name}
                                         </TableCell>
-                                        <TableCell className="px-4 py-2 text-center">
+                                        <TableCell className="pl-6 pr-4 py-2">
                                             <div className="inline-flex items-center space-x-1 justify-center">
                                                 <Cpu className="h-4 w-4" />
                                                 <span>
@@ -273,10 +267,13 @@ export const NodesList = ({ nodes }: NodesListProps) => {
                                                 </span>
                                             </div>
                                         </TableCell>
-                                        <TableCell className="px-4 py-2 text-center">
+                                        <TableCell className="pl-6 pr-4 py-2">
                                             {parseRamDisplay(node.type)}
                                         </TableCell>
-                                        <TableCell className="px-2 py-2 text-center">
+                                        <TableCell className="pl-6 pr-4 py-2">
+                                            {parseGpuDisplay(node.type)}
+                                        </TableCell>
+                                        <TableCell className="pl-6 pr-2 py-2 text-center">
                                             {node.status === "FAILED" && (
                                                 <button
                                                     onClick={(e) => {

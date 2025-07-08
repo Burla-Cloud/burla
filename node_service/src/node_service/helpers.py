@@ -29,7 +29,9 @@ class FirestoreLogHandler(python_logging.Handler):
 
     def emit(self, record):
         try:
-            self.log_collection.document().set({"msg": record.getMessage()})
+            timestamp = python_logging.Formatter().formatTime(record, "%b %d %H:%M %Z")
+            msg = f"[{timestamp}] {record.getMessage()}"
+            self.log_collection.document().set({"msg": msg})
         except Exception as e:
             print(f"Error logging to firestore: {e}")
 

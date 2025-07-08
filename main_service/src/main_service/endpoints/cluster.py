@@ -176,15 +176,8 @@ async def cluster_info(logger: Logger = Depends(get_logger)):
                         "status": doc_data.get("status"),
                         "type": doc_data.get("machine_type"),
                     }
-                    event_data["logs"] = []
-                    # ensure log messages are yielded in the sequence they were created
-                    log_snapshots = list(change.document.reference.collection("logs").stream())
-                    log_snapshots.sort(key=lambda snapshot: snapshot.create_time)
-                    for log_snapshot in log_snapshots:
-                        event_data["logs"].append(log_snapshot.to_dict()["msg"])
-
                 current_loop.call_soon_threadsafe(queue.put_nowait, event_data)
-                logger.log(f"Firestore event detected: {event_data}")
+                logger.log(f"Node change detected: {event_data}")
 
         display_filter = FieldFilter("display_in_dashboard", "==", True)
         query = DB.collection("nodes").where(filter=display_filter)

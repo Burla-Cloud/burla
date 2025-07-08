@@ -3,6 +3,8 @@ import asyncio
 import docker
 import requests
 from time import time
+import datetime
+import pytz
 
 from fastapi import APIRouter, Depends, Request, HTTPException
 from google.cloud.firestore_v1 import FieldFilter
@@ -207,17 +209,24 @@ def delete_node(node_id: str):
 
 
 @router.get("/v1/cluster/{node_id}/logs")
-async def node_log_stream(node_id: str, logger: Logger = Depends(get_logger)):
+async def node_log_stream(node_id: str, request: Request, logger: Logger = Depends(get_logger)):
     queue = asyncio.Queue()
+    queue.put_nowait({"message": f"Booting node {node_id} ..."})
     current_loop = asyncio.get_running_loop()
 
+    tz_cookie = request.cookies.get("timezone", "UTC")
+    try:
+        timezone = pytz.timezone(tz_cookie)
+    except pytz.UnknownTimeZoneError:
+        timezone = pytz.UTC
+
     def on_snapshot(query_snapshot, changes, read_time):
-        sorted_changes = sorted(changes, key=lambda change: change.document.to_dict()["ts"])
+        sorted_changes = sorted(changes, key=lambda change: change.document.to_dict().get("ts", 0))
         for change in sorted_changes:
-            doc_data = change.document.to_dict() or {}
-            message = doc_data.get("msg")
-            event = {"message": message}
-            current_loop.call_soon_threadsafe(queue.put_nowait, event)
+            log_doc_dict = change.document.to_dict()
+            dt = datetime.datetime.fromtimestamp(log_doc_dict.get("ts"), timezone)
+            message = f"[{dt.strftime('%m/%d %H:%M:%S %Z')}] {log_doc_dict.get('msg')}"
+            current_loop.call_soon_threadsafe(queue.put_nowait, {"message": message})
 
     logs_ref = DB.collection("nodes").document(node_id).collection("logs")
     watch = logs_ref.on_snapshot(on_snapshot)

@@ -172,7 +172,8 @@ class Node:
                     raise Exception(msg)
         except Exception as e:
             self.node_ref.update({"status": "FAILED"})
-            self.node_ref.collection("logs").document().set({"msg": traceback.format_exc()})
+            log = {"msg": traceback.format_exc(), "ts": time()}
+            self.node_ref.collection("logs").document().set(log)
             self.delete()
             raise e
 

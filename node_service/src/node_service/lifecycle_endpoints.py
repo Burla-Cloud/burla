@@ -240,7 +240,7 @@ def reboot_containers(
             logger.log("Node failed to boot!")
             node_doc.update({"status": "FAILED"})
             msg = f"Error from Node-Service: {traceback.format_exc()}"
-            node_doc.collection("logs").document().set({"msg": msg})
+            node_doc.collection("logs").document().set({"msg": msg, "ts": time()})
 
             # if not IN_LOCAL_DEV_MODE:
             #     instance_client = InstancesClient()

@@ -3,7 +3,7 @@ import sys
 import json
 import requests
 from uuid import uuid4
-from time import sleep
+from time import sleep, time
 import threading
 
 import docker
@@ -165,8 +165,12 @@ class Worker:
                 for log_line in docker_client.logs(**kw):
                     msg = log_line.decode("utf-8", errors="ignore").rstrip()
                     print(f"[{self.container_name}] {msg}")
+                    log = {"msg": f"[{self.container_name}] {msg}", "ts": time()}
+                    self.node_ref.collection("logs").document(INSTANCE_NAME).set(log)
             except Exception as e:
                 print(f"Log streaming stopped for {self.container_name}: {e}")
+                log = {"msg": f"[{self.container_name}] Log streaming stopped: {e}", "ts": time()}
+                self.node_ref.collection("logs").document(INSTANCE_NAME).set(log)
             finally:
                 docker_client.close()
 
@@ -208,16 +212,13 @@ class Worker:
     def log_debug_info(self):
         try:
             logs = self.logs() if self.exists() else "Unable to retrieve container logs."
-            logs = f"\nERROR INSIDE CONTAINER:\n{logs}\n"
             docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
-            info = docker_client.containers(all=True)
-            info = json.loads(json.dumps(info, default=lambda thing: str(thing)))
-            struct = {
-                "severity": "ERROR",
-                "LOGS_FROM_FAILED_CONTAINER": logs,
-                "CONTAINERS INFO": info,
-            }
+            struct = {"severity": "ERROR", "LOGS_FROM_FAILED_CONTAINER": logs}
             logging.Client().logger("node_service").log_struct(struct)
+
+            error_title = f"Container {self.container_name} has FAILED! Logs from container:"
+            log = {"msg": f"{error_title}\n{'-' * 120}\n{logs}\n{'-' * 120}", "ts": time()}
+            self.node_ref.collection("logs").document(INSTANCE_NAME).set(log)
         finally:
             docker_client.close()
 

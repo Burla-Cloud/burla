@@ -293,7 +293,7 @@ export const NodesList = ({ nodes }: NodesListProps) => {
                                         <TableRow
                                             key={`${node.id}-error`}
                                             className={cn("transition-all duration-300", {
-                                                "bg-red-50": expandedNodeId === node.id,
+                                                "bg-gray-50": expandedNodeId === node.id,
                                             })}
                                         >
                                             <TableCell colSpan={7} className="p-0">
@@ -307,7 +307,7 @@ export const NodesList = ({ nodes }: NodesListProps) => {
                                                         }
                                                     )}
                                                 >
-                                                    <pre className="whitespace-pre-wrap text-red-600 text-sm">
+                                                    <pre className="whitespace-pre-wrap text-gray-600 text-sm">
                                                         {nodeLogs[node.id]?.join("\n")}
                                                     </pre>
                                                 </div>

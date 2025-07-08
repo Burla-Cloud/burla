@@ -3,6 +3,7 @@ import requests
 from itertools import groupby
 from typing import Optional
 import logging as python_logging
+from time import time
 
 from fastapi import Request
 from google.cloud.firestore import Client
@@ -31,7 +32,7 @@ class FirestoreLogHandler(python_logging.Handler):
         try:
             timestamp = python_logging.Formatter().formatTime(record, "%b %d %H:%M %Z")
             msg = f"[{timestamp}] {record.getMessage()}"
-            self.log_collection.document().set({"msg": msg})
+            self.log_collection.document().set({"msg": msg, "ts": time()})
         except Exception as e:
             print(f"Error logging to firestore: {e}")
 

@@ -212,7 +212,8 @@ async def node_log_stream(node_id: str, logger: Logger = Depends(get_logger)):
     current_loop = asyncio.get_running_loop()
 
     def on_snapshot(query_snapshot, changes, read_time):
-        for change in changes:
+        sorted_changes = sorted(changes, key=lambda change: change.document.to_dict()["ts"])
+        for change in sorted_changes:
             doc_data = change.document.to_dict() or {}
             message = doc_data.get("msg")
             event = {"message": message}

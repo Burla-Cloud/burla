@@ -177,8 +177,11 @@ async def cluster_info(logger: Logger = Depends(get_logger)):
                         "type": doc_data.get("machine_type"),
                     }
                     event_data["logs"] = []
-                    for log_doc in change.document.reference.collection("logs").stream():
-                        event_data["logs"].append(log_doc.to_dict()["msg"])
+                    # ensure log messages are yielded in the sequence they were created
+                    log_snapshots = list(change.document.reference.collection("logs").stream())
+                    log_snapshots.sort(key=lambda snapshot: snapshot.create_time)
+                    for log_snapshot in log_snapshots:
+                        event_data["logs"].append(log_snapshot.to_dict()["msg"])
 
                 current_loop.call_soon_threadsafe(queue.put_nowait, event_data)
                 logger.log(f"Firestore event detected: {event_data}")
@@ -208,3 +211,29 @@ def delete_node(node_id: str):
         node_doc.reference.update({"status": "DELETED", "display_in_dashboard": False})
     else:
         raise HTTPException(status_code=404, detail=f"Node {node_id} not found")
+
+
+@router.get("/v1/cluster/{node_id}/logs")
+async def node_log_stream(node_id: str, logger: Logger = Depends(get_logger)):
+    queue = asyncio.Queue()
+    current_loop = asyncio.get_running_loop()
+
+    def on_snapshot(query_snapshot, changes, read_time):
+        for change in changes:
+            doc_data = change.document.to_dict() or {}
+            message = doc_data.get("msg")
+            event = {"message": message}
+            current_loop.call_soon_threadsafe(queue.put_nowait, event)
+
+    logs_ref = DB.collection("nodes").document(node_id).collection("logs")
+    watch = logs_ref.on_snapshot(on_snapshot)
+
+    async def log_generator():
+        try:
+            while True:
+                event = await queue.get()
+                yield f"data: {json.dumps(event)}\n\n"
+        finally:
+            watch.unsubscribe()
+
+    return StreamingResponse(log_generator(), media_type="text/event-stream")

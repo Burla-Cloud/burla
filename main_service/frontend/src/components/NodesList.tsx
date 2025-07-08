@@ -11,8 +11,7 @@ import {
 import { cn } from "@/lib/utils";
 import { Cpu, X, ChevronRight } from "lucide-react";
 import { NodeStatus, BurlaNode } from "@/types/coreTypes";
-import { useEffect, useState } from "react";
-import React from "react";
+import React, { useEffect, useState, useRef } from "react";
 
 interface NodesListProps {
     nodes: BurlaNode[];
@@ -125,6 +124,28 @@ export const NodesList = ({ nodes }: NodesListProps) => {
 
     // track which node row is currently expanded to show the error message
     const [expandedNodeId, setExpandedNodeId] = useState<string | null>(null);
+    const [nodeLogs, setNodeLogs] = useState<Record<string, string[]>>({});
+    const logSourceRef = useRef<EventSource | null>(null);
+
+    useEffect(() => {
+        if (expandedNodeId) {
+            setNodeLogs((prev) => ({ ...prev, [expandedNodeId]: [] }));
+            const source = new EventSource(`/v1/cluster/${expandedNodeId}/logs`);
+            logSourceRef.current = source;
+            source.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                setNodeLogs((prev) => {
+                    const existing = prev[expandedNodeId] || [];
+                    return { ...prev, [expandedNodeId]: [...existing, data.message] };
+                });
+            };
+            source.onerror = (error) => {
+                console.error("Node logs stream failed:", error);
+                source.close();
+            };
+            return () => source.close();
+        }
+    }, [expandedNodeId]);
 
     const toggleExpanded = (nodeId: string) => {
         setExpandedNodeId((prev) => (prev === nodeId ? null : nodeId));
@@ -197,16 +218,16 @@ export const NodesList = ({ nodes }: NodesListProps) => {
                 <CardContent>
                     <Table className="table-fixed w-full">
                         <colgroup>
-                            <col className="w-[16%]" />
-                            <col className="w-[20%]" />
-                            <col className="w-[20%]" />
-                            <col className="w-[16%]" />
-                            <col className="w-[16%]" />
-                            <col className="w-[12%]" />
+                            <col className="w-1/6" />
+                            <col className="w-1/6" />
+                            <col className="w-1/6" />
+                            <col className="w-1/6" />
+                            <col className="w-1/6" />
+                            <col className="w-1/6" />
                         </colgroup>
                         <TableHeader>
                             <TableRow>
-                                <TableHead className="px-4 py-2">Status</TableHead>
+                                <TableHead className="pl-10 pr-4 py-2">Status</TableHead>
                                 <TableHead className="px-4 py-2">Name</TableHead>
                                 <TableHead className="px-4 py-2">GPUs</TableHead>
                                 <TableHead className="px-4 py-2 text-center">CPUs</TableHead>
@@ -218,22 +239,17 @@ export const NodesList = ({ nodes }: NodesListProps) => {
                             {nodes.map((node) => (
                                 <React.Fragment key={node.id}>
                                     <TableRow
-                                        onClick={() => node.logs?.length && toggleExpanded(node.id)}
-                                        className={cn({ "cursor-pointer": node.logs?.length })}
+                                        onClick={() => toggleExpanded(node.id)}
+                                        className="cursor-pointer"
                                     >
                                         <TableCell className="px-4 py-2">
                                             <div className="flex items-center space-x-2">
-                                                {node.logs?.length && (
-                                                    <ChevronRight
-                                                        className={cn(
-                                                            "h-4 w-4 transition-transform duration-200",
-                                                            {
-                                                                "rotate-90":
-                                                                    expandedNodeId === node.id,
-                                                            }
-                                                        )}
-                                                    />
-                                                )}
+                                                <ChevronRight
+                                                    className={cn(
+                                                        "h-4 w-4 transition-transform duration-200",
+                                                        { "rotate-90": expandedNodeId === node.id }
+                                                    )}
+                                                />
                                                 <div className={getStatusClass(node.status)} />
                                                 <span
                                                     className={cn(
@@ -261,7 +277,7 @@ export const NodesList = ({ nodes }: NodesListProps) => {
                                             {parseRamDisplay(node.type)}
                                         </TableCell>
                                         <TableCell className="px-2 py-2 text-center">
-                                            {node.logs?.length && (
+                                            {node.status === "FAILED" && (
                                                 <button
                                                     onClick={(e) => {
                                                         e.stopPropagation();
@@ -276,7 +292,7 @@ export const NodesList = ({ nodes }: NodesListProps) => {
                                         </TableCell>
                                     </TableRow>
 
-                                    {node.logs?.length && (
+                                    {expandedNodeId === node.id && (
                                         <TableRow
                                             key={`${node.id}-error`}
                                             className={cn("transition-all duration-300", {
@@ -295,7 +311,7 @@ export const NodesList = ({ nodes }: NodesListProps) => {
                                                     )}
                                                 >
                                                     <pre className="whitespace-pre-wrap text-red-600 text-sm">
-                                                        {node.logs?.join("\n")}
+                                                        {nodeLogs[node.id]?.join("\n")}
                                                     </pre>
                                                 </div>
                                             </TableCell>

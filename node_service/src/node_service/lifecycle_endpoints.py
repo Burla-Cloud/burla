@@ -147,7 +147,7 @@ def reboot_containers(
     Rebooting will reboot the containers that are currently/ were previously running.
     If new containers are passed with the reboot request, those containers will be booted instead.
     """
-    logger.log(f"Rebooting Node: {INSTANCE_NAME}")
+    logger.log(f"Booting Node: {INSTANCE_NAME}")
     db = firestore.Client(project=PROJECT_ID, database="burla")
     node_doc = db.collection("nodes").document(INSTANCE_NAME)
     node_doc.update(

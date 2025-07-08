@@ -16,6 +16,24 @@ def format_traceback(traceback_details: list):
     return "".join(details).split("another exception occurred:")[-1]
 
 
+class ResultsEndpointFilter(python_logging.Filter):
+    def filter(self, record):
+        return not record.args[2].endswith("/results")
+
+
+class FirestoreLogHandler(python_logging.Handler):
+    def __init__(self):
+        super().__init__()
+        client = Client(project=PROJECT_ID, database="burla")
+        self.log_collection = client.collection("nodes").document(INSTANCE_NAME).collection("logs")
+
+    def emit(self, record):
+        try:
+            self.log_collection.document().set({"msg": record.getMessage()})
+        except Exception as e:
+            print(f"Error logging to firestore: {e}")
+
+
 class Logger:
 
     def __init__(self, request: Optional[Request] = None):
@@ -27,6 +45,7 @@ class Logger:
         if not self.logger.handlers:
             self.logger.setLevel(python_logging.INFO)
             self.logger.addHandler(python_logging.StreamHandler(sys.stdout))
+            self.logger.addHandler(FirestoreLogHandler())
             self.logger.propagate = False
 
     def __make_serializeable(self, obj):
@@ -83,43 +102,3 @@ class Logger:
                 requests.post(f"{BURLA_BACKEND_URL}/v1/telemetry/log/ERROR", json=json, timeout=1)
             except Exception:
                 pass
-
-
-class ResultsEndpointFilter(python_logging.Filter):
-    def filter(self, record):
-        return not record.args[2].endswith("/results")
-
-
-class FirestoreLogHandler(python_logging.Handler):
-    def __init__(self):
-        super().__init__()
-        client = Client(project=PROJECT_ID, database="burla")
-        self.log_collection = client.collection("nodes").document(INSTANCE_NAME).collection("logs")
-
-    def emit(self, record):
-        try:
-            self.log_collection.document().set({"msg": record.getMessage()})
-        except Exception as e:
-            print(f"Error logging to firestore: {e}")
-
-
-class StdStreamLogger:
-    def __init__(self, logger: python_logging.Logger, level: int):
-        self.logger = logger
-        self.level = level
-
-    def write(self, message):
-        message = message.rstrip()
-        if message:
-            self.logger.log(self.level, message)
-
-    def flush(self):
-        pass
-
-
-def setup_remote_logging():
-    root_logger = python_logging.getLogger()
-    root_logger.setLevel(python_logging.INFO)
-    root_logger.addHandler(FirestoreLogHandler())
-    sys.stdout = StdStreamLogger(root_logger, python_logging.INFO)
-    sys.stderr = StdStreamLogger(root_logger, python_logging.ERROR)

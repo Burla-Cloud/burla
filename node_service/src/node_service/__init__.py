@@ -63,11 +63,10 @@ def REINIT_SELF(SELF):
 
 SELF = {}
 REINIT_SELF(SELF)
-from node_service.helpers import setup_remote_logging, ResultsEndpointFilter, Logger
+from node_service.helpers import ResultsEndpointFilter, Logger
 
-# Silences fastapi logs coming from the /results endpoint, there are so many it slows stuff down.
+# Silence fastapi logs coming from the `/results` endpoint, there are so many it slows stuff down.
 python_logging.getLogger("uvicorn.access").addFilter(ResultsEndpointFilter())
-setup_remote_logging()
 
 
 async def get_request_json(request: Request):

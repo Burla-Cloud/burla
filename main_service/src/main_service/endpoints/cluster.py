@@ -63,7 +63,6 @@ def restart_cluster(request: Request, logger: Logger = Depends(get_logger)):
             as_local_container=IN_LOCAL_DEV_MODE,  # <- start in a container if IN_LOCAL_DEV_MODE
             inactivity_shutdown_time_sec=inactivity_time,
             disk_size=disk_size,
-            verbose=True,
         )
         return node.instance_name
 

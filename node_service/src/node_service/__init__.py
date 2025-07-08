@@ -154,7 +154,7 @@ async def shutdown_if_idle_for_too_long(logger: Logger):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger = Logger()
-    logger.log(f"Booting node service version {__version__}")
+    logger.log(f"Starting node service version {__version__}")
 
     # In dev all the workers restart everytime I hit save (server is in "reload" mode)
     # This is annoying but you must leave it like this, otherwise stuff won't restart correctly!

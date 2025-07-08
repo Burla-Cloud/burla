@@ -110,7 +110,6 @@ class Node:
         instance_client: Optional[InstancesClient] = None,
         inactivity_shutdown_time_sec: Optional[int] = None,
         disk_size: Optional[int] = None,
-        verbose=False,
     ):
         self = cls.__new__(cls)
         self.db = db
@@ -143,9 +142,6 @@ class Node:
         else:
             raise ValueError(f"Invalid machine type: {machine_type}")
 
-        if verbose:
-            self.logger.log(f"Adding node {self.instance_name} ..")
-
         current_state = dict(self.__dict__)  # <- create copy to modify / save
         current_state["status"] = "BOOTING"
         current_state["display_in_dashboard"] = True
@@ -153,6 +149,9 @@ class Node:
         attrs_to_not_save = ["db", "logger", "instance_client", "node_ref", "auth_headers"]
         current_state = {k: v for k, v in current_state.items() if k not in attrs_to_not_save}
         self.node_ref.set(current_state)
+
+        log = {"msg": f"Adding node {self.instance_name} ({self.machine_type}) ...", "ts": time()}
+        self.node_ref.collection("logs").document().set(log)
 
         try:
             if as_local_container:
@@ -300,6 +299,8 @@ class Node:
         exhausted_zones = []
         unavailable_zones = []
         for zone in ACCEPTABLE_ZONES:
+            msg = f"Attempting to provision {self.machine_type} in zone: {zone}"
+            self.node_ref.collection("logs").document().set({"msg": msg, "ts": time()})
             try:
                 instance = Instance(
                     name=self.instance_name,
@@ -319,11 +320,15 @@ class Node:
                 if "does not exist in zone" in str(e):
                     unavailable_zones.append(zone)
                     instance_created = False
+                    msg = f"Machine type {self.machine_type} not offered in zone: {zone}"
+                    self.node_ref.collection("logs").document().set({"msg": msg, "ts": time()})
                 else:
                     raise e
             except ServiceUnavailable:  # not enough instances in this zone, try next zone.
                 exhausted_zones.append(zone)
                 instance_created = False
+                msg = f"No available capacity for {self.machine_type} in zone: {zone}"
+                self.node_ref.collection("logs").document().set({"msg": msg, "ts": time()})
             except Conflict:
                 raise Exception(f"Node {self.instance_name} deleted while starting.")
 
@@ -344,11 +349,26 @@ class Node:
         self.host = f"http://{external_ip}:{self.port}"
         self.zone = zone
         self.node_ref.update(dict(host=self.host, zone=self.zone))
+        msg = f"Successfully provisioned {self.machine_type} in zone: {zone}"
+        self.node_ref.collection("logs").document().set({"msg": msg, "ts": time()})
 
     def __get_startup_script(self):
         return f"""
         #! /bin/bash        
-        echo "DOWNLOADING BURLA NODE SERVICE V{NODE_SVC_VERSION}"
+
+        # authenticate docker:
+        ACCESS_TOKEN=$(curl -s -H "Metadata-Flavor: Google" \
+        "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token" \
+        | jq -r .access_token)
+        echo "$ACCESS_TOKEN" | docker login -u oauth2accesstoken --password-stdin https://us-docker.pkg.dev
+
+        MSG="Installing Burla node service v{NODE_SVC_VERSION} ..."
+        echo $MSG
+        curl -sS -X POST "$DB_BASE_URL/nodes/{self.instance_name}/logs" \\
+            -H "Authorization: Bearer $ACCESS_TOKEN" \\
+            -H "Content-Type: application/json" \\
+            -d '{{"fields":{{"msg":{{"stringValue":"'$MSG'"}}, "ts":{{"integerValue":'$(date +%s)'}}}}}}'
+
         git clone --depth 1 --branch {NODE_SVC_VERSION} https://github.com/Burla-Cloud/burla.git  --no-checkout
         cd burla
         git sparse-checkout init --cone
@@ -356,19 +376,19 @@ class Node:
         git checkout {NODE_SVC_VERSION}
         cd node_service
         python -m pip install --break-system-packages .
-        echo "Done installing packages."
+
+        MSG="Successfully installed. Starting node service ..."
+        echo $MSG
+        curl -sS -X POST "$DB_BASE_URL/nodes/{self.instance_name}/logs" \\
+            -H "Authorization: Bearer $ACCESS_TOKEN" \\
+            -H "Content-Type: application/json" \\
+            -d '{{"fields":{{"msg":{{"stringValue":"'$MSG'"}}, "ts":{{"integerValue":'$(date +%s)'}}}}}}'
 
         export NUM_GPUS="{self.num_gpus}"
         export INSTANCE_NAME="{self.instance_name}"
         export PROJECT_ID="{PROJECT_ID}"
         export CONTAINERS='{json.dumps([c.to_dict() for c in self.containers])}'
         export INACTIVITY_SHUTDOWN_TIME_SEC="{self.inactivity_shutdown_time_sec}"
-
-        # authenticate docker:
-        ACCESS_TOKEN=$(curl -s -H "Metadata-Flavor: Google" \
-        "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token" \
-        | jq -r .access_token)
-        echo "$ACCESS_TOKEN" | docker login -u oauth2accesstoken --password-stdin https://us-docker.pkg.dev
 
         python -m uvicorn node_service:app --host 0.0.0.0 --port {self.port} --workers 1 --timeout-keep-alive 600
         """

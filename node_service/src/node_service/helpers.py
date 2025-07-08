@@ -87,7 +87,7 @@ class Logger:
             self.loggable_request = self.__loggable_request(self.request)
 
         if "traceback" in kw.keys():
-            self.logger.error(f"\nERROR: {message.strip()}\n{kw['traceback'].strip()}\n")
+            self.logger.error(kw["traceback"].strip())
         else:
             self.logger.info(message)
 

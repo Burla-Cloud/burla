@@ -219,13 +219,13 @@ export const NodesList = ({ nodes }: NodesListProps) => {
                     <Table className="table-auto w-full">
                         <TableHeader>
                             <TableRow>
-                                <TableHead className="pl-6 pr-4 py-2" />
-                                <TableHead className="pl-6 pr-4 py-2">Status</TableHead>
-                                <TableHead className="pl-6 pr-4 py-2">Name</TableHead>
-                                <TableHead className="pl-6 pr-4 py-2">CPUs</TableHead>
-                                <TableHead className="pl-6 pr-4 py-2">RAM</TableHead>
-                                <TableHead className="pl-6 pr-4 py-2">GPUs</TableHead>
-                                <TableHead className="pl-6 pr-2 py-2" />
+                                <TableHead className="w-8 pl-6 pr-4 py-2" />
+                                <TableHead className="w-24 pl-6 pr-4 py-2">Status</TableHead>
+                                <TableHead className="w-48 pl-6 pr-4 py-2">Name</TableHead>
+                                <TableHead className="w-24 pl-6 pr-4 py-2">CPUs</TableHead>
+                                <TableHead className="w-24 pl-6 pr-4 py-2">RAM</TableHead>
+                                <TableHead className="w-24 pl-6 pr-4 py-2">GPUs</TableHead>
+                                <TableHead className="w-8 pl-6 pr-2 py-2" />
                             </TableRow>
                         </TableHeader>
                         <TableBody>
@@ -235,7 +235,7 @@ export const NodesList = ({ nodes }: NodesListProps) => {
                                         onClick={() => toggleExpanded(node.id)}
                                         className="cursor-pointer"
                                     >
-                                        <TableCell className="pl-6 pr-4 py-2">
+                                        <TableCell className="w-8 pl-6 pr-4 py-2">
                                             <ChevronRight
                                                 className={cn(
                                                     "h-4 w-4 transition-transform duration-200",
@@ -243,7 +243,7 @@ export const NodesList = ({ nodes }: NodesListProps) => {
                                                 )}
                                             />
                                         </TableCell>
-                                        <TableCell className="pl-6 pr-4 py-2">
+                                        <TableCell className="w-24 pl-6 pr-4 py-2">
                                             <div className="flex items-center space-x-2">
                                                 <div className={getStatusClass(node.status)} />
                                                 <span
@@ -256,10 +256,10 @@ export const NodesList = ({ nodes }: NodesListProps) => {
                                                 </span>
                                             </div>
                                         </TableCell>
-                                        <TableCell className="pl-6 pr-4 py-2 whitespace-nowrap">
+                                        <TableCell className="w-48 pl-6 pr-4 py-2 whitespace-nowrap">
                                             {node.name}
                                         </TableCell>
-                                        <TableCell className="pl-6 pr-4 py-2">
+                                        <TableCell className="w-24 pl-6 pr-4 py-2">
                                             <div className="inline-flex items-center space-x-1 justify-center">
                                                 <Cpu className="h-4 w-4" />
                                                 <span>
@@ -267,13 +267,13 @@ export const NodesList = ({ nodes }: NodesListProps) => {
                                                 </span>
                                             </div>
                                         </TableCell>
-                                        <TableCell className="pl-6 pr-4 py-2">
+                                        <TableCell className="w-24 pl-6 pr-4 py-2">
                                             {parseRamDisplay(node.type)}
                                         </TableCell>
-                                        <TableCell className="pl-6 pr-4 py-2">
+                                        <TableCell className="w-24 pl-6 pr-4 py-2">
                                             {parseGpuDisplay(node.type)}
                                         </TableCell>
-                                        <TableCell className="pl-6 pr-2 py-2 text-center">
+                                        <TableCell className="w-8 pl-6 pr-2 py-2 text-center">
                                             {node.status === "FAILED" && (
                                                 <button
                                                     onClick={(e) => {
@@ -296,7 +296,7 @@ export const NodesList = ({ nodes }: NodesListProps) => {
                                                 "bg-red-50": expandedNodeId === node.id,
                                             })}
                                         >
-                                            <TableCell colSpan={6} className="p-0">
+                                            <TableCell colSpan={7} className="p-0">
                                                 <div
                                                     className={cn(
                                                         "overflow-y-auto transition-all duration-300",

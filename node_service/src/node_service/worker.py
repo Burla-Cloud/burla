@@ -1,14 +1,13 @@
 import os
 import sys
-import json
 import requests
 from uuid import uuid4
 from time import sleep, time
 import threading
 
 import docker
-from google.cloud import logging
 from docker.types import DeviceRequest
+from google.cloud import logging, firestore
 
 from node_service import PROJECT_ID, INSTANCE_NAME, IN_LOCAL_DEV_MODE, NUM_GPUS, __version__
 
@@ -161,16 +160,19 @@ class Worker:
         def stream_logs():
             try:
                 docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
+                firestore_client = firestore.Client(project=PROJECT_ID, database="burla")
+                node_ref = firestore_client.collection("nodes").document(INSTANCE_NAME)
+
                 kw = dict(self.container_id, stream=True, follow=True, stdout=True, stderr=True)
                 for log_line in docker_client.logs(**kw):
                     msg = log_line.decode("utf-8", errors="ignore").rstrip()
                     print(f"[{self.container_name}] {msg}")
                     log = {"msg": f"[{self.container_name}] {msg}", "ts": time()}
-                    self.node_ref.collection("logs").document(INSTANCE_NAME).set(log)
+                    node_ref.collection("logs").document().set(log)
             except Exception as e:
                 print(f"Log streaming stopped for {self.container_name}: {e}")
                 log = {"msg": f"[{self.container_name}] Log streaming stopped: {e}", "ts": time()}
-                self.node_ref.collection("logs").document(INSTANCE_NAME).set(log)
+                node_ref.collection("logs").document().set(log)
             finally:
                 docker_client.close()
 
@@ -218,7 +220,9 @@ class Worker:
 
             error_title = f"Container {self.container_name} has FAILED! Logs from container:"
             log = {"msg": f"{error_title}\n{'-' * 120}\n{logs}\n{'-' * 120}", "ts": time()}
-            self.node_ref.collection("logs").document(INSTANCE_NAME).set(log)
+            firestore_client = firestore.Client(project=PROJECT_ID, database="burla")
+            node_ref = firestore_client.collection("nodes").document(INSTANCE_NAME)
+            node_ref.collection("logs").document().set(log)
         finally:
             docker_client.close()
 

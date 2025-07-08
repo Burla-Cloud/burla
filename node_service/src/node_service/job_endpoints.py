@@ -1,7 +1,6 @@
 import pickle
 from queue import Empty
 from typing import Optional, Callable
-from time import time
 
 import asyncio
 import aiohttp

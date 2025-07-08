@@ -7,12 +7,19 @@ from time import sleep
 
 import cloudpickle
 from tblib import Traceback
-from google.auth.transport.requests import Request
-from worker_service import SELF, PROJECT_ID, CREDENTIALS
+from worker_service import SELF, PROJECT_ID
 
 FIRESTORE_URL = "https://firestore.googleapis.com"
 DB_BASE_URL = f"{FIRESTORE_URL}/v1/projects/{PROJECT_ID}/databases/burla/documents"
-CREDENTIALS.refresh(Request())
+
+
+def _get_gcp_auth_token():
+    metadata_svc_host = "http://metadata.google.internal"
+    token_url = f"{metadata_svc_host}/computeMetadata/v1/instance/service-accounts/default/token"
+    headers = {"Metadata-Flavor": "Google"}
+    response = requests.get(token_url, headers=headers)
+    response.raise_for_status()
+    return response.json()["access_token"]
 
 
 class _FirestoreLogger:
@@ -20,7 +27,7 @@ class _FirestoreLogger:
     def __init__(self, job_id: str, input_index: int):
         self.job_id = job_id
         self.input_index = input_index
-        token = CREDENTIALS.token
+        token = _get_gcp_auth_token()
         self.db_headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
     def write(self, msg):

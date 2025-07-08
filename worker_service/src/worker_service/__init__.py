@@ -7,17 +7,14 @@ from queue import Queue
 from threading import Event
 import logging as python_logging
 
-import google.auth
 from fastapi import FastAPI, Request, Response
 from starlette.datastructures import UploadFile
 
 # Defined before importing helpers/endpoints to prevent cyclic imports
 IN_LOCAL_DEV_MODE = os.environ.get("IN_LOCAL_DEV_MODE") == "True"
 SEND_LOGS_TO_GCL = os.environ.get("SEND_LOGS_TO_GCL") == "True"
-
-CREDENTIALS, PROJECT_ID = google.auth.default()  # need `CREDENTIALS` so token can be refreshed
+PROJECT_ID = os.environ.get("GOOGLE_CLOUD_PROJECT")
 BURLA_BACKEND_URL = "https://backend.burla.dev"
-print(f"Worker {os.environ.get("WORKER_NAME", "unknown_worker")} has booted.")
 
 from worker_service.helpers import VerboseList  # <- same as a list but prints stuff you append
 
@@ -81,6 +78,7 @@ from worker_service.endpoints import router as endpoints_router
 
 app = FastAPI(docs_url=None, redoc_url=None)
 app.include_router(endpoints_router)
+print(f"Worker {os.environ.get("WORKER_NAME", "unknown_worker")} has booted.")
 
 
 @app.middleware("http")

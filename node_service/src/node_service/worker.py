@@ -178,7 +178,7 @@ class Worker:
 
         docker_client.close()
 
-        if send_logs_to_gcl:
+        if install_worker:
             self._start_log_streaming()
 
         # wait until READY

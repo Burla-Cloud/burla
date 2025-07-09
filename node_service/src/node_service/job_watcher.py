@@ -120,6 +120,16 @@ async def _job_watcher(
             SELF["current_parallelism"] = sum(not w.is_idle for w in SELF["workers"])
             all_workers_empty = all(w.is_empty for w in SELF["workers"])
             failed = [f"{w.container_name}:{status}" for w, status in workers_info if status != 200]
+
+            for worker, status in workers_info:
+                if status == 500:
+                    logs = worker.logs() if worker.exists() else "Unable to retrieve container logs"
+                    error_title = f"Worker {worker.container_name} returned status 500!"
+                    msg = f"{error_title} Logs from container:\n{logs.strip()}"
+                    firestore_client = firestore.Client(project=PROJECT_ID, database="burla")
+                    node_ref = firestore_client.collection("nodes").document(INSTANCE_NAME)
+                    node_ref.collection("logs").document().set({"msg": msg, "ts": time()})
+
             if failed:
                 logger.log(f"workers failed: {', '.join(failed)}", severity="ERROR")
                 break

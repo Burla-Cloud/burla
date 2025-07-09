@@ -26,6 +26,7 @@ from yaspin import yaspin, Spinner
 from burla import __version__
 from burla._auth import get_auth_headers
 from burla._background_stuff import upload_inputs, send_alive_pings
+from burla._install import main_service_url
 from burla._helpers import (
     get_db_clients,
     install_signal_handlers,
@@ -198,16 +199,36 @@ async def _execute_job(
         url = f"{node['host']}/jobs/{job_id}"
         timeout = aiohttp.ClientTimeout(total=2)
         request = session.post(url, data=data, headers=auth_headers, timeout=timeout)
-        async with request as response:
-            if response.status == 200:
-                return node
-            elif response.status == 401:
-                raise Exception("Unauthorized! Please run `burla login` to authenticate.")
-            elif response.status == 409:
-                raise NodeConflict(f"ERROR from {node['instance_name']}: {await response.text()}")
-            else:
-                msg = f"Failed to assign {node['instance_name']}! ignoring: {response.status}"
-                spinner_compatible_print(msg)
+        try:
+            async with request as response:
+                if response.status == 200:
+                    return node
+                elif response.status == 401:
+                    raise Exception("Unauthorized! Please run `burla login` to authenticate.")
+                elif response.status == 409:
+                    msg = f"ERROR from {node['instance_name']}: {await response.text()}"
+                    raise NodeConflict(msg)
+                else:
+                    msg = f"Failed to assign {node['instance_name']}! ignoring: {response.status}"
+                    spinner_compatible_print(msg)
+        except asyncio.TimeoutError:
+            msg = f"Timeout assigning {node['instance_name']} to job! Failing node ..."
+            spinner_compatible_print(msg)
+            try:
+                # mark first as failed with reason so user can inspect the issue
+                node_doc = async_db.collection("nodes").document(node["instance_name"])
+                await node_doc.update({"status": "FAILED", "display_in_dashboard": True})
+                msg = f"Failed! This node didn't respond (in <2s) to client request to assign job."
+                await node_doc.collection("logs").document().set({"msg": msg, "ts": time()})
+                # delete node
+                url = f"{main_service_url()}/v1/cluster/{node['instance_name']}"
+                url += "?hide_if_failed=false"
+                async with session.delete(url, headers=auth_headers, timeout=1) as response:
+                    if response.status != 200:
+                        msg = f"Failed to delete node {node['instance_name']}."
+                        spinner_compatible_print(msg + f" ignoring: {response.status}")
+            except:
+                pass
 
     async with AsyncExitStack() as stack:
         connector = aiohttp.TCPConnector(limit=500, limit_per_host=100)

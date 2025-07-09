@@ -1,3 +1,4 @@
+import os
 import sys
 import shutil
 import subprocess
@@ -69,10 +70,17 @@ def _run_command(command, raise_error=True):
 
 
 def main_service_url():
-    result = _run_command(f"gcloud run services describe burla-main-service --region us-central1")
-    for line in result.stdout.decode().splitlines():
-        if line.startswith("URL:"):
-            return line.split()[1]
+    main_svc_image_name = "us-docker.pkg.dev/burla-test/burla-main-service/burla-main-service"
+    cmd = f"docker container list --filter ancestor={main_svc_image_name}"
+    result = _run_command(cmd, raise_error=False)
+    if result.returncode == 0 and result.stdout.strip():
+        return "http://localhost:5001"
+    else:
+        cmd = "gcloud run services describe burla-main-service --region us-central1"
+        result = _run_command(cmd)
+        for line in result.stdout.decode().splitlines():
+            if line.startswith("URL:"):
+                return line.split()[1]
 
 
 def install():

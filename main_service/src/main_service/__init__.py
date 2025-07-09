@@ -214,8 +214,7 @@ async def catch_errors(request: Request, call_next):
 @app.middleware("http")
 async def validate_requests(request: Request, call_next):
     # allow static asset requests (js/css/images) to pass through
-    path = request.url.path
-    last_segment = path.rstrip("/").split("/")[-1]
+    last_segment = request.url.path.rstrip("/").split("/")[-1]
     if "." in last_segment:
         return await call_next(request)
 
@@ -239,23 +238,20 @@ async def validate_requests(request: Request, call_next):
         response.set_cookie(key="session", value=session, httponly=True, samesite="lax")
         return response
 
-    no_email_header = request.session.get("X-User-Email") is None
-    no_token_header = request.session.get("Authorization") is None
-    if no_email_header or no_token_header:
+    email = request.session.get("X-User-Email") or request.headers.get("X-User-Email")
+    authorization = request.session.get("Authorization") or request.headers.get("Authorization")
+    if not email or not authorization:
         rendered = env.get_template("login.html.j2").render(user_email=None)
         return Response(content=rendered, status_code=401, media_type="text/html")
 
-    email = request.session.get("X-User-Email")
-    authorization = request.session.get("Authorization")
-    if email and authorization:
-        async with aiohttp.ClientSession() as session:
-            url = f"{BURLA_BACKEND_URL}/v1/projects/{PROJECT_ID}/users:validate"
-            headers = {"Authorization": authorization, "X-User-Email": email}
-            async with session.get(url, headers=headers) as response:
-                if response.status == 200:
-                    return await call_next(request)
-                elif response.status != 401:
-                    response.raise_for_status()
+    async with aiohttp.ClientSession() as session:
+        url = f"{BURLA_BACKEND_URL}/v1/projects/{PROJECT_ID}/users:validate"
+        headers = {"Authorization": authorization, "X-User-Email": email}
+        async with session.get(url, headers=headers) as response:
+            if response.status == 200:
+                return await call_next(request)
+            elif response.status != 401:
+                response.raise_for_status()
 
     rendered = env.get_template("login.html.j2").render(user_email=email)
     return Response(content=rendered, status_code=403, media_type="text/html")
@@ -289,19 +285,18 @@ async def log_and_time_requests(request: Request, call_next):
 app.add_middleware(SessionMiddleware, secret_key=CLUSTER_ID_TOKEN)
 
 
-# Middleware to capture timezone from request header and store in session
-@app.middleware("http")
-async def set_timezone_middleware(request: Request, call_next):
-    timezone_header = request.headers.get("X-User-Timezone")
-    if timezone_header:
-        request.session["timezone"] = timezone_header
-    return await call_next(request)
+# @app.middleware("http")
+# async def set_timezone_middleware(request: Request, call_next):
+#     timezone_header = request.headers.get("X-User-Timezone")
+#     if timezone_header:
+#         request.session["timezone"] = timezone_header
+#     return await call_next(request)
 
 
-@app.post("/api/timezone")
-async def set_timezone(request: Request):
-    data = await request.json()
-    timezone = data.get("timezone")
-    if timezone:
-        request.session["timezone"] = timezone
-    return {"timezone": timezone}
+# @app.post("/api/timezone")
+# async def set_timezone(request: Request):
+#     data = await request.json()
+#     timezone = data.get("timezone")
+#     if timezone:
+#         request.session["timezone"] = timezone
+#     return {"timezone": timezone}

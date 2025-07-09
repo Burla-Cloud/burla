@@ -21,6 +21,7 @@ from main_service import (
     PROJECT_ID,
     BURLA_BACKEND_URL,
     get_logger,
+    get_add_background_task_function,
 )
 from main_service.node import Container, Node
 from main_service.helpers import Logger
@@ -179,7 +180,6 @@ async def cluster_info(logger: Logger = Depends(get_logger)):
                         "type": doc_data.get("machine_type"),
                     }
                 current_loop.call_soon_threadsafe(queue.put_nowait, event_data)
-                logger.log(f"Node change detected: {event_data}")
 
         display_filter = FieldFilter("display_in_dashboard", "==", True)
         query = DB.collection("nodes").where(filter=display_filter)
@@ -196,14 +196,20 @@ async def cluster_info(logger: Logger = Depends(get_logger)):
 
 
 @router.delete("/v1/cluster/{node_id}")
-def delete_node(node_id: str, request: Request, logger: Logger = Depends(get_logger)):
+def delete_node(
+    node_id: str,
+    request: Request,
+    hide_if_failed: bool = True,
+    add_background_task=Depends(get_add_background_task_function),
+    logger: Logger = Depends(get_logger),
+):
     email = request.session.get("X-User-Email")
     authorization = request.session.get("Authorization")
     auth_headers = {"Authorization": authorization, "X-User-Email": email}
     node_doc = DB.collection("nodes").document(node_id).get()
 
     node = Node.from_snapshot(DB, logger, node_doc, auth_headers)
-    node.delete(hide_if_failed=True)  # <- ensure node is hidden from dashboard no matter
+    add_background_task(node.delete, hide_if_failed=hide_if_failed)
 
 
 @router.get("/v1/cluster/{node_id}/logs")

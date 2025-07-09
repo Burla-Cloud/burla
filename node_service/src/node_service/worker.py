@@ -235,6 +235,21 @@ class Worker:
             print(logs, file=sys.stderr)  # <- make local debugging easier
 
     def status(self, attempt: int = 0):
+        # Check if Docker container is running; fail if not
+        docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
+        try:
+            info = docker_client.inspect_container(self.container_id)
+            if not info.get("State", {}).get("Running"):
+                self.log_debug_info()
+                self.remove()
+                return "FAILED"
+        except docker.errors.NotFound:
+            self.log_debug_info()
+            self.remove()
+            return "FAILED"
+        finally:
+            docker_client.close()
+
         # A worker can also be "IDLE" (waiting for inputs) but that is not returned by this endpoint
         # "IDLE" is not a possible return value here because it is only returned/assigned to `self`
         # when checking results (for efficiency reasons).

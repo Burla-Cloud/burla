@@ -356,11 +356,9 @@ class Node:
         return f"""
         #! /bin/bash        
 
-        # authenticate docker:
         ACCESS_TOKEN=$(curl -s -H "Metadata-Flavor: Google" \
         "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token" \
         | jq -r .access_token)
-
 
         MSG="Installing Burla node service v{NODE_SVC_VERSION} ..."
         DB_BASE_URL="https://firestore.googleapis.com/v1/projects/{PROJECT_ID}/databases/burla/documents"
@@ -385,6 +383,7 @@ class Node:
             -H "Content-Type: application/json" \
             -d "$payload"
 
+        # authenticate docker:
         echo "$ACCESS_TOKEN" | docker login -u oauth2accesstoken --password-stdin https://us-docker.pkg.dev
 
         export NUM_GPUS="{self.num_gpus}"

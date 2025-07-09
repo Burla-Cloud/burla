@@ -44,6 +44,11 @@ class Worker:
         docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
 
         cmd_script = f"""    
+
+            ACCESS_TOKEN=$(curl -s -H "Metadata-Flavor: Google" \
+            "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token" \
+            | jq -r .access_token)
+
             # Find python version:
             python_cmd=""
             for py in python{self.python_version} python3 python; do
@@ -66,7 +71,15 @@ class Worker:
 
             # Install worker_service if missing
             if ! $python_cmd -c "import worker_service" 2>/dev/null; then
-                echo "Installing worker_service..."
+
+                MSG="Installing Burla worker-service inside container image: {image} ..."
+                DB_BASE_URL="https://firestore.googleapis.com/v1/projects/{PROJECT_ID}/databases/burla/documents"
+                payload=$(jq -n --arg msg "$MSG" --arg ts "$(date +%s)" '{{"fields":{{"msg":{{"stringValue":$msg}},"ts":{{"integerValue":$ts}}}}}}')
+                curl -sS -X POST "$DB_BASE_URL/nodes/{self.instance_name}/logs" \
+                    -H "Authorization: Bearer $ACCESS_TOKEN" \
+                    -H "Content-Type: application/json" \
+                    -d "$payload"
+
                 # use tarball if available because faster
                 if curl -Ls -o burla.tar.gz https://github.com/Burla-Cloud/burla/archive/{__version__}.tar.gz; then
                     tar -xzf burla.tar.gz
@@ -84,6 +97,13 @@ class Worker:
                     cd worker_service
                 fi
                 $python_cmd -m pip install --break-system-packages --no-cache-dir --only-binary=:all: .
+
+                MSG="Successfully installed worker-service."
+                payload=$(jq -n --arg msg "$MSG" --arg ts "$(date +%s)" '{{"fields":{{"msg":{{"stringValue":$msg}},"ts":{{"integerValue":$ts}}}}}}')
+                curl -sS -X POST "$DB_BASE_URL/nodes/{self.instance_name}/logs" \
+                    -H "Authorization: Bearer $ACCESS_TOKEN" \
+                    -H "Content-Type: application/json" \
+                    -d "$payload"
             fi
 
             # If local dev mode, run in reload mode

@@ -100,7 +100,8 @@ class Worker:
                     git sparse-checkout set worker_service
                     cd worker_service
                 fi
-                $python_cmd -m pip install --break-system-packages --no-cache-dir --only-binary=:all: .
+                $python_cmd -m pip install --break-system-packages --no-cache-dir \
+                    --only-binary=:all: --target /worker_service .
 
                 MSG="Successfully installed worker-service."
                 TS=$(date +%s)
@@ -118,7 +119,7 @@ class Worker:
             fi
 
             # Start the worker service
-            exec $python_cmd -m uvicorn worker_service:app --host 0.0.0.0 \
+            PYTHONPATH=/worker_service exec $python_cmd -m uvicorn worker_service:app --host 0.0.0.0 \
                 --port {WORKER_INTERNAL_PORT} --workers 1 \
                 --timeout-keep-alive 30 $reload_flag
         """.strip()

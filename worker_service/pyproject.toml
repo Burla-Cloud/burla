@@ -12,6 +12,7 @@ uvicorn = ">=0.34"
 aiohttp = ">=3.11"
 cloudpickle = ">=3.0"
 tblib = ">=3.0"
+requests = "^2.32.4"
 
 [build-system]
 requires = ["poetry-core"]

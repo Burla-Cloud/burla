@@ -28,6 +28,7 @@ def REINIT_SELF(SELF):
     SELF["STARTED"] = False
     SELF["IDLE"] = False
     SELF["job_id"] = None
+    SELF["current_job"] = None
     SELF["udf_executor_thread"] = None
     SELF["inputs_queue"] = Queue()
     SELF["in_progress_input"] = None  # needed so we can send ALL inputs elsewhere on shutdown

@@ -212,7 +212,7 @@ async def job_watcher_logged(n_inputs: int, is_background_job: bool, auth_header
     finally:
         # reset node so it can run a new job
         current_container_config = SELF["current_container_config"]
-        current_workers = SELF["workers"]
+        current_workers = SELF["workers"] + SELF["idle_workers"]
         authorized_users = SELF["authorized_users"]
         REINIT_SELF(SELF)
         SELF["current_container_config"] = current_container_config

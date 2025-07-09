@@ -131,16 +131,21 @@ async def execute(
     SELF["current_job"] = job_id
     SELF["RUNNING"] = True
 
+    # determine which workers to call
     workers_to_assign = []
+    workers_to_leave_idle = []
     future_parallelism = 0
     is_background_job = request_json["is_background_job"]
     user_python_version = request_json["user_python_version"]
     for worker in SELF["workers"]:
         correct_python_version = worker.python_version == user_python_version
         need_more_parallelism = future_parallelism < request_json["parallelism"]
+
         if correct_python_version and need_more_parallelism:
             workers_to_assign.append(worker)
             future_parallelism += 1
+        else:
+            workers_to_leave_idle.append(worker)
 
     if not workers_to_assign:
         SELF["RUNNING"] = False
@@ -181,6 +186,9 @@ async def execute(
         raise Exception("Failed to assign job to any workers")
 
     logger.log(f"Successfully assigned to {len(successfully_assigned_workers)} workers.")
+
+    SELF["workers"] = workers_to_assign
+    SELF["idle_workers"] = workers_to_leave_idle
 
     SELF["job_watcher_stop_event"].clear()  # is initalized as set by default
     job_watcher_coroutine = job_watcher_logged(

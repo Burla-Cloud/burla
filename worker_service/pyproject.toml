@@ -13,6 +13,7 @@ aiohttp = ">=3.11"
 cloudpickle = ">=3.0"
 tblib = ">=3.0"
 requests = "^2.32.4"
+python-multipart = "^0.0.20"
 
 [build-system]
 requires = ["poetry-core"]

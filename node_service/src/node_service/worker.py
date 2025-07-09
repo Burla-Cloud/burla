@@ -172,12 +172,12 @@ class Worker:
                 for log_line in log_generator:
                     msg = log_line.decode("utf-8", errors="ignore").rstrip()
                     print(f"[{self.container_name}] {msg}")
-                    log = {"msg": f"[{self.container_name}] {msg}", "ts": time()}
-                    node_ref.collection("logs").document().set(log)
+                    # log = {"msg": f"[{self.container_name}] {msg}", "ts": time()}
+                    # node_ref.collection("logs").document().set(log)
             except Exception as e:
                 msg = f"Log streaming stopped for {self.container_name}: {traceback.format_exc()}"
                 print(msg)
-                node_ref.collection("logs").document().set({"msg": msg, "ts": time()})
+                # node_ref.collection("logs").document().set({"msg": msg, "ts": time()})
             finally:
                 docker_client.close()
 
@@ -224,8 +224,7 @@ class Worker:
             logging.Client().logger("node_service").log_struct(struct)
 
             error_title = f"Container {self.container_name} has FAILED! Logs from container:\n"
-            logs = logs.strip().replace("\n", "\n  |  ")
-            log = {"msg": f"{error_title}\n{logs}", "ts": time()}
+            log = {"msg": f"{error_title}\n{logs.strip()}", "ts": time()}
             firestore_client = firestore.Client(project=PROJECT_ID, database="burla")
             node_ref = firestore_client.collection("nodes").document(INSTANCE_NAME)
             node_ref.collection("logs").document().set(log)

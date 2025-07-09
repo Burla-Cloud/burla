@@ -246,7 +246,7 @@ async def node_log_stream(node_id: str, request: Request):
                     if not formatted_lines:
                         formatted_lines.append(f"{timestamp_str} {segment}")
                     else:
-                        formatted_lines.append(f"{' ' * len(timestamp_str)}{segment}")
+                        formatted_lines.append(f" {' ' * len(timestamp_str)}{segment}")
             msg_clean = "\n".join(formatted_lines)
 
             current_loop.call_soon_threadsafe(queue.put_nowait, {"message": msg_clean})

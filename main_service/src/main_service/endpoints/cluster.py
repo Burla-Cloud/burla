@@ -233,12 +233,14 @@ async def node_log_stream(node_id: str, request: Request):
                 last_date_str = current_date_str
 
             msg_clean = ""
-            msg = f"{ts_to_str(timestamp)} {log_doc_dict.get('msg').strip()}"
+            timestamp_str = ts_to_str(timestamp)
+            msg = f"{timestamp_str} {log_doc_dict.get('msg').strip()}"
             for line in msg.split("\n"):
                 # wrap text within individual lines
                 for i, _ in enumerate(line):
                     if i > 0 and i % 121 == 0:  # 121 = character width of logs window
-                        line = line[:i] + "\n  |  " + line[i:]
+                        leading_whitespace = " " * len(timestamp_str)
+                        line = f"{line[:i]}\n {leading_whitespace}{line[i:]}"
                 line += "\n  |  " if msg_clean else ""
                 msg_clean += line
 

@@ -243,19 +243,15 @@ class Worker:
                 docker_client.close()
 
     def log_debug_info(self):
-        try:
-            logs = self.logs() if self.exists() else "Unable to retrieve container logs."
-            docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
-            struct = {"severity": "ERROR", "LOGS_FROM_FAILED_CONTAINER": logs}
-            logging.Client().logger("node_service").log_struct(struct)
+        logs = self.logs() if self.exists() else "Unable to retrieve container logs."
+        struct = {"severity": "ERROR", "LOGS_FROM_FAILED_CONTAINER": logs}
+        logging.Client().logger("node_service").log_struct(struct)
 
-            error_title = f"Container {self.container_name} has FAILED! Logs from container:\n"
-            log = {"msg": f"{error_title}\n{logs.strip()}", "ts": time()}
-            firestore_client = firestore.Client(project=PROJECT_ID, database="burla")
-            node_ref = firestore_client.collection("nodes").document(INSTANCE_NAME)
-            node_ref.collection("logs").document().set(log)
-        finally:
-            docker_client.close()
+        error_title = f"Container {self.container_name} has FAILED! Logs from container:\n"
+        log = {"msg": f"{error_title}\n{logs.strip()}", "ts": time()}
+        firestore_client = firestore.Client(project=PROJECT_ID, database="burla")
+        node_ref = firestore_client.collection("nodes").document(INSTANCE_NAME)
+        node_ref.collection("logs").document().set(log)
 
         if IN_LOCAL_DEV_MODE:
             print(logs, file=sys.stderr)  # <- make local debugging easier

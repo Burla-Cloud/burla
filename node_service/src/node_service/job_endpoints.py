@@ -1,13 +1,17 @@
 import pickle
+from time import time
 from queue import Empty
 from typing import Optional, Callable
 
 import asyncio
 import aiohttp
+from google.cloud import firestore
 from fastapi import APIRouter, Path, Depends, Response, Request
 
 from node_service import (
     SELF,
+    PROJECT_ID,
+    INSTANCE_NAME,
     get_request_json,
     get_logger,
     get_request_files,
@@ -161,6 +165,15 @@ async def execute(
         async with session.post(f"{worker.url}/jobs/{job_id}", data=data) as response:
             if response.status == 200:
                 return worker
+            elif response.status == 500:
+                logs = worker.logs() if worker.exists() else "Unable to retrieve container logs."
+                error_title = f"Worker {worker.container_name} returned status {response.status}!"
+                msg = f"{error_title} Logs from container:\n{logs.strip()}"
+                firestore_client = firestore.Client(project=PROJECT_ID, database="burla")
+                node_ref = firestore_client.collection("nodes").document(INSTANCE_NAME)
+                node_ref.collection("logs").document().set({"msg": msg, "ts": time()})
+                logger.log(msg, severity="WARNING")
+                return None
             else:
                 msg = f"Worker {worker.container_name} returned error: {response.status}"
                 logger.log(msg, severity="WARNING")

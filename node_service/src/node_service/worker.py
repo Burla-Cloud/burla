@@ -75,7 +75,7 @@ class Worker:
                 MSG="Installing Burla worker-service inside container image: {image} ..."
                 DB_BASE_URL="https://firestore.googleapis.com/v1/projects/{PROJECT_ID}/databases/burla/documents"
                 payload=$(jq -n --arg msg "$MSG" --arg ts "$(date +%s)" '{{"fields":{{"msg":{{"stringValue":$msg}},"ts":{{"integerValue":$ts}}}}}}')
-                curl -sS -X POST "$DB_BASE_URL/nodes/{self.instance_name}/logs" \
+                curl -sS -X POST "$DB_BASE_URL/nodes/{INSTANCE_NAME}/logs" \
                     -H "Authorization: Bearer $ACCESS_TOKEN" \
                     -H "Content-Type: application/json" \
                     -d "$payload"
@@ -100,7 +100,7 @@ class Worker:
 
                 MSG="Successfully installed worker-service."
                 payload=$(jq -n --arg msg "$MSG" --arg ts "$(date +%s)" '{{"fields":{{"msg":{{"stringValue":$msg}},"ts":{{"integerValue":$ts}}}}}}')
-                curl -sS -X POST "$DB_BASE_URL/nodes/{self.instance_name}/logs" \
+                curl -sS -X POST "$DB_BASE_URL/nodes/{INSTANCE_NAME}/logs" \
                     -H "Authorization: Bearer $ACCESS_TOKEN" \
                     -H "Content-Type: application/json" \
                     -d "$payload"

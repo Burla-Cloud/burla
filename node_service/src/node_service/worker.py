@@ -139,7 +139,7 @@ class Worker:
                 port_bindings={WORKER_INTERNAL_PORT: ("127.0.0.1", None)},
                 ipc_mode="host",
                 device_requests=device_requests,
-                binds={"burla/worker_service": "/burla/worker_service"},
+                binds={"/burla/worker_service": "/burla/worker_service"},
             )
 
         # start container

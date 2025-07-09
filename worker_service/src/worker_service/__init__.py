@@ -12,7 +12,6 @@ from starlette.datastructures import UploadFile
 
 # Defined before importing helpers/endpoints to prevent cyclic imports
 IN_LOCAL_DEV_MODE = os.environ.get("IN_LOCAL_DEV_MODE") == "True"
-SEND_LOGS_TO_GCL = os.environ.get("SEND_LOGS_TO_GCL") == "True"
 PROJECT_ID = os.environ.get("GOOGLE_CLOUD_PROJECT")
 BURLA_BACKEND_URL = "https://backend.burla.dev"
 

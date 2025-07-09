@@ -158,7 +158,7 @@ async def _job_watcher(
                 job_is_done = total_results == n_inputs and client_has_all_results
 
             if job_is_done:
-                logger.log("Job is done, updating job status and rebooting ...")
+                logger.log("Job is done, updating job status ...")
                 try:
                     await job_doc.update({"status": "COMPLETED"})
                 except Exception:

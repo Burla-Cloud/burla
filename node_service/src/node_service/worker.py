@@ -31,8 +31,7 @@ class Worker:
         self,
         python_version: str,
         image: str,
-        send_logs_to_gcl: bool = False,
-        install_worker_if_missing: bool = False,
+        install_worker: bool = False,
         boot_timeout_sec: int = 120,
     ):
         self.is_idle = False
@@ -73,7 +72,7 @@ class Worker:
             # TODO: update worker service if version is out of sync with this nodes version!
 
             # Install worker_service if missing
-            if ! $python_cmd -c "import worker_service" 2>/dev/null; then
+            if [ "{install_worker}" = "True" ] && ! $python_cmd -c "import worker_service" 2>/dev/null; then
 
                 MSG="Installing Burla worker-service inside container image: {image} ..."
                 DB_BASE_URL="https://firestore.googleapis.com/v1/projects/{PROJECT_ID}/databases/burla/documents"
@@ -101,7 +100,7 @@ class Worker:
                     cd worker_service
                 fi
                 $python_cmd -m pip install --break-system-packages --no-cache-dir \
-                    --only-binary=:all: --target /worker_service .
+                    --only-binary=:all: --target /burla/worker_service .
 
                 MSG="Successfully installed worker-service."
                 TS=$(date +%s)
@@ -119,7 +118,7 @@ class Worker:
             fi
 
             # Start the worker service
-            PYTHONPATH=/worker_service exec $python_cmd -m uvicorn worker_service:app --host 0.0.0.0 \
+            PYTHONPATH=/burla/worker_service exec $python_cmd -m uvicorn worker_service:app --host 0.0.0.0 \
                 --port {WORKER_INTERNAL_PORT} --workers 1 \
                 --timeout-keep-alive 30 $reload_flag
         """.strip()
@@ -140,6 +139,7 @@ class Worker:
                 port_bindings={WORKER_INTERNAL_PORT: ("127.0.0.1", None)},
                 ipc_mode="host",
                 device_requests=device_requests,
+                binds={"burla/worker_service": "/burla/worker_service"},
             )
 
         # start container
@@ -154,7 +154,6 @@ class Worker:
                 "GOOGLE_CLOUD_PROJECT": PROJECT_ID,
                 "IN_LOCAL_DEV_MODE": IN_LOCAL_DEV_MODE,
                 "WORKER_NAME": self.container_name,
-                "SEND_LOGS_TO_GCL": send_logs_to_gcl,
             },
             detach=True,
             runtime="nvidia" if NUM_GPUS != 0 else None,
@@ -190,20 +189,14 @@ class Worker:
         def stream_logs():
             try:
                 docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
-                firestore_client = firestore.Client(project=PROJECT_ID, database="burla")
-                node_ref = firestore_client.collection("nodes").document(INSTANCE_NAME)
                 log_generator = docker_client.logs(
                     container=self.container_id, stream=True, follow=True, stdout=True, stderr=True
                 )
                 for log_line in log_generator:
                     msg = log_line.decode("utf-8", errors="ignore").rstrip()
                     print(f"[{self.container_name}] {msg}")
-                    # log = {"msg": f"[{self.container_name}] {msg}", "ts": time()}
-                    # node_ref.collection("logs").document().set(log)
             except Exception as e:
-                msg = f"Log streaming stopped for {self.container_name}: {traceback.format_exc()}"
-                print(msg)
-                # node_ref.collection("logs").document().set({"msg": msg, "ts": time()})
+                print(f"Log streaming stopped for {self.container_name}: {traceback.format_exc()}")
             finally:
                 docker_client.close()
 

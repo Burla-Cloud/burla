@@ -5,6 +5,7 @@ import requests
 from time import time
 from datetime import datetime
 import pytz
+import textwrap
 
 from fastapi import APIRouter, Depends, Request, HTTPException
 from google.cloud.firestore_v1 import FieldFilter
@@ -234,15 +235,19 @@ async def node_log_stream(node_id: str, request: Request):
 
             msg_clean = ""
             timestamp_str = ts_to_str(timestamp)
-            msg = f"{timestamp_str} {log_doc_dict.get('msg').strip()}"
-            for line in msg.split("\n"):
-                # wrap text within individual lines
-                for i, _ in enumerate(line):
-                    if i > 0 and i % 121 == 0:  # 121 = character width of logs window
-                        leading_whitespace = " " * len(timestamp_str)
-                        line = f"{line[:i]}\n {leading_whitespace}{line[i:]}"
-                line += "\n  |  " if msg_clean else ""
-                msg_clean += line
+            # preserve original newline boundaries and wrap each line at word boundaries
+            msg_raw = log_doc_dict.get("msg").rstrip()
+            line_len = 120 - len(timestamp_str)
+            wrapper = textwrap.TextWrapper(line_len, break_long_words=True, break_on_hyphens=True)
+            formatted_lines = []
+            for original_line in msg_raw.splitlines():
+                wrapped_segments = wrapper.wrap(original_line)
+                for segment in wrapped_segments:
+                    if not formatted_lines:
+                        formatted_lines.append(f"{timestamp_str} {segment}")
+                    else:
+                        formatted_lines.append(f"{' ' * len(timestamp_str)}{segment}")
+            msg_clean = "\n".join(formatted_lines)
 
             current_loop.call_soon_threadsafe(queue.put_nowait, {"message": msg_clean})
 

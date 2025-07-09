@@ -282,21 +282,12 @@ async def log_and_time_requests(request: Request, call_next):
     return response
 
 
+@app.middleware("http")
+async def set_timezone_middleware(request: Request, call_next):
+    timezone_header = request.headers.get("X-User-Timezone")
+    if timezone_header:
+        request.session["timezone"] = timezone_header
+    return await call_next(request)
+
+
 app.add_middleware(SessionMiddleware, secret_key=CLUSTER_ID_TOKEN)
-
-
-# @app.middleware("http")
-# async def set_timezone_middleware(request: Request, call_next):
-#     timezone_header = request.headers.get("X-User-Timezone")
-#     if timezone_header:
-#         request.session["timezone"] = timezone_header
-#     return await call_next(request)
-
-
-# @app.post("/api/timezone")
-# async def set_timezone(request: Request):
-#     data = await request.json()
-#     timezone = data.get("timezone")
-#     if timezone:
-#         request.session["timezone"] = timezone
-#     return {"timezone": timezone}

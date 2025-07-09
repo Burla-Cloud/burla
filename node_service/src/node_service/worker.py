@@ -117,6 +117,19 @@ class Worker:
                 reload_flag="--reload"
             fi
 
+            # Wait for worker_service to become importable when not installing
+            if [ "{install_worker}" != "True" ]; then
+                start_time=$(date +%s)
+                until $python_cmd -c "import worker_service" 2>/dev/null; do
+                    now=$(date +%s)
+                    if [ $((now - start_time)) -ge {self.boot_timeout_sec} ]; then
+                        echo "Timeout waiting for worker_service to become importable after {self.boot_timeout_sec} seconds"
+                        exit 1
+                    fi
+                    sleep 1
+                done
+            fi
+
             # Start the worker service
             PYTHONPATH=/burla/worker_service exec $python_cmd -m uvicorn worker_service:app --host 0.0.0.0 \
                 --port {WORKER_INTERNAL_PORT} --workers 1 \

@@ -196,7 +196,9 @@ async def _execute_job(
         data.add_field("request_json", json.dumps(request_json))
         data.add_field("function_pkl", function_pkl)
         url = f"{node['host']}/jobs/{job_id}"
-        async with session.post(url, data=data, headers=auth_headers) as response:
+        timeout = aiohttp.ClientTimeout(total=2)
+        request = session.post(url, data=data, headers=auth_headers, timeout=timeout)
+        async with request as response:
             if response.status == 200:
                 return node
             elif response.status == 401:

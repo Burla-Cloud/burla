@@ -196,16 +196,14 @@ async def cluster_info(logger: Logger = Depends(get_logger)):
 
 
 @router.delete("/v1/cluster/{node_id}")
-def delete_node(node_id: str):
-    """deletes the firestore doc, used to dismiss failed nodes from dashboard"""
-
+def delete_node(node_id: str, request: Request, logger: Logger = Depends(get_logger)):
+    email = request.session.get("X-User-Email")
+    authorization = request.session.get("Authorization")
+    auth_headers = {"Authorization": authorization, "X-User-Email": email}
     node_doc = DB.collection("nodes").document(node_id).get()
-    if node_doc.exists and node_doc.to_dict().get("status") == "FAILED":
-        node_doc.reference.update({"display_in_dashboard": False})
-    elif node_doc.exists:
-        node_doc.reference.update({"status": "DELETED", "display_in_dashboard": False})
-    else:
-        raise HTTPException(status_code=404, detail=f"Node {node_id} not found")
+
+    node = Node.from_snapshot(DB, logger, node_doc, auth_headers)
+    node.delete(hide_if_failed=True)  # <- ensure node is hidden from dashboard no matter
 
 
 @router.get("/v1/cluster/{node_id}/logs")

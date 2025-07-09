@@ -180,11 +180,19 @@ class Node:
         self.is_booting = False
         return self
 
-    def delete(self):
+    def delete(self, hide_if_failed: bool = False):
+        """
+        hide_if_failed: should I hide this node from the dashboard if it's state is failed?
+        be default, no, so the user can inspect the logs of a failed node, then remove it later.
+        """
         node_snapshot = self.node_ref.get()
-        if node_snapshot.exists and node_snapshot.to_dict().get("status") != "FAILED":
-            new_attrs = dict(status="DELETED", display_in_dashboard=False)
-            self.node_ref.update(new_attrs)
+        node_is_failed = node_snapshot.exists and node_snapshot.to_dict().get("status") == "FAILED"
+        display_if_failed = not hide_if_failed
+
+        if node_is_failed:
+            self.node_ref.update(dict(status="FAILED", display_in_dashboard=display_if_failed))
+        else:
+            self.node_ref.update(dict(status="DELETED", display_in_dashboard=False))
 
         if not self.instance_client:
             self.instance_client = InstancesClient()

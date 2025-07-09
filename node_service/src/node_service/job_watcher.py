@@ -186,13 +186,15 @@ async def _job_watcher(
                 last_ping_timestamp = sync_job_doc.get().to_dict()["last_ping_from_client"]
                 client_disconnected = time() - last_ping_timestamp > CLIENT_DC_TIMEOUT_SEC
                 if client_disconnected:
+                    msg = f"No client ping in the last {CLIENT_DC_TIMEOUT_SEC}s, "
+                    msg += "setting job status to FAILED"
+                    logger.log(msg)
                     try:
                         await job_doc.update({"status": "FAILED"})
                     except Exception:
                         # ignore because this can get hit by like 100's of nodes at once
                         # one of them will succeed and the others will throw errors we can ignore.
                         pass
-                    logger.log(f"No client ping in the last {CLIENT_DC_TIMEOUT_SEC}s, REBOOTING")
                     break
 
     if not is_background_job:

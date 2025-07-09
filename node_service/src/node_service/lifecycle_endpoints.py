@@ -42,6 +42,10 @@ class Container(BaseModel):
 
 @router.post("/shutdown")
 async def shutdown_node(logger: Logger = Depends(get_logger)):
+    """
+    We dont need to delete the node here because the only way to call this is to run the shutdown
+    script (by deleting the node)
+    """
     SELF["SHUTTING_DOWN"] = True
     SELF["job_watcher_stop_event"].set()
 
@@ -65,7 +69,7 @@ async def shutdown_node(logger: Logger = Depends(get_logger)):
     snapshot = await doc_ref.get()
     if snapshot.exists:
         if snapshot.to_dict().get("status") != "FAILED":
-            doc_ref.update({"status": "DELETED", "display_in_dashboard": False})
+            await doc_ref.update({"status": "DELETED", "display_in_dashboard": False})
 
 
 @router.post("/reboot")

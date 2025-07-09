@@ -14,7 +14,6 @@ from threading import Event
 import aiohttp
 import google.auth
 from google.auth.transport.requests import Request
-from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 from fastapi import FastAPI, Request, BackgroundTasks, Depends
 from fastapi.responses import Response

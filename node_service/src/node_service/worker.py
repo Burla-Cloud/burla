@@ -9,10 +9,18 @@ import threading
 import docker
 from docker.types import DeviceRequest
 from google.cloud import logging, firestore
+from google.auth.transport.requests import Request
 
-from node_service import PROJECT_ID, INSTANCE_NAME, IN_LOCAL_DEV_MODE, NUM_GPUS, __version__
+from node_service import (
+    PROJECT_ID,
+    CREDENTIALS,
+    INSTANCE_NAME,
+    IN_LOCAL_DEV_MODE,
+    NUM_GPUS,
+    __version__,
+)
 
-
+CREDENTIALS.refresh(Request())
 WORKER_INTERNAL_PORT = 8080
 
 
@@ -43,13 +51,7 @@ class Worker:
         # dont assign to self because must be closed after use or causes issues :(
         docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
 
-        cmd_script = f"""    
-            ACCESS_TOKEN=$(
-              curl -s -H "Metadata-Flavor: Google" \
-                http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token \
-              | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p'
-            )
-
+        cmd_script = f"""
             # Find python version:
             python_cmd=""
             for py in python{self.python_version} python3 python; do
@@ -76,10 +78,9 @@ class Worker:
                 MSG="Installing Burla worker-service inside container image: {image} ..."
                 DB_BASE_URL="https://firestore.googleapis.com/v1/projects/{PROJECT_ID}/databases/burla/documents"
                 TS=$(date +%s)
-                payload='{{"fields":{{"msg":{{"stringValue":"'$MSG'"}}, "ts":{{"integerValue":"'$TS'"}}}}}}'
-
+                payload='{{"fields":{{"msg":{{"stringValue":"'"$MSG"'"}}, "ts":{{"integerValue":"'"$TS"'"}}}}}}'
                 curl -sS -X POST "$DB_BASE_URL/nodes/{INSTANCE_NAME}/logs" \\
-                    -H "Authorization: Bearer $ACCESS_TOKEN" \\
+                    -H "Authorization: Bearer {CREDENTIALS.token}" \\
                     -H "Content-Type: application/json" \\
                     -d "$payload"
 
@@ -103,9 +104,9 @@ class Worker:
 
                 MSG="Successfully installed worker-service."
                 TS=$(date +%s)
-                payload='{{"fields":{{"msg":{{"stringValue":"'$MSG'"}}, "ts":{{"integerValue":"'$TS'"}}}}}}'
+                payload='{{"fields":{{"msg":{{"stringValue":"'"$MSG"'"}}, "ts":{{"integerValue":"'"$TS"'"}}}}}}'
                 curl -sS -X POST "$DB_BASE_URL/nodes/{INSTANCE_NAME}/logs" \\
-                    -H "Authorization: Bearer $ACCESS_TOKEN" \\
+                    -H "Authorization: Bearer {CREDENTIALS.token}" \\
                     -H "Content-Type: application/json" \\
                     -d "$payload"
             fi

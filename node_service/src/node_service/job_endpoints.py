@@ -124,7 +124,6 @@ async def execute(
     request_json: dict = Depends(get_request_json),
     request_files: Optional[dict] = Depends(get_request_files),
     logger: Logger = Depends(get_logger),
-    add_background_task: Callable = Depends(get_add_background_task_function),
 ):
     if SELF["RUNNING"] or SELF["BOOTING"]:
         return Response("Node currently running or booting, request refused.", status_code=409)
@@ -132,23 +131,18 @@ async def execute(
     SELF["current_job"] = job_id
     SELF["RUNNING"] = True
 
-    # determine which workers to call and which to remove
-    workers_to_remove = []
-    workers_to_keep = []
+    workers_to_assign = []
     future_parallelism = 0
     is_background_job = request_json["is_background_job"]
     user_python_version = request_json["user_python_version"]
     for worker in SELF["workers"]:
         correct_python_version = worker.python_version == user_python_version
         need_more_parallelism = future_parallelism < request_json["parallelism"]
-
         if correct_python_version and need_more_parallelism:
-            workers_to_keep.append(worker)
+            workers_to_assign.append(worker)
             future_parallelism += 1
-        else:
-            workers_to_remove.append(worker)
 
-    if not workers_to_keep:
+    if not workers_to_assign:
         SELF["RUNNING"] = False
         msg = "No compatible containers.\n"
         msg += f"User is running python version {user_python_version}, "
@@ -180,7 +174,7 @@ async def execute(
                 return None
 
     async with aiohttp.ClientSession() as session:
-        tasks = [assign_worker(session, worker) for worker in workers_to_keep]
+        tasks = [assign_worker(session, worker) for worker in workers_to_assign]
         successfully_assigned_workers = [w for w in await asyncio.gather(*tasks) if w is not None]
 
     if len(successfully_assigned_workers) == 0:
@@ -188,13 +182,8 @@ async def execute(
 
     logger.log(f"Successfully assigned to {len(successfully_assigned_workers)} workers.")
 
-    SELF["workers"] = workers_to_keep
-    remove_workers = lambda workers_to_remove: [w.remove() for w in workers_to_remove]
-    add_background_task(remove_workers, workers_to_remove)
-
     SELF["job_watcher_stop_event"].clear()  # is initalized as set by default
-    auth_headers = request.headers
     job_watcher_coroutine = job_watcher_logged(
-        request_json["n_inputs"], is_background_job, auth_headers
+        request_json["n_inputs"], is_background_job, request.headers
     )
     SELF["job_watcher_task"] = asyncio.create_task(job_watcher_coroutine)

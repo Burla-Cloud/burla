@@ -44,10 +44,11 @@ class Worker:
         docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
 
         cmd_script = f"""    
-
-            ACCESS_TOKEN=$(curl -s -H "Metadata-Flavor: Google" \
-            "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token" \
-            | jq -r .access_token)
+            ACCESS_TOKEN=$(
+              curl -s -H "Metadata-Flavor: Google" \
+                http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token \
+              | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p'
+            )
 
             # Find python version:
             python_cmd=""

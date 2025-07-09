@@ -232,9 +232,17 @@ async def node_log_stream(node_id: str, request: Request):
                 current_loop.call_soon_threadsafe(queue.put_nowait, {"message": msg})
                 last_date_str = current_date_str
 
-            msg_cleaned = log_doc_dict.get("msg").strip().replace("\n", "\n\t")
-            message = f"{ts_to_str(timestamp)} {msg_cleaned}"
-            current_loop.call_soon_threadsafe(queue.put_nowait, {"message": message})
+            msg_clean = ""
+            msg = f"{ts_to_str(timestamp)} {log_doc_dict.get('msg').strip()}"
+            for line in msg.split("\n"):
+                # wrap text within individual lines
+                for i, _ in enumerate(line):
+                    if i > 0 and i % 121 == 0:  # 121 = character width of logs window
+                        line = line[:i] + "\n  |  " + line[i:]
+                line += "\n  |  " if msg_clean else ""
+                msg_clean += line
+
+            current_loop.call_soon_threadsafe(queue.put_nowait, {"message": msg_clean})
 
     logs_ref = DB.collection("nodes").document(node_id).collection("logs")
     watch = logs_ref.on_snapshot(on_snapshot)

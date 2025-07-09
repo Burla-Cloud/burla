@@ -31,7 +31,10 @@ class Worker:
         self.is_empty = False
         self.container = None
         self.container_id = None
-        self.container_name = f"worker_{uuid4().hex[:8]}--node_{INSTANCE_NAME[11:]}"
+        if IN_LOCAL_DEV_MODE:
+            self.container_name = f"worker_{uuid4().hex[:8]}--node_{INSTANCE_NAME[11:]}"
+        else:
+            self.container_name = f"worker_{uuid4().hex[:8]}"
         self.url = None
         self.host_port = None
         self.python_version = python_version

@@ -17,14 +17,14 @@ BURLA_BACKEND_URL = "https://backend.burla.dev"
 
 from worker_service.helpers import VerboseList  # <- same as a list but prints stuff you append
 
-# we append all logs to a list instead of sending them to google cloud logging because
-# there are so many logs that logging them all causes issues and slowness.
-# By adding them to a list we can write the logs out if an an error occurs,
-# or simply do nothing with them when there is no error.
-verbose_list = VerboseList(print_on_append=IN_LOCAL_DEV_MODE)
-
 
 def REINIT_SELF(SELF):
+    # we append all logs to a list instead of sending them to google cloud logging because
+    # there are so many logs that logging them all causes issues and slowness.
+    # By adding them to a list we can write the logs out if an an error occurs,
+    # or simply do nothing with them when there is no error.
+    verbose_list = VerboseList(print_on_append=IN_LOCAL_DEV_MODE)
+
     if SELF.get("udf_executor_thread"):
         SELF["STOP_PROCESSING_EVENT"].set()
         SELF["udf_executor_thread"].join()
@@ -37,7 +37,6 @@ def REINIT_SELF(SELF):
     SELF["in_progress_input"] = None  # needed so we can send ALL inputs elsewhere on shutdown
     SELF["results_queue"] = Queue()
     SELF["logs"] = verbose_list
-    SELF["logs"].clear()  # <- clear the list so we can re-use it
     SELF["STOP_PROCESSING_EVENT"] = Event()
     SELF["INPUT_UPLOAD_IN_PROGRESS"] = False
 

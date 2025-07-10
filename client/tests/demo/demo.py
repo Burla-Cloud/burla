@@ -9,6 +9,6 @@ def my_function(my_input):
     return my_input
 
 
-my_inputs = list(range(10001))
+my_inputs = list(range(1000001))
 
 return_values = remote_parallel_map(my_function, my_inputs)

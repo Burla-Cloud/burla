@@ -11,12 +11,13 @@ class VerboseList(list):
     # This is because there are a bunch of different threads using an instance of this class at
     # the same time, python's logging module handles threads a lot better than print does.
 
+    logger = python_logging.getLogger()
+    logger.setLevel(python_logging.INFO)
+    logger.addHandler(python_logging.StreamHandler(sys.stdout))
+
     def __init__(self, *a, print_on_append=False, **kw):
         self.start_time = None
         self.print_on_append = print_on_append
-        self.logger = python_logging.getLogger()
-        self.logger.setLevel(python_logging.INFO)
-        self.logger.addHandler(python_logging.StreamHandler(sys.stdout))
         super().__init__(*a, **kw)
 
     def append(self, item):

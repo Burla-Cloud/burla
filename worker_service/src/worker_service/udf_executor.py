@@ -31,13 +31,17 @@ def _get_gcp_auth_token():
     return response.json()["access_token"]
 
 
+DB_HEADERS = {
+    "Authorization": f"Bearer {_get_gcp_auth_token()}",
+    "Content-Type": "application/json",
+}
+
+
 class _FirestoreLogger:
 
     def __init__(self, job_id: str, input_index: int):
         self.job_id = job_id
         self.input_index = input_index
-        token = _get_gcp_auth_token()
-        self.db_headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
     def write(self, msg):
         if msg.strip() and (len(msg.encode("utf-8")) > 1_048_376):  # (1mb - est overhead):
@@ -54,7 +58,7 @@ class _FirestoreLogger:
                 }
             }
             try:
-                response = requests.post(log_doc_url, headers=self.db_headers, json=data, timeout=1)
+                response = requests.post(log_doc_url, headers=DB_HEADERS, json=data, timeout=1)
                 response.raise_for_status()
             except Exception as e:
                 SELF["logs"].append(f"Error writing log to firestore: {e}")

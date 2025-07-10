@@ -4,7 +4,7 @@ from burla import remote_parallel_map
 
 def my_function(my_input):
 
-    sleep(2)
+    sleep(0.1)
 
     # print(f"Running input #{my_input} on a remote computer in the cloud!")
 
@@ -13,5 +13,4 @@ def my_function(my_input):
 
 my_inputs = list(range(10001))
 
-print("hi\n\n\n\n\n")
 return_values = remote_parallel_map(my_function, my_inputs)

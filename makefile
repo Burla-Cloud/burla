@@ -31,6 +31,7 @@ test-jupyter:
 local-dev:
 	set -e; \
 	docker network create local-burla-cluster 2>/dev/null || true; \
+	gcloud auth print-access-token > .temp_token.txt; \
 	docker run --rm -it \
 		--name main_service \
 		--network local-burla-cluster \
@@ -73,11 +74,11 @@ __check-local-services-up-to-date:
 	WORKER_SVC_HAS_DIFF=$$(echo "$${WORKER_SVC_DIFF}" | grep -q . && echo "true" || echo "false"); \
 	NODE_SVC_DIFF=$$(git diff -- "./node_service/src/node_service"); \
 	NODE_SVC_HAS_DIFF=$$(echo "$${NODE_SVC_DIFF}" | grep -q . && echo "true" || echo "false"); \
-	# if [ "$${WORKER_SVC_HAS_DIFF}" = "true" ]; then \
-	# 	echo "DEPLOYED CONTAINER SERVICE NOT UP TO DATE!"; \
-	# 	echo "Your local worker service is different from the cluster's worker service."; \
-	# 	echo "To fix this, run 'make image_nogpu' from './worker_service'."; \
-	# fi; \
+	if [ "$${WORKER_SVC_HAS_DIFF}" = "true" ]; then \
+		echo "DEPLOYED CONTAINER SERVICE NOT UP TO DATE!"; \
+		echo "Your local worker service is different from the cluster's worker service."; \
+		echo "To fix this, run 'make image_nogpu' from './worker_service'."; \
+	fi; \
 	if [ "$${NODE_SVC_HAS_DIFF}" = "true" ]; then \
 		echo "DEPLOYED NODE SERVICE NOT UP TO DATE!"; \
 		echo "Your local node service is different from the cluster's node service."; \

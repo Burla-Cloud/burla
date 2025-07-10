@@ -1,6 +1,7 @@
 import os
 import sys
 import requests
+import subprocess
 from uuid import uuid4
 from time import sleep, time
 import traceback
@@ -114,12 +115,6 @@ class Worker:
                     -d "$payload"
             fi
 
-            # If local dev mode, run in reload mode
-            reload_flag=""
-            if [ "{IN_LOCAL_DEV_MODE}" = "True" ]; then
-                reload_flag="--reload"
-            fi
-
             # Wait for worker_service to become importable when not installing
             if [ "{install_worker}" != "True" ]; then
                 start_time=$(date +%s)
@@ -136,8 +131,33 @@ class Worker:
             # Start the worker service
             exec $python_cmd -m uvicorn worker_service:app --host 0.0.0.0 \
                 --port {WORKER_INTERNAL_PORT} --workers 1 \
-                --timeout-keep-alive 30 $reload_flag
+                --timeout-keep-alive 30
         """.strip()
+        # if IN_LOCAL_DEV_MODE:
+        #     cmd_script = f"""
+        #         # Find python version:
+        #         python_cmd=""
+        #         for py in python{self.python_version} python3 python; do
+        #             is_executable=$(command -v $py >/dev/null 2>&1 && echo true || echo false)
+        #             version_matches=$($py --version 2>&1 | grep -q "{self.python_version}" && echo true || echo false)
+        #             if [ "$is_executable" = true ] && [ "$version_matches" = true ]; then
+        #                 echo "Found correct python version: $py"
+        #                 python_cmd=$py
+        #                 break
+        #             fi
+        #         done
+
+        #         # If python version not found, exit
+        #         if [ -z "$python_cmd" ]; then
+        #             echo "Python {self.python_version} not found"
+        #             exit 1
+        #         fi
+
+        #         # Start the worker service
+        #         exec $python_cmd -m uvicorn worker_service:app --host 0.0.0.0 \
+        #             --port {WORKER_INTERNAL_PORT} --workers 1 \
+        #             --timeout-keep-alive 30 --reload
+        #     """.strip()
         cmd = ["-c", cmd_script]
         if IN_LOCAL_DEV_MODE:
             host_config = docker_client.create_host_config(
@@ -146,6 +166,7 @@ class Worker:
                 binds={
                     f"{os.environ['HOST_HOME_DIR']}/.config/gcloud": "/root/.config/gcloud",
                     f"{os.environ['HOST_PWD']}/worker_service": "/burla/worker_service",
+                    f"{os.environ['HOST_PWD']}/.temp_token.txt": "/burla/.temp_token.txt",
                 },
             )
         else:

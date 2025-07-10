@@ -4,16 +4,25 @@ import requests
 from datetime import datetime, timezone
 from queue import Empty
 from time import sleep
+from pathlib import Path
 
 import cloudpickle
 from tblib import Traceback
-from worker_service import SELF, PROJECT_ID
+from worker_service import SELF, PROJECT_ID, IN_LOCAL_DEV_MODE
 
 FIRESTORE_URL = "https://firestore.googleapis.com"
 DB_BASE_URL = f"{FIRESTORE_URL}/v1/projects/{PROJECT_ID}/databases/burla/documents"
 
 
 def _get_gcp_auth_token():
+    if IN_LOCAL_DEV_MODE:
+        token = Path("/burla/.temp_token.txt").read_text().strip()
+        url = "https://www.googleapis.com/auth/cloud-platform"
+        response = requests.get(url, headers={"Authorization": f"Bearer {token}"})
+        if response.status_code == 401:
+            raise Exception("EXPIRED GCP TOKEN: please run `make local-dev` to refresh the token.")
+        return token
+
     metadata_svc_host = "http://metadata.google.internal"
     token_url = f"{metadata_svc_host}/computeMetadata/v1/instance/service-accounts/default/token"
     headers = {"Metadata-Flavor": "Google"}

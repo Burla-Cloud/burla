@@ -1,7 +1,6 @@
 import os
 import sys
 import requests
-import subprocess
 from uuid import uuid4
 from time import sleep, time
 import traceback
@@ -54,6 +53,7 @@ class Worker:
         cmd_script = f"""
             # worker service is installed here and mounted to all other containers
             export PYTHONPATH=/burla/worker_service
+            DB_BASE_URL="https://firestore.googleapis.com/v1/projects/{PROJECT_ID}/databases/burla/documents"
 
             # Find python version:
             python_cmd=""
@@ -79,7 +79,6 @@ class Worker:
             if [ "{install_worker}" = "True" ] && ! $python_cmd -c "import worker_service" 2>/dev/null; then
 
                 MSG="Installing Burla worker-service inside container image: {image} ..."
-                DB_BASE_URL="https://firestore.googleapis.com/v1/projects/{PROJECT_ID}/databases/burla/documents"
                 TS=$(date +%s)
                 payload='{{"fields":{{"msg":{{"stringValue":"'"$MSG"'"}}, "ts":{{"integerValue":"'"$TS"'"}}}}}}'
                 curl -sS -o /dev/null -X POST "$DB_BASE_URL/nodes/{INSTANCE_NAME}/logs" \\
@@ -126,6 +125,15 @@ class Worker:
                     fi
                     sleep 1
                 done
+
+                TS=$(date +%s)
+                duration=$((TS - start_time))
+                MSG="Found worker-service installation after ${{duration}} seconds."
+                payload='{{"fields":{{"msg":{{"stringValue":"'"$MSG"'"}}, "ts":{{"integerValue":"'"$TS"'"}}}}}}'
+                curl -sS -o /dev/null -X POST "$DB_BASE_URL/nodes/{INSTANCE_NAME}/logs" \\
+                    -H "Authorization: Bearer {CREDENTIALS.token}" \\
+                    -H "Content-Type: application/json" \\
+                    -d "$payload"
             fi
 
             # Start the worker service
@@ -133,31 +141,6 @@ class Worker:
                 --port {WORKER_INTERNAL_PORT} --workers 1 \
                 --timeout-keep-alive 30
         """.strip()
-        # if IN_LOCAL_DEV_MODE:
-        #     cmd_script = f"""
-        #         # Find python version:
-        #         python_cmd=""
-        #         for py in python{self.python_version} python3 python; do
-        #             is_executable=$(command -v $py >/dev/null 2>&1 && echo true || echo false)
-        #             version_matches=$($py --version 2>&1 | grep -q "{self.python_version}" && echo true || echo false)
-        #             if [ "$is_executable" = true ] && [ "$version_matches" = true ]; then
-        #                 echo "Found correct python version: $py"
-        #                 python_cmd=$py
-        #                 break
-        #             fi
-        #         done
-
-        #         # If python version not found, exit
-        #         if [ -z "$python_cmd" ]; then
-        #             echo "Python {self.python_version} not found"
-        #             exit 1
-        #         fi
-
-        #         # Start the worker service
-        #         exec $python_cmd -m uvicorn worker_service:app --host 0.0.0.0 \
-        #             --port {WORKER_INTERNAL_PORT} --workers 1 \
-        #             --timeout-keep-alive 30 --reload
-        #     """.strip()
         cmd = ["-c", cmd_script]
         if IN_LOCAL_DEV_MODE:
             host_config = docker_client.create_host_config(

@@ -21,6 +21,12 @@ async def get_status():
         return {"status": "READY"}
 
 
+@router.get("/reinit")
+async def reinit():
+    REINIT_SELF(SELF)
+    SELF["logs"].append("Reinitialized successfully.")
+
+
 def _check_udf_executor_thread():
     if SELF["current_job"] and not SELF["STOP_PROCESSING_EVENT"].is_set():
         thread = SELF.get("udf_executor_thread")
@@ -108,7 +114,6 @@ async def start_job(
     job_id: str = Path(...),
     request_files: Optional[dict] = Depends(get_request_files),
 ):
-    REINIT_SELF(SELF)
     SELF["logs"].append(f"Assigned to job {job_id}.")
     function_pkl = request_files["function_pkl"]
     thread = ThreadWithExc(target=execute_job, args=(job_id, function_pkl), daemon=True)

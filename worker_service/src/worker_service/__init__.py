@@ -25,15 +25,17 @@ verbose_list = VerboseList(print_on_append=IN_LOCAL_DEV_MODE)
 
 
 def REINIT_SELF(SELF):
+    if SELF.get("udf_executor_thread"):
+        SELF["STOP_PROCESSING_EVENT"].set()
+        SELF["udf_executor_thread"].join()
+
     SELF["STARTED"] = False
     SELF["IDLE"] = False
-    SELF["job_id"] = None
     SELF["current_job"] = None
     SELF["udf_executor_thread"] = None
     SELF["inputs_queue"] = Queue()
     SELF["in_progress_input"] = None  # needed so we can send ALL inputs elsewhere on shutdown
     SELF["results_queue"] = Queue()
-    SELF["started_at"] = None
     SELF["logs"] = verbose_list
     SELF["logs"].clear()  # <- clear the list so we can re-use it
     SELF["STOP_PROCESSING_EVENT"] = Event()

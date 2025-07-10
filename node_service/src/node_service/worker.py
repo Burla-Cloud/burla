@@ -125,15 +125,6 @@ class Worker:
                     fi
                     sleep 1
                 done
-
-                TS=$(date +%s)
-                duration=$((TS - start_time))
-                MSG="Found worker-service installation after ${{duration}} seconds."
-                payload='{{"fields":{{"msg":{{"stringValue":"'"$MSG"'"}}, "ts":{{"integerValue":"'"$TS"'"}}}}}}'
-                curl -sS -o /dev/null -X POST "$DB_BASE_URL/nodes/{INSTANCE_NAME}/logs" \\
-                    -H "Authorization: Bearer {CREDENTIALS.token}" \\
-                    -H "Content-Type: application/json" \\
-                    -d "$payload"
             fi
 
             # Start the worker service

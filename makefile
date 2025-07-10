@@ -77,7 +77,7 @@ __check-local-services-up-to-date:
 	if [ "$${WORKER_SVC_HAS_DIFF}" = "true" ]; then \
 		echo "DEPLOYED CONTAINER SERVICE NOT UP TO DATE!"; \
 		echo "Your local worker service is different from the cluster's worker service."; \
-		echo "To fix this, run 'make image_nogpu' from './worker_service'."; \
+		echo "To fix this, run 'make images_same_env' from './worker_service'."; \
 	fi; \
 	if [ "$${NODE_SVC_HAS_DIFF}" = "true" ]; then \
 		echo "DEPLOYED NODE SERVICE NOT UP TO DATE!"; \

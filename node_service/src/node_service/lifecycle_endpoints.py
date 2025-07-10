@@ -163,6 +163,8 @@ def reboot_containers(
             "all_inputs_received": False,
         }
     )
+    msg = f"Booting {INSTANCE_N_CPUS if NUM_GPUS == 0 else NUM_GPUS} workers ..."
+    node_doc.collection("logs").document().set({"msg": msg, "ts": time()})
 
     try:
         # reset state of the node service, except current_container_config, and the job_watcher.

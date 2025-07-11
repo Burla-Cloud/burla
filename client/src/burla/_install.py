@@ -36,7 +36,11 @@ DEFAULT_CLUSTER_CONFIG = {
 class VerboseCalledProcessError(Exception):
     """This exists to include stderr in the exception message, CalledProcessError does not"""
 
-    def __init__(self, cmd: str, stderr: str):
+    def __init__(self, cmd: str, stderr: bytes):
+        try:
+            stderr = stderr.decode()
+        except Exception:
+            pass
         msg = "SubCommand failed with non-zero exit code!\n"
         msg += f'Command = "{cmd}"\n'
         msg += f"Command Stderr--------------------------------------------------------\n"

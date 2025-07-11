@@ -136,7 +136,9 @@ async def shutdown_if_idle_for_too_long(logger: Logger):
             SELF["last_activity_timestamp"] = time()
 
     if not IN_LOCAL_DEV_MODE:
-        logger.log(f"SHUTTING DOWN NODE DUE TO INACTIVITY: {INSTANCE_NAME}", severity="WARNING")
+        msg += f"Node has been idle for {INACTIVITY_SHUTDOWN_TIME_SEC // 60} minutes.\n"
+        msg += f"SHUTTING DOWN NODE {INSTANCE_NAME} DUE TO INACTIVITY."
+        logger.log(msg, severity="WARNING")
 
         client = firestore.Client(project=PROJECT_ID, database="burla")
         node_doc = client.collection("nodes").document(INSTANCE_NAME)
@@ -179,6 +181,21 @@ async def lifespan(app: FastAPI):
         tb_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
         traceback_str = format_traceback(tb_details)
         logger.log(str(e), "ERROR", traceback=traceback_str)
+
+        client = firestore.Client(project=PROJECT_ID, database="burla")
+        node_doc = client.collection("nodes").document(INSTANCE_NAME)
+        node_doc.update({"status": "FAILED"})
+        msg = f"Error from Node-Service: {traceback.format_exc()}"
+        node_doc.collection("logs").document().set({"msg": msg, "ts": time()})
+
+        instance_client = InstancesClient()
+        silly = instance_client.aggregated_list(project=PROJECT_ID)
+        vms_per_zone = [getattr(vms_in_zone, "instances", []) for _, vms_in_zone in silly]
+        vms = [vm for vms_in_zone in vms_per_zone for vm in vms_in_zone]
+        vm = next((vm for vm in vms if vm.name == INSTANCE_NAME), None)
+        if vm:
+            zone = vm.zone.split("/")[-1]
+            instance_client.delete(project=PROJECT_ID, zone=zone, instance=INSTANCE_NAME)
 
     yield
 

@@ -1,18 +1,26 @@
 import os
 import sys
-import json
 import requests
 from uuid import uuid4
-from time import sleep
+from time import sleep, time
+import traceback
 import threading
 
 import docker
-from google.cloud import logging
 from docker.types import DeviceRequest
+from google.cloud import logging, firestore
+from google.auth.transport.requests import Request
 
-from node_service import PROJECT_ID, INSTANCE_NAME, IN_LOCAL_DEV_MODE, NUM_GPUS, __version__
+from node_service import (
+    PROJECT_ID,
+    CREDENTIALS,
+    INSTANCE_NAME,
+    IN_LOCAL_DEV_MODE,
+    NUM_GPUS,
+    __version__,
+)
 
-
+CREDENTIALS.refresh(Request())
 WORKER_INTERNAL_PORT = 8080
 
 
@@ -23,21 +31,30 @@ class Worker:
         self,
         python_version: str,
         image: str,
-        send_logs_to_gcl: bool = False,
+        install_worker: bool = False,
+        boot_timeout_sec: int = 120,
     ):
         self.is_idle = False
         self.is_empty = False
         self.container = None
         self.container_id = None
-        self.container_name = f"worker_{uuid4().hex[:8]}--node_{INSTANCE_NAME[11:]}"
+        if IN_LOCAL_DEV_MODE:
+            self.container_name = f"worker_{uuid4().hex[:8]}--node_{INSTANCE_NAME[11:]}"
+        else:
+            self.container_name = f"worker_{uuid4().hex[:8]}"
         self.url = None
         self.host_port = None
         self.python_version = python_version
+        self.boot_timeout_sec = boot_timeout_sec
 
         # dont assign to self because must be closed after use or causes issues :(
         docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
 
-        cmd_script = f"""    
+        cmd_script = f"""
+            # worker service is installed here and mounted to all other containers
+            export PYTHONPATH=/burla/worker_service
+            DB_BASE_URL="https://firestore.googleapis.com/v1/projects/{PROJECT_ID}/databases/burla/documents"
+
             # Find python version:
             python_cmd=""
             for py in python{self.python_version} python3 python; do
@@ -56,36 +73,64 @@ class Worker:
                 exit 1
             fi
 
-            # Ensure git is installed
-            if ! command -v git >/dev/null 2>&1; then
-                echo "git not found, installing..."
-                apt-get update && apt-get install -y git
-            fi
-
             # TODO: update worker service if version is out of sync with this nodes version!
 
             # Install worker_service if missing
-            $python_cmd -c "import worker_service" 2>/dev/null || (
-                echo "Installing worker_service..."
-                git clone --depth 1 --branch {__version__} https://github.com/Burla-Cloud/burla.git --no-checkout
-                cd burla
-                git sparse-checkout init --cone
-                git sparse-checkout set worker_service
-                git checkout {__version__}
-                cd worker_service
-                $python_cmd -m pip install --break-system-packages .
-            )
+            if [ "{install_worker}" = "True" ] && ! $python_cmd -c "import worker_service" 2>/dev/null; then
 
-            # If local dev mode, run in reload mode
-            reload_flag=""
-            if [ "{IN_LOCAL_DEV_MODE}" = "True" ]; then
-                reload_flag="--reload"
+                MSG="Installing Burla worker-service inside container image: {image} ..."
+                TS=$(date +%s)
+                payload='{{"fields":{{"msg":{{"stringValue":"'"$MSG"'"}}, "ts":{{"integerValue":"'"$TS"'"}}}}}}'
+                curl -sS -o /dev/null -X POST "$DB_BASE_URL/nodes/{INSTANCE_NAME}/logs" \\
+                    -H "Authorization: Bearer {CREDENTIALS.token}" \\
+                    -H "Content-Type: application/json" \\
+                    -d "$payload"
+
+                # use tarball if available because faster
+                if curl -Ls -o burla.tar.gz https://github.com/Burla-Cloud/burla/archive/{__version__}.tar.gz; then
+                    tar -xzf burla.tar.gz
+                    cd burla-{__version__}/worker_service
+                else
+                    echo "Tarball not found, falling back to git..."
+                    # Ensure git is installed
+                    if ! command -v git >/dev/null 2>&1; then
+                        echo "git not found, installing..."
+                        apt-get update && apt-get install -y git
+                    fi
+                    git clone --depth 1 --filter=blob:none --sparse --branch {__version__} https://github.com/Burla-Cloud/burla.git
+                    cd burla
+                    git sparse-checkout set worker_service
+                    cd worker_service
+                fi
+                $python_cmd -m pip install --break-system-packages --no-cache-dir \
+                    --only-binary=:all: --target /burla/worker_service .
+
+                MSG="Successfully installed worker-service."
+                TS=$(date +%s)
+                payload='{{"fields":{{"msg":{{"stringValue":"'"$MSG"'"}}, "ts":{{"integerValue":"'"$TS"'"}}}}}}'
+                curl -sS -o /dev/null -X POST "$DB_BASE_URL/nodes/{INSTANCE_NAME}/logs" \\
+                    -H "Authorization: Bearer {CREDENTIALS.token}" \\
+                    -H "Content-Type: application/json" \\
+                    -d "$payload"
+            fi
+
+            # Wait for worker_service to become importable when not installing
+            if [ "{install_worker}" != "True" ]; then
+                start_time=$(date +%s)
+                until $python_cmd -c "import worker_service" 2>/dev/null; do
+                    now=$(date +%s)
+                    if [ $((now - start_time)) -ge {self.boot_timeout_sec} ]; then
+                        echo "Timeout waiting for worker_service to become importable after {self.boot_timeout_sec} seconds"
+                        exit 1
+                    fi
+                    sleep 1
+                done
             fi
 
             # Start the worker service
             exec $python_cmd -m uvicorn worker_service:app --host 0.0.0.0 \
                 --port {WORKER_INTERNAL_PORT} --workers 1 \
-                --timeout-keep-alive 30 $reload_flag
+                --timeout-keep-alive 30
         """.strip()
         cmd = ["-c", cmd_script]
         if IN_LOCAL_DEV_MODE:
@@ -95,6 +140,7 @@ class Worker:
                 binds={
                     f"{os.environ['HOST_HOME_DIR']}/.config/gcloud": "/root/.config/gcloud",
                     f"{os.environ['HOST_PWD']}/worker_service": "/burla/worker_service",
+                    f"{os.environ['HOST_PWD']}/.temp_token.txt": "/burla/.temp_token.txt",
                 },
             )
         else:
@@ -104,6 +150,7 @@ class Worker:
                 port_bindings={WORKER_INTERNAL_PORT: ("127.0.0.1", None)},
                 ipc_mode="host",
                 device_requests=device_requests,
+                binds={"/burla/worker_service": "/burla/worker_service"},
             )
 
         # start container
@@ -118,7 +165,6 @@ class Worker:
                 "GOOGLE_CLOUD_PROJECT": PROJECT_ID,
                 "IN_LOCAL_DEV_MODE": IN_LOCAL_DEV_MODE,
                 "WORKER_NAME": self.container_name,
-                "SEND_LOGS_TO_GCL": send_logs_to_gcl,
             },
             detach=True,
             runtime="nvidia" if NUM_GPUS != 0 else None,
@@ -143,7 +189,7 @@ class Worker:
 
         docker_client.close()
 
-        if send_logs_to_gcl:
+        if install_worker:
             self._start_log_streaming()
 
         # wait until READY
@@ -154,14 +200,14 @@ class Worker:
         def stream_logs():
             try:
                 docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
-                for log_line in docker_client.logs(
-                    self.container_id, stream=True, follow=True, stdout=True, stderr=True
-                ):
-                    print(
-                        f"[{self.container_name}] {log_line.decode('utf-8', errors='ignore').rstrip()}"
-                    )
+                log_generator = docker_client.logs(
+                    container=self.container_id, stream=True, follow=True, stdout=True, stderr=True
+                )
+                for log_line in log_generator:
+                    msg = log_line.decode("utf-8", errors="ignore").rstrip()
+                    print(f"[{self.container_name}] {msg}")
             except Exception as e:
-                print(f"Log streaming stopped for {self.container_name}: {e}")
+                print(f"Log streaming stopped for {self.container_name}: {traceback.format_exc()}")
             finally:
                 docker_client.close()
 
@@ -201,25 +247,35 @@ class Worker:
                 docker_client.close()
 
     def log_debug_info(self):
-        try:
-            logs = self.logs() if self.exists() else "Unable to retrieve container logs."
-            logs = f"\nERROR INSIDE CONTAINER:\n{logs}\n"
-            docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
-            info = docker_client.containers(all=True)
-            info = json.loads(json.dumps(info, default=lambda thing: str(thing)))
-            struct = {
-                "severity": "ERROR",
-                "LOGS_FROM_FAILED_CONTAINER": logs,
-                "CONTAINERS INFO": info,
-            }
-            logging.Client().logger("node_service").log_struct(struct)
-        finally:
-            docker_client.close()
+        logs = self.logs() if self.exists() else "Unable to retrieve container logs."
+        struct = {"severity": "ERROR", "LOGS_FROM_FAILED_CONTAINER": logs}
+        logging.Client().logger("node_service").log_struct(struct)
+
+        error_title = f"Container {self.container_name} has FAILED! Logs from container:\n"
+        log = {"msg": f"{error_title}\n{logs.strip()}", "ts": time()}
+        firestore_client = firestore.Client(project=PROJECT_ID, database="burla")
+        node_ref = firestore_client.collection("nodes").document(INSTANCE_NAME)
+        node_ref.collection("logs").document().set(log)
 
         if IN_LOCAL_DEV_MODE:
             print(logs, file=sys.stderr)  # <- make local debugging easier
 
     def status(self, attempt: int = 0):
+        # Check if Docker container is running; fail if not
+        docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
+        try:
+            info = docker_client.inspect_container(self.container_id)
+            if not info.get("State", {}).get("Running"):
+                self.log_debug_info()
+                self.remove()
+                return "FAILED"
+        except docker.errors.NotFound:
+            self.log_debug_info()
+            self.remove()
+            return "FAILED"
+        finally:
+            docker_client.close()
+
         # A worker can also be "IDLE" (waiting for inputs) but that is not returned by this endpoint
         # "IDLE" is not a possible return value here because it is only returned/assigned to `self`
         # when checking results (for efficiency reasons).
@@ -228,8 +284,8 @@ class Worker:
             response.raise_for_status()
             status = response.json()["status"]  # will be one of: READY, BUSY
         except requests.exceptions.ConnectionError as e:
-            if attempt < 10:
-                sleep(3)
+            if attempt < self.boot_timeout_sec:
+                sleep(1)
                 return self.status(attempt + 1)
             else:
                 status = "FAILED"

@@ -60,7 +60,7 @@ GCE_DEFAULT_SVC = f"{project.name.split('/')[-1]}-compute@developer.gserviceacco
 
 NODE_BOOT_TIMEOUT = 60 * 10
 ACCEPTABLE_ZONES = ["us-central1-a", "us-central1-b", "us-central1-c", "us-central1-f"]
-NODE_SVC_VERSION = "1.0.25"  # <- this maps to a git tag/release or branch
+NODE_SVC_VERSION = "1.0.26"  # <- this maps to a git tag/release or branch
 
 
 class Node:
@@ -110,7 +110,6 @@ class Node:
         instance_client: Optional[InstancesClient] = None,
         inactivity_shutdown_time_sec: Optional[int] = None,
         disk_size: Optional[int] = None,
-        verbose=False,
     ):
         self = cls.__new__(cls)
         self.db = db
@@ -143,15 +142,16 @@ class Node:
         else:
             raise ValueError(f"Invalid machine type: {machine_type}")
 
-        if verbose:
-            self.logger.log(f"Adding node {self.instance_name} ..")
-
         current_state = dict(self.__dict__)  # <- create copy to modify / save
         current_state["status"] = "BOOTING"
+        current_state["display_in_dashboard"] = True
         current_state["containers"] = [container.to_dict() for container in containers]
         attrs_to_not_save = ["db", "logger", "instance_client", "node_ref", "auth_headers"]
         current_state = {k: v for k, v in current_state.items() if k not in attrs_to_not_save}
         self.node_ref.set(current_state)
+
+        log = {"msg": f"Adding node {self.instance_name} ({self.machine_type}) ...", "ts": time()}
+        self.node_ref.collection("logs").document().set(log)
 
         try:
             if as_local_container:
@@ -167,38 +167,40 @@ class Node:
                 status = self.status()
 
                 if status == "FAILED" or booting_too_long:
-                    self.node_ref.update(dict(status="FAILED"))
-                    self.delete()
                     msg = f"Node {self.instance_name} Failed to start! (timeout={booting_too_long})"
                     raise Exception(msg)
         except Exception as e:
-            self.delete(error_message=traceback.format_exc())
+            self.node_ref.update({"status": "FAILED"})
+            log = {"msg": traceback.format_exc(), "ts": time()}
+            self.node_ref.collection("logs").document().set(log)
+            self.delete()
             raise e
 
         self.node_ref.update(dict(host=self.host, zone=self.zone))  # node svc marks itself as ready
         self.is_booting = False
         return self
 
-    def delete(self, error_message: Optional[str] = None):
+    def delete(self, hide_if_failed: bool = False):
         """
-        An `instance_client.delete` request creates an `operation` that runs in the background.
+        hide_if_failed: should I hide this node from the dashboard if it's state is failed?
+        be default, no, so the user can inspect the logs of a failed node, then remove it later.
         """
+        node_snapshot = self.node_ref.get()
+        node_is_failed = node_snapshot.exists and node_snapshot.to_dict().get("status") == "FAILED"
+        display_if_failed = not hide_if_failed
+
+        if node_is_failed:
+            self.node_ref.update(dict(status="FAILED", display_in_dashboard=display_if_failed))
+        else:
+            self.node_ref.update(dict(status="DELETED", display_in_dashboard=False))
+
         if not self.instance_client:
             self.instance_client = InstancesClient()
-
         try:
             kwargs = dict(project=PROJECT_ID, zone=self.zone, instance=self.instance_name)
             self.instance_client.delete(**kwargs)
         except (NotFound, ValueError):
             pass  # these errors mean it was already deleted.
-        if error_message:
-            # only add the error message if one isn't already there.
-            update_fields = {"status": "FAILED"}
-            if not self.node_ref.get().to_dict().get("error_message"):
-                update_fields["error_message"] = traceback.format_exc()
-            self.node_ref.update(update_fields)
-        else:
-            self.node_ref.delete()
 
     def status(self):
         """Returns one of: `BOOTING`, `RUNNING`, `READY`, `FAILED`"""
@@ -271,6 +273,7 @@ class Node:
         )
         docker_client.start(container=container.get("Id"))
         self.host = f"http://{container_name}:{self.port}"
+        self.node_ref.update(dict(host=self.host))
 
     def __start_svc_in_vm(self, disk_image: str, disk_size: int):
         disk_params = AttachedDiskInitializeParams(source_image=disk_image, disk_size_gb=disk_size)
@@ -304,6 +307,8 @@ class Node:
         exhausted_zones = []
         unavailable_zones = []
         for zone in ACCEPTABLE_ZONES:
+            msg = f"Attempting to provision {self.machine_type} in zone: {zone}"
+            self.node_ref.collection("logs").document().set({"msg": msg, "ts": time()})
             try:
                 instance = Instance(
                     name=self.instance_name,
@@ -315,20 +320,23 @@ class Node:
                     tags=Tags(items=["burla-cluster-node"]),
                     scheduling=scheduling,
                 )
-                self.instance_client.insert(
-                    project=PROJECT_ID, zone=zone, instance_resource=instance
-                ).result()
+                kw = dict(project=PROJECT_ID, zone=zone, instance_resource=instance)
+                self.instance_client.insert(**kw).result()
                 instance_created = True
                 break
             except BadRequest as e:
                 if "does not exist in zone" in str(e):
                     unavailable_zones.append(zone)
                     instance_created = False
+                    msg = f"Machine type {self.machine_type} not offered in zone: {zone}"
+                    self.node_ref.collection("logs").document().set({"msg": msg, "ts": time()})
                 else:
                     raise e
             except ServiceUnavailable:  # not enough instances in this zone, try next zone.
                 exhausted_zones.append(zone)
                 instance_created = False
+                msg = f"No available capacity for {self.machine_type} in zone: {zone}"
+                self.node_ref.collection("logs").document().set({"msg": msg, "ts": time()})
             except Conflict:
                 raise Exception(f"Node {self.instance_name} deleted while starting.")
 
@@ -348,11 +356,26 @@ class Node:
 
         self.host = f"http://{external_ip}:{self.port}"
         self.zone = zone
+        self.node_ref.update(dict(host=self.host, zone=self.zone))
+        msg = f"Successfully provisioned {self.machine_type} in zone: {zone}"
+        self.node_ref.collection("logs").document().set({"msg": msg, "ts": time()})
 
     def __get_startup_script(self):
         return f"""
         #! /bin/bash        
-        echo "DOWNLOADING BURLA NODE SERVICE V{NODE_SVC_VERSION}"
+
+        ACCESS_TOKEN=$(curl -s -H "Metadata-Flavor: Google" \
+        "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token" \
+        | jq -r .access_token)
+
+        MSG="Installing Burla node service v{NODE_SVC_VERSION} ..."
+        DB_BASE_URL="https://firestore.googleapis.com/v1/projects/{PROJECT_ID}/databases/burla/documents"
+        payload=$(jq -n --arg msg "$MSG" --arg ts "$(date +%s)" '{{"fields":{{"msg":{{"stringValue":$msg}},"ts":{{"integerValue":$ts}}}}}}')
+        curl -sS -X POST "$DB_BASE_URL/nodes/{self.instance_name}/logs" \
+            -H "Authorization: Bearer $ACCESS_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "$payload"
+
         git clone --depth 1 --branch {NODE_SVC_VERSION} https://github.com/Burla-Cloud/burla.git  --no-checkout
         cd burla
         git sparse-checkout init --cone
@@ -360,19 +383,22 @@ class Node:
         git checkout {NODE_SVC_VERSION}
         cd node_service
         python -m pip install --break-system-packages .
-        echo "Done installing packages."
+
+        MSG="Successfully installed node service."
+        payload=$(jq -n --arg msg "$MSG" --arg ts "$(date +%s)" '{{"fields":{{"msg":{{"stringValue":$msg}},"ts":{{"integerValue":$ts}}}}}}')
+        curl -sS -X POST "$DB_BASE_URL/nodes/{self.instance_name}/logs" \
+            -H "Authorization: Bearer $ACCESS_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "$payload"
+
+        # authenticate docker:
+        echo "$ACCESS_TOKEN" | docker login -u oauth2accesstoken --password-stdin https://us-docker.pkg.dev
 
         export NUM_GPUS="{self.num_gpus}"
         export INSTANCE_NAME="{self.instance_name}"
         export PROJECT_ID="{PROJECT_ID}"
         export CONTAINERS='{json.dumps([c.to_dict() for c in self.containers])}'
         export INACTIVITY_SHUTDOWN_TIME_SEC="{self.inactivity_shutdown_time_sec}"
-
-        # authenticate docker:
-        ACCESS_TOKEN=$(curl -s -H "Metadata-Flavor: Google" \
-        "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token" \
-        | jq -r .access_token)
-        echo "$ACCESS_TOKEN" | docker login -u oauth2accesstoken --password-stdin https://us-docker.pkg.dev
 
         python -m uvicorn node_service:app --host 0.0.0.0 --port {self.port} --workers 1 --timeout-keep-alive 600
         """

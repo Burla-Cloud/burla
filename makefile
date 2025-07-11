@@ -7,8 +7,8 @@ ACCESS_TOKEN := $(shell gcloud auth print-access-token)
 MAIN_SVC_IMAGE_NAME := us-docker.pkg.dev/$(PROJECT_ID)/burla-main-service/burla-main-service:latest
 
 
-local-login:
-	BURLA_DASHBOARD_URL=http://localhost:5001 poetry -C ./client run burla login
+login:
+	poetry -C ./client run burla login
 
 batch-demo:
 	poetry -C ./client run python client/tests/demo/batch_inference.py
@@ -31,6 +31,7 @@ test-jupyter:
 local-dev:
 	set -e; \
 	docker network create local-burla-cluster 2>/dev/null || true; \
+	gcloud auth print-access-token > .temp_token.txt; \
 	docker run --rm -it \
 		--name main_service \
 		--network local-burla-cluster \
@@ -76,7 +77,7 @@ __check-local-services-up-to-date:
 	if [ "$${WORKER_SVC_HAS_DIFF}" = "true" ]; then \
 		echo "DEPLOYED CONTAINER SERVICE NOT UP TO DATE!"; \
 		echo "Your local worker service is different from the cluster's worker service."; \
-		echo "To fix this, run 'make image_nogpu' from './worker_service'."; \
+		echo "To fix this, run 'make images_same_env' from './worker_service'."; \
 	fi; \
 	if [ "$${NODE_SVC_HAS_DIFF}" = "true" ]; then \
 		echo "DEPLOYED NODE SERVICE NOT UP TO DATE!"; \

@@ -12,7 +12,7 @@ export interface BurlaNode {
     gpus?: number;
     memory?: string;
     age?: string;
-    errorMessage?: string;
+    logs?: string[];
 }
 
 export interface BurlaJob {

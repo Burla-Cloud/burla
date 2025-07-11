@@ -3,8 +3,11 @@ import asyncio
 import docker
 import requests
 from time import time
+from datetime import datetime
+import pytz
+import textwrap
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Request, HTTPException
 from google.cloud.firestore_v1 import FieldFilter
 from google.cloud.compute_v1 import InstancesClient
 from starlette.responses import StreamingResponse
@@ -18,6 +21,7 @@ from main_service import (
     PROJECT_ID,
     BURLA_BACKEND_URL,
     get_logger,
+    get_add_background_task_function,
 )
 from main_service.node import Container, Node
 from main_service.helpers import Logger
@@ -61,7 +65,6 @@ def restart_cluster(request: Request, logger: Logger = Depends(get_logger)):
             as_local_container=IN_LOCAL_DEV_MODE,  # <- start in a container if IN_LOCAL_DEV_MODE
             inactivity_shutdown_time_sec=inactivity_time,
             disk_size=disk_size,
-            verbose=True,
         )
         return node.instance_name
 
@@ -171,23 +174,15 @@ async def cluster_info(logger: Logger = Depends(get_logger)):
                 if change.type.name == "REMOVED":
                     event_data = {"nodeId": instance_name, "deleted": True}
                 else:
-                    # always send status and type, and include the errorMessage if present so the UI can surface it
                     event_data = {
                         "nodeId": instance_name,
                         "status": doc_data.get("status"),
                         "type": doc_data.get("machine_type"),
                     }
-
-                    error_message = doc_data.get("error_message")
-                    if error_message:
-                        event_data["errorMessage"] = error_message
-
                 current_loop.call_soon_threadsafe(queue.put_nowait, event_data)
-                logger.log(f"Firestore event detected: {event_data}")
 
-        # include "FAILED" so the frontend is notified when a node fails
-        status_filter = FieldFilter("status", "in", ["READY", "BOOTING", "RUNNING", "FAILED"])
-        query = DB.collection("nodes").where(filter=status_filter)
+        display_filter = FieldFilter("display_in_dashboard", "==", True)
+        query = DB.collection("nodes").where(filter=display_filter)
         node_watch = query.on_snapshot(on_snapshot)
 
         try:
@@ -201,21 +196,74 @@ async def cluster_info(logger: Logger = Depends(get_logger)):
 
 
 @router.delete("/v1/cluster/{node_id}")
-def delete_node(node_id: str, request: Request, logger: Logger = Depends(get_logger)):
-    """Delete a single node and its Firestore document so users can dismiss failures."""
-    instance_client = InstancesClient()
-
+def delete_node(
+    node_id: str,
+    request: Request,
+    hide_if_failed: bool = True,
+    add_background_task=Depends(get_add_background_task_function),
+    logger: Logger = Depends(get_logger),
+):
     email = request.session.get("X-User-Email")
     authorization = request.session.get("Authorization")
     auth_headers = {"Authorization": authorization, "X-User-Email": email}
-
     node_doc = DB.collection("nodes").document(node_id).get()
-    if not node_doc.exists:
-        logger.log(f"Node {node_id} already deleted.")
-        return {"status": "not_found"}
 
-    node = Node.from_snapshot(DB, logger, node_doc, auth_headers, instance_client)
-    node.delete()
+    node = Node.from_snapshot(DB, logger, node_doc, auth_headers)
+    add_background_task(node.delete, hide_if_failed=hide_if_failed)
 
-    logger.log(f"Node {node_id} deleted by user request.")
-    return {"status": "deleted"}
+
+@router.get("/v1/cluster/{node_id}/logs")
+async def node_log_stream(node_id: str, request: Request):
+    queue = asyncio.Queue()
+    current_loop = asyncio.get_running_loop()
+    tz = pytz.timezone(request.cookies.get("timezone", "UTC"))
+    ts_to_str = lambda ts: f"[{datetime.fromtimestamp(ts, tz).strftime('%I:%M %p').lstrip('0')}]"
+
+    date_str = datetime.now(tz).strftime("%B %d, %Y (%Z)")
+    padding_size = (120 - 2 - len(date_str)) // 2
+    queue.put_nowait({"message": f"{'-' * padding_size} {date_str} {'-' * padding_size}"})
+    last_date_str = date_str
+
+    def on_snapshot(query_snapshot, changes, read_time):
+        nonlocal last_date_str
+        sorted_changes = sorted(changes, key=lambda change: change.document.to_dict().get("ts"))
+        for change in sorted_changes:
+            log_doc_dict = change.document.to_dict()
+            timestamp = log_doc_dict.get("ts")
+            current_date_str = datetime.fromtimestamp(timestamp, tz).strftime("%B %d, %Y (%Z)")
+            if current_date_str != last_date_str:
+                padding_size = (120 - 2 - len(current_date_str)) // 2
+                msg = f"{'-' * padding_size} {current_date_str} {'-' * padding_size}"
+                current_loop.call_soon_threadsafe(queue.put_nowait, {"message": msg})
+                last_date_str = current_date_str
+
+            msg_clean = ""
+            timestamp_str = ts_to_str(timestamp)
+            # preserve original newline boundaries and wrap each line at word boundaries
+            msg_raw = log_doc_dict.get("msg").rstrip()
+            line_len = 120 - len(timestamp_str)
+            wrapper = textwrap.TextWrapper(line_len, break_long_words=True, break_on_hyphens=True)
+            formatted_lines = []
+            for original_line in msg_raw.splitlines():
+                wrapped_segments = wrapper.wrap(original_line)
+                for segment in wrapped_segments:
+                    if not formatted_lines:
+                        formatted_lines.append(f"{timestamp_str} {segment}")
+                    else:
+                        formatted_lines.append(f" {' ' * len(timestamp_str)}{segment}")
+            msg_clean = "\n".join(formatted_lines)
+
+            current_loop.call_soon_threadsafe(queue.put_nowait, {"message": msg_clean})
+
+    logs_ref = DB.collection("nodes").document(node_id).collection("logs")
+    watch = logs_ref.on_snapshot(on_snapshot)
+
+    async def log_generator():
+        try:
+            while True:
+                event = await queue.get()
+                yield f"data: {json.dumps(event)}\n\n"
+        finally:
+            watch.unsubscribe()
+
+    return StreamingResponse(log_generator(), media_type="text/event-stream")

@@ -4,15 +4,37 @@ import requests
 from datetime import datetime, timezone
 from queue import Empty
 from time import sleep
+from pathlib import Path
 
 import cloudpickle
 from tblib import Traceback
-from google.auth.transport.requests import Request
-from worker_service import SELF, PROJECT_ID, CREDENTIALS
+from worker_service import SELF, PROJECT_ID, IN_LOCAL_DEV_MODE
 
 FIRESTORE_URL = "https://firestore.googleapis.com"
 DB_BASE_URL = f"{FIRESTORE_URL}/v1/projects/{PROJECT_ID}/databases/burla/documents"
-CREDENTIALS.refresh(Request())
+
+
+def _get_gcp_auth_token():
+    if IN_LOCAL_DEV_MODE:
+        token = Path("/burla/.temp_token.txt").read_text().strip()
+        url = "https://www.googleapis.com/auth/cloud-platform"
+        response = requests.get(url, headers={"Authorization": f"Bearer {token}"})
+        if response.status_code == 401:
+            raise Exception("EXPIRED GCP TOKEN: please run `make local-dev` to refresh the token.")
+        return token
+
+    metadata_svc_host = "http://metadata.google.internal"
+    token_url = f"{metadata_svc_host}/computeMetadata/v1/instance/service-accounts/default/token"
+    headers = {"Metadata-Flavor": "Google"}
+    response = requests.get(token_url, headers=headers)
+    response.raise_for_status()
+    return response.json()["access_token"]
+
+
+DB_HEADERS = {
+    "Authorization": f"Bearer {_get_gcp_auth_token()}",
+    "Content-Type": "application/json",
+}
 
 
 class _FirestoreLogger:
@@ -20,8 +42,6 @@ class _FirestoreLogger:
     def __init__(self, job_id: str, input_index: int):
         self.job_id = job_id
         self.input_index = input_index
-        token = CREDENTIALS.token
-        self.db_headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
     def write(self, msg):
         if msg.strip() and (len(msg.encode("utf-8")) > 1_048_376):  # (1mb - est overhead):
@@ -38,7 +58,7 @@ class _FirestoreLogger:
                 }
             }
             try:
-                response = requests.post(log_doc_url, headers=self.db_headers, json=data, timeout=1)
+                response = requests.post(log_doc_url, headers=DB_HEADERS, json=data, timeout=1)
                 response.raise_for_status()
             except Exception as e:
                 SELF["logs"].append(f"Error writing log to firestore: {e}")

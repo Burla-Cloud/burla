@@ -57,12 +57,8 @@ def _get_login_response(client_id, attempt=0):
 
 
 def login():
-    if os.getenv("BURLA_DASHBOARD_URL"):
-        dashboard_url = f"{os.getenv('BURLA_DASHBOARD_URL')}/auth-success"
-    else:
-        dashboard_url = f"{main_service_url()}/auth-success"
-
     client_id = uuid4().hex
+    dashboard_url = f"{main_service_url()}/auth-success"
     login_url = f"{_BURLA_BACKEND_URL}/v1/login/{client_id}?redirect_url={dashboard_url}"
     _, PROJECT_ID = google.auth.default()
 

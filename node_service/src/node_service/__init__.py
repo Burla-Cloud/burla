@@ -14,7 +14,6 @@ from threading import Event
 import aiohttp
 import google.auth
 from google.auth.transport.requests import Request
-from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 from fastapi import FastAPI, Request, BackgroundTasks, Depends
 from fastapi.responses import Response
@@ -23,7 +22,7 @@ from starlette.datastructures import UploadFile
 from google.cloud import logging, secretmanager
 from google.cloud.compute_v1 import InstancesClient
 
-__version__ = "1.0.25"
+__version__ = "1.0.26"
 CREDENTIALS, PROJECT_ID = google.auth.default()
 BURLA_BACKEND_URL = "https://backend.burla.dev"
 
@@ -63,20 +62,9 @@ def REINIT_SELF(SELF):
 
 SELF = {}
 REINIT_SELF(SELF)
-from node_service.helpers import Logger
+from node_service.helpers import ResultsEndpointFilter, Logger
 
-
-class Container(BaseModel):
-    image: str
-    python_version: str
-
-
-# Silence fastapi logs coming from the /results endpoint, there are so many it slows stuff down.
-class ResultsEndpointFilter(python_logging.Filter):
-    def filter(self, record):
-        return not record.args[2].endswith("/results")
-
-
+# Silence fastapi logs coming from the `/results` endpoint, there are so many it slows stuff down.
 python_logging.getLogger("uvicorn.access").addFilter(ResultsEndpointFilter())
 
 
@@ -130,7 +118,11 @@ def get_add_background_task_function(
 
 from node_service.helpers import Logger, format_traceback
 from node_service.job_endpoints import router as job_endpoints_router
-from node_service.reboot_endpoints import reboot_containers, router as reboot_endpoints_router
+from node_service.lifecycle_endpoints import (
+    reboot_containers,
+    router as lifecycle_endpoints_router,
+    Container,
+)
 
 
 async def shutdown_if_idle_for_too_long(logger: Logger):
@@ -140,6 +132,8 @@ async def shutdown_if_idle_for_too_long(logger: Logger):
     while time_since_last_activity < INACTIVITY_SHUTDOWN_TIME_SEC:
         await asyncio.sleep(5)
         time_since_last_activity = time() - SELF["last_activity_timestamp"]
+        if SELF["current_job"]:
+            SELF["last_activity_timestamp"] = time()
 
     if not IN_LOCAL_DEV_MODE:
         msg = f"SHUTTING DOWN NODE DUE TO INACTIVITY: {INSTANCE_NAME}"
@@ -161,7 +155,7 @@ async def shutdown_if_idle_for_too_long(logger: Logger):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger = Logger()
-    logger.log(f"Booting node service version {__version__}")
+    logger.log(f"Starting node service v{__version__} ...")
 
     # In dev all the workers restart everytime I hit save (server is in "reload" mode)
     # This is annoying but you must leave it like this, otherwise stuff won't restart correctly!
@@ -189,7 +183,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None)
 app.include_router(job_endpoints_router)
-app.include_router(reboot_endpoints_router)
+app.include_router(lifecycle_endpoints_router)
 
 
 @app.get("/")

@@ -74,6 +74,23 @@ export const SettingsForm = ({ isEditing }) => {
         initialVariant === "None" ? settings.machineType : cpuOptions[1].value
     );
 
+    // synchronize form state with backend settings.machineType to ensure correct initial values
+    React.useEffect(() => {
+        const entry = Object.entries(gpuCpuMap).find(([, v]) => v.value === settings.machineType);
+        if (entry) {
+            const displayKey = entry[0];
+            const [countWithX, ...variantParts] = displayKey.split(" ");
+            const count = parseInt(countWithX.slice(0, -1), 10);
+            const variant = variantParts.join(" ");
+            setGpuVariant(variant);
+            setGpusPerVm(count);
+        } else {
+            setGpuVariant("None");
+            setGpusPerVm(1);
+            setCpuChoice(settings.machineType);
+        }
+    }, [settings.machineType]);
+
     React.useEffect(() => {
         if (gpuVariant === "None") {
             handleInputChange("machineType", cpuChoice);

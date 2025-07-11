@@ -3,14 +3,36 @@ import requests
 from itertools import groupby
 from typing import Optional
 import logging as python_logging
+from time import time
+
 from fastapi import Request
-from node_service import IN_LOCAL_DEV_MODE, GCL_CLIENT, PROJECT_ID, BURLA_BACKEND_URL
+from google.cloud.firestore import Client
+
+from node_service import IN_LOCAL_DEV_MODE, GCL_CLIENT, PROJECT_ID, BURLA_BACKEND_URL, INSTANCE_NAME
 
 
 def format_traceback(traceback_details: list):
     details = ["  ... (detail hidden)\n" if "/pypoetry/" in d else d for d in traceback_details]
     details = [key for key, _ in groupby(details)]  # <- remove consecutive duplicates
     return "".join(details).split("another exception occurred:")[-1]
+
+
+class ResultsEndpointFilter(python_logging.Filter):
+    def filter(self, record):
+        return not record.args[2].endswith("/results")
+
+
+class FirestoreLogHandler(python_logging.Handler):
+    def __init__(self):
+        super().__init__()
+        client = Client(project=PROJECT_ID, database="burla")
+        self.log_collection = client.collection("nodes").document(INSTANCE_NAME).collection("logs")
+
+    def emit(self, record):
+        try:
+            self.log_collection.document().set({"msg": record.getMessage(), "ts": time()})
+        except Exception as e:
+            print(f"Error logging to firestore: {e}")
 
 
 class Logger:
@@ -24,6 +46,7 @@ class Logger:
         if not self.logger.handlers:
             self.logger.setLevel(python_logging.INFO)
             self.logger.addHandler(python_logging.StreamHandler(sys.stdout))
+            self.logger.addHandler(FirestoreLogHandler())
             self.logger.propagate = False
 
     def __make_serializeable(self, obj):
@@ -64,7 +87,7 @@ class Logger:
             self.loggable_request = self.__loggable_request(self.request)
 
         if "traceback" in kw.keys():
-            self.logger.error(f"\nERROR: {message.strip()}\n{kw['traceback'].strip()}\n")
+            self.logger.error(kw["traceback"].strip())
         else:
             self.logger.info(message)
 

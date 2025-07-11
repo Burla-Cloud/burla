@@ -1,20 +1,19 @@
 [tool.poetry]
 name = "worker_service"
-version = "1.0.25"
+version = "1.0.26"
 description = ""
 authors = ["Jacob Zuliani <jake@burla.dev>"]
 packages = [{include = "worker_service", from = "src"}]
 
 [tool.poetry.dependencies]
 python = ">=3.10,<4.0"
-cloudpickle = ">=3.0"
-tblib = ">=3.0"
-google-cloud-logging = ">=3.8"
-google-api-python-client = ">=2.147"
 fastapi = ">=0.115"
 uvicorn = ">=0.34"
-python-multipart = ">=0.0.20"
 aiohttp = ">=3.11"
+cloudpickle = ">=3.0"
+tblib = ">=3.0"
+requests = "^2.32.4"
+python-multipart = "^0.0.20"
 
 [build-system]
 requires = ["poetry-core"]

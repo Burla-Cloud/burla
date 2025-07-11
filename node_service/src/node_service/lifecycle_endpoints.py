@@ -8,6 +8,7 @@ import threading
 import aiohttp
 import docker
 from docker.errors import APIError
+from pydantic import BaseModel
 from fastapi import APIRouter, Depends, Response
 from google.cloud import firestore
 from google.cloud.compute_v1 import InstancesClient
@@ -26,7 +27,6 @@ from node_service import (
     CLUSTER_ID_TOKEN,
     NUM_GPUS,
     get_logger,
-    Container,
     get_add_background_task_function,
 )
 from node_service.helpers import Logger
@@ -35,8 +35,17 @@ from node_service.worker import Worker
 router = APIRouter()
 
 
+class Container(BaseModel):
+    image: str
+    python_version: str
+
+
 @router.post("/shutdown")
 async def shutdown_node(logger: Logger = Depends(get_logger)):
+    """
+    We dont need to delete the node here because the only way to call this is to run the shutdown
+    script (by deleting the node)
+    """
     SELF["SHUTTING_DOWN"] = True
     SELF["job_watcher_stop_event"].set()
 
@@ -58,8 +67,9 @@ async def shutdown_node(logger: Logger = Depends(get_logger)):
     async_db = AsyncClient(project=PROJECT_ID, database="burla")
     doc_ref = async_db.collection("nodes").document(INSTANCE_NAME)
     snapshot = await doc_ref.get()
-    if snapshot.to_dict().get("status") != "FAILED":
-        await doc_ref.delete()
+    if snapshot.exists:
+        if snapshot.to_dict().get("status") != "FAILED":
+            await doc_ref.update({"status": "DELETED", "display_in_dashboard": False})
 
 
 @router.post("/reboot")
@@ -141,7 +151,6 @@ def reboot_containers(
     Rebooting will reboot the containers that are currently/ were previously running.
     If new containers are passed with the reboot request, those containers will be booted instead.
     """
-    logger.log(f"Rebooting Node: {INSTANCE_NAME}")
     db = firestore.Client(project=PROJECT_ID, database="burla")
     node_doc = db.collection("nodes").document(INSTANCE_NAME)
     node_doc.update(
@@ -154,6 +163,8 @@ def reboot_containers(
             "all_inputs_received": False,
         }
     )
+    msg = f"Booting {INSTANCE_N_CPUS if NUM_GPUS == 0 else NUM_GPUS} workers ..."
+    node_doc.collection("logs").document().set({"msg": msg, "ts": time()})
 
     try:
         # reset state of the node service, except current_container_config, and the job_watcher.
@@ -218,9 +229,9 @@ def reboot_containers(
             num_workers = INSTANCE_N_CPUS if NUM_GPUS == 0 else NUM_GPUS
             for i in range(num_workers):
                 # have just one worker send logs to gcl, too many will break gcl
-                send_logs_to_gcl = (i == 0) and (not IN_LOCAL_DEV_MODE)
+                install_worker = (i == 0) and (not IN_LOCAL_DEV_MODE)
                 args = (spec.python_version, spec.image)
-                futures.append(executor.submit(Worker, *args, send_logs_to_gcl=send_logs_to_gcl))
+                futures.append(executor.submit(Worker, *args, install_worker=install_worker))
 
         docker_client.close()
         executor.shutdown(wait=True)
@@ -231,12 +242,9 @@ def reboot_containers(
     except Exception as parent_exception:
         SELF["FAILED"] = True
         try:
-            logger.log("Node failed to boot!! deleting node.")
-            node_doc.update(dict(status="FAILED", error_message=traceback.format_exc()))
-            update_fields = {"status": "FAILED"}
-            if not node_doc.get().to_dict().get("error_message"):
-                update_fields["error_message"] = traceback.format_exc()
-            node_doc.update(update_fields)
+            node_doc.update({"status": "FAILED"})
+            msg = f"Error from Node-Service: {traceback.format_exc()}"
+            node_doc.collection("logs").document().set({"msg": msg, "ts": time()})
 
             if not IN_LOCAL_DEV_MODE:
                 instance_client = InstancesClient()

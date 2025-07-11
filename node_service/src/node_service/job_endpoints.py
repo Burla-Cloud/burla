@@ -1,14 +1,17 @@
 import pickle
+from time import time
 from queue import Empty
 from typing import Optional, Callable
-from time import time
 
 import asyncio
 import aiohttp
+from google.cloud import firestore
 from fastapi import APIRouter, Path, Depends, Response, Request
 
 from node_service import (
     SELF,
+    PROJECT_ID,
+    INSTANCE_NAME,
     get_request_json,
     get_logger,
     get_request_files,
@@ -121,18 +124,16 @@ async def execute(
     request_json: dict = Depends(get_request_json),
     request_files: Optional[dict] = Depends(get_request_files),
     logger: Logger = Depends(get_logger),
-    add_background_task: Callable = Depends(get_add_background_task_function),
 ):
-    start = time()
     if SELF["RUNNING"] or SELF["BOOTING"]:
         return Response("Node currently running or booting, request refused.", status_code=409)
 
     SELF["current_job"] = job_id
     SELF["RUNNING"] = True
 
-    # determine which workers to call and which to remove
-    workers_to_remove = []
-    workers_to_keep = []
+    # determine which workers to call
+    workers_to_assign = []
+    workers_to_leave_idle = []
     future_parallelism = 0
     is_background_job = request_json["is_background_job"]
     user_python_version = request_json["user_python_version"]
@@ -141,12 +142,12 @@ async def execute(
         need_more_parallelism = future_parallelism < request_json["parallelism"]
 
         if correct_python_version and need_more_parallelism:
-            workers_to_keep.append(worker)
+            workers_to_assign.append(worker)
             future_parallelism += 1
         else:
-            workers_to_remove.append(worker)
+            workers_to_leave_idle.append(worker)
 
-    if not workers_to_keep:
+    if not workers_to_assign:
         SELF["RUNNING"] = False
         msg = "No compatible containers.\n"
         msg += f"User is running python version {user_python_version}, "
@@ -163,13 +164,22 @@ async def execute(
         async with session.post(f"{worker.url}/jobs/{job_id}", data=data) as response:
             if response.status == 200:
                 return worker
+            elif response.status == 500:
+                logs = worker.logs() if worker.exists() else "Unable to retrieve container logs."
+                error_title = f"Worker {worker.container_name} returned status {response.status}!"
+                msg = f"{error_title} Logs from container:\n{logs.strip()}"
+                firestore_client = firestore.Client(project=PROJECT_ID, database="burla")
+                node_ref = firestore_client.collection("nodes").document(INSTANCE_NAME)
+                node_ref.collection("logs").document().set({"msg": msg, "ts": time()})
+                logger.log(msg, severity="WARNING")
+                return None
             else:
                 msg = f"Worker {worker.container_name} returned error: {response.status}"
                 logger.log(msg, severity="WARNING")
                 return None
 
     async with aiohttp.ClientSession() as session:
-        tasks = [assign_worker(session, worker) for worker in workers_to_keep]
+        tasks = [assign_worker(session, worker) for worker in workers_to_assign]
         successfully_assigned_workers = [w for w in await asyncio.gather(*tasks) if w is not None]
 
     if len(successfully_assigned_workers) == 0:
@@ -177,15 +187,11 @@ async def execute(
 
     logger.log(f"Successfully assigned to {len(successfully_assigned_workers)} workers.")
 
-    SELF["workers"] = workers_to_keep
-    remove_workers = lambda workers_to_remove: [w.remove() for w in workers_to_remove]
-    add_background_task(remove_workers, workers_to_remove)
+    SELF["workers"] = workers_to_assign
+    SELF["idle_workers"] = workers_to_leave_idle
 
     SELF["job_watcher_stop_event"].clear()  # is initalized as set by default
-    auth_headers = request.headers
     job_watcher_coroutine = job_watcher_logged(
-        request_json["n_inputs"], is_background_job, auth_headers
+        request_json["n_inputs"], is_background_job, request.headers
     )
     SELF["job_watcher_task"] = asyncio.create_task(job_watcher_coroutine)
-
-    print(f"TIME TAKEN: {time() - start:.2f}s")

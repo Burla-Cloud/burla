@@ -109,7 +109,19 @@ def install():
         else:
             msg = f"If you're not sure what to do, please email jake@burla.dev, or call me at 508-320-8778!\n"
             msg += f"We take errors very seriously, and would really like to help you get Burla installed!\n"
-            raise InstallError(msg) from e
+            try:
+                exc_cls = e.__class__
+                old_str = exc_cls.__str__
+
+                def new_str(self):
+                    return f"{old_str(self)}\n\n{msg}"
+
+                if getattr(exc_cls, "_burla_str_patched", False) is False:
+                    exc_cls.__str__ = new_str
+                    exc_cls._burla_str_patched = True
+            except Exception:
+                raise InstallError(msg) from e
+            raise e
 
 
 def _install(spinner):
@@ -276,7 +288,7 @@ def _install(spinner):
 
     # wait for burla-main-service service account to exist:
     start = time()
-    while time() - start < 30:
+    while time() - start < 120:
         cmd = f"gcloud iam service-accounts describe {SA_EMAIL}"
         if _run_command(cmd, raise_error=False).returncode == 0:
             break
@@ -284,7 +296,7 @@ def _install(spinner):
     result = _run_command(f"gcloud iam service-accounts describe {SA_EMAIL}", raise_error=False)
     if result.returncode != 0:
         spinner.fail("✗")
-        raise Exception("Burla-main-service service account not found after 30s.")
+        raise Exception("Burla-main-service service account not found after 120s.")
 
     # apply required roles to new svc account:
     project_level_roles = ["datastore.user", "logging.logWriter", "compute.instanceAdmin.v1"]
@@ -302,7 +314,7 @@ def _install(spinner):
 
     # wait for compute engine default service account to exist:
     start = time()
-    while time() - start < 30:
+    while time() - start < 120:
         cmd = f"gcloud iam service-accounts describe {COMPUTE_SA}"
         if _run_command(cmd, raise_error=False).returncode == 0:
             break
@@ -310,7 +322,7 @@ def _install(spinner):
     result = _run_command(f"gcloud iam service-accounts describe {COMPUTE_SA}", raise_error=False)
     if result.returncode != 0:
         spinner.fail("✗")
-        raise Exception("Compute engine default service account not found after 30s.")
+        raise Exception("Compute engine default service account not found after 120s.")
 
     # allow compute engine service account to use burla token secret
     cmd = f"gcloud secrets add-iam-policy-binding burla-cluster-id-token "

@@ -132,6 +132,8 @@ async def shutdown_if_idle_for_too_long(logger: Logger):
     while time_since_last_activity < INACTIVITY_SHUTDOWN_TIME_SEC:
         await asyncio.sleep(5)
         time_since_last_activity = time() - SELF["last_activity_timestamp"]
+        if SELF["current_job"]:
+            SELF["last_activity_timestamp"] = time()
 
     if not IN_LOCAL_DEV_MODE:
         msg = f"SHUTTING DOWN NODE DUE TO INACTIVITY: {INSTANCE_NAME}"

@@ -73,7 +73,7 @@ def main_service_url():
     main_svc_image_name = "us-docker.pkg.dev/burla-test/burla-main-service/burla-main-service"
     cmd = f"docker container list --filter ancestor={main_svc_image_name}"
     result = _run_command(cmd, raise_error=False)
-    if result.returncode == 0 and result.stdout.strip():
+    if result.returncode == 0 and len(result.stdout.strip().splitlines()) > 1:
         return "http://localhost:5001"
     else:
         cmd = "gcloud run services describe burla-main-service --region us-central1"

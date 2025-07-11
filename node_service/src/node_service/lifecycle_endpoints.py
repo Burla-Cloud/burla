@@ -68,7 +68,10 @@ async def shutdown_node(logger: Logger = Depends(get_logger)):
     doc_ref = async_db.collection("nodes").document(INSTANCE_NAME)
     snapshot = await doc_ref.get()
     if snapshot.exists:
-        if snapshot.to_dict().get("status") != "FAILED":
+        node_dict = snapshot.to_dict()
+        if node_dict.get("status") != "FAILED" and node_dict.get("idle_for_too_long"):
+            await doc_ref.update({"status": "DELETED", "display_in_dashboard": True})
+        elif node_dict.get("status") != "FAILED":
             await doc_ref.update({"status": "DELETED", "display_in_dashboard": False})
 
 

@@ -19,7 +19,7 @@ from fastapi import FastAPI, Request, BackgroundTasks, Depends
 from fastapi.responses import Response
 from starlette.requests import ClientDisconnect
 from starlette.datastructures import UploadFile
-from google.cloud import logging, secretmanager
+from google.cloud import logging, secretmanager, firestore
 from google.cloud.compute_v1 import InstancesClient
 
 __version__ = "1.1.0"
@@ -136,9 +136,11 @@ async def shutdown_if_idle_for_too_long(logger: Logger):
             SELF["last_activity_timestamp"] = time()
 
     if not IN_LOCAL_DEV_MODE:
-        msg = f"SHUTTING DOWN NODE DUE TO INACTIVITY: {INSTANCE_NAME}"
-        struct = dict(message=msg)
-        GCL_CLIENT.log_struct(struct, severity="WARNING")
+        logger.log(f"SHUTTING DOWN NODE DUE TO INACTIVITY: {INSTANCE_NAME}", severity="WARNING")
+
+        client = firestore.Client(project=PROJECT_ID, database="burla")
+        node_doc = client.collection("nodes").document(INSTANCE_NAME)
+        node_doc.update({"idle_for_too_long": True})
 
         instance_client = InstancesClient()
         silly_response = instance_client.aggregated_list(project=PROJECT_ID)

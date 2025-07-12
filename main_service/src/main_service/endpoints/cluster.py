@@ -38,12 +38,6 @@ def restart_cluster(request: Request, logger: Logger = Depends(get_logger)):
     authorization = request.session.get("Authorization")
     auth_headers = {"Authorization": authorization, "X-User-Email": email}
 
-    try:
-        json = {"project_id": PROJECT_ID, "message": "Someone turned the cluster on."}
-        requests.post(f"{BURLA_BACKEND_URL}/v1/telemetry/log/INFO", json=json, timeout=1)
-    except Exception:
-        pass
-
     futures = []
     executor = ThreadPoolExecutor(max_workers=32)
 
@@ -85,6 +79,14 @@ def restart_cluster(request: Request, logger: Logger = Depends(get_logger)):
         config = LOCAL_DEV_CONFIG if IN_LOCAL_DEV_MODE else config_doc.to_dict()
 
     node_service_port = 8080  # <- must default to 8080 because only 8080 was opened in GCP firewall
+
+    # log telemetry
+    try:
+        msg = f"Booting {config['Nodes'][0]['quantity']} {config['Nodes'][0]['machine_type']} nodes"
+        json = {"project_id": PROJECT_ID, "message": msg}
+        requests.post(f"{BURLA_BACKEND_URL}/v1/telemetry/log/INFO", json=json, timeout=1)
+    except Exception:
+        pass
 
     for node_spec in config["Nodes"]:
         for _ in range(node_spec["quantity"]):
@@ -129,7 +131,7 @@ async def shutdown_cluster(request: Request, logger: Logger = Depends(get_logger
     auth_headers = {"Authorization": authorization, "X-User-Email": email}
 
     try:
-        json = {"project_id": PROJECT_ID, "message": "Someone turned the cluster off."}
+        json = {"project_id": PROJECT_ID, "message": "Cluster turned off."}
         requests.post(f"{BURLA_BACKEND_URL}/v1/telemetry/log/INFO", json=json, timeout=1)
     except Exception:
         pass

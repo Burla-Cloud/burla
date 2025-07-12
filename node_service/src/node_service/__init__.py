@@ -22,7 +22,7 @@ from starlette.datastructures import UploadFile
 from google.cloud import logging, secretmanager, firestore
 from google.cloud.compute_v1 import InstancesClient
 
-__version__ = "1.1.0"
+__version__ = "1.1.1"
 CREDENTIALS, PROJECT_ID = google.auth.default()
 BURLA_BACKEND_URL = "https://backend.burla.dev"
 
@@ -136,7 +136,7 @@ async def shutdown_if_idle_for_too_long(logger: Logger):
             SELF["last_activity_timestamp"] = time()
 
     if not IN_LOCAL_DEV_MODE:
-        msg += f"Node has been idle for {INACTIVITY_SHUTDOWN_TIME_SEC // 60} minutes.\n"
+        msg = f"Node has been idle for {INACTIVITY_SHUTDOWN_TIME_SEC // 60} minutes.\n"
         msg += f"SHUTTING DOWN NODE {INSTANCE_NAME} DUE TO INACTIVITY."
         logger.log(msg, severity="WARNING")
 

@@ -1,15 +1,8 @@
-from time import sleep
 from burla import remote_parallel_map
 
 
 def my_function(my_input):
-    sleep(1)
-
-    print(f"Running input #{my_input} on a remote computer in the cloud!")
-
-    return my_input
+    print("I'm running on a remote computer in the cloud!")
 
 
-my_inputs = list(range(1000001))
-
-return_values = remote_parallel_map(my_function, my_inputs, background=True)
+remote_parallel_map(my_function, list(range(10001)))

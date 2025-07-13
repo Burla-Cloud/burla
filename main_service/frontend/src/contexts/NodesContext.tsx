@@ -13,7 +13,31 @@ export const NodesProvider = ({ children }: { children: React.ReactNode }) => {
     const handleNodeUpdate = (data: any) => {
         setNodes((prevNodes) => {
             if (data.deleted) {
-                return prevNodes.filter((node) => node.id !== data.nodeId);
+                // Instead of removing, mark as DELETED
+                const existingNode = prevNodes.find((node) => node.id === data.nodeId);
+                if (existingNode) {
+                    return prevNodes.map((node) =>
+                        node.id === data.nodeId
+                            ? { ...node, status: "DELETED" as any } // use 'as any' to allow string
+                            : node
+                    );
+                } else {
+                    // If not present, add as DELETED
+                    return [
+                        ...prevNodes,
+                        {
+                            id: data.nodeId,
+                            name: data.nodeId,
+                            status: "DELETED" as any,
+                            type: data.type || "unknown",
+                            cpus: data.cpus,
+                            gpus: data.gpus,
+                            memory: data.memory,
+                            age: data.age,
+                            logs: data.logs,
+                        },
+                    ];
+                }
             }
             const existingNode = prevNodes.find((node) => node.id === data.nodeId);
 

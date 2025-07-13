@@ -221,27 +221,25 @@ async def node_log_stream(node_id: str, request: Request):
     tz = pytz.timezone(request.cookies.get("timezone", "UTC"))
     ts_to_str = lambda ts: f"[{datetime.fromtimestamp(ts, tz).strftime('%I:%M %p').lstrip('0')}]"
 
-    date_str = datetime.now(tz).strftime("%B %d, %Y (%Z)")
-    padding_size = (120 - 2 - len(date_str)) // 2
-    queue.put_nowait({"message": f"{'-' * padding_size} {date_str} {'-' * padding_size}"})
-    last_date_str = date_str
+    last_date_str = None
+    first_log_processed = False
 
     def on_snapshot(query_snapshot, changes, read_time):
-        nonlocal last_date_str
+        nonlocal last_date_str, first_log_processed
         sorted_changes = sorted(changes, key=lambda change: change.document.to_dict().get("ts"))
         for change in sorted_changes:
             log_doc_dict = change.document.to_dict()
             timestamp = log_doc_dict.get("ts")
             current_date_str = datetime.fromtimestamp(timestamp, tz).strftime("%B %d, %Y (%Z)")
-            if current_date_str != last_date_str:
+            if not first_log_processed or current_date_str != last_date_str:
                 padding_size = (120 - 2 - len(current_date_str)) // 2
                 msg = f"{'-' * padding_size} {current_date_str} {'-' * padding_size}"
                 current_loop.call_soon_threadsafe(queue.put_nowait, {"message": msg})
                 last_date_str = current_date_str
+                first_log_processed = True
 
             msg_clean = ""
             timestamp_str = ts_to_str(timestamp)
-            # preserve original newline boundaries and wrap each line at word boundaries
             msg_raw = log_doc_dict.get("msg").rstrip()
             line_len = 120 - len(timestamp_str)
             wrapper = textwrap.TextWrapper(line_len, break_long_words=True, break_on_hyphens=True)

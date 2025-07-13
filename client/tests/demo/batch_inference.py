@@ -1,7 +1,7 @@
 import os
 from burla import remote_parallel_map
 
-huggingface_token = os.environ["HUGGINGFACE_TOKEN"]
+# huggingface_token = ""  # os.environ["HUGGINGFACE_TOKEN"]
 worker_cache = {}
 
 
@@ -10,11 +10,11 @@ def do_inference(prompt: str):
     from huggingface_hub import login
 
     if not worker_cache.get("llm"):
-        login(huggingface_token)
+        login("XXX")
         model_name = "meta-llama/Meta-Llama-3-8B-Instruct"
         worker_cache["llm"] = LLM(model=model_name, dtype="float16", tensor_parallel_size=1)
 
-    sampling_params = SamplingParams(temperature=0.7, top_p=0.95)
+    sampling_params = SamplingParams(temperature=0.7, top_p=0.95, max_tokens=1000)
     output = worker_cache["llm"].generate(prompt, sampling_params)
     response = output[0].outputs[0].text
     print(f"\nQuestion: {prompt}\nResponse: {response}")

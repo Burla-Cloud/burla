@@ -30,15 +30,21 @@ export const NodesList = ({ nodes }: NodesListProps) => {
         localStorage.setItem("welcomeMessageHidden", "true");
     };
 
-    const getStatusClass = (nodeStatus: NodeStatus | null) => {
+    const getStatusClass = (nodeStatus: NodeStatus | string | null) => {
         const statusClasses = {
             READY: "bg-green-500",
             RUNNING: "bg-green-500 animate-pulse",
             BOOTING: "bg-yellow-500 animate-pulse",
             STOPPING: "bg-gray-300 animate-pulse",
             FAILED: "bg-red-500",
+            DELETED: "bg-red-500", // use same as FAILED
         };
-        return cn("w-2 h-2 rounded-full", nodeStatus ? statusClasses[nodeStatus] : "bg-gray-300");
+        return cn(
+            "w-2 h-2 rounded-full",
+            nodeStatus && typeof nodeStatus === "string"
+                ? statusClasses[nodeStatus] || "bg-gray-300"
+                : "bg-gray-300"
+        );
     };
 
     const extractCpuCount = (type: string): number | null => {
@@ -274,11 +280,12 @@ export const NodesList = ({ nodes }: NodesListProps) => {
                                             {parseGpuDisplay(node.type)}
                                         </TableCell>
                                         <TableCell className="w-8 pl-6 pr-2 py-2 text-center">
-                                            {node.status === "FAILED" && (
+                                            {(String(node.status) === "FAILED" ||
+                                                String(node.status) === "DELETED") && (
                                                 <button
                                                     onClick={(e) => {
                                                         e.stopPropagation();
-                                                        deleteNode(node.id);
+                                                        deleteNode(node.id); // Always call deleteNode for both statuses
                                                     }}
                                                     className="text-gray-400 hover:text-red-600"
                                                     aria-label="Dismiss node"

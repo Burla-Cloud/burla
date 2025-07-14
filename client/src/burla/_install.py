@@ -28,6 +28,7 @@ DEFAULT_CLUSTER_CONFIG = {
             "machine_type": "n4-standard-4",
             "quantity": 1,
             "disk_size_gb": 50,
+            "region": "us-central-1",
         }
     ]
 }

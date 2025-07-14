@@ -181,15 +181,14 @@ async def cluster_info(logger: Logger = Depends(get_logger)):
                         "status": doc_data.get("status"),
                         "type": doc_data.get("machine_type"),
                     }
-                    current_loop.call_soon_threadsafe(queue.put_nowait, event_data)
+                current_loop.call_soon_threadsafe(queue.put_nowait, event_data)
 
-        display_filter = FieldFilter("display_in_dashboard", "==", True)
-        query = DB.collection("nodes").where(filter=display_filter)
+        query = DB.collection("nodes").where("display_in_dashboard", "==", True)
         node_watch = query.on_snapshot(on_snapshot)
-
         try:
             while True:
                 event = await queue.get()
+                # print(f"Node {event['nodeId']} is {event['status']}")
                 yield f"data: {json.dumps(event)}\n\n"
         finally:
             node_watch.unsubscribe()

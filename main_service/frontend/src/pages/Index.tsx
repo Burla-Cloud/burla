@@ -4,11 +4,16 @@ import { NodesList } from "@/components/NodesList";
 import { useClusterControl } from "@/hooks/useClusterControl";
 import { useNodes } from "@/contexts/NodesContext";
 import { useCluster } from "@/contexts/ClusterContext";
+import { useState } from "react";
 
 const Dashboard = () => {
     const { rebootCluster, stopCluster } = useClusterControl();
     const { nodes } = useNodes();
     const { clusterStatus } = useCluster();
+
+    // Add local state for disabling buttons
+    const [disableStartButton, setDisableStartButton] = useState(false);
+    const [disableStopButton, setDisableStopButton] = useState(false);
 
     const extractCpuCount = (type: string): number | null => {
         const customMatch = type.match(/^custom-(\d+)-/);
@@ -23,6 +28,18 @@ const Dashboard = () => {
         return sum + cpus;
     }, 0);
 
+    // Handler wrappers for temporary disabling
+    const handleReboot = async () => {
+        setDisableStartButton(true);
+        setTimeout(() => setDisableStartButton(false), 4000);
+        await rebootCluster();
+    };
+    const handleStop = async () => {
+        setDisableStopButton(true);
+        setTimeout(() => setDisableStopButton(false), 4000);
+        await stopCluster();
+    };
+
     return (
         <div className="flex-1 flex flex-col justify-start px-12 pt-0">
             <div className="max-w-6xl mx-auto w-full">
@@ -35,8 +52,10 @@ const Dashboard = () => {
                         <div className="flex items-center justify-center">
                             <ClusterControls
                                 status={clusterStatus}
-                                onReboot={rebootCluster}
-                                onStop={stopCluster}
+                                onReboot={handleReboot}
+                                onStop={handleStop}
+                                disableStartButton={disableStartButton}
+                                disableStopButton={disableStopButton}
                             />
                         </div>
                     </div>

@@ -6,9 +6,17 @@ interface ClusterControlsProps {
     status: ClusterStatus;
     onReboot: () => void;
     onStop: () => void;
+    disableStartButton?: boolean;
+    disableStopButton?: boolean;
 }
 
-export const ClusterControls = ({ status, onReboot, onStop }: ClusterControlsProps) => {
+export const ClusterControls = ({
+    status,
+    onReboot,
+    onStop,
+    disableStartButton = false,
+    disableStopButton = false,
+}: ClusterControlsProps) => {
     const isRebooting = status === "REBOOTING";
     const isStarting = status === "BOOTING";
     const isStopping = status === "STOPPING";
@@ -30,7 +38,7 @@ export const ClusterControls = ({ status, onReboot, onStop }: ClusterControlsPro
             <Button
                 size="lg"
                 onClick={onReboot}
-                disabled={isStarting || isStopping || isRebooting}
+                disabled={isStarting || isStopping || isRebooting || disableStartButton}
                 className="w-32 text-white bg-primary hover:bg-primary/90 disabled:bg-gray-400"
             >
                 {startButtonIcon}
@@ -40,7 +48,7 @@ export const ClusterControls = ({ status, onReboot, onStop }: ClusterControlsPro
                 variant="destructive"
                 size="lg"
                 onClick={onStop}
-                disabled={isStopping || isOff || isRebooting || isStarting}
+                disabled={isStopping || isOff || isRebooting || isStarting || disableStopButton}
                 className="w-32"
             >
                 <PowerOff className="mr-2 h-4 w-4" />

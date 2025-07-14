@@ -10,15 +10,18 @@ const SettingsPage = () => {
     const [isEditing, setIsEditing] = useState(false);
     const { settings } = useSettings();
     const { saveSettings } = useSaveSettings();
+    const [saveDisabled, setSaveDisabled] = useState(false);
 
     const handleToggleEdit = async () => {
         if (isEditing) {
+            setSaveDisabled(true);
             const success = await saveSettings(settings);
             if (success) {
                 toast({ title: "Settings saved successfully" });
             } else {
                 toast({ title: "Failed to save settings", variant: "destructive" });
             }
+            setSaveDisabled(false);
         }
         setIsEditing((prev) => !prev);
     };
@@ -28,7 +31,7 @@ const SettingsPage = () => {
             <div className="max-w-6xl mx-auto w-full">
                 <div className="flex items-center justify-between mt-[-4px] mb-[15px]">
                     <h1 className="text-3xl font-bold text-primary">Settings</h1>
-                    <Button onClick={handleToggleEdit} variant="outline">
+                    <Button onClick={handleToggleEdit} variant="outline" disabled={saveDisabled}>
                         {isEditing ? "Save" : "Edit"}
                     </Button>
                 </div>

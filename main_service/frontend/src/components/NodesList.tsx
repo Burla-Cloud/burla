@@ -12,12 +12,14 @@ import { cn } from "@/lib/utils";
 import { Cpu, X, ChevronRight } from "lucide-react";
 import { NodeStatus, BurlaNode } from "@/types/coreTypes";
 import React, { useEffect, useState, useRef } from "react";
+import { useNodes } from "@/contexts/NodesContext";
 
 interface NodesListProps {
     nodes: BurlaNode[];
 }
 
 export const NodesList = ({ nodes }: NodesListProps) => {
+    const { setNodes } = useNodes();
     const [showWelcome, setShowWelcome] = useState(true);
 
     useEffect(() => {
@@ -158,6 +160,8 @@ export const NodesList = ({ nodes }: NodesListProps) => {
     };
 
     const deleteNode = async (nodeId: string) => {
+        // Immediately remove node from UI
+        setNodes((prev) => prev.filter((node) => node.id !== nodeId));
         try {
             await fetch(`/v1/cluster/${nodeId}`, { method: "DELETE" });
         } catch (error) {

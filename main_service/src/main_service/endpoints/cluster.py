@@ -181,7 +181,7 @@ async def cluster_info(logger: Logger = Depends(get_logger)):
                         "status": doc_data.get("status"),
                         "type": doc_data.get("machine_type"),
                     }
-                current_loop.call_soon_threadsafe(queue.put_nowait, event_data)
+                    current_loop.call_soon_threadsafe(queue.put_nowait, event_data)
 
         display_filter = FieldFilter("display_in_dashboard", "==", True)
         query = DB.collection("nodes").where(filter=display_filter)

@@ -8,7 +8,7 @@ def do_inference(prompt: str):
     from huggingface_hub import login
 
     if not cache.get("llm"):
-        login("xx")
+        login("")
         model_name = "meta-llama/Meta-Llama-3-8B-Instruct"
         cache["llm"] = LLM(model=model_name, dtype="float16", tensor_parallel_size=1)
 

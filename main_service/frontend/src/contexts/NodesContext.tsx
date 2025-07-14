@@ -3,9 +3,10 @@ import { BurlaNode, NodeStatus } from "@/types/coreTypes";
 
 interface NodesContextType {
     nodes: BurlaNode[];
+    setNodes: React.Dispatch<React.SetStateAction<BurlaNode[]>>;
 }
 
-const NodesContext = createContext<NodesContextType>({ nodes: [] });
+const NodesContext = createContext<NodesContextType>({ nodes: [], setNodes: () => {} });
 
 export const NodesProvider = ({ children }: { children: React.ReactNode }) => {
     const [nodes, setNodes] = useState<BurlaNode[]>([]);
@@ -67,7 +68,7 @@ export const NodesProvider = ({ children }: { children: React.ReactNode }) => {
         return () => eventSource.close();
     }, []);
 
-    return <NodesContext.Provider value={{ nodes }}>{children}</NodesContext.Provider>;
+    return <NodesContext.Provider value={{ nodes, setNodes }}>{children}</NodesContext.Provider>;
 };
 
 const createNewNode = (data: any): BurlaNode => ({

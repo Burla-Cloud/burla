@@ -133,11 +133,13 @@ export const NodesList = ({ nodes }: NodesListProps) => {
     // track which node row is currently expanded to show the error message
     const [expandedNodeId, setExpandedNodeId] = useState<string | null>(null);
     const [nodeLogs, setNodeLogs] = useState<Record<string, string[]>>({});
+    const [logsLoading, setLogsLoading] = useState<Record<string, boolean>>({});
     const logSourceRef = useRef<EventSource | null>(null);
 
     useEffect(() => {
         if (expandedNodeId) {
             setNodeLogs((prev) => ({ ...prev, [expandedNodeId]: [] }));
+            setLogsLoading((prev) => ({ ...prev, [expandedNodeId]: true }));
             const source = new EventSource(`/v1/cluster/${expandedNodeId}/logs`);
             logSourceRef.current = source;
             source.onmessage = (event) => {
@@ -146,10 +148,12 @@ export const NodesList = ({ nodes }: NodesListProps) => {
                     const existing = prev[expandedNodeId] || [];
                     return { ...prev, [expandedNodeId]: [...existing, data.message] };
                 });
+                setLogsLoading((prev) => ({ ...prev, [expandedNodeId]: false }));
             };
             source.onerror = (error) => {
                 console.error("Node logs stream failed:", error);
                 source.close();
+                setLogsLoading((prev) => ({ ...prev, [expandedNodeId]: false }));
             };
             return () => source.close();
         }
@@ -318,9 +322,35 @@ export const NodesList = ({ nodes }: NodesListProps) => {
                                                         }
                                                     )}
                                                 >
-                                                    <pre className="whitespace-pre-wrap text-gray-600 text-sm">
-                                                        {nodeLogs[node.id]?.join("\n")}
-                                                    </pre>
+                                                    {logsLoading[node.id] ? (
+                                                        <div className="flex flex-col items-center justify-center h-40 w-full text-gray-500">
+                                                            <svg
+                                                                className="animate-spin h-8 w-8 text-primary mb-2"
+                                                                viewBox="0 0 24 24"
+                                                                fill="none"
+                                                                xmlns="http://www.w3.org/2000/svg"
+                                                            >
+                                                                <circle
+                                                                    cx="12"
+                                                                    cy="12"
+                                                                    r="10"
+                                                                    stroke="currentColor"
+                                                                    strokeWidth="4"
+                                                                    opacity="0.2"
+                                                                />
+                                                                <path
+                                                                    d="M22 12a10 10 0 0 1-10 10"
+                                                                    stroke="currentColor"
+                                                                    strokeWidth="4"
+                                                                    strokeLinecap="round"
+                                                                />
+                                                            </svg>
+                                                        </div>
+                                                    ) : (
+                                                        <pre className="whitespace-pre-wrap text-gray-600 text-sm">
+                                                            {nodeLogs[node.id]?.join("\n")}
+                                                        </pre>
+                                                    )}
                                                 </div>
                                             </TableCell>
                                         </TableRow>

@@ -21,14 +21,116 @@ const Dashboard = () => {
         const customMatch = type.match(/^custom-(\d+)-/);
         if (customMatch) return parseInt(customMatch[1], 10);
 
+        // n4-standard-16 -> captures 16
         const standardMatch = type.match(/-(\d+)$/);
-        return standardMatch ? parseInt(standardMatch[1], 10) : null;
+        if (standardMatch) return parseInt(standardMatch[1], 10);
+
+        // GPU machine types like a2-highgpu-4g, a3-highgpu-1g, etc.
+        const gpuMatch = type.match(/^(a\d-(highgpu|ultragpu|megagpu|edgegpu))-(\d+)g$/);
+        if (gpuMatch) {
+            const family = gpuMatch[1];
+            const gpus = parseInt(gpuMatch[3], 10);
+
+            const cpuTable: Record<string, Record<number, number>> = {
+                "a2-highgpu": { 1: 12, 2: 24, 4: 48, 8: 96 },
+                "a2-ultragpu": { 1: 12, 2: 24, 4: 48, 8: 96 },
+                "a2-megagpu": { 16: 96 },
+                "a3-highgpu": { 1: 26, 2: 52, 4: 104, 8: 208 },
+                "a3-ultragpu": { 8: 224 },
+                "a3-edgegpu": { 8: 208 },
+            };
+
+            const cpus = cpuTable[family]?.[gpus];
+            if (cpus) return cpus;
+        }
+
+        return null;
     };
 
     const parallelism = nodes.reduce((sum, node) => {
         const cpus = node.cpus ?? extractCpuCount(node.type) ?? 0;
         return sum + cpus;
     }, 0);
+
+    // Helper to parse RAM string like '16G' or '340G' to number of GB
+    const parseRamGB = (ram: string): number => {
+        if (!ram) return 0;
+        const match = ram.match(/(\d+)(G|g)/);
+        if (match) return parseInt(match[1], 10);
+        return 0;
+    };
+
+    // Copy of parseRamDisplay from NodesList
+    const parseRamDisplay = (type: string): string => {
+        const lower = type.toLowerCase();
+        if (lower.startsWith("n4-standard-")) {
+            const cpu = extractCpuCount(type);
+            if (cpu !== null) return `${cpu * 4}G`;
+        }
+        const ramTable: Record<string, Record<number, string>> = {
+            "a2-highgpu": { 1: "85G", 2: "170G", 4: "340G", 8: "680G", 16: "1360G" },
+            "a2-ultragpu": { 1: "170G", 2: "340G", 4: "680G", 8: "1360G" },
+            "a2-megagpu": { 16: "1360G" },
+            "a3-highgpu": { 1: "234G", 2: "468G", 4: "936G", 8: "1872G" },
+            "a3-ultragpu": { 8: "2952G" },
+        };
+        const match = lower.match(/^(a\d-(highgpu|ultragpu|megagpu|edgegpu))-(\d+)g$/);
+        if (match) {
+            const family = match[1];
+            const count = parseInt(match[3], 10);
+            const sizes = ramTable[family];
+            if (sizes && sizes[count]) return sizes[count];
+        }
+        return "-";
+    };
+
+    // Copy of parseGpuDisplay from NodesList
+    const parseGpuDisplay = (type: string): string => {
+        const lower = type.toLowerCase();
+        const gpuPatterns: { prefix: string; model: string; vram: string }[] = [
+            { prefix: "a2-highgpu-", model: "A100", vram: "40G" },
+            { prefix: "a2-ultragpu-", model: "A100", vram: "80G" },
+            { prefix: "a2-megagpu-", model: "A100", vram: "40G" },
+            { prefix: "a3-highgpu-", model: "H100", vram: "80G" },
+            { prefix: "a3-ultragpu-", model: "H200", vram: "141G" },
+        ];
+        for (const { prefix, model, vram } of gpuPatterns) {
+            if (lower.startsWith(prefix)) {
+                const countMatch = lower.match(/-(\d+)g$/);
+                if (countMatch) {
+                    const count = parseInt(countMatch[1], 10);
+                    return `${count}x ${model} ${vram}`;
+                }
+            }
+        }
+        return "-";
+    };
+
+    // Aggregate total RAM (in GB)
+    const totalRamGB = nodes.reduce((sum, node) => {
+        const ramStr = node.memory || parseRamDisplay(node.type);
+        return sum + parseRamGB(ramStr);
+    }, 0);
+    const totalRam = totalRamGB > 0 ? `${totalRamGB}G` : "-";
+
+    // Aggregate GPU summary: group by GPU type (model + vram), count total GPUs per type
+    const gpuCountMap: Record<string, number> = {};
+    nodes.forEach((node) => {
+        const gpuStr = parseGpuDisplay(node.type);
+        if (gpuStr !== "-") {
+            // Parse the count and type (e.g., '2x H100 80G' -> 2, 'H100 80G')
+            const match = gpuStr.match(/^(\d+)x (.+)$/);
+            if (match) {
+                const count = parseInt(match[1], 10);
+                const key = match[2];
+                gpuCountMap[key] = (gpuCountMap[key] || 0) + count;
+            }
+        }
+    });
+    const gpuSummary =
+        Object.entries(gpuCountMap)
+            .map(([type, count]) => `${count} ${type}`)
+            .join(", ") || "-";
 
     // Handler wrappers for temporary disabling
     const handleReboot = async () => {
@@ -70,7 +172,12 @@ const Dashboard = () => {
                                 </CardContent>
                             </Card>
                         ) : (
-                            <ClusterStatusCard status={clusterStatus} parallelism={parallelism} />
+                            <ClusterStatusCard
+                                status={clusterStatus}
+                                parallelism={parallelism}
+                                totalRam={totalRam}
+                                gpuSummary={gpuSummary}
+                            />
                         )}
                         <div className="flex items-center justify-center">
                             <ClusterControls

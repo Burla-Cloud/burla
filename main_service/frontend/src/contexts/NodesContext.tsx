@@ -4,12 +4,19 @@ import { BurlaNode, NodeStatus } from "@/types/coreTypes";
 interface NodesContextType {
     nodes: BurlaNode[];
     setNodes: React.Dispatch<React.SetStateAction<BurlaNode[]>>;
+    loading: boolean;
 }
 
-const NodesContext = createContext<NodesContextType>({ nodes: [], setNodes: () => {} });
+const NodesContext = createContext<NodesContextType>({
+    nodes: [],
+    setNodes: () => {},
+    loading: true,
+});
 
 export const NodesProvider = ({ children }: { children: React.ReactNode }) => {
     const [nodes, setNodes] = useState<BurlaNode[]>([]);
+    const [loading, setLoading] = useState(true);
+    // const firstEventReceived = useState(false); // not needed anymore
 
     const handleNodeUpdate = (data: any) => {
         setNodes((prevNodes) => {
@@ -39,13 +46,30 @@ export const NodesProvider = ({ children }: { children: React.ReactNode }) => {
     };
 
     useEffect(() => {
+        let first = true;
         const eventSource = new EventSource("/v1/cluster");
-        eventSource.onmessage = (event) => handleNodeUpdate(JSON.parse(event.data));
+        eventSource.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+            if (first) {
+                setLoading(false);
+                first = false;
+            }
+            if (data.type === "empty") {
+                setNodes([]); // ensure nodes is empty
+                setLoading(false);
+                return;
+            }
+            handleNodeUpdate(data);
+        };
         eventSource.onerror = (error) => console.error("EventSource failed:", error);
         return () => eventSource.close();
     }, []);
 
-    return <NodesContext.Provider value={{ nodes, setNodes }}>{children}</NodesContext.Provider>;
+    return (
+        <NodesContext.Provider value={{ nodes, setNodes, loading }}>
+            {children}
+        </NodesContext.Provider>
+    );
 };
 
 const createNewNode = (data: any): BurlaNode => ({

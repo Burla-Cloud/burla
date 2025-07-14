@@ -5,10 +5,12 @@ import { useClusterControl } from "@/hooks/useClusterControl";
 import { useNodes } from "@/contexts/NodesContext";
 import { useCluster } from "@/contexts/ClusterContext";
 import { useState } from "react";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
 
 const Dashboard = () => {
     const { rebootCluster, stopCluster } = useClusterControl();
-    const { nodes } = useNodes();
+    const { nodes, loading } = useNodes();
     const { clusterStatus } = useCluster();
 
     // Add local state for disabling buttons
@@ -48,19 +50,64 @@ const Dashboard = () => {
 
                 <div className="space-y-6">
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        <ClusterStatusCard status={clusterStatus} parallelism={parallelism} />
+                        {loading ? (
+                            <Card className="w-full animate-pulse">
+                                <CardHeader className="pb-2">
+                                    <CardTitle className="text-xl font-semibold text-primary">
+                                        <Skeleton className="h-6 w-40 mb-2" />
+                                    </CardTitle>
+                                </CardHeader>
+                                <CardContent className="mt-6">
+                                    <div className="flex items-center gap-4">
+                                        <Skeleton className="w-6 h-6 rounded-full" />
+                                        <Skeleton className="h-5 w-24" />
+                                        <Skeleton className="h-5 w-16 ml-8" />
+                                    </div>
+                                    <div className="mt-6 flex gap-2">
+                                        <Skeleton className="h-4 w-20" />
+                                        <Skeleton className="h-4 w-10" />
+                                    </div>
+                                </CardContent>
+                            </Card>
+                        ) : (
+                            <ClusterStatusCard status={clusterStatus} parallelism={parallelism} />
+                        )}
                         <div className="flex items-center justify-center">
                             <ClusterControls
                                 status={clusterStatus}
                                 onReboot={handleReboot}
                                 onStop={handleStop}
-                                disableStartButton={disableStartButton}
-                                disableStopButton={disableStopButton}
+                                disableStartButton={disableStartButton || loading}
+                                disableStopButton={disableStopButton || loading}
                             />
                         </div>
                     </div>
 
-                    <NodesList nodes={nodes} />
+                    {loading ? (
+                        <Card className="w-full animate-pulse">
+                            <CardHeader className="flex flex-row items-center justify-between">
+                                <CardTitle className="text-xl font-semibold text-primary">
+                                    <Skeleton className="h-6 w-32" />
+                                </CardTitle>
+                            </CardHeader>
+                            <CardContent>
+                                <div className="space-y-2">
+                                    {[...Array(3)].map((_, i) => (
+                                        <div key={i} className="flex items-center gap-4 py-2">
+                                            <Skeleton className="w-4 h-4 rounded-full" />
+                                            <Skeleton className="h-4 w-24" />
+                                            <Skeleton className="h-4 w-16" />
+                                            <Skeleton className="h-4 w-16" />
+                                            <Skeleton className="h-4 w-16" />
+                                            <Skeleton className="h-4 w-8" />
+                                        </div>
+                                    ))}
+                                </div>
+                            </CardContent>
+                        </Card>
+                    ) : (
+                        <NodesList nodes={nodes} />
+                    )}
 
                     <div className="text-center text-sm text-gray-500 mt-8">
                         Need help? Email me!{" "}

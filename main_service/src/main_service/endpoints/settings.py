@@ -2,7 +2,7 @@ import requests
 
 from fastapi import APIRouter, Depends, Request
 
-from main_service import DB, get_logger, PROJECT_ID, CLUSTER_ID_TOKEN
+from main_service import DB, get_logger, PROJECT_ID, CLUSTER_ID_TOKEN, CURRENT_BURLA_VERSION
 from main_service.helpers import Logger
 
 router = APIRouter()
@@ -29,6 +29,8 @@ def get_settings(request: Request, logger: Logger = Depends(get_logger)):
         "diskSize": node.get("disk_size_gb", 50),
         "inactivityTimeout": int(node.get("inactivity_shutdown_time_sec", 600) // 60),
         "users": user_emails,
+        "burlaVersion": CURRENT_BURLA_VERSION,
+        "googleCloudProjectId": PROJECT_ID,
     }
 
 

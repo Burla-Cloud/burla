@@ -35,6 +35,8 @@ export interface Settings {
     inactivityTimeout: number; // in minutes
     users: string[];
     gcpRegion?: string;
+    burlaVersion?: string;
+    googleCloudProjectId?: string;
 }
 
 export interface ServiceAccount {

@@ -13,7 +13,7 @@ import docker
 from docker.errors import APIError
 from google.cloud import resourcemanager_v3
 from google.auth.transport.requests import Request
-from google.api_core.exceptions import NotFound, ServiceUnavailable, Conflict, BadRequest
+from google.api_core.exceptions import NotFound, ServiceUnavailable, Conflict
 from google.cloud.compute_v1 import MachineTypesClient, AggregatedListMachineTypesRequest
 from google.cloud import firestore
 from google.cloud.firestore import DocumentSnapshot
@@ -31,7 +31,7 @@ from google.cloud.compute_v1 import (
     Scheduling,
 )
 
-from main_service import PROJECT_ID, CREDENTIALS, IN_LOCAL_DEV_MODE
+from main_service import PROJECT_ID, CREDENTIALS, IN_LOCAL_DEV_MODE, CURRENT_BURLA_VERSION
 from main_service.helpers import Logger, format_traceback
 
 
@@ -60,7 +60,6 @@ project = client.get_project(name=f"projects/{PROJECT_ID}")
 GCE_DEFAULT_SVC = f"{project.name.split('/')[-1]}-compute@developer.gserviceaccount.com"
 
 NODE_BOOT_TIMEOUT = 60 * 10
-NODE_SVC_VERSION = "1.1.3"  # <- this maps to a git tag/release or branch
 
 
 def zones_supporting_machine_type(region_name: str, machine_type_name: str):
@@ -369,7 +368,7 @@ class Node:
         "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token" \
         | jq -r .access_token)
 
-        MSG="Installing Burla node service v{NODE_SVC_VERSION} ..."
+        MSG="Installing Burla node service v{CURRENT_BURLA_VERSION} ..."
         DB_BASE_URL="https://firestore.googleapis.com/v1/projects/{PROJECT_ID}/databases/burla/documents"
         payload=$(jq -n --arg msg "$MSG" --arg ts "$(date +%s)" '{{"fields":{{"msg":{{"stringValue":$msg}},"ts":{{"integerValue":$ts}}}}}}')
         curl -sS -X POST "$DB_BASE_URL/nodes/{self.instance_name}/logs" \
@@ -377,11 +376,11 @@ class Node:
             -H "Content-Type: application/json" \
             -d "$payload"
 
-        git clone --depth 1 --branch {NODE_SVC_VERSION} https://github.com/Burla-Cloud/burla.git  --no-checkout
+        git clone --depth 1 --branch {CURRENT_BURLA_VERSION} https://github.com/Burla-Cloud/burla.git  --no-checkout
         cd burla
         git sparse-checkout init --cone
         git sparse-checkout set node_service
-        git checkout {NODE_SVC_VERSION}
+        git checkout {CURRENT_BURLA_VERSION}
         cd node_service
         python -m pip install --break-system-packages .
 

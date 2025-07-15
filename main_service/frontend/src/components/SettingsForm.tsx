@@ -588,6 +588,29 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
                             </div>
                         </div>
                     </CardContent>
+                    {/* Footer for version and GCP project */}
+                    {(settings.burlaVersion || settings.googleCloudProjectId) && (
+                        <div
+                            className="flex items-center justify-between rounded-b-lg"
+                            style={{
+                                background: "#f8f9fa",
+                                borderTop: "1px solid #e5e7eb",
+                                fontSize: "0.8em",
+                                color: "#8c939f",
+                                padding: "10px 24px",
+                                minHeight: 40,
+                            }}
+                        >
+                            <span style={{ fontWeight: 400 }}>
+                                {settings.burlaVersion && <>Version: {settings.burlaVersion}</>}
+                            </span>
+                            <span style={{ fontWeight: 400, textAlign: "right" }}>
+                                {settings.googleCloudProjectId && (
+                                    <>Google Cloud Project: {settings.googleCloudProjectId}</>
+                                )}
+                            </span>
+                        </div>
+                    )}
                 </Card>
             </div>
         );

@@ -318,7 +318,8 @@ class Node:
         exhausted_zones = []
         zones = list(zones_supporting_machine_type(self.gcp_region, self.machine_type))
         if not zones:
-            raise Exception(f"No zones supporting {self.machine_type} in region: {self.gcp_region}")
+            msg = f"None of the zones in region {self.gcp_region} "
+            raise Exception(msg + f"support the machine type {self.machine_type}.")
 
         for zone in zones:
             msg = f"Attempting to provision {self.machine_type} in zone: {zone}"

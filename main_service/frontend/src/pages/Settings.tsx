@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useSettings } from "@/contexts/SettingsContext";
 import { SettingsForm } from "@/components/SettingsForm";
 // import { ServiceAccounts } from "@/components/ServiceAccounts";
@@ -14,6 +14,7 @@ const SettingsPage = () => {
     const { saveSettings } = useSaveSettings();
     const [saveDisabled, setSaveDisabled] = useState(false);
     const [loading, setLoading] = useState(true);
+    const settingsFormRef = useRef<{ isRegionValid: () => boolean } | null>(null);
 
     useEffect(() => {
         // Fetch settings from the backend
@@ -35,6 +36,16 @@ const SettingsPage = () => {
 
     const handleToggleEdit = async () => {
         if (isEditing) {
+            // Check region validity before saving
+            if (
+                settingsFormRef.current &&
+                typeof settingsFormRef.current.isRegionValid === "function"
+            ) {
+                if (!settingsFormRef.current.isRegionValid()) {
+                    // SettingsForm will show toast and error, just block save
+                    return;
+                }
+            }
             setSaveDisabled(true);
             const success = await saveSettings(settings);
             if (success) {
@@ -94,7 +105,11 @@ const SettingsPage = () => {
                             </CardContent>
                         </Card>
                     ) : (
-                        <SettingsForm key={settings.machineType} isEditing={isEditing} />
+                        <SettingsForm
+                            ref={settingsFormRef}
+                            key={settings.machineType}
+                            isEditing={isEditing}
+                        />
                     )}
                 </div>
             </div>

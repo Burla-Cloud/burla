@@ -34,6 +34,7 @@ export interface Settings {
     diskSize: number; // in GB
     inactivityTimeout: number; // in minutes
     users: string[];
+    gcpRegion?: string;
 }
 
 export interface ServiceAccount {

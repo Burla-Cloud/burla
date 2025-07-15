@@ -24,6 +24,7 @@ def get_settings(request: Request, logger: Logger = Depends(get_logger)):
         "containerImage": container.get("image", ""),
         "pythonVersion": container.get("python_version", ""),
         "machineType": node.get("machine_type", ""),
+        "gcpRegion": node.get("gcp_region", ""),
         "machineQuantity": node.get("quantity", 1),
         "diskSize": node.get("disk_size_gb", 50),
         "inactivityTimeout": int(node.get("inactivity_shutdown_time_sec", 600) // 60),
@@ -50,6 +51,7 @@ async def update_settings(request: Request, logger: Logger = Depends(get_logger)
     node.update(
         {
             "machine_type": request_json.get("machineType", node.get("machine_type")),
+            "gcp_region": request_json.get("gcpRegion", node.get("gcp_region")),
             "quantity": request_json.get("machineQuantity", node.get("quantity")),
             "disk_size_gb": request_json.get("diskSize", node.get("disk_size_gb")),
             "inactivity_shutdown_time_sec": (

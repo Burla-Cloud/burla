@@ -14,6 +14,7 @@ from docker.errors import APIError
 from google.cloud import resourcemanager_v3
 from google.auth.transport.requests import Request
 from google.api_core.exceptions import NotFound, ServiceUnavailable, Conflict, BadRequest
+from google.cloud.compute_v1 import MachineTypesClient, AggregatedListMachineTypesRequest
 from google.cloud import firestore
 from google.cloud.firestore import DocumentSnapshot
 from google.cloud.compute_v1 import (
@@ -59,8 +60,16 @@ project = client.get_project(name=f"projects/{PROJECT_ID}")
 GCE_DEFAULT_SVC = f"{project.name.split('/')[-1]}-compute@developer.gserviceaccount.com"
 
 NODE_BOOT_TIMEOUT = 60 * 10
-ACCEPTABLE_ZONES = ["us-central1-a", "us-central1-b", "us-central1-c", "us-central1-f"]
 NODE_SVC_VERSION = "1.1.3"  # <- this maps to a git tag/release or branch
+
+
+def zones_supporting_machine_type(region_name: str, machine_type_name: str):
+    name_filter = f"name={machine_type_name}"
+    request = AggregatedListMachineTypesRequest(project=PROJECT_ID, filter=name_filter)
+    zone_generator = MachineTypesClient().aggregated_list(request=request)
+    for zone, matches in zone_generator:
+        if matches.machine_types and zone.startswith(f"zones/{region_name}"):
+            yield zone.split("/")[1]
 
 
 class Node:
@@ -102,6 +111,7 @@ class Node:
         db: firestore.Client,
         logger: Logger,
         machine_type: str,
+        gcp_region: str,
         containers: list[Container],
         auth_headers: dict,
         spot: bool = False,
@@ -114,6 +124,7 @@ class Node:
         self = cls.__new__(cls)
         self.db = db
         self.logger = logger
+        self.gcp_region = gcp_region
         self.machine_type = machine_type
         self.containers = containers
         self.auth_headers = auth_headers
@@ -305,8 +316,11 @@ class Node:
         startup_script_metadata = Items(key="startup-script", value=startup_script)
         shutdown_script_metadata = Items(key="shutdown-script", value=shutdown_script)
         exhausted_zones = []
-        unavailable_zones = []
-        for zone in ACCEPTABLE_ZONES:
+        zones = list(zones_supporting_machine_type(self.gcp_region, self.machine_type))
+        if not zones:
+            raise Exception(f"No zones supporting {self.machine_type} in region: {self.gcp_region}")
+
+        for zone in zones:
             msg = f"Attempting to provision {self.machine_type} in zone: {zone}"
             self.node_ref.collection("logs").document().set({"msg": msg, "ts": time()})
             try:
@@ -324,14 +338,6 @@ class Node:
                 self.instance_client.insert(**kw).result()
                 instance_created = True
                 break
-            except BadRequest as e:
-                if "does not exist in zone" in str(e):
-                    unavailable_zones.append(zone)
-                    instance_created = False
-                    msg = f"Machine type {self.machine_type} not offered in zone: {zone}"
-                    self.node_ref.collection("logs").document().set({"msg": msg, "ts": time()})
-                else:
-                    raise e
             except ServiceUnavailable:  # not enough instances in this zone, try next zone.
                 exhausted_zones.append(zone)
                 instance_created = False
@@ -340,16 +346,10 @@ class Node:
             except Conflict:
                 raise Exception(f"Node {self.instance_name} deleted while starting.")
 
-        if not instance_created:
-            msg = ""
-            if exhausted_zones:
-                msg += f"ZONE_RESOURCE_POOL_EXHAUSTED: {exhausted_zones} currently have no "
-                msg += f"available capacity for VM {self.machine_type}\n"
-            if unavailable_zones:
-                msg += f"VM type {self.machine_type} is not offered in remaining zones: "
-                msg += f"{unavailable_zones}\n\n"
-            if unavailable_zones or exhausted_zones:
-                raise Exception(msg)
+        if not instance_created and exhausted_zones:
+            msg = f"ZONE_RESOURCE_POOL_EXHAUSTED: {exhausted_zones} currently have no "
+            msg += f"available capacity for VM {self.machine_type}\n"
+            raise Exception(msg)
 
         kw = dict(project=PROJECT_ID, zone=zone, instance=self.instance_name)
         external_ip = self.instance_client.get(**kw).network_interfaces[0].access_configs[0].nat_i_p

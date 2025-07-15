@@ -7,7 +7,7 @@ from datetime import datetime
 import pytz
 import textwrap
 
-from fastapi import APIRouter, Depends, Request, HTTPException
+from fastapi import APIRouter, Depends, Request
 from google.cloud.firestore_v1 import FieldFilter
 from google.cloud.compute_v1 import InstancesClient
 from starlette.responses import StreamingResponse
@@ -48,11 +48,14 @@ def restart_cluster(request: Request, logger: Logger = Depends(get_logger)):
         futures.append(executor.submit(node.delete))
 
     # add nodes according to cluster_config doc
-    def _add_node_logged(machine_type, containers, node_service_port, inactivity_time, disk_size):
+    def _add_node_logged(
+        machine_type, gcp_region, containers, node_service_port, inactivity_time, disk_size
+    ):
         node = Node.start(
             db=DB,
             logger=logger,
             machine_type=machine_type,
+            gcp_region=gcp_region,
             containers=containers,
             auth_headers=auth_headers,
             service_port=node_service_port,
@@ -90,16 +93,17 @@ def restart_cluster(request: Request, logger: Logger = Depends(get_logger)):
 
     for node_spec in config["Nodes"]:
         for _ in range(node_spec["quantity"]):
-
             if IN_LOCAL_DEV_MODE:  # avoid trying to open same port on multiple local containers
                 node_service_port += 1
-            machine_type = node_spec["machine_type"]
-            containers = [Container.from_dict(c) for c in node_spec["containers"]]
-            inactivity_time = node_spec.get("inactivity_shutdown_time_sec")
-            disk_size = node_spec.get("disk_size_gb")
-
-            node_args = (machine_type, containers, node_service_port, inactivity_time, disk_size)
-            future = executor.submit(_add_node_logged, *node_args)
+            node_kwargs = dict(
+                machine_type=node_spec["machine_type"],
+                gcp_region=node_spec["gcp_region"],
+                containers=[Container.from_dict(c) for c in node_spec["containers"]],
+                node_service_port=node_service_port,
+                inactivity_time=node_spec.get("inactivity_shutdown_time_sec"),
+                disk_size=node_spec.get("disk_size_gb"),
+            )
+            future = executor.submit(_add_node_logged, **node_kwargs)
             futures.append(future)
 
     # wait until all operations done
@@ -167,6 +171,11 @@ async def cluster_info(logger: Logger = Depends(get_logger)):
     current_loop = asyncio.get_running_loop()
 
     async def node_stream():
+        # Check for empty collection before starting snapshot listener
+        display_filter = FieldFilter("display_in_dashboard", "==", True)
+        query = DB.collection("nodes").where(filter=display_filter)
+        if len([doc for doc in query.stream()]) == 0:
+            yield f"data: {json.dumps({'type': 'empty'})}\n\n"
 
         def on_snapshot(query_snapshot, changes, read_time):
             for change in changes:
@@ -184,9 +193,7 @@ async def cluster_info(logger: Logger = Depends(get_logger)):
                 current_loop.call_soon_threadsafe(queue.put_nowait, event_data)
 
         display_filter = FieldFilter("display_in_dashboard", "==", True)
-        query = DB.collection("nodes").where(filter=display_filter)
-        node_watch = query.on_snapshot(on_snapshot)
-
+        node_watch = DB.collection("nodes").where(filter=display_filter).on_snapshot(on_snapshot)
         try:
             while True:
                 event = await queue.get()

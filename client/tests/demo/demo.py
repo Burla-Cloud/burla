@@ -3,10 +3,13 @@ from burla import remote_parallel_map
 
 def my_function(my_input):
 
-    print(f"I'm running on my own remote computer in the cloud!  #{my_input}")
+    # Something intense goes here!
+
+    return my_input * 2
 
 
-remote_parallel_map(my_function, list(range(1000)))
+return_values = remote_parallel_map(my_function, list(range(10_000_000)))
+print(return_values)
 
 
 pass

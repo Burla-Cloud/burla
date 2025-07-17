@@ -7,3 +7,6 @@ def my_function(my_input):
 
 
 remote_parallel_map(my_function, list(range(10_000_000)))
+
+
+pass

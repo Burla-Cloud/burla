@@ -1,4 +1,3 @@
-
 from burla import remote_parallel_map
 
 my_inputs = list(range(1000))

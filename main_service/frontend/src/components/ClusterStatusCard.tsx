@@ -63,7 +63,7 @@ export const ClusterStatusCard = ({
                                 </span>
                             </span>
                             {gpuSummary !== "-" && (
-                                <span className="flex items-baseline gap-1 min-w-[110px]">
+                                <span className="flex items-baseline gap-1 min-w-[110px] whitespace-nowrap">
                                     <span className="text-base font-medium text-gray-700 leading-tight">
                                         {gpuSummary}
                                     </span>

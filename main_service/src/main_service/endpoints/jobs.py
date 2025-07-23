@@ -8,32 +8,40 @@ from fastapi.responses import JSONResponse
 from starlette.responses import StreamingResponse
 from google.cloud import firestore
 
-from main_service import DB
+from main_service import DB, PROJECT_ID
 
 router = APIRouter()
 
 
+ASYNC_DB = firestore.AsyncClient(project=PROJECT_ID, database="burla")
+
+
+async def current_num_results(job_id: str):
+    job_doc = ASYNC_DB.collection("jobs").document(job_id)
+    assigned_nodes_collection = job_doc.collection("assigned_nodes")
+    query_result = await assigned_nodes_collection.sum("current_num_results").get()
+    return query_result[0][0].value
+
+
 @router.get("/v1/jobs_paginated")
 async def get_recent_jobs(request: Request, page: int = 0, stream: bool = False):
-    limit = 15
-    offset = page * limit
-
+    docs_per_page = 15
+    offset = page * docs_per_page
     accept = request.headers.get("accept", "")
-    paginated_docs = list(
+
+    page_one_docs = list(
         DB.collection("jobs")
         .order_by("started_at", direction=firestore.Query.DESCENDING)
         .offset(offset)
-        .limit(limit)
+        .limit(docs_per_page)
         .stream()
     )
-
-    job_ids = [doc.id for doc in paginated_docs]
 
     if stream or "text/event-stream" in accept:
         queue = asyncio.Queue()
         loop = asyncio.get_running_loop()
 
-        if not job_ids:
+        if not page_one_docs:
             return StreamingResponse(iter([]), media_type="text/event-stream")
 
         def on_snapshot(col_snapshot, changes, read_time):
@@ -45,36 +53,28 @@ async def get_recent_jobs(request: Request, page: int = 0, stream: bool = False)
                 if hasattr(ts, "timestamp"):
                     ts = ts.timestamp()
 
-                # Sum n_results from assigned_nodes
-                n_results = 0
-                assigned_nodes_ref = (
-                    DB.collection("jobs").document(doc.id).collection("assigned_nodes")
-                )
-                for node_doc in assigned_nodes_ref.stream():
-                    node_data = node_doc.to_dict()
-                    if node_data:
-                        n_results += node_data.get("current_num_results", 0)
+                async def build_event_and_put():
+                    # I cant figure out how to `current_num_results` synchronously
+                    event = {
+                        "jobId": doc.id,
+                        "status": data.get("status"),
+                        "user": data.get("user", "Unknown"),
+                        "function_name": data.get("function_name", "Unknown"),
+                        "n_inputs": data.get("n_inputs", 0),
+                        "n_results": await current_num_results(doc.id),
+                        "started_at": ts,
+                        "deleted": change.type.name == "REMOVED",
+                    }
+                    await queue.put(event)
 
-                event = {
-                    "jobId": doc.id,
-                    "status": data.get("status"),
-                    "user": data.get("user", "Unknown"),
-                    "function_name": data.get("function_name", "Unknown"),
-                    "n_inputs": data.get("n_inputs", 0),
-                    "n_results": n_results,
-                    "started_at": ts,
-                    "deleted": change.type.name == "REMOVED",
-                }
-                loop.call_soon_threadsafe(queue.put_nowait, event)
+                asyncio.run_coroutine_threadsafe(build_event_and_put(), loop)
 
-        snapshot_query = DB.collection("jobs")
-        unsubscribe = snapshot_query.on_snapshot(on_snapshot)
+        unsubscribe = DB.collection("jobs").on_snapshot(on_snapshot)
 
         async def event_stream():
             try:
                 while True:
-                    evt = await queue.get()
-                    yield f"data: {json.dumps(evt)}\n\n"
+                    yield f"data: {json.dumps(await queue.get())}\n\n"
             finally:
                 unsubscribe.unsubscribe()
 
@@ -82,19 +82,11 @@ async def get_recent_jobs(request: Request, page: int = 0, stream: bool = False)
 
     # --- fallback for non-stream requests ---
     jobs = []
-    for doc in paginated_docs:
+    for doc in page_one_docs:
         d = doc.to_dict() or {}
         ts = d.get("started_at")
         if hasattr(ts, "timestamp"):
             ts = ts.timestamp()
-
-        n_results = 0
-        assigned_nodes_ref = DB.collection("jobs").document(doc.id).collection("assigned_nodes")
-        for node_doc in assigned_nodes_ref.stream():
-            node_data = node_doc.to_dict()
-            if node_data:
-                n_results += node_data.get("current_num_results", 0)
-
         jobs.append(
             {
                 "jobId": doc.id,
@@ -102,13 +94,15 @@ async def get_recent_jobs(request: Request, page: int = 0, stream: bool = False)
                 "user": d.get("user", "Unknown"),
                 "function_name": d.get("function_name", "Unknown"),
                 "n_inputs": d.get("n_inputs", 0),
-                "n_results": n_results,
+                "n_results": await current_num_results(doc.id),
                 "started_at": ts,
             }
         )
 
-    total = sum(1 for _ in DB.collection("jobs").stream())
-    return JSONResponse({"jobs": jobs, "page": page, "limit": limit, "total": total})
+    total_jobs = await ASYNC_DB.collection("jobs").count().get()
+    total_jobs = total_jobs[0][0].value
+
+    return JSONResponse({"jobs": jobs, "page": page, "limit": docs_per_page, "total": total_jobs})
 
 
 @router.get("/v1/job_logs/{job_id}/paginated")

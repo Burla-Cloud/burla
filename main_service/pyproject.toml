@@ -9,7 +9,7 @@ packages = [{include = "main_service", from = "src"}]
 python = "^3.11"
 google-cloud-logging = "^3.5.0"
 grpcio = "^1.54.2"
-google-cloud-firestore = "^2.11.1"
+google-cloud-firestore = "^2.21.0"
 google-cloud-secret-manager = "^2.16.2"
 google-cloud-run = "^0.9.1"
 google-api-python-client = "^2.97.0"

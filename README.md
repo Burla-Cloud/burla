@@ -2,7 +2,7 @@
 
 Burla is the simplest way to run Python on lot's of computers in the cloud.
 
-<figure><img src=".gitbook/assets/main_demo.gif" alt=""><figcaption></figcaption></figure>
+<figure><img src="https://github.com/Burla-Cloud/.github/blob/main/media/main_demo.gif" alt="" style="width:70%" /><figcaption></figcaption></figure>
 
 #### How It Works:
 
@@ -20,7 +20,7 @@ def my_function(my_input):
 return_values = remote_parallel_map(my_function, my_inputs)
 ```
 
-With Burla, running code in the cloud feels the same as coding locally:
+Running code in the cloud feels the same as running code locally:
 
 * Anything you print appears in your local terminal.
 * Exceptions thrown in your code are thrown on your local machine.
@@ -45,7 +45,7 @@ remote_parallel_map(train_model, parameter_grid, func_cpu=64, func_ram=256)
 Queue up 10 Million function calls, and run them with thousands of containers.\
 Our custom distributed task queue is incredibly fast, keeping hardware utilization high.
 
-<figure><img src=".gitbook/assets/queue_demo.gif" alt=""><figcaption><p>This demo is in realtime!</p></figcaption></figure>
+<figure><img src="https://github.com/Burla-Cloud/.github/blob/main/media/queue_demo.gif" alt="" style="width:80%" /><figcaption><p>This demo is in realtime!</p></figcaption></figure>
 
 #### Simple, Flexible Pipelines:
 
@@ -75,7 +75,7 @@ remote_parallel_map(process_files, [files], background=True)
 Public or private, just paste a link to your image and hit start.\
 Scale to 10,000 CPU's, terabytes of RAM, or 1,000 H100's, everything stays in your cloud.
 
-<figure><img src=".gitbook/assets/settings_demo.gif" alt=""><figcaption></figcaption></figure>
+<figure><img src="https://github.com/Burla-Cloud/.github/blob/main/media/settings_demo.gif" alt="" style="width:80%" /><figcaption></figcaption></figure>
 
 #### Deploy With Just Two Commands:
 

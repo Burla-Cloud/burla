@@ -1,6 +1,7 @@
 ### Run any Python function on 1000 computers in 1 second.
 
-Burla is the simplest way to run Python on lot's of computers in the cloud.
+In the future the cloud will be fast, simple, and open-source.  
+Help us make this a reality by [becoming a contributor](https://cal.com/jakez/burla-contributor-inquiry).
 
 <figure><img src="https://github.com/Burla-Cloud/.github/blob/main/media/main_demo.gif" alt="" style="width:70%" /><figcaption></figcaption></figure>
 

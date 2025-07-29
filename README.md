@@ -6,8 +6,7 @@ Burla is the simplest way to run Python on lot's of computers in the cloud.
 
 #### How It Works:
 
-Burla is an open-source platform for orchestrating parallel Python in the cloud.\
-It only has one function:
+Burla only has one function:
 
 ```python
 from burla import remote_parallel_map

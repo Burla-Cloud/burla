@@ -1,35 +1,98 @@
-<p align="center"><img src="https://raw.githubusercontent.com/Burla-Cloud/.github/main/media/readme_banner.png" width=1000></p>
+### Run any Python function on 1000 computers in 1 second.
 
+Burla is the simplest way to run Python on lot's of computers in the cloud.
 
-#### Burla is an open-source, batch-processing platform for Python developers.
+<figure><img src=".gitbook/assets/main_demo.gif" alt=""><figcaption></figcaption></figure>
 
-- Burla can deploy a simple python function to 10,000VM's in about 2 seconds (see our [demo](https://www.youtube.com/watch?v=1HQkTL-7_VY)).
-- Code runs in any docker container, on any machine type, for any length of time.
-- It comes with a dashboard to monitor long running jobs, and view logs.
-- Burla can be installed with one command.
+#### How It Works:
 
-#### Burla is a python package with only one function:
+Burla is an open-source platform for orchestrating parallel Python in the cloud.\
+It only has one function:
+
 ```python
 from burla import remote_parallel_map
-​
-​
+
+my_inputs = [1, 2, 3]
+
 def my_function(my_input):
-    print("I'm running on remote computer in the cloud!")
+    print("I'm running on my own separate computer in the cloud!")
+    return my_input
     
-remote_parallel_map(my_function, [1, 2, 3])
+return_values = remote_parallel_map(my_function, my_inputs)
 ```
 
-This code runs: `my_function(1)`, `my_function(2)`, `my_function(3)` in parallel, each in a separate container, and on a separate cpu, in the cloud.
 With Burla, running code in the cloud feels the same as coding locally:
-- Anything you print appears your local terminal.
-- Exceptions thrown in your code are thrown on your local machine.
-- Responses are pretty quick, you can call a million simple functions in a couple seconds.
 
-[Click here to learn more about remote_parallel_map.](https://docs.burla.dev/overview)
+* Anything you print appears in your local terminal.
+* Exceptions thrown in your code are thrown on your local machine.
+* Responses are pretty quick, you can call a million simple functions in a couple seconds.
+
+#### Attach Big Hardware to Functions That Need It:
+
+Zero config files, just simple arguments like `func_cpu` & `func_ram`.
+
+```python
+from xgboost import XGBClassifier
+
+def train_model(hyper_parameters):
+    model = XGBClassifier(n_jobs=64, **hyper_parameters)
+    model.fit(training_inputs, training_targets)
+    
+remote_parallel_map(train_model, parameter_grid, func_cpu=64, func_ram=256)
+```
+
+#### A Fast, Scalable Task Queue:
+
+Queue up 10 Million function calls, and run them with thousands of containers.\
+Our custom distributed task queue is incredibly fast, keeping hardware utilization high.
+
+<figure><img src=".gitbook/assets/queue_demo.gif" alt=""><figcaption><p>This demo is in realtime!</p></figcaption></figure>
+
+#### Simple, Flexible Pipelines:
+
+Nest `remote_parallel_map` calls to build simple, massively parallel pipelines.\
+Use `background=True` to fire and forget code, then monitor progress from the dashboard.
+
+```python
+from burla import remote_parallel_map
+
+def process_record(record):
+    # Pretend this does some math per-record!
+    return result
+
+def process_file(file):
+    results = remote_parallel_map(process_record, split_into_records(file))
+    upload_results(results)
+
+def process_files(files):
+    remote_parallel_map(process_file, files, func_ram=16)
+    
+
+remote_parallel_map(process_files, [files], background=True)
+```
+
+#### Run Code in any Docker Image, on any Hardware:
+
+Public or private, just paste a link to your image and hit start.\
+Scale to 10,000 CPU's, terabytes of RAM, or 1,000 H100's, everything stays in your cloud.
+
+<figure><img src=".gitbook/assets/settings_demo.gif" alt=""><figcaption></figcaption></figure>
+
+#### Deploy With Just Two Commands:
+
+(**Burla is currently Google Cloud only!**)
+
+1. `pip install burla`
+2. `burla install`
+
+See the [Getting Started guide](https://docs.burla.dev/getting-started#quickstart) for more info.
+
 
 &nbsp;
 &nbsp;
 
----
-Questions?
-[Schedule a call with us](https://cal.com/jakez/burla?duration=30), or [email us](mailto:jake@burla.dev). We're always happy to talk.
+
+***
+
+Questions?\
+[Schedule a call](http://cal.com/jakez/burla), or email **jake@burla.dev**. We're always happy to talk.

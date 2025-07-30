@@ -214,37 +214,37 @@ async def job_watcher_logged(n_inputs: int, is_background_job: bool, auth_header
             tb_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
             traceback_str = format_traceback(tb_details)
             logger.log(str(e), "ERROR", traceback=traceback_str)
-        finally:
-            # reinit workers (only the ones that ran the job):
-            async def _reinit_single_worker(worker):
-                async with session.get(f"{worker.url}/reinit") as response:
-                    if response.status != 200:
-                        logs = worker.logs() if worker.exists() else "Unable to retrieve logs."
-                        name = worker.container_name
-                        msg = f"Worker {name} returned status {response.status}!"
-                        msg += " REBOOTING NODE ...\n"
-                        msg += f"{msg} Logs from container:\n{logs.strip()}"
-                        node_ref = async_db.collection("nodes").document(INSTANCE_NAME)
-                        node_ref.collection("logs").document().set({"msg": msg, "ts": time()})
-                        logger.log(msg, severity="ERROR")
-                        return None
-                    return worker
 
-            tasks = [_reinit_single_worker(w) for w in SELF["workers"]]
-            reinitialized_workers = await asyncio.gather(*tasks)
-            if any(w is None for w in reinitialized_workers) and (not SELF["SHUTTING_DOWN"]):
-                reboot_containers(logger=logger)
-            else:
-                # reinit node so it can run a new job
-                current_container_config = SELF["current_container_config"]
-                current_workers = reinitialized_workers + SELF["idle_workers"]
-                authorized_users = SELF["authorized_users"]
-                REINIT_SELF(SELF)
-                SELF["current_container_config"] = current_container_config
-                SELF["workers"] = current_workers
-                SELF["authorized_users"] = authorized_users
-                node_doc = async_db.collection("nodes").document(INSTANCE_NAME)
-                await node_doc.update({"status": "READY"})
+        # reinit workers (only the ones that ran the job):
+        async def _reinit_single_worker(worker):
+            async with session.get(f"{worker.url}/reinit") as response:
+                if response.status != 200:
+                    logs = worker.logs() if worker.exists() else "Unable to retrieve logs."
+                    name = worker.container_name
+                    msg = f"Worker {name} returned status {response.status}!"
+                    msg += " REBOOTING NODE ...\n"
+                    msg += f"{msg} Logs from container:\n{logs.strip()}"
+                    node_ref = async_db.collection("nodes").document(INSTANCE_NAME)
+                    node_ref.collection("logs").document().set({"msg": msg, "ts": time()})
+                    logger.log(msg, severity="ERROR")
+                    return None
+                return worker
+
+        tasks = [_reinit_single_worker(w) for w in SELF["workers"]]
+        reinitialized_workers = await asyncio.gather(*tasks)
+        if any(w is None for w in reinitialized_workers) and (not SELF["SHUTTING_DOWN"]):
+            reboot_containers(logger=logger)
+        else:
+            # reinit node so it can run a new job
+            current_container_config = SELF["current_container_config"]
+            current_workers = reinitialized_workers + SELF["idle_workers"]
+            authorized_users = SELF["authorized_users"]
+            REINIT_SELF(SELF)
+            SELF["current_container_config"] = current_container_config
+            SELF["workers"] = current_workers
+            SELF["authorized_users"] = authorized_users
+            node_doc = async_db.collection("nodes").document(INSTANCE_NAME)
+            await node_doc.update({"status": "READY"})
 
 
 async def result_check_all_workers(session: aiohttp.ClientSession, logger: Logger):

@@ -18,7 +18,7 @@ def download_and_unzip(bucket, blob_name):
         bucket.blob(blob_name).download_to_filename(blob_name)
 
     print("Unzipping...")
-    command = f"pbzip2 -d -p80 -c {blob_name} > {xml_file_path}"
+    command = f"pbzip2 -d -p80 -o {xml_file_path} {blob_name}"
     process = subprocess.run(command, shell=True, stderr=subprocess.PIPE, text=True)
     if process.returncode != 0:
         raise RuntimeError(f"pbzip2 failed with error: {process.stderr}")

@@ -4,12 +4,13 @@ version = "0.1.0"
 description = ""
 authors = ["Jake Zuliani <jake@burla.dev>"]
 readme = "README.md"
-packages = [{include = "vector_embeddings"}]
 
 [tool.poetry.dependencies]
-python = "^3.11"
+python = "^3.12"
 google-cloud-compute = "^1.33.0"
 google-auth = "^2.40.3"
+google-cloud-storage = "^3.2.0"
+burla = "^1.1.4"
 
 
 [build-system]

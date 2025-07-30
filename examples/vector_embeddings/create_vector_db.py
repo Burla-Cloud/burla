@@ -21,16 +21,18 @@ mkdir -p /qdrant_data
 docker run -d -p 6333:6333 -v /qdrant_data:/qdrant/storage qdrant/qdrant
 """
 
-image = "projects/ubuntu-os-cloud/global/images/family/ubuntu-2204-lts"
-disk_type = f"zones/{zone}/diskTypes/pd-ssd"
-disk_params = AttachedDiskInitializeParams(source_image=image, disk_size_gb=50, disk_type=disk_type)
+disk_image = "projects/ubuntu-os-cloud/global/images/family/ubuntu-2204-lts"
+disk_type = f"zones/{zone}/diskTypes/hyperdisk-balanced"
+disk_params = AttachedDiskInitializeParams(
+    source_image=disk_image, disk_size_gb=100, disk_type=disk_type
+)
 
 access_config = AccessConfig(type_="ONE_TO_ONE_NAT", name="External NAT")
 network_interface = NetworkInterface(name="global/networks/default", access_configs=[access_config])
 
 instance = Instance(
     name=instance_name,
-    machine_type=f"zones/{zone}/machineTypes/e2-standard-2",
+    machine_type=f"zones/{zone}/machineTypes/n4-standard-80",
     disks=[AttachedDisk(boot=True, auto_delete=True, initialize_params=disk_params)],
     network_interfaces=[network_interface],
     metadata=Metadata(items=[Items(key="startup-script", value=startup_script)]),

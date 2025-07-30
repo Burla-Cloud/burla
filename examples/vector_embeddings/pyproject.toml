@@ -1,0 +1,17 @@
+[tool.poetry]
+name = "vector-embeddings"
+version = "0.1.0"
+description = ""
+authors = ["Jake Zuliani <jake@burla.dev>"]
+readme = "README.md"
+packages = [{include = "vector_embeddings"}]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+google-cloud-compute = "^1.33.0"
+google-auth = "^2.40.3"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

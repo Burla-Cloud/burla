@@ -216,7 +216,8 @@ async def job_watcher_logged(n_inputs: int, is_background_job: bool, auth_header
             logger.log(str(e), "ERROR", traceback=traceback_str)
 
         # reinit workers (only the ones that ran the job):
-        async def _reinit_single_worker(worker):
+        async def _reinit_single_worker(worker, logger):
+            logger.log(f"HI")
             async with session.get(f"{worker.url}/restart", timeout=1) as response:
                 # worker service kills itself in /restart and is restarted by container script
                 # -> why we don't check for a 200 response.
@@ -236,7 +237,7 @@ async def job_watcher_logged(n_inputs: int, is_background_job: bool, auth_header
             return await _wait_til_worker_ready()
 
         logger.log(f"RESTARTING {len(SELF['workers'])} workers ...")
-        tasks = [_reinit_single_worker(w) for w in SELF["workers"]]
+        tasks = [_reinit_single_worker(w, logger) for w in SELF["workers"]]
         reinitialized_workers = await asyncio.gather(*tasks)
         logger.log(f"RESTARTED {len(reinitialized_workers)} workers!")
         if any(w is None for w in reinitialized_workers) and (not SELF["SHUTTING_DOWN"]):

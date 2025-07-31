@@ -235,6 +235,7 @@ async def job_watcher_logged(n_inputs: int, is_background_job: bool, auth_header
 
         tasks = [_reinit_single_worker(w) for w in SELF["workers"]]
         reinitialized_workers = await asyncio.gather(*tasks)
+        logger.log(f"RESTARTED {len(reinitialized_workers)} workers!")
         if any(w is None for w in reinitialized_workers) and (not SELF["SHUTTING_DOWN"]):
             reboot_containers(logger=logger)
         else:

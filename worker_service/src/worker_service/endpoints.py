@@ -1,4 +1,4 @@
-import sys
+import os
 import pickle
 import asyncio
 import aiohttp
@@ -27,7 +27,7 @@ async def restart():
     # Used to cancel running user jobs because I don't want to make them run in a
     # process (cancelable) instead of a thread (not cancelable) rn.
     # This is automatically restarted by the while loop in the containers script.
-    sys.exit(0)
+    os._exit(0)
     # I think SELF["STOP_PROCESSING_EVENT"] is still important for other resons.
     # (used to be used here to stop thread until I remembered not all user jobs are tiny)
 

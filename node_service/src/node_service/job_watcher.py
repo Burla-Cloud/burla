@@ -218,10 +218,14 @@ async def job_watcher_logged(n_inputs: int, is_background_job: bool, auth_header
         # reinit workers (only the ones that ran the job):
         async def _reinit_single_worker(worker, logger):
             logger.log(f"HI")
-            async with session.get(f"{worker.url}/restart", timeout=1) as response:
-                # worker service kills itself in /restart and is restarted by container script
-                # -> why we don't check for a 200 response.
-                logger.log(f"got: {response.status} from /restart")
+            try:
+                async with session.get(f"{worker.url}/restart", timeout=1) as response:
+                    # worker service kills itself in /restart and is restarted by container script
+                    # -> why we don't check for a 200 response.
+                    logger.log(f"got: {response.status} from /restart")
+            except Exception as e:
+                logger.log(f"ERROR {e}")
+                raise e
 
             async def _wait_til_worker_ready(attempt=0):
                 async with session.get(f"{worker.url}/", timeout=0.2) as response:

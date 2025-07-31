@@ -3,6 +3,7 @@ import subprocess
 import xml.etree.ElementTree as xml_tree
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+import sys
 
 from google.cloud import storage
 from burla import remote_parallel_map
@@ -18,10 +19,19 @@ def download_and_unzip(bucket, blob_name):
         bucket.blob(blob_name).download_to_filename(blob_name)
 
     print("Unzipping...")
-    command = f"pbzip2 -d -p80 -o {xml_file_path} {blob_name}"
-    process = subprocess.run(command, shell=True, stderr=subprocess.PIPE, text=True)
+    command = f"pbzip2 -d -v -p80 {blob_name}"
+    process = subprocess.Popen(
+        command,
+        shell=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    for line in process.stdout:
+        print(line, end="")
+    process.wait()
     if process.returncode != 0:
-        raise RuntimeError(f"pbzip2 failed with error: {process.stderr}")
+        raise RuntimeError(f"pbzip2 failed with exit code {process.returncode}")
     print("Download and unzip complete.")
 
 

@@ -1,38 +1,30 @@
-import bz2
-import subprocess
 import xml.etree.ElementTree as xml_tree
+from subprocess import Popen, PIPE, STDOUT
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-import sys
 
 from google.cloud import storage
 from burla import remote_parallel_map
 
 
-def download_and_unzip(bucket, blob_name):
-    xml_file_path = blob_name.removesuffix(".bz2")
-    if Path(xml_file_path).exists():
-        return
+def execute_cmd_live_output(cmd: str):
+    process = Popen(cmd, shell=True, stdout=PIPE, stderr=STDOUT, text=True)
+    for line in process.stdout:
+        print(line.rstrip("\n"), end="", flush=True)
+    process.wait()
+    if process.returncode != 0:
+        msg = f"pbzip2 failed with exit code {process.returncode}"
+        raise RuntimeError(msg=f"{msg}, stderr: {process.stderr.read()}")
 
+
+def download_and_unzip(bucket, blob_name):
     if not Path(blob_name).exists():
         print("Downloading compressed XML from GCS...")
         bucket.blob(blob_name).download_to_filename(blob_name)
 
-    print("Unzipping...")
-    command = f"pbzip2 -d -v -p80 {blob_name}"
-    process = subprocess.Popen(
-        command,
-        shell=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-    )
-    for line in process.stdout:
-        print(line, end="")
-    process.wait()
-    if process.returncode != 0:
-        raise RuntimeError(f"pbzip2 failed with exit code {process.returncode}")
-    print("Download and unzip complete.")
+    if not Path(blob_name.removesuffix(".bz2")).exists():
+        print("Unzipping...")
+        execute_cmd_live_output(f"pbzip2 -d -v -p80 {blob_name}")
 
 
 def articles_to_blobs(blob_name):

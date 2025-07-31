@@ -1,7 +1,8 @@
 .ONESHELL:
 .SILENT:
 
-IMAGE_NAME := us-docker.pkg.dev/imaginary-space-burla/vector-embedding-demo/vector-embedding-demo:latest
+PROJECT_ID := $(shell gcloud config get-value project 2>/dev/null)
+IMAGE_NAME := us-docker.pkg.dev/$(PROJECT_ID)/vector-embedding-demo/vector-embedding-demo:latest
 
 image:
 	docker build --platform linux/amd64 -t $(IMAGE_NAME) .

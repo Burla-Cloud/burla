@@ -217,13 +217,16 @@ async def job_watcher_logged(n_inputs: int, is_background_job: bool, auth_header
 
         # reinit workers (only the ones that ran the job):
         async def _reinit_single_worker(worker):
-            async with session.get(f"{worker.url}/restart", timeout=1):
+            async with session.get(f"{worker.url}/restart", timeout=1) as response:
                 # worker service kills itself in /restart and is restarted by container script
                 # -> why we don't check for a 200 response.
                 pass
 
+            logger.log(f"got: {response.status} from /restart")
+
             async def _wait_til_worker_ready(attempt=0):
                 async with session.get(f"{worker.url}/", timeout=1) as response:
+                    logger.log(f"got: {response.status} from /")
                     if response.status == 200:
                         return worker
                     elif attempt > 10:
@@ -233,6 +236,7 @@ async def job_watcher_logged(n_inputs: int, is_background_job: bool, auth_header
 
             return await _wait_til_worker_ready()
 
+        logger.log(f"RESTARTING {len(SELF['workers'])} workers ...")
         tasks = [_reinit_single_worker(w) for w in SELF["workers"]]
         reinitialized_workers = await asyncio.gather(*tasks)
         logger.log(f"RESTARTED {len(reinitialized_workers)} workers!")

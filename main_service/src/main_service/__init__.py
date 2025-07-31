@@ -21,7 +21,7 @@ from jinja2 import Environment, FileSystemLoader
 os.environ["GRPC_VERBOSITY"] = "ERROR"
 os.environ["GLOG_minloglevel"] = "2"
 
-CURRENT_BURLA_VERSION = "1.1.4"
+CURRENT_BURLA_VERSION = "1.1.5"
 
 # This is the only possible alternative "mode".
 # In this mode everything runs locally in docker containers.
@@ -58,7 +58,7 @@ DEFAULT_CONFIG = {  # <- config used only when config is missing from firestore
         {
             "containers": [
                 {
-                    "image": "burlacloud/default-image-py3.12",
+                    "image": "python:3.12",
                     "python_version": "3.12",
                 },
             ],

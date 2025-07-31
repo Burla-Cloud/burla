@@ -1,3 +1,4 @@
+import sys
 import pickle
 import asyncio
 import aiohttp
@@ -5,7 +6,7 @@ from typing import Optional
 from queue import Empty
 from fastapi import APIRouter, Path, Response, Depends, Query
 
-from worker_service import SELF, REINIT_SELF, get_request_json, get_request_files
+from worker_service import SELF, get_request_json, get_request_files
 from worker_service.udf_executor import execute_job
 from worker_service.helpers import ThreadWithExc
 
@@ -21,10 +22,14 @@ async def get_status():
         return {"status": "READY"}
 
 
-@router.get("/reinit")
-async def reinit():
-    REINIT_SELF(SELF)
-    SELF["logs"].append("Reinitialized successfully.")
+@router.get("/restart")
+async def restart():
+    # Used to cancel running user jobs because I don't want to make them run in a
+    # process (cancelable) instead of a thread (not cancelable) rn.
+    # This is automatically restarted by the while loop in the containers script.
+    sys.exit(0)
+    # I think SELF["STOP_PROCESSING_EVENT"] is still important for other resons.
+    # (used to be used here to stop thread until I remembered not all user jobs are tiny)
 
 
 def _check_udf_executor_thread():

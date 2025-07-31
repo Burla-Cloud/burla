@@ -201,8 +201,6 @@ async def _job_watcher(
     if not is_background_job:
         job_watch.unsubscribe()
 
-    logger.log("HERE1")
-
 
 async def job_watcher_logged(n_inputs: int, is_background_job: bool, auth_headers: dict):
     logger = Logger()  # new logger has no request attached like the one in execute job did.
@@ -212,38 +210,34 @@ async def job_watcher_logged(n_inputs: int, is_background_job: bool, auth_header
             async_db = AsyncClient(project=PROJECT_ID, database="burla")
             await _job_watcher(n_inputs, is_background_job, logger, auth_headers, async_db, session)
         except Exception as e:
-            logger.log("HERE F")
             exc_type, exc_value, exc_traceback = sys.exc_info()
             tb_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
             traceback_str = format_traceback(tb_details)
             logger.log(str(e), "ERROR", traceback=traceback_str)
 
-        logger.log("HERE2")
-
         # reinit workers (only the ones that ran the job):
         async def _reinit_single_worker(worker):
-            async with session.get(f"{worker.url}/reinit") as response:
-                if response.status != 200:
-                    logs = worker.logs() if worker.exists() else "Unable to retrieve logs."
-                    name = worker.container_name
-                    msg = f"Worker {name} returned status {response.status}!"
-                    msg += " REBOOTING NODE ...\n"
-                    msg += f"{msg} Logs from container:\n{logs.strip()}"
-                    node_ref = async_db.collection("nodes").document(INSTANCE_NAME)
-                    node_ref.collection("logs").document().set({"msg": msg, "ts": time()})
-                    logger.log(msg, severity="ERROR")
-                    return None
-                return worker
+            async with session.get(f"{worker.url}/restart", timeout=1):
+                # worker service kills itself in /restart and is restarted by container script
+                # -> why we don't check for a 200 response.
+                pass
+
+            async def _wait_til_worker_ready(attempt=0):
+                async with session.get(f"{worker.url}/", timeout=1) as response:
+                    if response.status == 200:
+                        return worker
+                    elif attempt > 10:
+                        raise Exception(f"Worker {worker.container_name} not ready after 10s")
+                    else:
+                        return await _wait_til_worker_ready(attempt + 1)
+
+            return await _wait_til_worker_ready()
 
         tasks = [_reinit_single_worker(w) for w in SELF["workers"]]
         reinitialized_workers = await asyncio.gather(*tasks)
-        logger.log("HERE3")
         if any(w is None for w in reinitialized_workers) and (not SELF["SHUTTING_DOWN"]):
-            logger.log("HERE4")
             reboot_containers(logger=logger)
-            logger.log("HERE5")
         else:
-            logger.log("HERE6")
             # reinit node so it can run a new job
             current_container_config = SELF["current_container_config"]
             current_workers = reinitialized_workers + SELF["idle_workers"]
@@ -255,8 +249,6 @@ async def job_watcher_logged(n_inputs: int, is_background_job: bool, auth_header
             SELF["authorized_users"] = authorized_users
             node_doc = async_db.collection("nodes").document(INSTANCE_NAME)
             await node_doc.update({"status": "READY"})
-            logger.log("HERE8")
-        logger.log("HERE9")
 
 
 async def result_check_all_workers(session: aiohttp.ClientSession, logger: Logger):

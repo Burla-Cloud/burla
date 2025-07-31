@@ -220,18 +220,17 @@ async def job_watcher_logged(n_inputs: int, is_background_job: bool, auth_header
             async with session.get(f"{worker.url}/restart", timeout=1) as response:
                 # worker service kills itself in /restart and is restarted by container script
                 # -> why we don't check for a 200 response.
-                pass
-
-            logger.log(f"got: {response.status} from /restart")
+                logger.log(f"got: {response.status} from /restart")
 
             async def _wait_til_worker_ready(attempt=0):
-                async with session.get(f"{worker.url}/", timeout=1) as response:
+                async with session.get(f"{worker.url}/", timeout=0.2) as response:
                     logger.log(f"got: {response.status} from /")
                     if response.status == 200:
                         return worker
-                    elif attempt > 10:
+                    elif attempt > 100:
                         raise Exception(f"Worker {worker.container_name} not ready after 10s")
                     else:
+                        await asyncio.sleep(0.1)
                         return await _wait_til_worker_ready(attempt + 1)
 
             return await _wait_til_worker_ready()

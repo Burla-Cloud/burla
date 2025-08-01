@@ -271,7 +271,8 @@ async def restart_workers(session: aiohttp.ClientSession, logger: Logger, async_
                 async with session.get(f"{worker.url}/", timeout=0.2) as response:
                     status = response.status
             except Exception:
-                pass
+                status = None
+
             logger.log(f"got: {status} from /")
             if status == 200:
                 return worker

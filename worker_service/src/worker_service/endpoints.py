@@ -6,7 +6,7 @@ from typing import Optional
 from queue import Empty
 from fastapi import APIRouter, Path, Response, Depends, Query
 
-from worker_service import SELF, get_request_json, get_request_files
+from worker_service import SELF, REINIT_SELF, get_request_json, get_request_files
 from worker_service.udf_executor import execute_job
 from worker_service.helpers import ThreadWithExc
 
@@ -20,6 +20,12 @@ async def get_status():
         return {"status": "BUSY"}
     else:
         return {"status": "READY"}
+
+
+@router.get("/reinit")
+async def reinit():
+    REINIT_SELF(SELF)
+    SELF["logs"].append("Reinitialized successfully.")
 
 
 @router.get("/restart")

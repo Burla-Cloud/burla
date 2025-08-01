@@ -21,7 +21,7 @@ from jinja2 import Environment, FileSystemLoader
 os.environ["GRPC_VERBOSITY"] = "ERROR"
 os.environ["GLOG_minloglevel"] = "2"
 
-CURRENT_BURLA_VERSION = "1.1.4"
+CURRENT_BURLA_VERSION = "1.1.5"
 
 # This is the only possible alternative "mode".
 # In this mode everything runs locally in docker containers.
@@ -38,37 +38,25 @@ secret_name = f"projects/{PROJECT_ID}/secrets/burla-cluster-id-token/versions/la
 response = secret_client.access_secret_version(request={"name": secret_name})
 CLUSTER_ID_TOKEN = response.payload.data.decode("UTF-8")
 
-LOCAL_DEV_CONFIG = {  # <- config used only in local dev mode
-    "Nodes": [
-        {
-            "containers": [
-                {
-                    "image": "us-docker.pkg.dev/burla-test/cluster-default/3.10:latest",
-                    "python_version": "3.10",
-                },
-            ],
-            "machine_type": "n4-standard-1",  # should match `INSTANCE_N_CPUS` in node svc
-            "quantity": 2,
-            "inactivity_shutdown_time_sec": 60 * 10,
-        }
-    ]
-}
+config_doc = DB.collection("cluster_config").document("cluster_config").get()
+LOCAL_DEV_CONFIG = config_doc.to_dict()
+LOCAL_DEV_CONFIG["machine_type"] = "n4-standard1"
 DEFAULT_CONFIG = {  # <- config used only when config is missing from firestore
     "Nodes": [
         {
             "containers": [
                 {
-                    "image": "burlacloud/default-image-py3.12",
+                    "image": "python:3.12",
                     "python_version": "3.12",
                 },
             ],
             "machine_type": "n4-standard-4",
+            "gcp_region": "us-central1",
             "quantity": 1,
             "inactivity_shutdown_time_sec": 60 * 10,
         }
     ]
 }
-
 from main_service.helpers import Logger, format_traceback
 
 

@@ -1,3 +1,4 @@
+import os
 import sys
 import pickle
 import json
@@ -36,6 +37,10 @@ from burla._helpers import (
     log_telemetry,
     run_in_subprocess,
 )
+
+os.environ["ABSL_LOG_LEVEL"] = "3"  # 3 = ERROR, 2 = WARNING, 1 = INFO, 0 = DEBUG
+os.environ["GRPC_VERBOSITY"] = "ERROR"
+os.environ["GRPC_CPP_MIN_LOG_LEVEL"] = "3"
 
 
 class NodeConflict(Exception):

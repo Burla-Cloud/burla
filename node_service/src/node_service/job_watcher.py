@@ -261,21 +261,25 @@ async def restart_workers(session: aiohttp.ClientSession, logger: Logger, async_
         try:
             async with session.get(f"{worker.url}/restart", timeout=1):
                 pass
-        except (ServerDisconnectedError, ConnectionResetError):
+        except Exception:
             # worker service kills itself in /restart and is restarted by container script
             # -> why we don't check for a 200 response and expect a disconnect error.
             pass
 
         async def _wait_til_worker_ready(attempt=0):
-            async with session.get(f"{worker.url}/", timeout=0.2) as response:
-                logger.log(f"got: {response.status} from /")
-                if response.status == 200:
-                    return worker
-                elif attempt > 100:
-                    raise Exception(f"Worker {worker.container_name} not ready after 10s")
-                else:
-                    await asyncio.sleep(0.1)
-                    return await _wait_til_worker_ready(attempt + 1)
+            try:
+                async with session.get(f"{worker.url}/", timeout=0.2) as response:
+                    status = response.status
+            except Exception:
+                pass
+            logger.log(f"got: {status} from /")
+            if status == 200:
+                return worker
+            elif attempt > 100:
+                raise Exception(f"Worker {worker.container_name} not ready after 10s")
+            else:
+                await asyncio.sleep(0.1)
+                return await _wait_til_worker_ready(attempt + 1)
 
         return await _wait_til_worker_ready()
 

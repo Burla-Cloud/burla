@@ -3,7 +3,7 @@ import pickle
 import traceback
 import asyncio
 import aiohttp
-from time import time
+from time import time, sleep
 
 from google.cloud import firestore
 from google.cloud.firestore import FieldFilter, And
@@ -213,7 +213,6 @@ async def job_watcher_logged(n_inputs: int, is_background_job: bool, auth_header
         try:
             async_db = AsyncClient(project=PROJECT_ID, database="burla")
             await _job_watcher(n_inputs, is_background_job, logger, auth_headers, async_db, session)
-            await restart_workers(session, logger, async_db)
         except Exception as e:
             exc_type, exc_value, exc_traceback = sys.exc_info()
             tb_details = traceback.format_exception(exc_type, exc_value, exc_traceback)

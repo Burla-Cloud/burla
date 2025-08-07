@@ -131,9 +131,10 @@ class Worker:
             # Restart automatically if it dies (IMPORTANT!):
             # Because it kills itself intentionally when it needs to cancel a running job.
             while true; do
-                exec $python_cmd -m uvicorn worker_service:app --host 0.0.0.0 \
+                $python_cmd -m uvicorn worker_service:app --host 0.0.0.0 \
                     --port {WORKER_INTERNAL_PORT} --workers 1 \
                     --timeout-keep-alive 30
+                echo "Restarting worker service..."
             done
         """.strip()
         cmd = ["-c", cmd_script]

@@ -18,11 +18,15 @@ def execute_cmd_live_output(cmd: str):
 
 
 def download_and_unzip(bucket, blob_name):
-    if not Path(blob_name).exists():
+    if Path(blob_name).exists():
+        print("Skipping download, file already exists.")
+    else:
         print("Downloading compressed XML from GCS...")
         bucket.blob(blob_name).download_to_filename(blob_name)
 
-    if not Path(blob_name.removesuffix(".bz2")).exists():
+    if Path(blob_name.removesuffix(".bz2")).exists():
+        print("Skipping unzip, file already exists.")
+    else:
         print("Unzipping...")
         execute_cmd_live_output(f"pbzip2 -d -v -p80 {blob_name}")
 

@@ -3,12 +3,13 @@ import pickle
 import traceback
 import asyncio
 import aiohttp
-from time import time
+from time import time, sleep
 
 from google.cloud import firestore
 from google.cloud.firestore import FieldFilter, And
 from google.cloud.firestore_v1.field_path import FieldPath
 from google.cloud.firestore_v1.async_client import AsyncClient
+from aiohttp.client_exceptions import ServerDisconnectedError
 
 from node_service import PROJECT_ID, SELF, INSTANCE_NAME, REINIT_SELF
 from node_service.helpers import Logger, format_traceback
@@ -133,6 +134,7 @@ async def _job_watcher(
 
         if failed:
             logger.log(f"workers failed: {', '.join(failed)}", severity="ERROR")
+            reboot_containers(logger=logger)
             break
 
         # has this node finished all it's inputs ?
@@ -176,6 +178,7 @@ async def _job_watcher(
                 # ignore because this can get hit by like 100's of nodes at once
                 # one of them will succeed and the others will throw errors we can ignore.
                 pass
+            await reinit_workers(session, logger, async_db)
             break
 
         # client still listening? (if this is NOT a background job)
@@ -196,6 +199,7 @@ async def _job_watcher(
                     # ignore because this can get hit by like 100's of nodes at once
                     # one of them will succeed and the others will throw errors we can ignore.
                     pass
+                await restart_workers(session, logger, async_db)
                 break
 
     if not is_background_job:
@@ -214,37 +218,78 @@ async def job_watcher_logged(n_inputs: int, is_background_job: bool, auth_header
             tb_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
             traceback_str = format_traceback(tb_details)
             logger.log(str(e), "ERROR", traceback=traceback_str)
-        finally:
-            # reinit workers (only the ones that ran the job):
-            async def _reinit_single_worker(worker):
-                async with session.get(f"{worker.url}/reinit") as response:
-                    if response.status != 200:
-                        logs = worker.logs() if worker.exists() else "Unable to retrieve logs."
-                        name = worker.container_name
-                        msg = f"Worker {name} returned status {response.status}!"
-                        msg += " REBOOTING NODE ...\n"
-                        msg += f"{msg} Logs from container:\n{logs.strip()}"
-                        node_ref = async_db.collection("nodes").document(INSTANCE_NAME)
-                        node_ref.collection("logs").document().set({"msg": msg, "ts": time()})
-                        logger.log(msg, severity="ERROR")
-                        return None
-                    return worker
 
-            tasks = [_reinit_single_worker(w) for w in SELF["workers"]]
-            reinitialized_workers = await asyncio.gather(*tasks)
-            if any(w is None for w in reinitialized_workers) and (not SELF["SHUTTING_DOWN"]):
-                reboot_containers(logger=logger)
+
+async def reinit_node(assigned_workers: list, async_db: AsyncClient):
+    current_container_config = SELF["current_container_config"]
+    current_workers = assigned_workers + SELF["idle_workers"]
+    authorized_users = SELF["authorized_users"]
+    REINIT_SELF(SELF)
+    SELF["current_container_config"] = current_container_config
+    SELF["workers"] = current_workers
+    SELF["authorized_users"] = authorized_users
+    node_doc = async_db.collection("nodes").document(INSTANCE_NAME)
+    await node_doc.update({"status": "READY"})
+
+
+async def reinit_workers(session: aiohttp.ClientSession, logger: Logger, async_db: AsyncClient):
+    async def _reinit_single_worker(worker):
+        async with session.get(f"{worker.url}/reinit") as response:
+            if response.status != 200:
+                logs = worker.logs() if worker.exists() else "Unable to retrieve logs."
+                name = worker.container_name
+                msg = f"Worker {name} returned status {response.status}!"
+                msg += " REBOOTING NODE ...\n"
+                msg += f"{msg} Logs from container:\n{logs.strip()}"
+                node_ref = async_db.collection("nodes").document(INSTANCE_NAME)
+                node_ref.collection("logs").document().set({"msg": msg, "ts": time()})
+                logger.log(msg, severity="ERROR")
+                return None
+            return worker
+
+    tasks = [_reinit_single_worker(w) for w in SELF["workers"]]
+    reinitialized_workers = await asyncio.gather(*tasks)
+    if any(w is None for w in reinitialized_workers) and (not SELF["SHUTTING_DOWN"]):
+        reboot_containers(logger=logger)
+    else:
+        await reinit_node(reinitialized_workers, async_db)
+
+
+async def restart_workers(session: aiohttp.ClientSession, logger: Logger, async_db: AsyncClient):
+    async def _restart_single_worker(worker):
+        try:
+            async with session.get(f"{worker.url}/restart", timeout=1):
+                pass
+        except Exception:
+            # worker service kills itself in /restart and is restarted by container script
+            # -> why we don't check for a 200 response and expect a disconnect error.
+            pass
+
+        async def _wait_til_worker_ready(attempt=0):
+            try:
+                async with session.get(f"{worker.url}/", timeout=0.2) as response:
+                    status = response.status
+            except Exception:
+                status = None
+
+            logger.log(f"got: {status} from /")
+            if status == 200:
+                return worker
+            elif attempt > 100:
+                raise Exception(f"Worker {worker.container_name} not ready after 10s")
             else:
-                # reinit node so it can run a new job
-                current_container_config = SELF["current_container_config"]
-                current_workers = reinitialized_workers + SELF["idle_workers"]
-                authorized_users = SELF["authorized_users"]
-                REINIT_SELF(SELF)
-                SELF["current_container_config"] = current_container_config
-                SELF["workers"] = current_workers
-                SELF["authorized_users"] = authorized_users
-                node_doc = async_db.collection("nodes").document(INSTANCE_NAME)
-                await node_doc.update({"status": "READY"})
+                await asyncio.sleep(0.1)
+                return await _wait_til_worker_ready(attempt + 1)
+
+        return await _wait_til_worker_ready()
+
+    tasks = [_restart_single_worker(w) for w in SELF["workers"]]
+    restarted_workers = await asyncio.gather(*tasks)
+    if any(w is None for w in restarted_workers) and (not SELF["SHUTTING_DOWN"]):
+        logger.log("Some workers failed to restart, rebooting containers ...")
+        reboot_containers(logger=logger)
+    else:
+        await reinit_node(restarted_workers, async_db)
 
 
 async def result_check_all_workers(session: aiohttp.ClientSession, logger: Logger):

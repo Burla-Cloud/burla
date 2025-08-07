@@ -10,11 +10,8 @@ MAIN_SVC_IMAGE_NAME := us-docker.pkg.dev/$(PROJECT_ID)/burla-main-service/burla-
 login:
 	poetry -C ./client run burla login
 
-batch-demo:
-	poetry -C ./client run python client/tests/demo/batch_inference.py
-
 demo:
-	poetry -C ./client run python client/tests/demo/demo.py
+	poetry -C ./client run python examples/basic.py
 
 shell:
 	poetry -C ./client shell

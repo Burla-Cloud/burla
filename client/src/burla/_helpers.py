@@ -7,14 +7,12 @@ import inspect
 import requests
 import subprocess
 import textwrap
+import logging
 from typing import Union
 from threading import Event
 
 import cloudpickle
 from yaspin import Spinner
-from google.oauth2 import service_account
-from google.cloud.firestore import Client
-from google.cloud.firestore_v1.async_client import AsyncClient
 
 from burla import _BURLA_BACKEND_URL, CONFIG_PATH
 
@@ -23,6 +21,17 @@ POSIX_SIGNALS_TO_HANDLE = ["SIGINT", "SIGTERM", "SIGHUP", "SIGQUIT"]
 NT_SIGNALS_TO_HANDLE = ["SIGINT", "SIGBREAK"]
 _signal_names_to_handle = POSIX_SIGNALS_TO_HANDLE if os.name == "posix" else NT_SIGNALS_TO_HANDLE
 SIGNALS_TO_HANDLE = [getattr(signal, s) for s in _signal_names_to_handle]
+
+# throws some uncatchable, unimportant, warnings
+logging.getLogger("google.api_core.bidi").setLevel(logging.ERROR)
+# prevent some annoying grpc logs / warnings
+os.environ["GRPC_VERBOSITY"] = "ERROR"  # only log ERROR/FATAL
+os.environ["GLOG_minloglevel"] = "2"  # 0-INFO, 1-WARNING, 2-ERROR, 3-FATAL
+
+# needs to be imported after ^
+from google.cloud.firestore import Client
+from google.cloud.firestore_v1.async_client import AsyncClient
+from google.oauth2 import service_account
 
 
 class GoogleLoginError(Exception):

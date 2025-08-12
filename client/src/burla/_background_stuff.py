@@ -1,5 +1,3 @@
-import os
-import logging
 import asyncio
 import aiohttp
 import pickle
@@ -9,12 +7,6 @@ from threading import Event
 import cloudpickle
 
 from burla._helpers import get_db_clients
-
-# throws some uncatchable, unimportant, warnings
-logging.getLogger("google.api_core.bidi").setLevel(logging.ERROR)
-# prevent some annoying grpc logs / warnings
-os.environ["GRPC_VERBOSITY"] = "ERROR"  # only log ERROR/FATAL
-os.environ["GLOG_minloglevel"] = "2"  # 0-INFO, 1-WARNING, 2-ERROR, 3-FATAL
 
 
 class InputTooBig(Exception):

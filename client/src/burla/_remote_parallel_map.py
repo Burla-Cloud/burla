@@ -34,7 +34,11 @@ from burla._helpers import (
     run_in_subprocess,
 )
 
-SYNC_DB, ASYNC_DB = get_db_clients()
+# try to init db connections on import which might save time when calling RPM
+try:
+    SYNC_DB, ASYNC_DB = get_db_clients()
+except:
+    SYNC_DB, ASYNC_DB = None, None
 
 
 class NodeConflict(Exception):
@@ -157,6 +161,9 @@ async def _execute_job(
     job_canceled_event: Event,
 ):
     auth_headers = get_auth_headers()
+    if not (SYNC_DB and ASYNC_DB):
+        SYNC_DB, ASYNC_DB = get_db_clients()
+
     spinner_compatible_print = lambda msg: spinner.write(msg) if spinner else print(msg)
     function_pkl = cloudpickle.dumps(function_)
 
@@ -475,6 +482,9 @@ def remote_parallel_map(
     except Exception as e:
         if spinner:
             spinner.stop()
+
+        if not SYNC_DB:
+            SYNC_DB, _ = get_db_clients()
 
         # After a `FirestoreTimeout` further attempts to use firestore will take forever then fail.
         if not isinstance(e, FirestoreTimeout):

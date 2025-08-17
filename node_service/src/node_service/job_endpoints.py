@@ -15,7 +15,6 @@ from node_service import (
     get_request_json,
     get_logger,
     get_request_files,
-    get_add_background_task_function,
 )
 from node_service.helpers import Logger
 from node_service.job_watcher import send_inputs_to_workers, job_watcher_logged

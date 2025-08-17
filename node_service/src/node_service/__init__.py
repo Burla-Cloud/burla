@@ -278,7 +278,7 @@ async def validate_requests(request: Request, call_next):
     if invalid_headers:
         # refresh and try again:
         headers = {"Authorization": f"Bearer {CLUSTER_ID_TOKEN}"}
-        url = f"{BURLA_BACKEND_URL}/v1/projects/{PROJECT_ID}/users"
+        url = f"{BURLA_BACKEND_URL}/v1/clusters/{PROJECT_ID}/users"
         async with aiohttp.ClientSession() as session:
             async with session.get(url, headers=headers) as response:
                 response.raise_for_status()

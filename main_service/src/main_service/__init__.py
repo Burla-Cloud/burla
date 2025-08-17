@@ -168,7 +168,7 @@ async def logout(request: Request, response: Response):
 
 @app.get("/auth-success")
 def auth_success():
-    rendered = env.get_template("authorized.html.j2").render()
+    rendered = env.get_template("auth_success.html.j2").render()
     return Response(content=rendered, status_code=200, media_type="text/html")
 
 
@@ -239,7 +239,7 @@ async def validate_requests(request: Request, call_next):
         return Response(content=rendered, status_code=401, media_type="text/html")
 
     async with aiohttp.ClientSession() as session:
-        url = f"{BURLA_BACKEND_URL}/v1/projects/{PROJECT_ID}/users:validate"
+        url = f"{BURLA_BACKEND_URL}/v1/clusters/{PROJECT_ID}/users:validate"
         headers = {"Authorization": authorization, "X-User-Email": email}
         async with session.get(url, headers=headers) as response:
             if response.status == 200:

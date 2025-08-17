@@ -179,7 +179,7 @@ def reboot_containers(
 
         # get list of authorized users/tokens from backend service
         headers = {"Authorization": f"Bearer {CLUSTER_ID_TOKEN}"}
-        url = f"{BURLA_BACKEND_URL}/v1/projects/{PROJECT_ID}/users"
+        url = f"{BURLA_BACKEND_URL}/v1/clusters/{PROJECT_ID}/users"
         response = requests.get(url, headers=headers)
         response.raise_for_status()
         SELF["authorized_users"] = response.json()["authorized_users"]

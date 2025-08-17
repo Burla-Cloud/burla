@@ -13,11 +13,8 @@ requests = ">=2.32"
 yaspin = ">=2.5"
 cloudpickle = ">=3.0"
 tblib = ">=3.0"
-tomli = ">=2.0"
-ipython = ">=7.0"
 google-cloud-firestore = ">=2.20"
 aiohttp = ">=3.11.14"
-google-cloud-run = ">=0.10"
 six = "^1.17.0"
 
 [tool.poetry.scripts]

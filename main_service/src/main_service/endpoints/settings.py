@@ -16,7 +16,7 @@ def get_settings(request: Request, logger: Logger = Depends(get_logger)):
     node = config_dict.get("Nodes", [{}])[0]
     container = node.get("containers", [{}])[0]
 
-    url = f"{BURLA_BACKEND_URL}/v1/projects/{PROJECT_ID}/users"
+    url = f"{BURLA_BACKEND_URL}/v1/clusters/{PROJECT_ID}/users"
     response = requests.get(url, headers={"Authorization": f"Bearer {CLUSTER_ID_TOKEN}"})
     response.raise_for_status()
     user_emails = [user["email"] for user in response.json()["authorized_users"]]
@@ -71,7 +71,7 @@ async def update_settings(request: Request, logger: Logger = Depends(get_logger)
     headers = {"Authorization": authorization, "X-User-Email": email}
 
     # updates users in backend service
-    users_url = f"{BURLA_BACKEND_URL}/v1/projects/{PROJECT_ID}/users"
+    users_url = f"{BURLA_BACKEND_URL}/v1/clusters/{PROJECT_ID}/users"
     response = requests.get(users_url, headers={"Authorization": f"Bearer {CLUSTER_ID_TOKEN}"})
     response.raise_for_status()
     current_user_emails = [user["email"] for user in response.json()["authorized_users"]]

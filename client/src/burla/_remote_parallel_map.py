@@ -161,6 +161,7 @@ async def _execute_job(
     job_canceled_event: Event,
 ):
     auth_headers = get_auth_headers()
+    global SYNC_DB, ASYNC_DB
     if not (SYNC_DB and ASYNC_DB):
         SYNC_DB, ASYNC_DB = get_db_clients()
 
@@ -483,6 +484,7 @@ def remote_parallel_map(
         if spinner:
             spinner.stop()
 
+        global SYNC_DB
         if not SYNC_DB:
             SYNC_DB, _ = get_db_clients()
 

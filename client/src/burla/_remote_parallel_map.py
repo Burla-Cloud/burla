@@ -17,16 +17,13 @@ from pickle import UnpicklingError
 import aiohttp
 import cloudpickle
 from tblib import Traceback
-import google.auth
-from google.cloud.run_v2 import ServicesClient
 from google.cloud.firestore import FieldFilter
 from google.cloud.firestore_v1.async_client import AsyncClient
 from yaspin import yaspin, Spinner
 
-from burla import __version__
+from burla import __version__, CONFIG_PATH
 from burla._auth import get_auth_headers
 from burla._background_stuff import upload_inputs, send_alive_pings
-from burla._install import main_service_url
 from burla._helpers import (
     get_db_clients,
     install_signal_handlers,
@@ -36,6 +33,8 @@ from burla._helpers import (
     log_telemetry,
     run_in_subprocess,
 )
+
+SYNC_DB, ASYNC_DB = get_db_clients()
 
 
 class NodeConflict(Exception):
@@ -158,15 +157,14 @@ async def _execute_job(
     job_canceled_event: Event,
 ):
     auth_headers = get_auth_headers()
-    sync_db, async_db = get_db_clients()
     spinner_compatible_print = lambda msg: spinner.write(msg) if spinner else print(msg)
     function_pkl = cloudpickle.dumps(function_)
 
     nodes_to_assign, total_target_parallelism = await _select_nodes_to_assign_to_job(
-        async_db, max_parallelism, func_cpu, func_ram, spinner
+        ASYNC_DB, max_parallelism, func_cpu, func_ram, spinner
     )
 
-    job_ref = async_db.collection("jobs").document(job_id)
+    job_ref = ASYNC_DB.collection("jobs").document(job_id)
     await job_ref.set(
         {
             "n_inputs": len(inputs),
@@ -216,12 +214,13 @@ async def _execute_job(
             spinner_compatible_print(msg)
             try:
                 # mark first as failed with reason so user can inspect the issue
-                node_doc = async_db.collection("nodes").document(node["instance_name"])
+                node_doc = ASYNC_DB.collection("nodes").document(node["instance_name"])
                 await node_doc.update({"status": "FAILED", "display_in_dashboard": True})
                 msg = f"Failed! This node didn't respond (in <2s) to client request to assign job."
                 await node_doc.collection("logs").document().set({"msg": msg, "ts": time()})
                 # delete node
-                url = f"{main_service_url()}/v1/cluster/{node['instance_name']}"
+                main_service_url = json.loads(CONFIG_PATH.read_text())["cluster_dashboard_url"]
+                url = f"{main_service_url}/v1/cluster/{node['instance_name']}"
                 url += "?hide_if_failed=false"
                 async with session.delete(url, headers=auth_headers, timeout=1) as response:
                     if response.status != 200:
@@ -264,7 +263,7 @@ async def _execute_job(
                 for change in changes:
                     spinner_compatible_print(change.document.to_dict()["msg"])
 
-            logs_collection = sync_db.collection("jobs").document(job_id).collection("logs")
+            logs_collection = SYNC_DB.collection("jobs").document(job_id).collection("logs")
             log_stream = logs_collection.on_snapshot(_on_new_log_message)
             stack.callback(log_stream.unsubscribe)
 
@@ -405,7 +404,7 @@ def remote_parallel_map(
         pass
 
     job_id = str(uuid4())
-    _, project_id = google.auth.default()
+    project_id = json.loads(CONFIG_PATH.read_text())["project_id"]
 
     return_queue = Queue()
     original_signal_handlers = None
@@ -450,10 +449,8 @@ def remote_parallel_map(
             raise execute_job.exc_info[1].with_traceback(execute_job.exc_info[2])
 
         if background:
-            client = ServicesClient()
-            service_path = client.service_path(project_id, "us-central1", "burla-main-service")
-            job_url = f"{client.get_service(name=service_path).uri}/jobs/{job_id}"
-
+            main_service_url = json.loads(CONFIG_PATH.read_text())["cluster_dashboard_url"]
+            job_url = f"{main_service_url}/jobs/{job_id}"
             msg = f"Done uploading inputs.\n"
             msg += f"Job will continue running in the background, monitor progress at: {job_url}"
             spinner.text = msg
@@ -482,8 +479,7 @@ def remote_parallel_map(
         # After a `FirestoreTimeout` further attempts to use firestore will take forever then fail.
         if not isinstance(e, FirestoreTimeout):
             try:
-                sync_db, _ = get_db_clients()
-                sync_db.collection("jobs").document(job_id).update({"status": "FAILED"})
+                SYNC_DB.collection("jobs").document(job_id).update({"status": "FAILED"})
             except Exception:
                 pass
 

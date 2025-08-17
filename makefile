@@ -7,9 +7,6 @@ ACCESS_TOKEN := $(shell gcloud auth print-access-token)
 MAIN_SVC_IMAGE_NAME := us-docker.pkg.dev/$(PROJECT_ID)/burla-main-service/burla-main-service:latest
 
 
-login:
-	poetry -C ./client run burla login
-
 demo:
 	poetry -C ./client run python examples/basic.py
 
@@ -91,10 +88,6 @@ __check-local-services-up-to-date:
 deploy-prod:
 	set -e; \
 	$(MAKE) __check-local-services-up-to-date && echo "" || exit 1; \
-	:; \
-	cd ./worker_service; \
-	$(MAKE) publish; \
-	cd ..; \
 	cd ./main_service; \
 	$(MAKE) image; \
 	$(MAKE) publish;

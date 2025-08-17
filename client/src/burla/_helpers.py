@@ -72,13 +72,12 @@ def parallelism_capacity(machine_type: str, func_cpu: int, func_ram: int):
 
 
 def get_db_clients():
-    project_id = json.loads(CONFIG_PATH.read_text())["project_id"]
-    service_account_dict = json.loads(CONFIG_PATH.read_text())["client_svc_account_key"]
-    credentials = service_account.Credentials.from_service_account_info(
-        service_account_dict, scopes=["https://www.googleapis.com/auth/datastore"]
-    )
-    async_db = AsyncClient(project=project_id, credentials=credentials, database="burla")
-    sync_db = Client(project=project_id, credentials=credentials, database="burla")
+    config = json.loads(CONFIG_PATH.read_text())
+    key = config["client_svc_account_key"]
+    scopes = ["https://www.googleapis.com/auth/datastore"]
+    credentials = service_account.Credentials.from_service_account_info(key, scopes=scopes)
+    async_db = AsyncClient(project=config["project_id"], credentials=credentials, database="burla")
+    sync_db = Client(project=config["project_id"], credentials=credentials, database="burla")
     return sync_db, async_db
 
 

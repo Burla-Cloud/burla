@@ -21,7 +21,7 @@ from jinja2 import Environment, FileSystemLoader
 os.environ["GRPC_VERBOSITY"] = "ERROR"
 os.environ["GLOG_minloglevel"] = "2"
 
-CURRENT_BURLA_VERSION = "1.1.8"
+CURRENT_BURLA_VERSION = "1.1.9"
 
 # This is the only possible alternative "mode".
 # In this mode everything runs locally in docker containers.

@@ -166,12 +166,6 @@ async def logout(request: Request, response: Response):
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-@app.get("/auth-success")
-def auth_success():
-    rendered = env.get_template("auth_success.html.j2").render()
-    return Response(content=rendered, status_code=200, media_type="text/html")
-
-
 # don't move this! must be declared before static files are mounted to the same path below.
 @app.get("/")
 @app.get("/jobs")
@@ -216,7 +210,7 @@ async def validate_requests(request: Request, call_next):
     # client_id's are only valid once, and for a very short period of time
     if request.query_params.get("client_id"):
         client_id = request.query_params.get("client_id")
-        token_url = f"{BURLA_BACKEND_URL}/v1/login/{client_id}/token"
+        token_url = f"{BURLA_BACKEND_URL}/v1/login/{client_id}/token?project_id={PROJECT_ID}"
         async with aiohttp.ClientSession() as session:
             async with session.get(token_url) as response:
                 if response.status == 200:

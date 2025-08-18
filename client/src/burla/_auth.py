@@ -6,6 +6,8 @@ from time import sleep
 from uuid import uuid4
 from typing import Tuple
 
+from yaspin import yaspin
+
 from burla import _BURLA_BACKEND_URL, CONFIG_PATH
 from burla._helpers import run_command
 
@@ -36,7 +38,7 @@ def get_auth_headers() -> Tuple[str, str]:
         }
 
 
-def _get_login_response(client_id, attempt=0):
+def _get_login_response(client_id, spinner, attempt=0):
     if attempt == AUTH_TIMEOUT_SECONDS / 2:
         raise AuthTimeoutException()
 
@@ -44,9 +46,24 @@ def _get_login_response(client_id, attempt=0):
     response = requests.get(f"{_BURLA_BACKEND_URL}/v1/login/{client_id}/token")
 
     if response.status_code == 404:
-        return _get_login_response(client_id, attempt=attempt + 1)
-    else:
+        return _get_login_response(client_id, spinner, attempt=attempt + 1)
+    elif response.status_code == 202:
+        if spinner.text != "Waiting for dashboard login ...":
+            spinner.text = "Waiting for Google login response ... Response recieved."
+            spinner.ok("✓")
+            spinner.start()
+            spinner.text = "Waiting for dashboard login ..."
+        return _get_login_response(client_id, spinner, attempt=attempt + 1)
+    elif response.status_code == 408:
+        spinner.text = "Waiting for dashboard login ... Timed out after 3 minutes."
+        spinner.fail("✗")
         response.raise_for_status()
+    elif response.status_code != 200:
+        spinner.fail("✗")
+        response.raise_for_status()
+    else:
+        spinner.text = "Waiting for dashboard login ... Done."
+        spinner.ok("✓")
         return (
             response.json()["token"],
             response.json()["email"],
@@ -72,29 +89,23 @@ def login():
         print(f"Your browser has been opened to visit:\n\n    {login_url}\n")
         webbrowser.open(login_url)
 
-    auth_token, email, project_id, cluster_dashboard_url, client_svc_account_key = (
-        _get_login_response(client_id)
-    )
-    validate_url = f"{_BURLA_BACKEND_URL}/v1/clusters/{project_id}/users:validate"
-    headers = {"Authorization": f"Bearer {auth_token}", "X-User-Email": email}
-    response = requests.get(validate_url, headers=headers)
-    if response.status_code == 200:
-        print(f"You are now logged in as [{email}].")
-        print("Please email jake@burla.dev with any questions!\n")
-        if not CONFIG_PATH.exists():
-            CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-            CONFIG_PATH.touch()
-        config = {
-            "auth_token": auth_token,
-            "email": email,
-            "project_id": project_id,
-            "cluster_dashboard_url": cluster_dashboard_url,
-            "client_svc_account_key": client_svc_account_key,
-        }
-        CONFIG_PATH.write_text(json.dumps(config))
-    elif response.status_code == 401:
-        print("Access denied.")
-        print(f"[{email}] is not authorized to access the deployment in project: [{project_id}]")
-        print(f"Contact your admin to request access, then login again.\n")
-    else:
-        response.raise_for_status()
+    with yaspin() as spinner:
+        spinner.text = "Waiting for Google login response ..."
+        auth_token, email, project_id, cluster_dashboard_url, client_svc_account_key = (
+            _get_login_response(client_id, spinner)
+        )
+        spinner.ok("✓")
+
+    print(f"You are now logged in as [{email}].")
+    print("Please email jake@burla.dev with any questions!\n")
+    if not CONFIG_PATH.exists():
+        CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        CONFIG_PATH.touch()
+    config = {
+        "auth_token": auth_token,
+        "email": email,
+        "project_id": project_id,
+        "cluster_dashboard_url": cluster_dashboard_url,
+        "client_svc_account_key": client_svc_account_key,
+    }
+    CONFIG_PATH.write_text(json.dumps(config))

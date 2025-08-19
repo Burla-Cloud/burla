@@ -34,11 +34,13 @@ from burla._helpers import (
     run_in_subprocess,
 )
 
-# try to init db connections on import which might save time when calling RPM
-try:
-    SYNC_DB, ASYNC_DB = get_db_clients()
-except:
-    SYNC_DB, ASYNC_DB = None, None
+
+# WARNING: if you warm up the connections here then back to back RPM calls cause GRPC issues!
+# this is possible to fix but not a priority right now.
+# try:
+#     SYNC_DB, ASYNC_DB = get_db_clients()
+# except:
+#     SYNC_DB, ASYNC_DB = None, None
 
 
 class NodeConflict(Exception):
@@ -95,20 +97,8 @@ async def _num_booting_nodes(db: AsyncClient):
 
 async def _get_ready_nodes(db: AsyncClient):
     filter_ = FieldFilter("status", "==", "READY")
-    ready_node_iterator = db.collection("nodes").where(filter=filter_).stream()
-
-    # get first doc, takes 0.1-0.3s independant of number of documents/matches in collection
-    try:
-        first_ready_node = await asyncio.wait_for(anext(ready_node_iterator), 2)
-    except StopAsyncIteration:
-        return []
-    except asyncio.TimeoutError:
-        msg = "\nFirestore request timed out after 2s.\n"
-        msg += "This almost always means your Google Cloud credentials have expired!\n"
-        msg += "Please run `gcloud auth application-default login` then try again.\n"
-        raise FirestoreTimeout(msg)
-
-    return [first_ready_node.to_dict()] + [n.to_dict() async for n in ready_node_iterator]
+    docs = await db.collection("nodes").where(filter=filter_).get()
+    return [d.to_dict() for d in docs]
 
 
 async def _select_nodes_to_assign_to_job(
@@ -161,9 +151,7 @@ async def _execute_job(
     job_canceled_event: Event,
 ):
     auth_headers = get_auth_headers()
-    global SYNC_DB, ASYNC_DB
-    if not (SYNC_DB and ASYNC_DB):
-        SYNC_DB, ASYNC_DB = get_db_clients()
+    SYNC_DB, ASYNC_DB = get_db_clients()
 
     spinner_compatible_print = lambda msg: spinner.write(msg) if spinner else print(msg)
     function_pkl = cloudpickle.dumps(function_)
@@ -395,6 +383,11 @@ def remote_parallel_map(
         For more info see our overview: https://docs.burla.dev/overview
         or API-Reference: https://docs.burla.dev/api-reference
     """
+    if not inputs and not generator:
+        return []
+    elif not inputs and generator:
+        return iter([])
+
     max_parallelism = max_parallelism if max_parallelism else len(inputs)
     function_signature = inspect.signature(function_)
     if len(function_signature.parameters) != 1:
@@ -484,9 +477,7 @@ def remote_parallel_map(
         if spinner:
             spinner.stop()
 
-        global SYNC_DB
-        if not SYNC_DB:
-            SYNC_DB, _ = get_db_clients()
+        SYNC_DB, _ = get_db_clients()
 
         # After a `FirestoreTimeout` further attempts to use firestore will take forever then fail.
         if not isinstance(e, FirestoreTimeout):

@@ -42,12 +42,13 @@ def _get_login_response(client_id, spinner, attempt=0):
     if attempt == AUTH_TIMEOUT_SECONDS / 2:
         raise AuthTimeoutException()
 
-    sleep(2)
     response = requests.get(f"{_BURLA_BACKEND_URL}/v1/login/{client_id}/token")
 
     if response.status_code == 404:
+        sleep(2)
         return _get_login_response(client_id, spinner, attempt=attempt + 1)
     elif response.status_code == 202:
+        sleep(2)
         if spinner.text != "Waiting for dashboard login ...":
             spinner.text = "Waiting for Google login response ... Response recieved."
             spinner.ok("✓")
@@ -94,9 +95,8 @@ def login():
         auth_token, email, project_id, cluster_dashboard_url, client_svc_account_key = (
             _get_login_response(client_id, spinner)
         )
-        spinner.ok("✓")
 
-    print(f"You are now logged in as [{email}].")
+    print(f"\nYou are now logged in to [{project_id}] as [{email}].")
     print("Please email jake@burla.dev with any questions!\n")
     if not CONFIG_PATH.exists():
         CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)

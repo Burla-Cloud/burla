@@ -22,7 +22,7 @@ from starlette.datastructures import UploadFile
 from google.cloud import logging, secretmanager, firestore
 from google.cloud.compute_v1 import InstancesClient
 
-__version__ = "1.1.9"
+__version__ = "1.2.0"
 CREDENTIALS, PROJECT_ID = google.auth.default()
 BURLA_BACKEND_URL = "https://backend.burla.dev"
 

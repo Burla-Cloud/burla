@@ -88,7 +88,8 @@ class _FirestoreStdout:
                 response.raise_for_status()
             except Exception as e:
                 if response.status_code == 401 and IN_LOCAL_DEV_MODE:
-                    msg = "401 writing logs, dev token probably expired! re-run `make local-dev`."
+                    msg = "401 error writing logs, YOU DEV TOKEN IS PROBABLY EXPIRED!\n"
+                    msg += "         Re-run `make local-dev` to refresh the token.\n"
                     SELF["logs"].append(msg)
                 else:
                     SELF["logs"].append(f"Error writing log to firestore: {e}")

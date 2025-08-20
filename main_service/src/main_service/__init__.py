@@ -40,8 +40,8 @@ CLUSTER_ID_TOKEN = response.payload.data.decode("UTF-8")
 
 config_doc = DB.collection("cluster_config").document("cluster_config").get()
 LOCAL_DEV_CONFIG = config_doc.to_dict()
-LOCAL_DEV_CONFIG["Nodes"][0]["machine_type"] = "n4-standard-1"
-LOCAL_DEV_CONFIG["Nodes"][0]["quantity"] = 2
+LOCAL_DEV_CONFIG["Nodes"][0]["machine_type"] = "n4-standard-2"
+LOCAL_DEV_CONFIG["Nodes"][0]["quantity"] = 1
 
 DEFAULT_CONFIG = {  # <- config used only when config is missing from firestore
     "Nodes": [

@@ -111,16 +111,17 @@ async def _wait_for_nodes_to_be_ready(db: AsyncClient, spinner: Union[bool, Spin
             msg += f"Check your clsuter dashboard at: {main_service_url}\n\n"
             raise NoNodes(msg)
 
-    elif n_booting_nodes == 0 and n_running_nodes == 0:
+    ready_nodes = await _get_ready_nodes(db)
+    if n_booting_nodes == 0 and n_running_nodes == 0 and len(ready_nodes) == 0:
         main_service_url = json.loads(CONFIG_PATH.read_text())["cluster_dashboard_url"]
         msg = "\n\nZero nodes are ready. Is your cluster turned on?\n"
         msg += f'Go to {main_service_url} and hit "⏻ Start" to turn it on!\n\n'
         raise NoNodes(msg)
+    return ready_nodes
 
 
 async def _get_ready_nodes(db: AsyncClient):
-    filter_ = FieldFilter("status", "==", "READY")
-    docs = await db.collection("nodes").where(filter=filter_).get()
+    docs = await db.collection("nodes").where(filter=FieldFilter("status", "==", "READY")).get()
     return [d.to_dict() for d in docs]
 
 
@@ -133,8 +134,7 @@ async def _select_nodes_to_assign_to_job(
 ):
     ready_nodes = await _get_ready_nodes(db)
     if not ready_nodes:
-        await _wait_for_nodes_to_be_ready(db, spinner)
-        ready_nodes = await _get_ready_nodes(db)
+        ready_nodes = await _wait_for_nodes_to_be_ready(db, spinner)
 
     planned_initial_job_parallelism = 0
     nodes_to_assign = []

@@ -61,18 +61,6 @@ remote-dev:
 # does the worker service have a git diff since AFTER the last image was pushed?
 # does the node service have a git diff?
 __check-local-services-up-to-date:
-	set -e; \
-	WORKER_SVC_TS=$$(cat ./worker_service/last_image_pushed_at.txt); \
-	WORKER_SVC_DIR="./worker_service/src/worker_service"; \
-	WORKER_SVC_DIFF=$$(git diff --stat "@{$${WORKER_SVC_TS}}" -- "$${WORKER_SVC_DIR}"); \
-	WORKER_SVC_HAS_DIFF=$$(echo "$${WORKER_SVC_DIFF}" | grep -q . && echo "true" || echo "false"); \
-	NODE_SVC_DIFF=$$(git diff -- "./node_service/src/node_service"); \
-	NODE_SVC_HAS_DIFF=$$(echo "$${NODE_SVC_DIFF}" | grep -q . && echo "true" || echo "false"); \
-	if [ "$${WORKER_SVC_HAS_DIFF}" = "true" ]; then \
-		echo "DEPLOYED CONTAINER SERVICE NOT UP TO DATE!"; \
-		echo "Your local worker service is different from the cluster's worker service."; \
-		echo "To fix this, run 'make images_same_env' from './worker_service'."; \
-	fi; \
 	if [ "$${NODE_SVC_HAS_DIFF}" = "true" ]; then \
 		echo "DEPLOYED NODE SERVICE NOT UP TO DATE!"; \
 		echo "Your local node service is different from the cluster's node service."; \
@@ -91,8 +79,3 @@ deploy-prod:
 	cd ./main_service; \
 	$(MAKE) image; \
 	$(MAKE) publish;
-
-new-workers:
-	set -e; \
-	cd ./worker_service; \
-	$(MAKE) image_same_env

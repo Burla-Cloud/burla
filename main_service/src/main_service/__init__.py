@@ -40,10 +40,8 @@ CLUSTER_ID_TOKEN = response.payload.data.decode("UTF-8")
 
 config_doc = DB.collection("cluster_config").document("cluster_config").get()
 LOCAL_DEV_CONFIG = config_doc.to_dict()
-local_img = "us-docker.pkg.dev/burla-test/cluster-default/3.12:latest"
-LOCAL_DEV_CONFIG["Nodes"][0]["containers"][0]["image"] = local_img
-LOCAL_DEV_CONFIG["Nodes"][0]["machine_type"] = "n4-standard-1"
-LOCAL_DEV_CONFIG["Nodes"][0]["quantity"] = 1
+LOCAL_DEV_CONFIG["Nodes"][0]["machine_type"] = "n4-LOCAL-DEV-1"
+LOCAL_DEV_CONFIG["Nodes"][0]["quantity"] = 2
 
 DEFAULT_CONFIG = {  # <- config used only when config is missing from firestore
     "Nodes": [

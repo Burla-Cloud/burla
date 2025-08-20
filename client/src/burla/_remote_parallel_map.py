@@ -67,33 +67,55 @@ class NodeDisconnected(Exception):
     pass
 
 
-async def _wait_for_nodes_to_boot(db: AsyncClient, spinner: Union[bool, Spinner]):
-    n_booting_nodes = await _num_booting_nodes(db)
-    if n_booting_nodes == 0:
-        filter_ = FieldFilter("status", "==", "RUNNING")
-        running_nodes_generator = db.collection("nodes").where(filter=filter_).stream()
-        running_nodes = [n.to_dict() async for n in running_nodes_generator]
-        if running_nodes:
-            raise AllNodesBusy("All nodes are busy, please try again later.")
-        else:
-            main_service_url = json.loads(CONFIG_PATH.read_text())["cluster_dashboard_url"]
-            msg = "\n\nZero nodes are ready. Is your cluster turned on?\n"
-            msg += f'Go to {main_service_url} and hit "⏻ Start" to turn it on!\n\n'
-            raise NoNodes(msg)
-
-    ready_nodes = []
-    while n_booting_nodes != 0:
-        if spinner:
-            msg = f"{len(ready_nodes)} Nodes are ready, waiting for remaining {n_booting_nodes} "
-            spinner.text = msg + "to boot before starting ..."
-        await asyncio.sleep(0.1)
-        n_booting_nodes = await _num_booting_nodes(db)
-
-
 async def _num_booting_nodes(db: AsyncClient):
     filter_ = FieldFilter("status", "==", "BOOTING")
     nodes_snapshot = await db.collection("nodes").where(filter=filter_).get()
     return len(nodes_snapshot)
+
+
+async def _num_running_nodes(db: AsyncClient):
+    filter_ = FieldFilter("status", "==", "RUNNING")
+    nodes_snapshot = await db.collection("nodes").where(filter=filter_).get()
+    return len(nodes_snapshot)
+
+
+async def _wait_for_nodes_to_be_ready(db: AsyncClient, spinner: Union[bool, Spinner]):
+    n_booting_nodes = await _num_booting_nodes(db)
+    n_running_nodes = await _num_running_nodes(db)
+
+    if n_running_nodes != 0:
+        start_time = time()
+        time_waiting = 0
+        while n_running_nodes != 0:
+            if spinner:
+                msg = f"Waiting for {n_running_nodes} running nodes to become ready..."
+                spinner.text = msg + f" (timeout in {4-time_waiting:.1f}s)"
+            await asyncio.sleep(0.01)
+            n_running_nodes = await _num_running_nodes(db)
+            ready_nodes = await _get_ready_nodes(db)
+            time_waiting = time() - start_time
+            if time_waiting > 4:
+                raise AllNodesBusy("All nodes are busy, please try again later.")
+
+    elif n_booting_nodes != 0:
+        while n_booting_nodes != 0:
+            if spinner:
+                msg = f"{len(ready_nodes)} Nodes are ready, waiting for remaining {n_booting_nodes}"
+                spinner.text = msg + " to boot before starting ..."
+            await asyncio.sleep(0.1)
+            n_booting_nodes = await _num_booting_nodes(db)
+            ready_nodes = await _get_ready_nodes(db)
+        if not ready_nodes:
+            main_service_url = json.loads(CONFIG_PATH.read_text())["cluster_dashboard_url"]
+            msg = "\n\nZero nodes are ready after Booting. Did they fail to boot?\n"
+            msg += f"Check your clsuter dashboard at: {main_service_url}\n\n"
+            raise NoNodes(msg)
+
+    elif n_booting_nodes == 0 and n_running_nodes == 0:
+        main_service_url = json.loads(CONFIG_PATH.read_text())["cluster_dashboard_url"]
+        msg = "\n\nZero nodes are ready. Is your cluster turned on?\n"
+        msg += f'Go to {main_service_url} and hit "⏻ Start" to turn it on!\n\n'
+        raise NoNodes(msg)
 
 
 async def _get_ready_nodes(db: AsyncClient):
@@ -111,13 +133,8 @@ async def _select_nodes_to_assign_to_job(
 ):
     ready_nodes = await _get_ready_nodes(db)
     if not ready_nodes:
-        await _wait_for_nodes_to_boot(db, spinner)
+        await _wait_for_nodes_to_be_ready(db, spinner)
         ready_nodes = await _get_ready_nodes(db)
-        if not ready_nodes:
-            main_service_url = json.loads(CONFIG_PATH.read_text())["cluster_dashboard_url"]
-            msg = "\n\nZero nodes are ready after Booting. Did they fail to boot?\n"
-            msg += f"Check your clsuter dashboard at: {main_service_url}\n\n"
-            raise NoNodes(msg)
 
     planned_initial_job_parallelism = 0
     nodes_to_assign = []

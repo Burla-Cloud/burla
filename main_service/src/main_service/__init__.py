@@ -222,8 +222,6 @@ async def validate_requests(request: Request, call_next):
 
         base_url = f"{request.url.scheme}://{request.url.netloc}{request.url.path}"
         response = RedirectResponse(url=base_url, status_code=303)
-        session = request.cookies.get("session")
-        response.set_cookie(key="session", value=session, httponly=True, samesite="lax")
         return response
 
     email = request.session.get("X-User-Email") or request.headers.get("X-User-Email")
@@ -278,4 +276,4 @@ async def set_timezone_middleware(request: Request, call_next):
     return await call_next(request)
 
 
-app.add_middleware(SessionMiddleware, secret_key=CLUSTER_ID_TOKEN)
+app.add_middleware(SessionMiddleware, secret_key=CLUSTER_ID_TOKEN, same_site="lax")

@@ -7,6 +7,8 @@ import { useSaveSettings } from "@/hooks/useSaveSettings";
 import { toast } from "@/components/ui/use-toast";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { AlertTriangle } from "lucide-react";
 
 const SettingsPage = () => {
     const [isEditing, setIsEditing] = useState(false);
@@ -14,6 +16,7 @@ const SettingsPage = () => {
     const { saveSettings } = useSaveSettings();
     const [saveDisabled, setSaveDisabled] = useState(false);
     const [loading, setLoading] = useState(true);
+    const [error, setError] = useState<string | null>(null);
     const settingsFormRef = useRef<{ isRegionValid: () => boolean } | null>(null);
 
     useEffect(() => {
@@ -22,9 +25,13 @@ const SettingsPage = () => {
             setLoading(true);
             try {
                 const res = await fetch("/v1/settings");
+                if (!res.ok) {
+                    throw new Error(`HTTP ${res.status}`);
+                }
                 const data = await res.json();
                 setSettings((prev) => ({ ...prev, ...data }));
             } catch (err) {
+                setError("Could not load settings");
                 toast({ title: "Failed to load settings", variant: "destructive" });
             } finally {
                 setLoading(false);
@@ -66,7 +73,7 @@ const SettingsPage = () => {
                     <Button
                         onClick={handleToggleEdit}
                         variant="outline"
-                        disabled={saveDisabled || loading}
+                        disabled={saveDisabled || loading || !!error}
                     >
                         {isEditing ? "Save" : "Edit"}
                     </Button>
@@ -104,6 +111,19 @@ const SettingsPage = () => {
                                 </div>
                             </CardContent>
                         </Card>
+                    ) : error ? (
+                        <Alert variant="destructive" className="w-full">
+                            <AlertTriangle className="h-4 w-4" />
+                            <AlertTitle>Could not load settings</AlertTitle>
+                            <AlertDescription>
+                                This is an error and we have been paged! If you don't hear from us
+                                in the next ~15 minutes please email jake@burla.dev or call +1 (508)
+                                320-8778!
+                                <br />
+                                Refreshing or reinstalling (if you're self-hosting) can't hurt.
+                                Either way we're looking into it.
+                            </AlertDescription>
+                        </Alert>
                     ) : (
                         <SettingsForm
                             ref={settingsFormRef}

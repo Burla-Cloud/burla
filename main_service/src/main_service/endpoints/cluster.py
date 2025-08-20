@@ -195,13 +195,26 @@ async def cluster_info(logger: Logger = Depends(get_logger)):
         display_filter = FieldFilter("display_in_dashboard", "==", True)
         node_watch = DB.collection("nodes").where(filter=display_filter).on_snapshot(on_snapshot)
         try:
+            # send an initial comment to open the stream
+            yield ": init\n\n"
             while True:
-                event = await queue.get()
-                yield f"data: {json.dumps(event)}\n\n"
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=15)
+                    yield f"data: {json.dumps(event)}\n\n"
+                except asyncio.TimeoutError:
+                    yield ": keep-alive\n\n"
         finally:
             node_watch.unsubscribe()
 
-    return StreamingResponse(node_stream(), media_type="text/event-stream")
+    return StreamingResponse(
+        node_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.delete("/v1/cluster/{node_id}")
@@ -267,10 +280,23 @@ async def node_log_stream(node_id: str, request: Request):
 
     async def log_generator():
         try:
+            # initial comment
+            yield ": init\n\n"
             while True:
-                event = await queue.get()
-                yield f"data: {json.dumps(event)}\n\n"
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=15)
+                    yield f"data: {json.dumps(event)}\n\n"
+                except asyncio.TimeoutError:
+                    yield ": keep-alive\n\n"
         finally:
             watch.unsubscribe()
 
-    return StreamingResponse(log_generator(), media_type="text/event-stream")
+    return StreamingResponse(
+        log_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )

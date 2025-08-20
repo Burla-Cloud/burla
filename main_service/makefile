@@ -74,38 +74,6 @@ image:
 	echo "$${TEST_IMAGE_NAME_LATEST}"; \
 	echo "";
 
-deploy-test:
-	set -e; \
-	PROJECT_ID=$$(gcloud config get-value project 2>/dev/null); \
-	TEST_IMAGE_BASE_NAME=$$( echo \
-		"us-docker.pkg.dev/$${PROJECT_ID}/$(ARTIFACT_REPO_NAME)/$(ARTIFACT_PKG_NAME)" \
-	); \
-	TEST_IMAGE_TAG=$$( \
-		gcloud artifacts tags list \
-			--package=$(ARTIFACT_PKG_NAME) \
-			--location=us \
-			--repository=$(ARTIFACT_REPO_NAME) \
-			--project $${PROJECT_ID} \
-			2>&1 | grep -Eo '^[0-9]+' | sort -n | tail -n 1 \
-	); \
-	TEST_IMAGE_NAME=$${TEST_IMAGE_BASE_NAME}:$${TEST_IMAGE_TAG}; \
-	gcloud run deploy test-burla-main-service \
-		--image=$${TEST_IMAGE_NAME} \
-		--project $${PROJECT_ID} \
-		--region=us-central1 \
-		--service-account=burla-main-service@$${PROJECT_ID}.iam.gserviceaccount.com \
-		--min-instances 1 \
-		--max-instances 5 \
-		--memory 4Gi \
-		--cpu 1 \
-		--timeout 10 \
-		--concurrency 20 \
-		--allow-unauthenticated; \
-	gcloud run services update-traffic test-burla-main-service \
-		--project $${PROJECT_ID} \
-		--region=us-central1 \
-		--to-latest
-
 container:
 	set -e; \
 	PROJECT_ID=$$(gcloud config get-value project 2>/dev/null); \

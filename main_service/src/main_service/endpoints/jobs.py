@@ -41,9 +41,6 @@ async def get_recent_jobs(request: Request, page: int = 0, stream: bool = False)
         queue = asyncio.Queue()
         loop = asyncio.get_running_loop()
 
-        if not page_one_docs:
-            return StreamingResponse(iter([]), media_type="text/event-stream")
-
         def on_snapshot(col_snapshot, changes, read_time):
             for change in changes:
                 doc = change.document
@@ -72,13 +69,28 @@ async def get_recent_jobs(request: Request, page: int = 0, stream: bool = False)
         unsubscribe = DB.collection("jobs").on_snapshot(on_snapshot)
 
         async def event_stream():
+            # send an initial comment to open the stream
+            yield ": init\n\n"
             try:
                 while True:
-                    yield f"data: {json.dumps(await queue.get())}\n\n"
+                    try:
+                        event = await asyncio.wait_for(queue.get(), timeout=15)
+                        yield f"data: {json.dumps(event)}\n\n"
+                    except asyncio.TimeoutError:
+                        # heartbeat to keep proxies from closing the connection
+                        yield ": keep-alive\n\n"
             finally:
                 unsubscribe.unsubscribe()
 
-        return StreamingResponse(event_stream(), media_type="text/event-stream")
+        return StreamingResponse(
+            event_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache, no-transform",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
 
     # --- fallback for non-stream requests ---
     jobs = []

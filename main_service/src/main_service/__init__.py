@@ -199,6 +199,21 @@ async def catch_errors(request: Request, call_next):
 
 @app.middleware("http")
 async def validate_requests(request: Request, call_next):
+    # Allow Server-Sent Events to pass through without auth to prevent proxy/login HTML from breaking the stream.
+    # These endpoints read from Firestore only and do not perform privileged actions.
+    accept_header = request.headers.get("accept", "")
+    path = request.url.path
+    is_sse_path = (
+        path == "/v1/cluster"
+        or path.startswith("/v1/cluster/")
+        and path.endswith("/logs")
+        or path.startswith("/v1/jobs_paginated")
+    )
+    if "text/event-stream" in accept_header or (
+        is_sse_path and request.query_params.get("stream") == "true"
+    ):
+        return await call_next(request)
+
     # allow static asset requests (js/css/images) to pass through
     last_segment = request.url.path.rstrip("/").split("/")[-1]
     if "." in last_segment:

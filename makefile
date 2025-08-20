@@ -74,10 +74,3 @@ deploy-prod:
 	cd ./main_service; \
 	$(MAKE) image; \
 	$(MAKE) publish;
-
-deploy-test:
-	set -e; \
-	$(MAKE) __check-node-service-up-to-date && echo "" || exit 1; \
-	cd ./main_service; \
-	$(MAKE) image; \
-	$(MAKE) deploy-test;

@@ -45,7 +45,7 @@ local-dev:
 # Uses cluster config from firestore doc: `/databases/burla/cluster_config/cluster_config`
 remote-dev:
 	set -e; \
-	$(MAKE) __check-local-services-up-to-date && echo "" || exit 1; \
+	$(MAKE) __check-node-service-up-to-date && echo "" || exit 1; \
 	:; \
 	docker run --rm -it \
 		--name main_service \
@@ -57,25 +57,27 @@ remote-dev:
 		$(MAIN_SVC_IMAGE_NAME) -m uvicorn main_service:app --host 0.0.0.0 --port 5001 --reload \
 			--reload-exclude main_service/frontend/node_modules/
 
-# raise error if local node/worker services are different from remote-dev versions
-# does the worker service have a git diff since AFTER the last image was pushed?
+# raise error if local node service is different from remote-dev version
 # does the node service have a git diff?
-__check-local-services-up-to-date:
+__check-node-service-up-to-date:
 	if [ "$${NODE_SVC_HAS_DIFF}" = "true" ]; then \
 		echo "DEPLOYED NODE SERVICE NOT UP TO DATE!"; \
 		echo "Your local node service is different from the cluster's node service."; \
 		echo "To fix this, commit your node service code to the latest release branch."; \
-	fi; \
-	if [ "$${WORKER_SVC_HAS_DIFF}" = "true" ] || [ "$${NODE_SVC_HAS_DIFF}" = "true" ]; then \
 		exit 1; \
 	fi; \
-	echo "deployed worker service and node service are up to date with local versions.";
+	echo "deployed node service up to date with local version.";
 
-# Moves latest worker service image to prod & 
-# Builds new main-service image, moves to prod, then deploys prod main service
 deploy-prod:
 	set -e; \
-	$(MAKE) __check-local-services-up-to-date && echo "" || exit 1; \
+	$(MAKE) __check-node-service-up-to-date && echo "" || exit 1; \
 	cd ./main_service; \
 	$(MAKE) image; \
 	$(MAKE) publish;
+
+deploy-test:
+	set -e; \
+	$(MAKE) __check-node-service-up-to-date && echo "" || exit 1; \
+	cd ./main_service; \
+	$(MAKE) image; \
+	$(MAKE) deploy-test;

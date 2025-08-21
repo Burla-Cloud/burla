@@ -88,6 +88,8 @@ class Worker:
                 # install local worker_service in edit mode or use version on github if not in DEV
                 if [ "{IN_LOCAL_DEV_MODE}" = "True" ]; then
                     echo "Installing local dev version ..."
+                    mkdir -p /worker_service_python_env
+                    mkdir -p /burla/worker_service
                     cd /burla/worker_service
                     $python_cmd -m pip install . --break-system-packages --no-cache-dir \
                         --only-binary=:all: --target /worker_service_python_env
@@ -135,7 +137,7 @@ class Worker:
                     sleep 1
                 done
             fi
-
+            
             # Start the worker service,
             # Restart automatically if it dies (IMPORTANT!):
             # Because it kills itself intentionally when it needs to cancel a running job.
@@ -161,8 +163,9 @@ class Worker:
                 network_mode="local-burla-cluster",
                 binds={
                     f"{os.environ['HOST_HOME_DIR']}/.config/gcloud": "/root/.config/gcloud",
-                    f"{os.environ['HOST_PWD']}/worker_service_python_env": "/worker_service_python_env",
+                    f"{os.environ['HOST_PWD']}/worker_service": "/burla/worker_service",
                     f"{os.environ['HOST_PWD']}/worker_service/src/worker_service": "/worker_service_python_env/worker_service",
+                    f"{os.environ['HOST_PWD']}/worker_service_python_env": "/worker_service_python_env",
                     f"{os.environ['HOST_PWD']}/.temp_token.txt": "/burla/.temp_token.txt",
                 },
             )

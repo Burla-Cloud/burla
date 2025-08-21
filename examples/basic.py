@@ -6,7 +6,6 @@ my_inputs = list(range(1000))
 
 def my_function(my_input):
 
-    sleep(1)
     print(f"Running Input #{my_input} on it's own separate computer in the cloud!")
 
 

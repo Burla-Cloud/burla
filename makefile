@@ -19,6 +19,25 @@ test:
 test-jupyter:
 	poetry -C ./client run jupyter-lab
 
+# remove all booting nodes from DB (only run in local-dev mode)
+stop:
+	printf '%s\n' \
+		'import json' \
+		'from google.cloud import firestore' \
+		'from google.cloud.firestore_v1 import FieldFilter' \
+		'from appdirs import user_config_dir' \
+		'from pathlib import Path' \
+		'' \
+		'appdata_dir = Path(user_config_dir(appname="burla", appauthor="burla"))' \
+		'config_path = appdata_dir / Path("burla_credentials.json")' \
+		'project_id = json.loads(config_path.read_text())["project_id"]' \
+		'db = firestore.Client(project=project_id, database="burla")' \
+		'booting_filter = FieldFilter("status", "==", "BOOTING")' \
+		'for document in db.collection("nodes").where(filter=booting_filter).get():' \
+		'    document.reference.delete()' \
+		'    print(f"Deleted node doc: {document.id}")' \
+	| poetry -C ./client run python -
+
 # start ONLY the main service, in local dev mode
 # The cluster is run 100% locally using the config `LOCAL_DEV_CONFIG` in `main_service.__init__.py`
 # All components (main_svc, node_svc, worker_svc) will restart when changes to code are made.

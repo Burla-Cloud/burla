@@ -113,8 +113,8 @@ export const JobsProvider = ({ children }: { children: React.ReactNode }) => {
         };
 
         eventSource.onerror = (err) => {
-            console.error("❌ SSE failed:", err);
-            eventSource.close();
+            // Safari and proxies may emit transient errors; let EventSource auto-reconnect
+            console.warn("SSE transient error (jobs_paginated), will auto-reconnect:", err);
         };
 
         return () => eventSource.close();

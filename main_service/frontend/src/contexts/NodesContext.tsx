@@ -60,7 +60,6 @@ export const NodesProvider = ({ children }: { children: React.ReactNode }) => {
             rotateTimeoutId = window.setTimeout(() => {
                 if (stopped) return;
                 closingForRotate = true;
-                console.info("Rotating SSE connection for /v1/cluster");
                 if (source) source.close();
                 // reopen on next tick; suppress any transient onerror caused by close()
                 window.setTimeout(() => {

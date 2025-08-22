@@ -90,4 +90,4 @@ container:
 		-e HOST_PWD=$(PWD) \
 		-e HOST_HOME_DIR=$${HOME} \
 		-p 5001:5001 \
-		--entrypoint poetry $${TEST_IMAGE_NAME} run bash
+		$${TEST_IMAGE_NAME}

@@ -75,7 +75,6 @@ export const JobsProvider = ({ children }: { children: React.ReactNode }) => {
             rotateTimeoutId = window.setTimeout(() => {
                 if (stopped) return;
                 closingForRotate = true;
-                console.info(`Rotating SSE connection for /v1/jobs_paginated (page ${page})`);
                 if (source) source.close();
                 window.setTimeout(() => {
                     closingForRotate = false;

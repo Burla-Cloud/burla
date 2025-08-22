@@ -29,7 +29,7 @@ from main_service.helpers import Logger
 router = APIRouter()
 
 
-def restart_cluster(request: Request, logger: Logger = Depends(get_logger)):
+def _restart_cluster(request: Request, logger: Logger):
     start = time()
     instance_client = InstancesClient()
 
@@ -125,7 +125,7 @@ def restart_cluster(request: Request, logger: Logger = Depends(get_logger)):
 
 
 @router.post("/v1/cluster/restart")
-def _restart_cluster(
+def restart_cluster(
     request: Request,
     logger: Logger = Depends(get_logger),
     add_background_task=Depends(get_add_background_task_function),

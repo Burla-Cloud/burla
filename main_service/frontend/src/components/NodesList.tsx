@@ -189,10 +189,7 @@ export const NodesList = ({ nodes }: NodesListProps) => {
             source.onerror = (error) => {
                 if (closingForRotate) return; // intentional rotation
                 if (rotateTimeoutId) window.clearTimeout(rotateTimeoutId);
-                console.error(
-                    "Node logs stream error; will retry after server-advertised delay:",
-                    error
-                );
+                console.error("Node logs stream error; retry in 5s:", error);
                 setLogsLoading((prev) => ({ ...prev, [expandedNodeId]: false }));
             };
         };

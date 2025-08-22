@@ -52,7 +52,7 @@ export const JobsProvider = ({ children }: { children: React.ReactNode }) => {
                 setTotalPages(1);
             }
         } catch (err) {
-            console.error("❌ Error fetching paginated jobs:", err);
+            console.error("Error fetching jobs:", err);
         } finally {
             setIsLoading(false);
         }
@@ -137,17 +137,14 @@ export const JobsProvider = ({ children }: { children: React.ReactNode }) => {
                         return prevJobs;
                     });
                 } catch (err) {
-                    console.error("❌ Failed to parse SSE job update:", err);
+                    console.error("Failed to parse SSE job update:", err);
                 }
             };
 
             source.onerror = (err) => {
                 if (closingForRotate) return; // intentional close
                 if (rotateTimeoutId) window.clearTimeout(rotateTimeoutId);
-                console.error(
-                    "SSE error (jobs_paginated), will retry after server-advertised delay:",
-                    err
-                );
+                console.error("SSE error (jobs_paginated), retry in 5s:", err);
             };
         };
 

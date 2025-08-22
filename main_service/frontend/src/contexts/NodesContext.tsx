@@ -46,23 +46,70 @@ export const NodesProvider = ({ children }: { children: React.ReactNode }) => {
     };
 
     useEffect(() => {
-        let first = true;
-        const eventSource = new EventSource("/v1/cluster");
-        eventSource.onmessage = (event) => {
-            const data = JSON.parse(event.data);
-            if (first) {
-                setLoading(false);
-                first = false;
-            }
-            if (data.type === "empty") {
-                setNodes([]); // ensure nodes is empty
-                setLoading(false);
-                return;
-            }
-            handleNodeUpdate(data);
+        let firstMessageSeen = false;
+        let stopped = false;
+        let source: EventSource | null = null;
+        let rotateTimeoutId: number | undefined;
+        let closingForRotate = false;
+        let inErrorRecovery = false;
+
+        const ROTATE_MS = 55_000; // proactively renew before proxy hard timeout
+
+        const armRotationTimer = () => {
+            if (rotateTimeoutId) window.clearTimeout(rotateTimeoutId);
+            rotateTimeoutId = window.setTimeout(() => {
+                if (stopped) return;
+                closingForRotate = true;
+                console.info("Rotating SSE connection for /v1/cluster");
+                if (source) source.close();
+                // reopen on next tick; suppress any transient onerror caused by close()
+                window.setTimeout(() => {
+                    closingForRotate = false;
+                    open();
+                }, 0);
+            }, ROTATE_MS);
         };
-        eventSource.onerror = (error) => console.error("EventSource failed:", error);
-        return () => eventSource.close();
+
+        const open = () => {
+            if (stopped) return;
+            if (source) source.close();
+
+            source = new EventSource("/v1/cluster");
+
+            source.onopen = () => {
+                inErrorRecovery = false;
+                armRotationTimer();
+            };
+
+            source.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                if (!firstMessageSeen) {
+                    setLoading(false);
+                    firstMessageSeen = true;
+                }
+                if (data.type === "empty") {
+                    setNodes([]);
+                    setLoading(false);
+                    return;
+                }
+                handleNodeUpdate(data);
+            };
+
+            source.onerror = (error) => {
+                if (closingForRotate) return; // intentional close: do not log, do not interfere
+                inErrorRecovery = true;
+                if (rotateTimeoutId) window.clearTimeout(rotateTimeoutId); // let server-side retry delay dictate reconnect timing
+                console.error("EventSource failed!", error);
+            };
+        };
+
+        open();
+
+        return () => {
+            stopped = true;
+            if (rotateTimeoutId) window.clearTimeout(rotateTimeoutId);
+            if (source) source.close();
+        };
     }, []);
 
     return (

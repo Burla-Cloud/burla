@@ -69,12 +69,13 @@ async def get_recent_jobs(request: Request, page: int = 0, stream: bool = False)
         unsubscribe = DB.collection("jobs").on_snapshot(on_snapshot)
 
         async def event_stream():
-            # send an initial comment to open the stream
+            # advertise a 5s reconnect delay on errors and send an initial comment to open the stream
+            yield "retry: 5000\n\n"
             yield ": init\n\n"
             try:
                 while True:
                     try:
-                        event = await asyncio.wait_for(queue.get(), timeout=15)
+                        event = await asyncio.wait_for(queue.get(), timeout=2)
                         yield f"data: {json.dumps(event)}\n\n"
                     except asyncio.TimeoutError:
                         # heartbeat to keep proxies from closing the connection
@@ -85,11 +86,7 @@ async def get_recent_jobs(request: Request, page: int = 0, stream: bool = False)
         return StreamingResponse(
             event_stream(),
             media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache, no-transform",
-                "Connection": "keep-alive",
-                "X-Accel-Buffering": "no",
-            },
+            headers={"Cache-Control": "no-cache, no-transform"},
         )
 
     # --- fallback for non-stream requests ---

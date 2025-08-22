@@ -29,7 +29,6 @@ from main_service.helpers import Logger
 router = APIRouter()
 
 
-@router.post("/v1/cluster/restart")
 def restart_cluster(request: Request, logger: Logger = Depends(get_logger)):
     start = time()
     instance_client = InstancesClient()
@@ -125,6 +124,15 @@ def restart_cluster(request: Request, logger: Logger = Depends(get_logger)):
     logger.log(f"Restarted after {duration//60}m {duration%60}s")
 
 
+@router.post("/v1/cluster/restart")
+def _restart_cluster(
+    request: Request,
+    logger: Logger = Depends(get_logger),
+    add_background_task=Depends(get_add_background_task_function),
+):
+    add_background_task(_restart_cluster, request, logger)
+
+
 @router.post("/v1/cluster/shutdown")
 async def shutdown_cluster(request: Request, logger: Logger = Depends(get_logger)):
     start = time()
@@ -195,11 +203,12 @@ async def cluster_info(logger: Logger = Depends(get_logger)):
         display_filter = FieldFilter("display_in_dashboard", "==", True)
         node_watch = DB.collection("nodes").where(filter=display_filter).on_snapshot(on_snapshot)
         try:
-            # send an initial comment to open the stream
+            # set 5s reconnect on drop and send an initial comment to open the stream
+            yield "retry: 5000\n\n"
             yield ": init\n\n"
             while True:
                 try:
-                    event = await asyncio.wait_for(queue.get(), timeout=15)
+                    event = await asyncio.wait_for(queue.get(), timeout=2)
                     yield f"data: {json.dumps(event)}\n\n"
                 except asyncio.TimeoutError:
                     yield ": keep-alive\n\n"
@@ -209,11 +218,7 @@ async def cluster_info(logger: Logger = Depends(get_logger)):
     return StreamingResponse(
         node_stream(),
         media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache, no-transform",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
+        headers={"Cache-Control": "no-cache, no-transform"},
     )
 
 
@@ -280,11 +285,12 @@ async def node_log_stream(node_id: str, request: Request):
 
     async def log_generator():
         try:
-            # initial comment
+            # set 5s reconnect on drop and send initial comment
+            yield "retry: 5000\n\n"
             yield ": init\n\n"
             while True:
                 try:
-                    event = await asyncio.wait_for(queue.get(), timeout=15)
+                    event = await asyncio.wait_for(queue.get(), timeout=2)
                     yield f"data: {json.dumps(event)}\n\n"
                 except asyncio.TimeoutError:
                     yield ": keep-alive\n\n"
@@ -294,9 +300,5 @@ async def node_log_stream(node_id: str, request: Request):
     return StreamingResponse(
         log_generator(),
         media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache, no-transform",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
+        headers={"Cache-Control": "no-cache, no-transform"},
     )

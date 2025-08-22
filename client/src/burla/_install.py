@@ -125,7 +125,7 @@ def _install(spinner):
         f"--max-instances 5 "
         f"--memory 4Gi "
         f"--cpu 1 "
-        f"--timeout 10 "
+        f"--timeout 60 "
         f"--concurrency 20 "
         f"--allow-unauthenticated"
     )

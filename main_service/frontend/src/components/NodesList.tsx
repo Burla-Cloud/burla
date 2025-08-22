@@ -137,26 +137,74 @@ export const NodesList = ({ nodes }: NodesListProps) => {
     const logSourceRef = useRef<EventSource | null>(null);
 
     useEffect(() => {
-        if (expandedNodeId) {
-            setNodeLogs((prev) => ({ ...prev, [expandedNodeId]: [] }));
-            setLogsLoading((prev) => ({ ...prev, [expandedNodeId]: true }));
-            const source = new EventSource(`/v1/cluster/${expandedNodeId}/logs`);
+        if (!expandedNodeId) return;
+
+        setNodeLogs((prev) => ({ ...prev, [expandedNodeId]: [] }));
+        setLogsLoading((prev) => ({ ...prev, [expandedNodeId]: true }));
+
+        let source: EventSource | null = null;
+        let rotateTimeoutId: number | undefined;
+        let closingForRotate = false;
+        let stopped = false;
+        const ROTATE_MS = 55_000;
+
+        const armRotationTimer = () => {
+            if (rotateTimeoutId) window.clearTimeout(rotateTimeoutId);
+            rotateTimeoutId = window.setTimeout(() => {
+                if (stopped) return;
+                closingForRotate = true;
+                console.info(`Rotating SSE connection for /v1/cluster/${expandedNodeId}/logs`);
+                if (source) source.close();
+                window.setTimeout(() => {
+                    closingForRotate = false;
+                    open();
+                }, 0);
+            }, ROTATE_MS);
+        };
+
+        const open = () => {
+            if (stopped) return;
+            if (source) source.close();
+            let clearedOnThisConnection = false;
+            source = new EventSource(`/v1/cluster/${expandedNodeId}/logs`);
             logSourceRef.current = source;
+
+            source.onopen = () => {
+                armRotationTimer();
+            };
+
             source.onmessage = (event) => {
                 const data = JSON.parse(event.data);
+                if (!clearedOnThisConnection) {
+                    setNodeLogs((prev) => ({ ...prev, [expandedNodeId]: [] }));
+                    setLogsLoading((prev) => ({ ...prev, [expandedNodeId]: false }));
+                    clearedOnThisConnection = true;
+                }
                 setNodeLogs((prev) => {
                     const existing = prev[expandedNodeId] || [];
                     return { ...prev, [expandedNodeId]: [...existing, data.message] };
                 });
                 setLogsLoading((prev) => ({ ...prev, [expandedNodeId]: false }));
             };
+
             source.onerror = (error) => {
-                console.error("Node logs stream failed:", error);
-                source.close();
+                if (closingForRotate) return; // intentional rotation
+                if (rotateTimeoutId) window.clearTimeout(rotateTimeoutId);
+                console.error(
+                    "Node logs stream error; will retry after server-advertised delay:",
+                    error
+                );
                 setLogsLoading((prev) => ({ ...prev, [expandedNodeId]: false }));
             };
-            return () => source.close();
-        }
+        };
+
+        open();
+
+        return () => {
+            stopped = true;
+            if (rotateTimeoutId) window.clearTimeout(rotateTimeoutId);
+            if (source) source.close();
+        };
     }, [expandedNodeId]);
 
     const toggleExpanded = (nodeId: string) => {

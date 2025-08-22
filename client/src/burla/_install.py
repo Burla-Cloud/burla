@@ -127,6 +127,7 @@ def _install(spinner):
         f"--cpu 1 "
         f"--timeout 60 "
         f"--concurrency 20 "
+        f"--startup-timeout-seconds 300 "
         f"--allow-unauthenticated"
     )
     run_command(

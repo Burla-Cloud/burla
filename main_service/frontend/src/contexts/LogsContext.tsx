@@ -25,7 +25,7 @@ export const LogsProvider = ({ children }: { children: React.ReactNode }) => {
         Object.values(logMap).sort((a, b) => a.created_at - b.created_at);
 
     const fetchInitialLogs = async (jobId: string) => {
-        const res = await fetch(`/v1/job_logs/${jobId}/paginated?limit=1000`);
+        const res = await fetch(`/v1/jobs/${jobId}/logs?limit=1000`);
         const json = await res.json();
 
         const newLogs: LogEntry[] = json.logs.map((log: any) => ({
@@ -59,7 +59,7 @@ export const LogsProvider = ({ children }: { children: React.ReactNode }) => {
         if (!cursor) return;
 
         const res = await fetch(
-            `/v1/job_logs/${jobId}/paginated?limit=1000&start_after_time=${cursor.time}&start_after_id=${cursor.id}`
+            `/v1/jobs/${jobId}/logs?limit=1000&start_after_time=${cursor.time}&start_after_id=${cursor.id}`
         );
         const json = await res.json();
 

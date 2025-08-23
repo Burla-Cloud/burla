@@ -28,7 +28,7 @@ export const JobsProvider = ({ children }: { children: React.ReactNode }) => {
     const fetchJobs = useCallback(async () => {
         setIsLoading(true);
         try {
-            const response = await fetch(`/v1/jobs_paginated?page=${page}`);
+            const response = await fetch(`/v1/jobs?page=${page}`);
             const json = await response.json();
             const jobList = (json.jobs ?? []).map(createNewJob);
 
@@ -86,7 +86,7 @@ export const JobsProvider = ({ children }: { children: React.ReactNode }) => {
         const open = () => {
             if (stopped) return;
             if (source) source.close();
-            source = new EventSource(`/v1/jobs_paginated?stream=true&page=${page}`);
+            source = new EventSource(`/v1/jobs?stream=true&page=${page}`);
 
             source.onopen = () => {
                 armRotationTimer();

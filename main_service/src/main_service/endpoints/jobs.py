@@ -11,8 +11,6 @@ from google.cloud import firestore
 from main_service import DB, PROJECT_ID
 
 router = APIRouter()
-
-
 ASYNC_DB = firestore.AsyncClient(project=PROJECT_ID, database="burla")
 
 
@@ -23,99 +21,98 @@ async def current_num_results(job_id: str):
     return query_result[0][0].value
 
 
-@router.get("/v1/jobs_paginated")
-async def get_recent_jobs(request: Request, page: int = 0, stream: bool = False):
+def job_stream(jobs_current_page: firestore.CollectionReference):
+    queue = asyncio.Queue()
+    loop = asyncio.get_running_loop()
+    running_jobs = {}
+
+    async def push_n_results_updates(job_id: str, event: dict):
+        while True:
+            n_results = await current_num_results(job_id)
+            print(f"here: {job_id}: {n_results}")
+            event["n_results"] = n_results
+            await queue.put(event)
+            await asyncio.sleep(1)
+
+    def on_changed_job_doc(col_snapshot, changes, read_time):
+        for change in changes:
+            job = change.document.to_dict()
+            event = {
+                "jobId": change.document.id,
+                "status": job.get("status"),
+                "user": job.get("user", "Unknown"),
+                "function_name": job.get("function_name", "Unknown"),
+                "n_inputs": job.get("n_inputs", 0),
+                "n_results": None,
+                "started_at": job.get("started_at"),
+                "deleted": change.type.name == "REMOVED",
+            }
+
+            if (change.document.id in running_jobs) and (job.get("status") != "RUNNING"):
+                running_jobs.pop(change.document.id).cancel()
+            elif (change.document.id not in running_jobs) and (job.get("status") == "RUNNING"):
+                coroutine = push_n_results_updates(change.document.id, event)
+                future = asyncio.run_coroutine_threadsafe(coroutine, loop)
+                running_jobs[change.document.id] = future
+
+            async def queue_job(job_id: str, event: dict):
+                # I cant figure out how to `current_num_results` synchronously
+                n_results = await current_num_results(job_id)
+                event["n_results"] = n_results
+                await queue.put(event)
+
+            coroutine = queue_job(change.document.id, event)
+            asyncio.run_coroutine_threadsafe(coroutine, loop)
+
+    job_collection_stream = jobs_current_page.on_snapshot(on_changed_job_doc)
+
+    async def event_stream():
+        yield "retry: 5000\n\n"  # <- make browser reconnect after 5s on error
+        yield ": init\n\n"
+        try:
+            while True:
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=10)
+                    yield f"data: {json.dumps(event)}\n\n"
+                except asyncio.TimeoutError:
+                    # heartbeat to keeps proxy from closing connection
+                    yield ": keep-alive\n\n"
+        finally:
+            job_collection_stream.unsubscribe()
+
+    headers = {"Cache-Control": "no-cache, no-transform"}
+    return StreamingResponse(event_stream(), media_type="text/event-stream", headers=headers)
+
+
+@router.get("/v1/jobs")
+async def get_jobs(request: Request, page: int = 0, stream: bool = False):
     docs_per_page = 15
-    offset = page * docs_per_page
-    accept = request.headers.get("accept", "")
+    _jobs_ref = DB.collection("jobs").order_by("started_at", direction=firestore.Query.DESCENDING)
+    jobs_current_page = _jobs_ref.offset(page * docs_per_page).limit(docs_per_page)
+    if stream:
+        return job_stream(jobs_current_page)
 
-    page_one_docs = list(
-        DB.collection("jobs")
-        .order_by("started_at", direction=firestore.Query.DESCENDING)
-        .offset(offset)
-        .limit(docs_per_page)
-        .stream()
-    )
-
-    if stream or "text/event-stream" in accept:
-        queue = asyncio.Queue()
-        loop = asyncio.get_running_loop()
-
-        def on_snapshot(col_snapshot, changes, read_time):
-            for change in changes:
-                doc = change.document
-                data = doc.to_dict() or {}
-
-                ts = data.get("started_at")
-                if hasattr(ts, "timestamp"):
-                    ts = ts.timestamp()
-
-                async def build_event_and_put():
-                    # I cant figure out how to `current_num_results` synchronously
-                    event = {
-                        "jobId": doc.id,
-                        "status": data.get("status"),
-                        "user": data.get("user", "Unknown"),
-                        "function_name": data.get("function_name", "Unknown"),
-                        "n_inputs": data.get("n_inputs", 0),
-                        "n_results": await current_num_results(doc.id),
-                        "started_at": ts,
-                        "deleted": change.type.name == "REMOVED",
-                    }
-                    await queue.put(event)
-
-                asyncio.run_coroutine_threadsafe(build_event_and_put(), loop)
-
-        unsubscribe = DB.collection("jobs").on_snapshot(on_snapshot)
-
-        async def event_stream():
-            # advertise a 5s reconnect delay on errors and send an initial comment to open the stream
-            yield "retry: 5000\n\n"
-            yield ": init\n\n"
-            try:
-                while True:
-                    try:
-                        event = await asyncio.wait_for(queue.get(), timeout=2)
-                        yield f"data: {json.dumps(event)}\n\n"
-                    except asyncio.TimeoutError:
-                        # heartbeat to keep proxies from closing the connection
-                        yield ": keep-alive\n\n"
-            finally:
-                unsubscribe.unsubscribe()
-
-        return StreamingResponse(
-            event_stream(),
-            media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache, no-transform"},
-        )
-
-    # --- fallback for non-stream requests ---
     jobs = []
-    for doc in page_one_docs:
-        d = doc.to_dict() or {}
-        ts = d.get("started_at")
-        if hasattr(ts, "timestamp"):
-            ts = ts.timestamp()
+    for job_doc in jobs_current_page.stream():
+        job = job_doc.to_dict() or {}
         jobs.append(
             {
-                "jobId": doc.id,
-                "status": d.get("status"),
-                "user": d.get("user", "Unknown"),
-                "function_name": d.get("function_name", "Unknown"),
-                "n_inputs": d.get("n_inputs", 0),
-                "n_results": await current_num_results(doc.id),
-                "started_at": ts,
+                "jobId": job_doc.id,
+                "status": job.get("status"),
+                "user": job.get("user", "Unknown"),
+                "function_name": job.get("function_name", "Unknown"),
+                "n_inputs": job.get("n_inputs", 0),
+                "n_results": await current_num_results(job_doc.id),
+                "started_at": job.get("started_at"),
             }
         )
-
     total_jobs = await ASYNC_DB.collection("jobs").count().get()
     total_jobs = total_jobs[0][0].value
-
     return JSONResponse({"jobs": jobs, "page": page, "limit": docs_per_page, "total": total_jobs})
 
 
-@router.get("/v1/job_logs/{job_id}/paginated")
-def get_paginated_logs(
+@router.get("/v1/jobs/{job_id}/logs")
+def get_job_logs(
     job_id: str,
     limit: int = Query(10, ge=1, le=1000),
     start_after_time: Optional[float] = Query(None),

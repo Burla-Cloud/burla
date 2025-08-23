@@ -225,8 +225,7 @@ async def validate_requests(request: Request, call_next):
                     request.session["name"] = data["name"]
 
         base_url = f"{request.url.scheme}://{request.url.netloc}{request.url.path}"
-        response = RedirectResponse(url=base_url, status_code=303)
-        return response
+        return RedirectResponse(url=base_url, status_code=303)
 
     email = request.session.get("X-User-Email") or request.headers.get("X-User-Email")
     authorization = request.session.get("Authorization") or request.headers.get("Authorization")

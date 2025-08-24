@@ -279,12 +279,13 @@ async def _execute_job(
             stack.callback(ping_process.kill)
 
             # start stdout/stderr stream
-            def _on_new_log_message(col_snapshot, changes, read_time):
+            def _on_new_logs_doc(col_snapshot, changes, read_time):
                 for change in changes:
-                    spinner_compatible_print(change.document.to_dict()["msg"])
+                    for log in change.document.to_dict()["logs"]:
+                        spinner_compatible_print(log["message"])
 
             logs_collection = SYNC_DB.collection("jobs").document(job_id).collection("logs")
-            log_stream = logs_collection.on_snapshot(_on_new_log_message)
+            log_stream = logs_collection.on_snapshot(_on_new_logs_doc)
             stack.callback(log_stream.unsubscribe)
 
         async def _check_single_node(node: dict):

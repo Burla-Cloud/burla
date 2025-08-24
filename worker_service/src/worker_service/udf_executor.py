@@ -58,17 +58,26 @@ class _FirestoreStdout:
 
     def write(self, msg):
         if msg.strip():
-            msg_size = len(msg.encode("utf-8")) + 1  # for '\n'
+            timestamp_str = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            msg_size = len(msg.encode("utf-8")) + 180  # for timestamp and dict overhead
             msg_too_big = msg_size > self._max_buffer_size
             if msg_too_big:
                 truncated_msg_bytes = msg.encode("utf-8")[: self._max_buffer_size]
                 truncated_msg = truncated_msg_bytes.decode("utf-8", errors="ignore")
                 msg = truncated_msg + "<too-long--remaining-msg-truncated-due-to-length>"
+            firestore_formatted_msg = {
+                "mapValue": {
+                    "fields": {
+                        "timestamp": {"timestampValue": timestamp_str},
+                        "message": {"stringValue": msg},
+                    }
+                }
+            }
             with self._lock:
                 future_buffer_size = self._buffer_size + msg_size
                 if future_buffer_size > self._max_buffer_size:
                     self.actually_flush()
-                self._buffer.append(msg)
+                self._buffer.append(firestore_formatted_msg)
                 self._buffer_size += msg_size
 
     def flush(self):
@@ -77,11 +86,11 @@ class _FirestoreStdout:
 
     def actually_flush(self):
         if self._buffer:
-            SELF["logs"].append(f"Flushing")
+            SELF["logs"].append(f"Flushing {len(self._buffer)} logs")
             timestamp_str = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-            firestore_msg = {"stringValue": "\n".join(self._buffer)}
-            firestore_created_at = {"timestampValue": timestamp_str}
-            data = {"fields": {"msg": firestore_msg, "created_at": firestore_created_at}}
+            timestamp_field = {"timestampValue": timestamp_str}
+            logs_field = {"arrayValue": {"values": [self._buffer]}}
+            data = {"fields": {"logs": logs_field, "timestamp": timestamp_field}}
             try:
                 url = f"{DB_BASE_URL}/jobs/{self.job_id}/logs"
                 response = requests.post(url, headers=DB_HEADERS, json=data, timeout=1)
@@ -89,7 +98,7 @@ class _FirestoreStdout:
             except Exception as e:
                 if response.status_code == 401 and IN_LOCAL_DEV_MODE:
                     msg = "401 error writing logs, YOU DEV TOKEN IS PROBABLY EXPIRED!\n"
-                    msg += "         Re-run `make local-dev` to refresh the token.\n"
+                    msg += "         Re-run `make local-dev` (and reboot!) to refresh the token.\n"
                     SELF["logs"].append(msg)
                 else:
                     SELF["logs"].append(f"Error writing log to firestore: {e}")

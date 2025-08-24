@@ -66,6 +66,14 @@ const JobLogs = ({ jobId, jobStatus }: JobLogsProps) => {
     const listRef = useRef<any>(null);
     const containerRef = useRef<HTMLDivElement | null>(null);
     const [listHeight, setListHeight] = useState<number>(300);
+    const sizeMapRef = useRef<Record<string, number>>({});
+
+    const setSizeForKey = useCallback((key: string, size: number, fromIndex: number) => {
+        if (sizeMapRef.current[key] !== size) {
+            sizeMapRef.current[key] = size;
+            listRef.current?.resetAfterIndex(fromIndex, false);
+        }
+    }, []);
 
     useEffect(() => {
         const updateWidth = () => setWindowWidth(window.innerWidth);
@@ -122,13 +130,7 @@ const JobLogs = ({ jobId, jobStatus }: JobLogsProps) => {
     };
 
     const toggleExpand = (id: string) => {
-        setExpandedLogs((prev) => {
-            const updated = { ...prev, [id]: !prev[id] };
-            setTimeout(() => {
-                listRef.current?.resetAfterIndex(0); // recalculate row heights
-            }, 0);
-            return updated;
-        });
+        setExpandedLogs((prev) => ({ ...prev, [id]: !prev[id] }));
     };
 
     const getItemSize = useCallback(
@@ -136,7 +138,7 @@ const JobLogs = ({ jobId, jobStatus }: JobLogsProps) => {
             const row = items[index];
             if (!row) return 36;
             if (row.type === "divider") return 40;
-            return expandedLogs[row.id] ? 72 : 36;
+            return sizeMapRef.current[row.id] ?? (expandedLogs[row.id] ? 72 : 36);
         },
         [expandedLogs, items]
     );
@@ -219,20 +221,35 @@ const JobLogs = ({ jobId, jobStatus }: JobLogsProps) => {
                                     <div
                                         key={row.key}
                                         style={style}
+                                        className="cursor-pointer"
                                         onClick={() => toggleExpand(row.id)}
-                                        className={`grid grid-cols-[8rem,1fr] gap-2 px-4 py-2 border-t border-gray-200 cursor-pointer transition ${background} hover:bg-gray-100`}
                                     >
-                                        <div className="text-gray-500 text-left tabular-nums">
-                                            {formatTime(row.createdAt)}
-                                        </div>
                                         <div
-                                            className={
-                                                isExpanded
-                                                    ? "whitespace-normal break-words"
-                                                    : "truncate"
-                                            }
+                                            ref={(el) => {
+                                                if (!el) return;
+                                                requestAnimationFrame(() => {
+                                                    try {
+                                                        if (!el || !el.isConnected) return;
+                                                        const h = Math.ceil(el.scrollHeight);
+                                                        const desired = isExpanded ? h : 36;
+                                                        setSizeForKey(row.id, desired, index);
+                                                    } catch {}
+                                                });
+                                            }}
+                                            className={`grid grid-cols-[8rem,1fr] gap-2 px-4 py-2 border-t border-gray-200 transition ${background} hover:bg-gray-100`}
                                         >
-                                            {row.message}
+                                            <div className="text-gray-500 text-left tabular-nums">
+                                                {formatTime(row.createdAt)}
+                                            </div>
+                                            <div
+                                                className={
+                                                    isExpanded
+                                                        ? "whitespace-normal break-words"
+                                                        : "truncate"
+                                                }
+                                            >
+                                                {row.message}
+                                            </div>
                                         </div>
                                     </div>
                                 );

@@ -2,11 +2,16 @@ import { useParams, useNavigate } from "react-router-dom";
 import { useEffect, useState } from "react";
 import { useJobs } from "@/contexts/JobsContext";
 import JobLogs from "@/components/JobLogs";
+import { Button } from "@/components/ui/button";
+import { PowerOff } from "lucide-react";
+import { useToast } from "@/components/ui/use-toast";
 
 const JobDetails = () => {
     const { jobId } = useParams<{ jobId: string }>();
     const { jobs } = useJobs();
     const navigate = useNavigate();
+    const { toast } = useToast();
+    const [isStopping, setIsStopping] = useState(false);
     const [userTimeZone, setUserTimeZone] = useState<string>(() => {
         const stored = typeof window !== "undefined" ? localStorage.getItem("userTimezone") : null;
         if (stored) return stored;
@@ -102,6 +107,24 @@ const JobDetails = () => {
         return `w-2 h-2 rounded-full ${status ? statusClasses[status] || "" : ""}`;
     };
 
+    const stopJob = async () => {
+        if (!jobId) return;
+        try {
+            setIsStopping(true);
+            const res = await fetch(`/v1/jobs/${jobId}/stop`, { method: "POST" });
+            if (!res.ok) throw new Error("Failed to stop job");
+            toast({ title: "Stopping job", description: `Job ${jobId} is stopping.` });
+        } catch (err) {
+            toast({
+                variant: "destructive",
+                title: "Error",
+                description: "Failed to stop job. Please try again.",
+            });
+        } finally {
+            setIsStopping(false);
+        }
+    };
+
     if (!jobId) {
         return (
             <div className="flex-1 flex flex-col items-center justify-center px-12 pt-10">
@@ -130,7 +153,7 @@ const JobDetails = () => {
         <div className="flex flex-col flex-1 min-h-0 px-12 pt-0">
             <div className="max-w-6xl mx-auto w-full flex flex-col flex-1 min-h-0">
                 {/* Breadcrumb */}
-                <h1 className="text-3xl font-bold mt-[-4px] mb-6 text-primary">
+                <h1 className="text-3xl font-bold mt-[-4px] mb-3 text-primary">
                     <button
                         onClick={() => navigate("/jobs")}
                         className="hover:underline underline-offset-2 decoration-[0.5px] transition text-inherit"
@@ -141,32 +164,50 @@ const JobDetails = () => {
                     <span className="text-inherit">{job.id}</span>
                 </h1>
 
-                {/* Metadata row */}
-                <div className="flex flex-row items-center text-sm text-gray-600 mb-6 space-x-8">
-                    <div className="flex items-center space-x-2">
-                        <div className={getStatusClass(job.status)} />
-                        <span className="text-sm capitalize">
-                            {job.status?.toUpperCase() || "UNKNOWN"}
-                        </span>
-                    </div>
-                    <div className="flex items-baseline">
-                        <strong>Function:</strong>
-                        <span className="ml-2">{job.function_name ?? "Unknown"}</span>
-                    </div>
-                    <div className="flex items-baseline">
-                        <strong>Started At:</strong>
-                        <span className="ml-2 flex items-baseline">
-                            <span className="tabular-nums">
-                                {formatStartedAtTime(job.started_at)}
+                {/* Metadata row with Stop button on the same row */}
+                <div className="flex flex-row items-center justify-between text-sm text-gray-600 mb-3">
+                    <div className="flex items-center space-x-6">
+                        <div className="flex items-center space-x-2">
+                            <div className={getStatusClass(job.status)} />
+                            <span className="text-sm capitalize">
+                                {job.status?.toUpperCase() || "UNKNOWN"}
                             </span>
-                            <span className="ml-1">{formatStartedAtWeekday(job.started_at)}</span>
-                            <span className="ml-1">{formatStartedAtMonthDay(job.started_at)}</span>
-                        </span>
+                        </div>
+                        <div className="flex items-baseline">
+                            <strong>Function:</strong>
+                            <span className="ml-2">{job.function_name ?? "Unknown"}</span>
+                        </div>
+                        <div className="flex items-baseline">
+                            <strong>Started At:</strong>
+                            <span className="ml-2 flex items-baseline">
+                                <span className="tabular-nums">
+                                    {formatStartedAtTime(job.started_at)}
+                                </span>
+                                <span className="ml-1">
+                                    {formatStartedAtWeekday(job.started_at)}
+                                </span>
+                                <span className="ml-1">
+                                    {formatStartedAtMonthDay(job.started_at)}
+                                </span>
+                            </span>
+                        </div>
                     </div>
+                    <Button
+                        variant="destructive"
+                        size="lg"
+                        className="w-32 -mt-2"
+                        onClick={stopJob}
+                        disabled={
+                            isStopping || (job?.status !== "RUNNING" && job?.status !== "PENDING")
+                        }
+                    >
+                        <PowerOff className="mr-2 h-4 w-4" />
+                        Stop
+                    </Button>
                 </div>
 
-                <div className="mb-6">
-                    <div className="flex flex-col space-y-1 min-w-[100px]">
+                <div className="mb-4">
+                    <div className="flex flex-col space-y-0.5 min-w-[100px]">
                         <div>
                             <strong>Results:</strong> {job.n_results.toLocaleString()} /{" "}
                             {job.n_inputs.toLocaleString()}

@@ -1,4 +1,5 @@
 import { useParams, useNavigate } from "react-router-dom";
+import { useEffect, useState } from "react";
 import { useJobs } from "@/contexts/JobsContext";
 import JobLogs from "@/components/JobLogs";
 
@@ -6,6 +7,89 @@ const JobDetails = () => {
     const { jobId } = useParams<{ jobId: string }>();
     const { jobs } = useJobs();
     const navigate = useNavigate();
+    const [userTimeZone, setUserTimeZone] = useState<string>(() => {
+        const stored = typeof window !== "undefined" ? localStorage.getItem("userTimezone") : null;
+        if (stored) return stored;
+        const cookieTz =
+            typeof document !== "undefined"
+                ? document.cookie
+                      .split("; ")
+                      .find((row) => row.startsWith("timezone="))
+                      ?.split("=")[1]
+                : null;
+        return cookieTz || Intl.DateTimeFormat().resolvedOptions().timeZone;
+    });
+
+    useEffect(() => {
+        let cancelled = false;
+        const loadTimezone = async () => {
+            try {
+                const res = await fetch("/api/user");
+                if (res.ok) {
+                    const data = await res.json();
+                    const tz = data?.timezone || data?.time_zone || data?.tz || null;
+                    if (tz && !cancelled) {
+                        setUserTimeZone(tz);
+                        try {
+                            localStorage.setItem("userTimezone", tz);
+                        } catch {}
+                        return;
+                    }
+                }
+            } catch {}
+            if (!cancelled) {
+                const cookieTz = document.cookie
+                    .split("; ")
+                    .find((row) => row.startsWith("timezone="))
+                    ?.split("=")[1];
+                setUserTimeZone(cookieTz || Intl.DateTimeFormat().resolvedOptions().timeZone);
+            }
+        };
+        loadTimezone();
+        return () => {
+            cancelled = true;
+        };
+    }, []);
+
+    const formatStartedAtTime = (date?: Date): string => {
+        if (!date) return "";
+        const tz = userTimeZone || Intl.DateTimeFormat().resolvedOptions().timeZone;
+        const t = date.toLocaleTimeString("en-US", {
+            timeZone: tz,
+            hour: "numeric",
+            minute: "2-digit",
+            hour12: true,
+        });
+        return `${t}`;
+    };
+
+    const formatStartedAtWeekday = (date?: Date): string => {
+        if (!date) return "";
+        const tz = userTimeZone || Intl.DateTimeFormat().resolvedOptions().timeZone;
+        return date.toLocaleDateString("en-US", {
+            timeZone: tz,
+            weekday: "long",
+        });
+    };
+
+    const formatStartedAtMonthDay = (date?: Date): string => {
+        if (!date) return "";
+        const tz = userTimeZone || Intl.DateTimeFormat().resolvedOptions().timeZone;
+        return date.toLocaleDateString("en-US", {
+            timeZone: tz,
+            month: "short",
+            day: "numeric",
+        });
+    };
+    const getStatusClass = (status: string | null) => {
+        const statusClasses: Record<string, string> = {
+            PENDING: "bg-gray-400",
+            RUNNING: "bg-yellow-500 animate-pulse",
+            FAILED: "bg-red-500",
+            COMPLETED: "bg-green-500",
+        };
+        return `w-2 h-2 rounded-full ${status ? statusClasses[status] || "" : ""}`;
+    };
 
     if (!jobId) {
         return (
@@ -48,20 +132,42 @@ const JobDetails = () => {
 
                 {/* Metadata row */}
                 <div className="flex flex-row items-center text-sm text-gray-600 mb-6 space-x-8">
-                    <div>
-                        <strong>Status:</strong> {job.status?.toUpperCase() || "UNKNOWN"}
+                    <div className="flex items-center space-x-2">
+                        <div className={getStatusClass(job.status)} />
+                        <span className="text-sm capitalize">
+                            {job.status?.toUpperCase() || "UNKNOWN"}
+                        </span>
                     </div>
-                    <div>
-                        <strong>Started At:</strong>{" "}
-                        {job.started_at?.toLocaleString("en-US", {
-                            year: "numeric",
-                            month: "short",
-                            day: "2-digit",
-                            hour: "2-digit",
-                            minute: "2-digit",
-                            second: "2-digit",
-                            hour12: true,
-                        }) || "N/A"}
+                    <div className="flex items-baseline">
+                        <strong>Started At:</strong>
+                        <span className="ml-2 flex items-baseline">
+                            <span className="tabular-nums">
+                                {formatStartedAtTime(job.started_at)}
+                            </span>
+                            <span className="ml-1">{formatStartedAtWeekday(job.started_at)}</span>
+                            <span className="ml-1">{formatStartedAtMonthDay(job.started_at)}</span>
+                        </span>
+                    </div>
+                </div>
+
+                <div className="mb-6">
+                    <div className="flex flex-col space-y-1 min-w-[100px]">
+                        <div>
+                            <strong>Results:</strong> {job.n_results.toLocaleString()} /{" "}
+                            {job.n_inputs.toLocaleString()}
+                        </div>
+                        <div className="w-full bg-gray-200 rounded h-1.5 overflow-hidden">
+                            <div
+                                className="bg-primary h-1.5 transition-all"
+                                style={{
+                                    width: `${
+                                        job.n_inputs
+                                            ? Math.min(100, (job.n_results / job.n_inputs) * 100)
+                                            : 0
+                                    }%`,
+                                }}
+                            />
+                        </div>
                     </div>
                 </div>
 

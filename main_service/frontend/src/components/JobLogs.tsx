@@ -1,7 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useLogsContext } from "@/contexts/LogsContext";
-import { Loader2 } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import { VariableSizeList as List } from "react-window";
 
 interface JobLogsProps {
@@ -10,17 +8,15 @@ interface JobLogsProps {
 }
 
 const JobLogs = ({ jobId, jobStatus }: JobLogsProps) => {
-    const { logsByJobId, hasMoreByJobId, fetchInitialLogs, fetchMoreLogs } = useLogsContext();
+    const { logsByJobId, startLiveStream, loadInitial, closeLiveStream } = useLogsContext();
     const rawLogs = logsByJobId[jobId] || [];
     const logs = [...rawLogs];
 
-    const [initialLoading, setInitialLoading] = useState(true);
     const [hasAutoScrolled, setHasAutoScrolled] = useState(false);
     const [windowWidth, setWindowWidth] = useState(window.innerWidth);
     const [expandedLogs, setExpandedLogs] = useState<{ [id: string]: boolean }>({});
 
     const listRef = useRef<any>(null);
-    const isFetchInFlight = useRef(false);
 
     const listMaxHeight = window.innerHeight - 250;
 
@@ -30,32 +26,28 @@ const JobLogs = ({ jobId, jobStatus }: JobLogsProps) => {
         return () => window.removeEventListener("resize", updateWidth);
     }, []);
 
+    // Load initial logs once per jobId
     useEffect(() => {
-        const load = async () => {
-            setInitialLoading(true);
-            await fetchInitialLogs(jobId);
-            setInitialLoading(false);
-        };
-        load();
-    }, [jobId]);
+        loadInitial(jobId, 0, 2000);
+    }, [jobId, loadInitial]);
+
+    // Open/close SSE based on jobStatus
+    useEffect(() => {
+        if (jobStatus === "RUNNING") {
+            const stop = startLiveStream(jobId);
+            return () => stop();
+        }
+        // not running: ensure any open stream is closed
+        closeLiveStream(jobId);
+        return () => {};
+    }, [jobId, jobStatus, startLiveStream, closeLiveStream]);
 
     useEffect(() => {
-        if (!initialLoading && logs.length > 0 && listRef.current && !hasAutoScrolled) {
+        if (logs.length > 0 && listRef.current && !hasAutoScrolled) {
             listRef.current.scrollToItem(logs.length, "end");
             setHasAutoScrolled(true);
         }
-    }, [initialLoading, logs.length, hasAutoScrolled]);
-
-    const refreshDisabled =
-        initialLoading ||
-        ((jobStatus === "COMPLETED" || jobStatus === "FAILED") && logs.length === 0);
-
-    const handleManualRefresh = async () => {
-        setInitialLoading(true);
-        await fetchInitialLogs(jobId);
-        setInitialLoading(false);
-        setHasAutoScrolled(false);
-    };
+    }, [logs.length, hasAutoScrolled]);
 
     const formatTime = (ts: number) => {
         const date = new Date(ts * 1000);
@@ -84,38 +76,22 @@ const JobLogs = ({ jobId, jobStatus }: JobLogsProps) => {
 
     const getItemSize = useCallback(
         (index: number) => {
-            const log = logs[index - (logs.length >= 1000 ? 1 : 0)];
+            const log = logs[index];
             const id = log?.id ?? `${log?.created_at}-${log?.message}`;
             return expandedLogs[id] ? 72 : 36;
         },
         [expandedLogs, logs]
     );
 
-    const handleFetchMorePreservePosition = async () => {
-        if (!listRef.current) return;
-        const scrollEl = listRef.current._outerRef;
-        const prevScrollHeight = scrollEl.scrollHeight;
-        const prevScrollTop = scrollEl.scrollTop;
+    const handleFetchMorePreservePosition = async () => {};
 
-        await fetchMoreLogs(jobId);
-
-        requestAnimationFrame(() => {
-            const newScrollHeight = scrollEl.scrollHeight;
-            scrollEl.scrollTop = newScrollHeight - prevScrollHeight + prevScrollTop;
-        });
-    };
-
-    const hasExtraRow = logs.length >= 1000;
-    const totalItemCount = logs.length + (hasExtraRow ? 1 : 0);
+    const totalItemCount = logs.length;
 
     if (windowWidth <= 1000) {
         return (
             <div className="mt-4 mb-4 flex flex-col">
                 <div className="flex items-center justify-between mb-3">
                     <h2 className="text-lg font-semibold text-primary">Logs</h2>
-                    <Button variant="outline" disabled>
-                        Refresh
-                    </Button>
                 </div>
                 <div className="text-gray-500 italic text-sm text-center p-4">
                     Logs are hidden on small screens.
@@ -131,23 +107,10 @@ const JobLogs = ({ jobId, jobStatus }: JobLogsProps) => {
         >
             <div className="flex items-center justify-between mb-3">
                 <h2 className="text-lg font-semibold text-primary">Logs</h2>
-                <Button onClick={handleManualRefresh} variant="outline" disabled={refreshDisabled}>
-                    {initialLoading ? (
-                        <>
-                            <Loader2 className="w-4 h-4 animate-spin mr-2" /> Refreshing
-                        </>
-                    ) : (
-                        "Refresh"
-                    )}
-                </Button>
             </div>
 
             <div className="flex-1 bg-white border border-gray-200 rounded-lg shadow-sm relative">
-                {initialLoading ? (
-                    <div className="flex h-full items-center justify-center py-10">
-                        <Loader2 className="h-6 w-6 animate-spin text-primary" />
-                    </div>
-                ) : logs.length === 0 ? (
+                {logs.length === 0 ? (
                     <ul className="font-mono text-xs text-gray-800">
                         <li className="px-4 py-2 text-gray-400 text-sm text-center italic min-h-[75px] flex items-center justify-center">
                             No logs
@@ -165,40 +128,9 @@ const JobLogs = ({ jobId, jobStatus }: JobLogsProps) => {
                             itemSize={getItemSize}
                             width="100%"
                             ref={listRef}
-                            onScroll={({ scrollOffset }) => {
-                                const isNearTop = scrollOffset < 200;
-                                if (
-                                    isNearTop &&
-                                    hasMoreByJobId[jobId] &&
-                                    !isFetchInFlight.current
-                                ) {
-                                    isFetchInFlight.current = true;
-                                    handleFetchMorePreservePosition().finally(() => {
-                                        isFetchInFlight.current = false;
-                                    });
-                                }
-                            }}
                         >
                             {({ index, style }) => {
-                                if (hasExtraRow && index === 0) {
-                                    return (
-                                        <div
-                                            style={style}
-                                            className="text-center px-4 py-2 text-gray-400"
-                                        >
-                                            {!hasMoreByJobId[jobId] ? (
-                                                "No more logs"
-                                            ) : isFetchInFlight.current ? (
-                                                <div className="flex justify-center items-center gap-2">
-                                                    <Loader2 className="h-4 w-4 animate-spin text-primary" />{" "}
-                                                    Loading more…
-                                                </div>
-                                            ) : null}
-                                        </div>
-                                    );
-                                }
-
-                                const log = logs[index - (hasExtraRow ? 1 : 0)];
+                                const log = logs[index];
                                 const id = log.id ?? `${log.created_at}-${log.message}`;
                                 const isExpanded = expandedLogs[id];
 

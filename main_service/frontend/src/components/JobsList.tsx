@@ -9,11 +9,114 @@ import {
     TableRow,
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
 export const JobsList = () => {
     const { jobs, setJobs, page, setPage, totalPages, isLoading } = useJobs();
     const anySelected = jobs.some((job) => job.checked);
+
+    const [userTimeZone, setUserTimeZone] = useState<string>(() => {
+        const stored = typeof window !== "undefined" ? localStorage.getItem("userTimezone") : null;
+        if (stored) return stored;
+        const cookieTz =
+            typeof document !== "undefined"
+                ? document.cookie
+                      .split("; ")
+                      .find((row) => row.startsWith("timezone="))
+                      ?.split("=")[1]
+                : null;
+        return cookieTz || Intl.DateTimeFormat().resolvedOptions().timeZone;
+    });
+
+    useEffect(() => {
+        let cancelled = false;
+        const loadTimezone = async () => {
+            try {
+                const res = await fetch("/api/user");
+                if (res.ok) {
+                    const data = await res.json();
+                    const tz = data?.timezone || data?.time_zone || data?.tz || null;
+                    if (tz && !cancelled) {
+                        setUserTimeZone(tz);
+                        try {
+                            localStorage.setItem("userTimezone", tz);
+                        } catch {}
+                        return;
+                    }
+                }
+            } catch {}
+            if (!cancelled) {
+                const cookieTz = document.cookie
+                    .split("; ")
+                    .find((row) => row.startsWith("timezone="))
+                    ?.split("=")[1];
+                setUserTimeZone(cookieTz || Intl.DateTimeFormat().resolvedOptions().timeZone);
+            }
+        };
+        loadTimezone();
+        return () => {
+            cancelled = true;
+        };
+    }, []);
+
+    const getTimeZoneAbbr = (tz: string, at: Date): string => {
+        const parts = new Intl.DateTimeFormat("en-US", {
+            timeZone: tz,
+            timeZoneName: "short",
+            hour: "numeric",
+        }).formatToParts(at);
+        return parts.find((p) => p.type === "timeZoneName")?.value || "";
+    };
+
+    const formatStartedAt = (date: Date): string => {
+        const tz = userTimeZone || Intl.DateTimeFormat().resolvedOptions().timeZone;
+        const time = date.toLocaleTimeString("en-US", {
+            timeZone: tz,
+            hour: "numeric",
+            minute: "2-digit",
+            hour12: true,
+        });
+        const dateStr = date.toLocaleDateString("en-US", {
+            timeZone: tz,
+            weekday: "long",
+            month: "short",
+            day: "numeric",
+        });
+        return `${time}, ${dateStr}`;
+    };
+
+    const formatStartedAtTime = (date?: Date): string => {
+        if (!date) return "";
+        const tz = userTimeZone || Intl.DateTimeFormat().resolvedOptions().timeZone;
+        const t = date.toLocaleTimeString("en-US", {
+            timeZone: tz,
+            hour: "numeric",
+            minute: "2-digit",
+            hour12: true,
+        });
+        return `${t},`;
+    };
+
+    const formatStartedAtWeekday = (date?: Date): string => {
+        if (!date) return "";
+        const tz = userTimeZone || Intl.DateTimeFormat().resolvedOptions().timeZone;
+        const wd = date.toLocaleDateString("en-US", {
+            timeZone: tz,
+            weekday: "long",
+        });
+        return `${wd},`;
+    };
+
+    const formatStartedAtMonthDay = (date?: Date): string => {
+        if (!date) return "";
+        const tz = userTimeZone || Intl.DateTimeFormat().resolvedOptions().timeZone;
+        return date.toLocaleDateString("en-US", {
+            timeZone: tz,
+            month: "short",
+            day: "numeric",
+        });
+    };
 
     const handleCheckboxChange = (id: string) => {
         setJobs((prev) =>
@@ -62,10 +165,26 @@ export const JobsList = () => {
                                             />
                                         </TableHead>
                                         <TableHead>Status</TableHead>
-                                        <TableHead>Function Name</TableHead>
+                                        <TableHead>Function</TableHead>
                                         <TableHead>Results</TableHead>
                                         <TableHead>User</TableHead>
-                                        <TableHead>Started At</TableHead>
+                                        <TableHead colSpan={3}>
+                                            {(() => {
+                                                const tz =
+                                                    userTimeZone ||
+                                                    Intl.DateTimeFormat().resolvedOptions()
+                                                        .timeZone;
+                                                const abbr = getTimeZoneAbbr(tz, new Date());
+                                                return (
+                                                    <>
+                                                        <span>Started At </span>{" "}
+                                                        <span className="text-s text-gray-500 font-normal">
+                                                            ({abbr})
+                                                        </span>
+                                                    </>
+                                                );
+                                            })()}
+                                        </TableHead>
                                         <TableHead className="w-[5px] text-right" />
                                     </TableRow>
                                 </TableHeader>
@@ -123,18 +242,18 @@ export const JobsList = () => {
                                                 </div>
                                             </TableCell>
                                             <TableCell>{job.user}</TableCell>
-                                            <TableCell>
-                                                {job.started_at
-                                                    ? job.started_at.toLocaleString("en-US", {
-                                                          year: "numeric",
-                                                          month: "short",
-                                                          day: "2-digit",
-                                                          hour: "2-digit",
-                                                          minute: "2-digit",
-                                                          second: "2-digit",
-                                                          hour12: true,
-                                                      })
-                                                    : "N/A"}
+                                            <TableCell className="whitespace-nowrap">
+                                                <span className="flex items-baseline">
+                                                    <span className="tabular-nums">
+                                                        {formatStartedAtTime(job.started_at)}
+                                                    </span>
+                                                    <span className="ml-1">
+                                                        {formatStartedAtWeekday(job.started_at)}
+                                                    </span>
+                                                    <span className="ml-1">
+                                                        {formatStartedAtMonthDay(job.started_at)}
+                                                    </span>
+                                                </span>
                                             </TableCell>
                                             <TableCell className="text-right" />
                                         </TableRow>

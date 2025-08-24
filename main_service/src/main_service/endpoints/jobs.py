@@ -1,9 +1,7 @@
 import json
 import asyncio
-from datetime import datetime, timezone
-from typing import Optional
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from starlette.responses import StreamingResponse
 from google.cloud import firestore
@@ -29,7 +27,7 @@ def job_stream(jobs_current_page: firestore.CollectionReference):
     async def push_n_results_updates(job_id: str, event: dict):
         while True:
             n_results = await current_num_results(job_id)
-            print(f"here: {job_id}: {n_results}")
+            print(f"pushing new n results: {job_id}: {n_results}")
             event["n_results"] = n_results
             await queue.put(event)
             await asyncio.sleep(1)
@@ -94,7 +92,7 @@ async def get_jobs(request: Request, page: int = 0, stream: bool = False):
 
     jobs = []
     for job_doc in jobs_current_page.stream():
-        job = job_doc.to_dict() or {}
+        job = job_doc.to_dict()
         jobs.append(
             {
                 "jobId": job_doc.id,
@@ -112,56 +110,95 @@ async def get_jobs(request: Request, page: int = 0, stream: bool = False):
 
 
 @router.get("/v1/jobs/{job_id}/logs")
-def get_job_logs(
-    job_id: str,
-    limit: int = Query(10, ge=1, le=1000),
-    start_after_time: Optional[float] = Query(None),
-    start_after_id: Optional[str] = Query(None),
+async def stream_or_fetch_job_logs(
+    job_id: str, stream: bool = False, page: int = 0, limit: int = 1000
 ):
-    logs_ref = (
-        DB.collection("jobs")
-        .document(job_id)
-        .collection("logs")
-        .order_by("created_at", direction=firestore.Query.DESCENDING)
-        .order_by("__name__", direction=firestore.Query.DESCENDING)
-    )
+    if not stream:
+        # Non-streaming JSON mode for fetching large chunks at once
+        logs_sync_ref = DB.collection("jobs").document(job_id).collection("logs")
+        # Firestore orders by created_at ascending for natural reading order
+        query = logs_sync_ref.order_by("created_at").offset(page * limit).limit(limit)
+        items = []
+        for doc in query.stream():
+            d = doc.to_dict() or {}
+            created_at = d.get("created_at")
+            try:
+                created_at = float(created_at.timestamp())  # timestamp from Firestore Timestamp
+            except Exception:
+                try:
+                    # already a number
+                    created_at = float(created_at)
+                except Exception:
+                    created_at = None
+            items.append(
+                {
+                    "id": doc.id,
+                    "message": d.get("msg"),
+                    "created_at": created_at,
+                }
+            )
 
-    if start_after_time is not None and start_after_id:
-        ts = datetime.fromtimestamp(start_after_time, tz=timezone.utc)
-        logs_ref = logs_ref.start_after({"created_at": ts, "__name__": start_after_id})
+        # Total count
+        total_res = (
+            await ASYNC_DB.collection("jobs").document(job_id).collection("logs").count().get()
+        )
+        total = total_res[0][0].value
+        return JSONResponse({"logs": items, "page": page, "limit": limit, "total": total})
 
-    docs = list(logs_ref.limit(limit).stream())
+    # Streaming (SSE) mode for live updates only
+    queue = asyncio.Queue()
+    current_loop = asyncio.get_running_loop()
+    skip_first_snapshot = True
 
-    logs = []
-    for doc in docs:
-        data = doc.to_dict()
-        created_at = data.get("created_at")
-        if isinstance(created_at, float):
-            created_at = datetime.fromtimestamp(created_at, tz=timezone.utc)
-        logs.append(
-            {
-                "id": doc.id,
-                "msg": data.get("msg"),
-                "time": created_at.timestamp() if created_at else None,
-            }
+    def on_snapshot(col_snapshot, changes, read_time):
+        def to_ts(value):
+            if value is None:
+                return None
+            if isinstance(value, (int, float)):
+                return float(value)
+            try:
+                return value.timestamp()
+            except Exception:
+                return None
+
+        nonlocal skip_first_snapshot
+        if skip_first_snapshot:
+            # Ignore the initial on_snapshot flood (ADDED for all existing docs)
+            skip_first_snapshot = False
+            return
+
+        # Stream incremental changes as single events
+        sorted_changes = sorted(
+            changes,
+            key=lambda change: to_ts(change.document.to_dict().get("created_at")) or 0.0,
         )
 
-    next_cursor = None
-    if len(docs) == limit:
-        last = docs[-1]
-        last_data = last.to_dict()
-        last_created_at = last_data.get("created_at")
-        if isinstance(last_created_at, float):
-            last_created_at = datetime.fromtimestamp(last_created_at, tz=timezone.utc)
-        if last_created_at:
-            next_cursor = {
-                "start_after_time": last_created_at.timestamp(),
-                "start_after_id": last.id,
+        for change in sorted_changes:
+            data = change.document.to_dict() or {}
+            created_at_val = data.get("created_at")
+            created_at_ts = to_ts(created_at_val)
+            event = {
+                "id": change.document.id,
+                "message": data.get("msg"),
+                "created_at": created_at_ts,
             }
+            current_loop.call_soon_threadsafe(queue.put_nowait, event)
 
-    return {
-        "logs": logs,
-        "limit": limit,
-        "job_id": job_id,
-        "nextCursor": next_cursor,
-    }
+    logs_ref = DB.collection("jobs").document(job_id).collection("logs")
+    watch = logs_ref.on_snapshot(on_snapshot)
+
+    async def event_stream():
+        try:
+            yield "retry: 5000\n\n"
+            yield ": init\n\n"
+            while True:
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=2)
+                    yield f"data: {json.dumps(event)}\n\n"
+                except asyncio.TimeoutError:
+                    yield ": keep-alive\n\n"
+        finally:
+            watch.unsubscribe()
+
+    headers = {"Cache-Control": "no-cache, no-transform"}
+    return StreamingResponse(event_stream(), media_type="text/event-stream", headers=headers)

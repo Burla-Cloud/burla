@@ -1,5 +1,7 @@
 import json
 import asyncio
+from time import time
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
@@ -25,12 +27,32 @@ def job_stream(jobs_current_page: firestore.CollectionReference):
     running_jobs = {}
 
     async def push_n_results_updates(job_id: str, event: dict):
+        start = time()
         while True:
             n_results = await current_num_results(job_id)
             print(f"pushing new n results: {job_id}: {n_results}")
             event["n_results"] = n_results
             await queue.put(event)
             await asyncio.sleep(1)
+            if (time() - start) % 10 < 1:
+                print("checking")
+                # check job has nodes working on it
+                filter_ = firestore.FieldFilter("current_job", "==", job_id)
+                nodes = ASYNC_DB.collection("nodes").where(filter=filter_)
+                nodes_working_on_job = await nodes.get()
+                if not nodes_working_on_job:
+                    try:
+                        msg = "Job failed due to internal cluster error."
+                        timestamp = datetime.now(timezone.utc)
+                        logs = [{"message": msg, "timestamp": timestamp}]
+                        job_doc = ASYNC_DB.collection("jobs").document(job_id)
+                        await job_doc.collection("logs").add({"logs": logs, "timestamp": timestamp})
+                    except Exception as e:
+                        print(f"error adding log doc: {e}")
+
+                    print("ADDED LOG DOC")
+                    await job_doc.update({"status": "FAILED"})
+                    return
 
     def on_changed_job_doc(col_snapshot, changes, read_time):
         for change in changes:

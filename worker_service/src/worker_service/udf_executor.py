@@ -93,7 +93,7 @@ class _FirestoreStdout:
             data = {"fields": {"logs": logs_field, "timestamp": timestamp_field}}
             try:
                 url = f"{DB_BASE_URL}/jobs/{self.job_id}/logs"
-                response = requests.post(url, headers=DB_HEADERS, json=data, timeout=1)
+                response = requests.post(url, headers=DB_HEADERS, json=data, timeout=5)
                 response.raise_for_status()
             except Exception as e:
                 if response.status_code == 401 and IN_LOCAL_DEV_MODE:

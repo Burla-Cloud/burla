@@ -51,17 +51,12 @@ const JobLogs = ({ jobId, jobStatus }: JobLogsProps) => {
 
     const formatTime = (ts: number) => {
         const date = new Date(ts * 1000);
-        const ms = String(date.getMilliseconds()).padStart(3, "0");
-        const main = date.toLocaleString(undefined, {
-            year: "numeric",
-            month: "short",
-            day: "numeric",
-            hour: "2-digit",
+        return date.toLocaleTimeString("en-US", {
+            hour: "numeric",
             minute: "2-digit",
             second: "2-digit",
-            hour12: false,
+            hour12: true,
         });
-        return `${main}.${ms}`;
     };
 
     const toggleExpand = (id: string) => {
@@ -139,12 +134,14 @@ const JobLogs = ({ jobId, jobStatus }: JobLogsProps) => {
                                         key={id}
                                         style={style}
                                         onClick={() => toggleExpand(id)}
-                                        className={`flex flex-col md:flex-row px-4 py-2 border-t border-gray-300 gap-1 md:gap-5 cursor-pointer hover:bg-gray-50 transition`}
+                                        className={`grid grid-cols-[8rem,1fr] gap-2 px-4 py-2 border-t border-gray-200 cursor-pointer transition ${
+                                            index % 2 === 0 ? "bg-gray-50" : ""
+                                        } hover:bg-gray-100`}
                                     >
-                                        <span className="text-gray-600 min-w-[220px]">
+                                        <div className="text-gray-500 text-left tabular-nums">
                                             {formatTime(log.created_at)}
-                                        </span>
-                                        <span
+                                        </div>
+                                        <div
                                             className={
                                                 isExpanded
                                                     ? "whitespace-normal break-words"
@@ -152,7 +149,7 @@ const JobLogs = ({ jobId, jobStatus }: JobLogsProps) => {
                                             }
                                         >
                                             {log.message || "No message"}
-                                        </span>
+                                        </div>
                                     </div>
                                 );
                             }}

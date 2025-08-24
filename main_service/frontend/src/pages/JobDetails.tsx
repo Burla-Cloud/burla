@@ -51,6 +51,15 @@ const JobDetails = () => {
         };
     }, []);
 
+    const getTimeZoneAbbr = (tz: string, at: Date): string => {
+        const parts = new Intl.DateTimeFormat("en-US", {
+            timeZone: tz,
+            timeZoneName: "short",
+            hour: "numeric",
+        }).formatToParts(at);
+        return parts.find((p) => p.type === "timeZoneName")?.value || "";
+    };
+
     const formatStartedAtTime = (date?: Date): string => {
         if (!date) return "";
         const tz = userTimeZone || Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -60,16 +69,18 @@ const JobDetails = () => {
             minute: "2-digit",
             hour12: true,
         });
-        return `${t}`;
+        const abbr = getTimeZoneAbbr(tz, date);
+        return `${t} ${abbr},`;
     };
 
     const formatStartedAtWeekday = (date?: Date): string => {
         if (!date) return "";
         const tz = userTimeZone || Intl.DateTimeFormat().resolvedOptions().timeZone;
-        return date.toLocaleDateString("en-US", {
+        const wd = date.toLocaleDateString("en-US", {
             timeZone: tz,
             weekday: "long",
         });
+        return `${wd},`;
     };
 
     const formatStartedAtMonthDay = (date?: Date): string => {

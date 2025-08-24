@@ -127,8 +127,8 @@ const JobDetails = () => {
     }
 
     return (
-        <div className="flex flex-col flex-1 px-12 pt-0">
-            <div className="max-w-6xl mx-auto w-full flex flex-col">
+        <div className="flex flex-col flex-1 min-h-0 px-12 pt-0">
+            <div className="max-w-6xl mx-auto w-full flex flex-col flex-1 min-h-0">
                 {/* Breadcrumb */}
                 <h1 className="text-3xl font-bold mt-[-4px] mb-6 text-primary">
                     <button
@@ -148,6 +148,10 @@ const JobDetails = () => {
                         <span className="text-sm capitalize">
                             {job.status?.toUpperCase() || "UNKNOWN"}
                         </span>
+                    </div>
+                    <div className="flex items-baseline">
+                        <strong>Function:</strong>
+                        <span className="ml-2">{job.function_name ?? "Unknown"}</span>
                     </div>
                     <div className="flex items-baseline">
                         <strong>Started At:</strong>
@@ -183,7 +187,7 @@ const JobDetails = () => {
                 </div>
 
                 {/* Logs Section */}
-                <div className="flex-1 flex flex-col">
+                <div className="flex-1 min-h-0 flex flex-col">
                     <JobLogs jobId={job.id} jobStatus={job.status} />
                 </div>
             </div>

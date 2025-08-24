@@ -26,10 +26,10 @@ const App = () => (
                             <LogsProvider>
                                 <AppDataLoader />
                                 <Router>
-                                    <div className="flex min-h-screen items-start bg-gray-50">
+                                    <div className="flex min-h-screen items-stretch bg-gray-50">
                                         <ProfilePicture />
                                         <Sidebar />
-                                        <div className="flex-1 py-10 px-12 flex items-start">
+                                        <div className="flex-1 py-10 px-12 flex items-stretch">
                                             <Routes>
                                                 <Route path="/" element={<Dashboard />} />
                                                 <Route path="/jobs" element={<Jobs />} />

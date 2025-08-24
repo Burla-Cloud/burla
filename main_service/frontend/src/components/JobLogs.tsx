@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import { useLogsContext } from "@/contexts/LogsContext";
 import { VariableSizeList as List } from "react-window";
 
@@ -12,18 +12,80 @@ const JobLogs = ({ jobId, jobStatus }: JobLogsProps) => {
     const rawLogs = logsByJobId[jobId] || [];
     const logs = [...rawLogs];
 
+    type RowItem =
+        | { type: "divider"; key: string; label: string }
+        | { type: "log"; key: string; id: string; createdAt: number; message: string };
+
+    const formatDateLabel = (tsSeconds: number) => {
+        const d = new Date(tsSeconds * 1000);
+        return d.toLocaleDateString("en-US", {
+            weekday: "long",
+            month: "long",
+            day: "numeric",
+            year: "numeric",
+        });
+    };
+
+    const getDateKey = (tsSeconds: number) => {
+        const d = new Date(tsSeconds * 1000);
+        const y = d.getFullYear();
+        const m = String(d.getMonth() + 1).padStart(2, "0");
+        const da = String(d.getDate()).padStart(2, "0");
+        return `${y}-${m}-${da}`;
+    };
+
+    const items: RowItem[] = useMemo(() => {
+        const result: RowItem[] = [];
+        let lastDateKey: string | null = null;
+        for (const entry of logs) {
+            const dateKey = getDateKey(entry.created_at);
+            if (lastDateKey !== dateKey) {
+                result.push({
+                    type: "divider",
+                    key: `divider-${dateKey}`,
+                    label: formatDateLabel(entry.created_at),
+                });
+                lastDateKey = dateKey;
+            }
+            const key = entry.id ?? `${entry.created_at}-${entry.message}`;
+            result.push({
+                type: "log",
+                key,
+                id: key,
+                createdAt: entry.created_at,
+                message: entry.message || "No message",
+            });
+        }
+        return result;
+    }, [logs]);
+
     const [hasAutoScrolled, setHasAutoScrolled] = useState(false);
     const [windowWidth, setWindowWidth] = useState(window.innerWidth);
     const [expandedLogs, setExpandedLogs] = useState<{ [id: string]: boolean }>({});
 
     const listRef = useRef<any>(null);
-
-    const listMaxHeight = window.innerHeight - 250;
+    const containerRef = useRef<HTMLDivElement | null>(null);
+    const [listHeight, setListHeight] = useState<number>(300);
 
     useEffect(() => {
         const updateWidth = () => setWindowWidth(window.innerWidth);
         window.addEventListener("resize", updateWidth);
-        return () => window.removeEventListener("resize", updateWidth);
+
+        let observer: ResizeObserver | null = null;
+        if (containerRef.current) {
+            observer = new ResizeObserver((entries) => {
+                const entry = entries[0];
+                if (!entry) return;
+                const h = Math.max(0, Math.floor(entry.contentRect.height));
+                setListHeight(h);
+            });
+            observer.observe(containerRef.current);
+        }
+
+        return () => {
+            window.removeEventListener("resize", updateWidth);
+            if (observer && containerRef.current) observer.disconnect();
+        };
     }, []);
 
     // Load initial logs once per jobId
@@ -71,16 +133,17 @@ const JobLogs = ({ jobId, jobStatus }: JobLogsProps) => {
 
     const getItemSize = useCallback(
         (index: number) => {
-            const log = logs[index];
-            const id = log?.id ?? `${log?.created_at}-${log?.message}`;
-            return expandedLogs[id] ? 72 : 36;
+            const row = items[index];
+            if (!row) return 36;
+            if (row.type === "divider") return 40;
+            return expandedLogs[row.id] ? 72 : 36;
         },
-        [expandedLogs, logs]
+        [expandedLogs, items]
     );
 
     const handleFetchMorePreservePosition = async () => {};
 
-    const totalItemCount = logs.length;
+    const totalItemCount = items.length;
 
     if (windowWidth <= 1000) {
         return (
@@ -96,50 +159,71 @@ const JobLogs = ({ jobId, jobStatus }: JobLogsProps) => {
     }
 
     return (
-        <div
-            className="mt-4 mb-4 flex flex-col"
-            style={{ maxHeight: "calc(100vh - 140px)", overflow: "hidden" }}
-        >
+        <div className="mt-4 mb-4 flex flex-col flex-1 min-h-0">
             <div className="flex items-center justify-between mb-3">
                 <h2 className="text-lg font-semibold text-primary">Logs</h2>
             </div>
 
-            <div className="flex-1 bg-white border border-gray-200 rounded-lg shadow-sm relative">
+            <div className="flex-1 min-h-0 bg-white border border-gray-200 rounded-lg shadow-sm relative">
                 {logs.length === 0 ? (
-                    <ul className="font-mono text-xs text-gray-800">
-                        <li className="px-4 py-2 text-gray-400 text-sm text-center italic min-h-[75px] flex items-center justify-center">
-                            No logs
-                        </li>
-                    </ul>
+                    <div ref={containerRef} className="h-full w-full">
+                        <ul className="font-mono text-xs text-gray-800 h-full flex items-center justify-center">
+                            <li className="px-4 py-2 text-gray-400 text-sm text-center italic">
+                                No logs
+                            </li>
+                        </ul>
+                    </div>
                 ) : (
-                    <div className="font-mono text-xs text-gray-800 h-full">
+                    <div ref={containerRef} className="font-mono text-xs text-gray-800 h-full">
                         <List
-                            height={
-                                logs.length * 36 < listMaxHeight
-                                    ? logs.length * 36 + 1
-                                    : listMaxHeight
-                            }
+                            height={listHeight}
                             itemCount={totalItemCount}
                             itemSize={getItemSize}
                             width="100%"
                             ref={listRef}
                         >
                             {({ index, style }) => {
-                                const log = logs[index];
-                                const id = log.id ?? `${log.created_at}-${log.message}`;
-                                const isExpanded = expandedLogs[id];
+                                const row = items[index];
+                                if (!row) return null;
+
+                                if (row.type === "divider") {
+                                    return (
+                                        <div
+                                            key={row.key}
+                                            style={style}
+                                            className="px-4 py-2"
+                                            role="separator"
+                                            aria-label={`Logs for ${row.label}`}
+                                        >
+                                            <div className="w-full flex items-center gap-3 select-none">
+                                                <div
+                                                    className="h-px w-full bg-gray-200 dark:bg-gray-800"
+                                                    aria-hidden="true"
+                                                />
+                                                <span className="shrink-0 text-center text-xs sm:text-sm text-muted-foreground font-medium tracking-tight">
+                                                    {row.label}
+                                                </span>
+                                                <div
+                                                    className="h-px w-full bg-gray-200 dark:bg-gray-800"
+                                                    aria-hidden="true"
+                                                />
+                                            </div>
+                                        </div>
+                                    );
+                                }
+
+                                const isExpanded = expandedLogs[row.id];
+                                const background = index % 2 === 0 ? "bg-gray-50" : "";
 
                                 return (
                                     <div
-                                        key={id}
+                                        key={row.key}
                                         style={style}
-                                        onClick={() => toggleExpand(id)}
-                                        className={`grid grid-cols-[8rem,1fr] gap-2 px-4 py-2 border-t border-gray-200 cursor-pointer transition ${
-                                            index % 2 === 0 ? "bg-gray-50" : ""
-                                        } hover:bg-gray-100`}
+                                        onClick={() => toggleExpand(row.id)}
+                                        className={`grid grid-cols-[8rem,1fr] gap-2 px-4 py-2 border-t border-gray-200 cursor-pointer transition ${background} hover:bg-gray-100`}
                                     >
                                         <div className="text-gray-500 text-left tabular-nums">
-                                            {formatTime(log.created_at)}
+                                            {formatTime(row.createdAt)}
                                         </div>
                                         <div
                                             className={
@@ -148,7 +232,7 @@ const JobLogs = ({ jobId, jobStatus }: JobLogsProps) => {
                                                     : "truncate"
                                             }
                                         >
-                                            {log.message || "No message"}
+                                            {row.message}
                                         </div>
                                     </div>
                                 );

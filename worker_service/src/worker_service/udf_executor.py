@@ -1,6 +1,7 @@
 import sys
 import pickle
 import requests
+import traceback
 from datetime import datetime, timezone
 from queue import Empty
 from time import sleep, time
@@ -65,7 +66,7 @@ class _FirestoreStdout:
                 truncated_msg_bytes = msg.encode("utf-8")[: self._max_buffer_size]
                 truncated_msg = truncated_msg_bytes.decode("utf-8", errors="ignore")
                 msg = truncated_msg + "<too-long--remaining-msg-truncated-due-to-length>"
-            firestore_formatted_msg = {
+            firestore_formatted_log_msg = {
                 "mapValue": {
                     "fields": {
                         "timestamp": {"timestampValue": timestamp_str},
@@ -77,7 +78,7 @@ class _FirestoreStdout:
                 future_buffer_size = self._buffer_size + msg_size
                 if future_buffer_size > self._max_buffer_size:
                     self.actually_flush()
-                self._buffer.append(firestore_formatted_msg)
+                self._buffer.append(firestore_formatted_log_msg)
                 self._buffer_size += msg_size
 
     def flush(self):
@@ -121,9 +122,8 @@ class _FirestoreStdout:
                 self.actually_flush()
 
 
-def _serialize_error(exc_info):
+def _serialize_error(exception_type, exception, traceback):
     # exc_info is tuple returned by sys.exc_info()
-    exception_type, exception, traceback = exc_info
     pickled_exception_info = pickle.dumps(
         dict(
             type=exception_type,
@@ -165,8 +165,34 @@ def execute_job(job_id: str, function_pkl: bytes):
                 # SELF["logs"].append(f"UDF succeded on input #{input_index}.")
             except Exception:
                 # SELF["logs"].append(f"UDF raised an exception on input #{input_index}.")
-                result_pkl = _serialize_error(sys.exc_info())
+                exc_type, exc_value, exc_tb = sys.exc_info()
+                result_pkl = _serialize_error(exc_type, exc_value, exc_tb)
                 is_error = True
+
+        if is_error:
+            # write traceback as log message
+            tb_str = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+            timestamp_str = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            firestore_formatted_log_msg = {
+                "mapValue": {
+                    "fields": {
+                        "timestamp": {"timestampValue": timestamp_str},
+                        "message": {"stringValue": tb_str},
+                        "is_error": {"booleanValue": True},
+                    }
+                }
+            }
+            logs_field = {"arrayValue": {"values": [firestore_formatted_log_msg]}}
+            data = {"fields": {"logs": logs_field, "timestamp": {"timestampValue": timestamp_str}}}
+            url = f"{DB_BASE_URL}/jobs/{job_id}/logs"
+            response = requests.post(url, headers=DB_HEADERS, json=data, timeout=5)
+            response.raise_for_status()
+            # mark job failed
+            mask = [("updateMask.fieldPaths", "status")]
+            data = {"fields": {"status": {"stringValue": "FAILED"}}}
+            url = f"{DB_BASE_URL}/jobs/{job_id}"
+            response = requests.patch(url, headers=DB_HEADERS, params=mask, json=data)
+            response.raise_for_status()
 
         # we REALLY want to be sure we dont add this result if the stop event got set during the udf
         # because that means the worker is shutting down and the client probably cant get it in time

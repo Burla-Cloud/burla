@@ -61,7 +61,7 @@ const JobLogs = ({ jobId, jobStatus }: JobLogsProps) => {
 
     const [hasAutoScrolled, setHasAutoScrolled] = useState(false);
     const [windowWidth, setWindowWidth] = useState(window.innerWidth);
-    const [expandedLogs, setExpandedLogs] = useState<{ [id: string]: boolean }>({});
+    // All logs are expanded by default and non-interactive
 
     const listRef = useRef<any>(null);
     const containerRef = useRef<HTMLDivElement | null>(null);
@@ -96,9 +96,22 @@ const JobLogs = ({ jobId, jobStatus }: JobLogsProps) => {
         };
     }, []);
 
-    // Load initial logs once per jobId
+    const [isInitialLoading, setIsInitialLoading] = useState(logs.length === 0);
+
     useEffect(() => {
-        loadInitial(jobId, 0, 2000);
+        let cancelled = false;
+        const run = async () => {
+            if (logs.length === 0) setIsInitialLoading(true);
+            try {
+                await loadInitial(jobId, 0, 2000);
+            } finally {
+                if (!cancelled) setIsInitialLoading(false);
+            }
+        };
+        run();
+        return () => {
+            cancelled = true;
+        };
     }, [jobId, loadInitial]);
 
     // Open/close SSE based on jobStatus
@@ -119,6 +132,8 @@ const JobLogs = ({ jobId, jobStatus }: JobLogsProps) => {
         }
     }, [logs.length, hasAutoScrolled]);
 
+    // (no expand/collapse state needed)
+
     const formatTime = (ts: number) => {
         const date = new Date(ts * 1000);
         return date.toLocaleTimeString("en-US", {
@@ -129,18 +144,17 @@ const JobLogs = ({ jobId, jobStatus }: JobLogsProps) => {
         });
     };
 
-    const toggleExpand = (id: string) => {
-        setExpandedLogs((prev) => ({ ...prev, [id]: !prev[id] }));
-    };
+    // (no interaction)
 
     const getItemSize = useCallback(
         (index: number) => {
             const row = items[index];
             if (!row) return 36;
             if (row.type === "divider") return 40;
-            return sizeMapRef.current[row.id] ?? (expandedLogs[row.id] ? 72 : 36);
+            // All logs are expanded; use measured size or a small fallback until measured
+            return sizeMapRef.current[row.id] ?? 36;
         },
-        [expandedLogs, items]
+        [items]
     );
 
     const handleFetchMorePreservePosition = async () => {};
@@ -167,7 +181,21 @@ const JobLogs = ({ jobId, jobStatus }: JobLogsProps) => {
             </div>
 
             <div className="flex-1 min-h-0 bg-white border border-gray-200 rounded-lg shadow-sm relative">
-                {logs.length === 0 ? (
+                {isInitialLoading ? (
+                    <div
+                        ref={containerRef}
+                        className="h-full w-full flex items-center justify-center"
+                    >
+                        <div className="flex flex-col items-center text-gray-500">
+                            <div
+                                className="h-8 w-8 rounded-full border-2 border-gray-300 border-t-primary animate-spin"
+                                role="status"
+                                aria-label="Loading logs"
+                            />
+                            <div className="mt-2 text-sm">Loading logs…</div>
+                        </div>
+                    </div>
+                ) : logs.length === 0 ? (
                     <div ref={containerRef} className="h-full w-full">
                         <ul className="font-mono text-xs text-gray-800 h-full flex items-center justify-center">
                             <li className="px-4 py-2 text-gray-400 text-sm text-center italic">
@@ -214,16 +242,10 @@ const JobLogs = ({ jobId, jobStatus }: JobLogsProps) => {
                                     );
                                 }
 
-                                const isExpanded = expandedLogs[row.id];
                                 const background = index % 2 === 0 ? "bg-gray-50" : "";
 
                                 return (
-                                    <div
-                                        key={row.key}
-                                        style={style}
-                                        className="cursor-pointer"
-                                        onClick={() => toggleExpand(row.id)}
-                                    >
+                                    <div key={row.key} style={style} className="">
                                         <div
                                             ref={(el) => {
                                                 if (!el) return;
@@ -231,23 +253,17 @@ const JobLogs = ({ jobId, jobStatus }: JobLogsProps) => {
                                                     try {
                                                         if (!el || !el.isConnected) return;
                                                         const h = Math.ceil(el.scrollHeight);
-                                                        const desired = isExpanded ? h : 36;
+                                                        const desired = h;
                                                         setSizeForKey(row.id, desired, index);
                                                     } catch {}
                                                 });
                                             }}
-                                            className={`grid grid-cols-[8rem,1fr] gap-2 px-4 py-2 border-t border-gray-200 transition ${background} hover:bg-gray-100`}
+                                            className={`grid grid-cols-[8rem,1fr] gap-2 px-4 py-2 border-t border-gray-200 transition ${background}`}
                                         >
                                             <div className="text-gray-500 text-left tabular-nums">
                                                 {formatTime(row.createdAt)}
                                             </div>
-                                            <div
-                                                className={
-                                                    isExpanded
-                                                        ? "whitespace-normal break-words"
-                                                        : "truncate"
-                                                }
-                                            >
+                                            <div className={"whitespace-pre-wrap break-words"}>
                                                 {row.message}
                                             </div>
                                         </div>

@@ -98,6 +98,7 @@ async def _wait_for_nodes_to_be_ready(db: AsyncClient, spinner: Union[bool, Spin
                 raise AllNodesBusy("All nodes are busy, please try again later.")
 
     elif n_booting_nodes != 0:
+        ready_nodes = await _get_ready_nodes(db)
         while n_booting_nodes != 0:
             if spinner:
                 msg = f"{len(ready_nodes)} Nodes are ready, waiting for remaining {n_booting_nodes}"
@@ -282,7 +283,9 @@ async def _execute_job(
             def _on_new_logs_doc(col_snapshot, changes, read_time):
                 for change in changes:
                     for log in change.document.to_dict()["logs"]:
-                        spinner_compatible_print(log["message"])
+                        # ignore tb's written as log messages because errors are reraised here
+                        if not log.get("is_error"):
+                            spinner_compatible_print(log["message"])
 
             logs_collection = SYNC_DB.collection("jobs").document(job_id).collection("logs")
             log_stream = logs_collection.on_snapshot(_on_new_logs_doc)

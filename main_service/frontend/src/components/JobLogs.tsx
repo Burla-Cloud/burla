@@ -66,12 +66,14 @@ const JobLogs = ({ jobId, jobStatus }: JobLogsProps) => {
     const listRef = useRef<any>(null);
     const containerRef = useRef<HTMLDivElement | null>(null);
     const [listHeight, setListHeight] = useState<number>(300);
+    const [hasMeasuredContainer, setHasMeasuredContainer] = useState<boolean>(false);
     const sizeMapRef = useRef<Record<string, number>>({});
 
     const setSizeForKey = useCallback((key: string, size: number, fromIndex: number) => {
         if (sizeMapRef.current[key] !== size) {
             sizeMapRef.current[key] = size;
-            listRef.current?.resetAfterIndex(fromIndex, false);
+            // Force the list to recompute sizes to avoid overlapping
+            listRef.current?.resetAfterIndex(fromIndex, true);
         }
     }, []);
 
@@ -86,6 +88,7 @@ const JobLogs = ({ jobId, jobStatus }: JobLogsProps) => {
                 if (!entry) return;
                 const h = Math.max(0, Math.floor(entry.contentRect.height));
                 setListHeight(h);
+                setHasMeasuredContainer(true);
             });
             observer.observe(containerRef.current);
         }
@@ -126,11 +129,18 @@ const JobLogs = ({ jobId, jobStatus }: JobLogsProps) => {
     }, [jobId, jobStatus, startLiveStream, closeLiveStream]);
 
     useEffect(() => {
-        if (logs.length > 0 && listRef.current && !hasAutoScrolled) {
+        if (logs.length > 0 && listRef.current && !hasAutoScrolled && hasMeasuredContainer) {
             listRef.current.scrollToItem(logs.length, "end");
             setHasAutoScrolled(true);
         }
-    }, [logs.length, hasAutoScrolled]);
+    }, [logs.length, hasAutoScrolled, hasMeasuredContainer]);
+
+    // When job changes, clear cached sizes and auto-scroll state to avoid layout glitches
+    useEffect(() => {
+        sizeMapRef.current = {};
+        listRef.current?.resetAfterIndex(0, true);
+        setHasAutoScrolled(false);
+    }, [jobId]);
 
     // (no expand/collapse state needed)
 
@@ -211,6 +221,7 @@ const JobLogs = ({ jobId, jobStatus }: JobLogsProps) => {
                             itemSize={getItemSize}
                             width="100%"
                             ref={listRef}
+                            itemKey={(index) => items[index]?.key ?? index}
                         >
                             {({ index, style }) => {
                                 const row = items[index];
@@ -252,7 +263,7 @@ const JobLogs = ({ jobId, jobStatus }: JobLogsProps) => {
                                                 requestAnimationFrame(() => {
                                                     try {
                                                         if (!el || !el.isConnected) return;
-                                                        const h = Math.ceil(el.scrollHeight);
+                                                        const h = Math.ceil(el.offsetHeight);
                                                         const desired = h;
                                                         setSizeForKey(row.id, desired, index);
                                                     } catch {}

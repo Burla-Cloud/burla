@@ -1,18 +1,28 @@
 import requests
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Request
 
-from main_service import DB, get_logger, PROJECT_ID, CLUSTER_ID_TOKEN, CURRENT_BURLA_VERSION
-from main_service.helpers import Logger
+from main_service import (
+    DB,
+    PROJECT_ID,
+    CLUSTER_ID_TOKEN,
+    CURRENT_BURLA_VERSION,
+    IN_LOCAL_DEV_MODE,
+    LOCAL_DEV_CONFIG,
+)
 
 router = APIRouter()
 BURLA_BACKEND_URL = "https://backend.burla.dev"
 
 
 @router.get("/v1/settings")
-def get_settings(request: Request, logger: Logger = Depends(get_logger)):
+def get_settings(request: Request):
     config_doc = DB.collection("cluster_config").document("cluster_config")
     config_dict = config_doc.get().to_dict()
+
+    if IN_LOCAL_DEV_MODE:
+        config_dict = LOCAL_DEV_CONFIG
+
     node = config_dict.get("Nodes", [{}])[0]
     container = node.get("containers", [{}])[0]
 
@@ -35,7 +45,7 @@ def get_settings(request: Request, logger: Logger = Depends(get_logger)):
 
 
 @router.post("/v1/settings")
-async def update_settings(request: Request, logger: Logger = Depends(get_logger)):
+async def update_settings(request: Request):
     request_json = await request.json()
     config_ref = DB.collection("cluster_config").document("cluster_config")
     config_dict = config_ref.get().to_dict()

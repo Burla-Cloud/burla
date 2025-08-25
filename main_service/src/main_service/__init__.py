@@ -21,7 +21,7 @@ from jinja2 import Environment, FileSystemLoader
 os.environ["GRPC_VERBOSITY"] = "ERROR"
 os.environ["GLOG_minloglevel"] = "2"
 
-CURRENT_BURLA_VERSION = "1.2.0"
+CURRENT_BURLA_VERSION = "1.2.1"
 
 # This is the only possible alternative "mode".
 # In this mode everything runs locally in docker containers.
@@ -40,9 +40,7 @@ CLUSTER_ID_TOKEN = response.payload.data.decode("UTF-8")
 
 config_doc = DB.collection("cluster_config").document("cluster_config").get()
 LOCAL_DEV_CONFIG = config_doc.to_dict()
-local_img = "us-docker.pkg.dev/burla-test/cluster-default/3.12:latest"
-LOCAL_DEV_CONFIG["Nodes"][0]["containers"][0]["image"] = local_img
-LOCAL_DEV_CONFIG["Nodes"][0]["machine_type"] = "n4-standard-1"
+LOCAL_DEV_CONFIG["Nodes"][0]["machine_type"] = "n4-standard-2"
 LOCAL_DEV_CONFIG["Nodes"][0]["quantity"] = 1
 
 DEFAULT_CONFIG = {  # <- config used only when config is missing from firestore
@@ -86,10 +84,6 @@ async def get_request_files(request: Request):
 
 def get_logger(request: Request):
     return Logger(request)
-
-
-def get_user_email(request: Request):
-    return request.state.user_email
 
 
 def get_add_background_task_function(
@@ -201,6 +195,12 @@ async def catch_errors(request: Request, call_next):
 
 @app.middleware("http")
 async def validate_requests(request: Request, call_next):
+    # Allow Server-Sent Events to pass through without auth to prevent proxy/login HTML from breaking the stream
+    # These endpoints read from Firestore only and do not perform privileged actions.
+    accept_header = request.headers.get("accept", "")
+    if "text/event-stream" in accept_header:
+        return await call_next(request)
+
     # allow static asset requests (js/css/images) to pass through
     last_segment = request.url.path.rstrip("/").split("/")[-1]
     if "." in last_segment:
@@ -221,10 +221,7 @@ async def validate_requests(request: Request, call_next):
                     request.session["name"] = data["name"]
 
         base_url = f"{request.url.scheme}://{request.url.netloc}{request.url.path}"
-        response = RedirectResponse(url=base_url, status_code=303)
-        session = request.cookies.get("session")
-        response.set_cookie(key="session", value=session, httponly=True, samesite="lax")
-        return response
+        return RedirectResponse(url=base_url, status_code=303)
 
     email = request.session.get("X-User-Email") or request.headers.get("X-User-Email")
     authorization = request.session.get("Authorization") or request.headers.get("Authorization")
@@ -278,4 +275,4 @@ async def set_timezone_middleware(request: Request, call_next):
     return await call_next(request)
 
 
-app.add_middleware(SessionMiddleware, secret_key=CLUSTER_ID_TOKEN)
+app.add_middleware(SessionMiddleware, secret_key=CLUSTER_ID_TOKEN, same_site="lax")

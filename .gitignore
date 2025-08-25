@@ -198,3 +198,4 @@ main_service/frontend/.vscode/
 main_service/main_svc_last_started_at.txt
 main_service/.frontend_last_built_at.txt
 .temp_token.txt
+worker_service_python_env/*

@@ -19,6 +19,25 @@ test:
 test-jupyter:
 	poetry -C ./client run jupyter-lab
 
+# remove all booting nodes from DB (only run in local-dev mode)
+stop:
+	printf '%s\n' \
+		'import json' \
+		'from google.cloud import firestore' \
+		'from google.cloud.firestore_v1 import FieldFilter' \
+		'from appdirs import user_config_dir' \
+		'from pathlib import Path' \
+		'' \
+		'appdata_dir = Path(user_config_dir(appname="burla", appauthor="burla"))' \
+		'config_path = appdata_dir / Path("burla_credentials.json")' \
+		'project_id = json.loads(config_path.read_text())["project_id"]' \
+		'db = firestore.Client(project=project_id, database="burla")' \
+		'booting_filter = FieldFilter("status", "==", "BOOTING")' \
+		'for document in db.collection("nodes").where(filter=booting_filter).get():' \
+		'    document.reference.delete()' \
+		'    print(f"Deleted node doc: {document.id}")' \
+	| poetry -C ./client run python -
+
 # start ONLY the main service, in local dev mode
 # The cluster is run 100% locally using the config `LOCAL_DEV_CONFIG` in `main_service.__init__.py`
 # All components (main_svc, node_svc, worker_svc) will restart when changes to code are made.
@@ -45,7 +64,7 @@ local-dev:
 # Uses cluster config from firestore doc: `/databases/burla/cluster_config/cluster_config`
 remote-dev:
 	set -e; \
-	$(MAKE) __check-local-services-up-to-date && echo "" || exit 1; \
+	$(MAKE) __check-node-service-up-to-date && echo "" || exit 1; \
 	:; \
 	docker run --rm -it \
 		--name main_service \
@@ -57,42 +76,20 @@ remote-dev:
 		$(MAIN_SVC_IMAGE_NAME) -m uvicorn main_service:app --host 0.0.0.0 --port 5001 --reload \
 			--reload-exclude main_service/frontend/node_modules/
 
-# raise error if local node/worker services are different from remote-dev versions
-# does the worker service have a git diff since AFTER the last image was pushed?
+# raise error if local node service is different from remote-dev version
 # does the node service have a git diff?
-__check-local-services-up-to-date:
-	set -e; \
-	WORKER_SVC_TS=$$(cat ./worker_service/last_image_pushed_at.txt); \
-	WORKER_SVC_DIR="./worker_service/src/worker_service"; \
-	WORKER_SVC_DIFF=$$(git diff --stat "@{$${WORKER_SVC_TS}}" -- "$${WORKER_SVC_DIR}"); \
-	WORKER_SVC_HAS_DIFF=$$(echo "$${WORKER_SVC_DIFF}" | grep -q . && echo "true" || echo "false"); \
-	NODE_SVC_DIFF=$$(git diff -- "./node_service/src/node_service"); \
-	NODE_SVC_HAS_DIFF=$$(echo "$${NODE_SVC_DIFF}" | grep -q . && echo "true" || echo "false"); \
-	if [ "$${WORKER_SVC_HAS_DIFF}" = "true" ]; then \
-		echo "DEPLOYED CONTAINER SERVICE NOT UP TO DATE!"; \
-		echo "Your local worker service is different from the cluster's worker service."; \
-		echo "To fix this, run 'make images_same_env' from './worker_service'."; \
-	fi; \
+__check-node-service-up-to-date:
 	if [ "$${NODE_SVC_HAS_DIFF}" = "true" ]; then \
 		echo "DEPLOYED NODE SERVICE NOT UP TO DATE!"; \
 		echo "Your local node service is different from the cluster's node service."; \
 		echo "To fix this, commit your node service code to the latest release branch."; \
-	fi; \
-	if [ "$${WORKER_SVC_HAS_DIFF}" = "true" ] || [ "$${NODE_SVC_HAS_DIFF}" = "true" ]; then \
 		exit 1; \
 	fi; \
-	echo "deployed worker service and node service are up to date with local versions.";
+	echo "deployed node service up to date with local version.";
 
-# Moves latest worker service image to prod & 
-# Builds new main-service image, moves to prod, then deploys prod main service
 deploy-prod:
 	set -e; \
-	$(MAKE) __check-local-services-up-to-date && echo "" || exit 1; \
+	$(MAKE) __check-node-service-up-to-date && echo "" || exit 1; \
 	cd ./main_service; \
 	$(MAKE) image; \
 	$(MAKE) publish;
-
-new-workers:
-	set -e; \
-	cd ./worker_service; \
-	$(MAKE) image_same_env

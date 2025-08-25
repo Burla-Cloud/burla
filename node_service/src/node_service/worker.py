@@ -52,7 +52,7 @@ class Worker:
 
         cmd_script = f"""
             # worker service is installed here and mounted to all other containers
-            export PYTHONPATH=/burla/worker_service
+            export PYTHONPATH=/worker_service_python_env
             DB_BASE_URL="https://firestore.googleapis.com/v1/projects/{PROJECT_ID}/databases/burla/documents"
 
             # Find python version:
@@ -73,8 +73,6 @@ class Worker:
                 exit 1
             fi
 
-            # TODO: update worker service if version is out of sync with this nodes version!
-
             # Install worker_service if missing
             if [ "{install_worker}" = "True" ] && ! $python_cmd -c "import worker_service" 2>/dev/null; then
 
@@ -85,25 +83,37 @@ class Worker:
                     -H "Authorization: Bearer {CREDENTIALS.token}" \\
                     -H "Content-Type: application/json" \\
                     -d "$payload"
+                echo "$MSG"
 
-                # use tarball if available because faster
-                if curl -Ls -o burla.tar.gz https://github.com/Burla-Cloud/burla/archive/{__version__}.tar.gz; then
-                    tar -xzf burla.tar.gz
-                    cd burla-{__version__}/worker_service
+                # install local worker_service in edit mode or use version on github if not in DEV
+                if [ "{IN_LOCAL_DEV_MODE}" = "True" ]; then
+                    echo "Installing local dev version ..."
+                    mkdir -p /worker_service_python_env
+                    mkdir -p /burla/worker_service
+                    cd /burla/worker_service
+                    $python_cmd -m pip install . --break-system-packages --no-cache-dir \
+                        --only-binary=:all: --target /worker_service_python_env
                 else
-                    echo "Tarball not found, falling back to git..."
-                    # Ensure git is installed
-                    if ! command -v git >/dev/null 2>&1; then
-                        echo "git not found, installing..."
-                        apt-get update && apt-get install -y git
+                    # try with tarball first because faster
+                    if curl -Ls -o burla.tar.gz https://github.com/Burla-Cloud/burla/archive/{__version__}.tar.gz; then
+                        echo "Installing from tarball ..."
+                        tar -xzf burla.tar.gz
+                        cd burla-{__version__}/worker_service
+                    else
+                        echo "Tarball not found, falling back to git..."
+                        # Ensure git is installed
+                        if ! command -v git >/dev/null 2>&1; then
+                            echo "git not found, installing..."
+                            apt-get update && apt-get install -y git
+                        fi
+                        git clone --depth 1 --filter=blob:none --sparse --branch {__version__} https://github.com/Burla-Cloud/burla.git
+                        cd burla
+                        git sparse-checkout set worker_service
+                        cd worker_service
                     fi
-                    git clone --depth 1 --filter=blob:none --sparse --branch {__version__} https://github.com/Burla-Cloud/burla.git
-                    cd burla
-                    git sparse-checkout set worker_service
-                    cd worker_service
+                    $python_cmd -m pip install --break-system-packages --no-cache-dir \
+                        --only-binary=:all: --target /worker_service_python_env .
                 fi
-                $python_cmd -m pip install --break-system-packages --no-cache-dir \
-                    --only-binary=:all: --target /burla/worker_service .
 
                 MSG="Successfully installed worker-service."
                 TS=$(date +%s)
@@ -112,6 +122,7 @@ class Worker:
                     -H "Authorization: Bearer {CREDENTIALS.token}" \\
                     -H "Content-Type: application/json" \\
                     -d "$payload"
+                echo "$MSG"
             fi
 
             # Wait for worker_service to become importable when not installing
@@ -126,14 +137,22 @@ class Worker:
                     sleep 1
                 done
             fi
-
+            
             # Start the worker service,
             # Restart automatically if it dies (IMPORTANT!):
             # Because it kills itself intentionally when it needs to cancel a running job.
             while true; do
-                $python_cmd -m uvicorn worker_service:app --host 0.0.0.0 \
-                    --port {WORKER_INTERNAL_PORT} --workers 1 \
-                    --timeout-keep-alive 30
+                if [ "{IN_LOCAL_DEV_MODE}" = "True" ]; then
+                    echo "Starting worker service in local dev mode..."
+                    $python_cmd -m uvicorn worker_service:app --host 0.0.0.0 \
+                        --port {WORKER_INTERNAL_PORT} --workers 1 \
+                        --timeout-keep-alive 30 --reload
+                else
+                    echo "Starting worker service in prod mode..."
+                    $python_cmd -m uvicorn worker_service:app --host 0.0.0.0 \
+                        --port {WORKER_INTERNAL_PORT} --workers 1 \
+                        --timeout-keep-alive 30
+                fi
                 echo "Restarting worker service..."
             done
         """.strip()
@@ -145,6 +164,8 @@ class Worker:
                 binds={
                     f"{os.environ['HOST_HOME_DIR']}/.config/gcloud": "/root/.config/gcloud",
                     f"{os.environ['HOST_PWD']}/worker_service": "/burla/worker_service",
+                    f"{os.environ['HOST_PWD']}/worker_service/src/worker_service": "/worker_service_python_env/worker_service",
+                    f"{os.environ['HOST_PWD']}/worker_service_python_env": "/worker_service_python_env",
                     f"{os.environ['HOST_PWD']}/.temp_token.txt": "/burla/.temp_token.txt",
                 },
             )
@@ -155,7 +176,7 @@ class Worker:
                 port_bindings={WORKER_INTERNAL_PORT: ("127.0.0.1", None)},
                 ipc_mode="host",
                 device_requests=device_requests,
-                binds={"/burla/worker_service": "/burla/worker_service"},
+                binds={"/worker_service_python_env": "/worker_service_python_env"},
             )
 
         # start container

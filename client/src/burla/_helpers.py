@@ -99,7 +99,9 @@ def install_signal_handlers(
             spinner.stop()
         try:
             sync_db, _ = get_db_clients()
-            sync_db.collection("jobs").document(job_id).update({"status": "FAILED"})
+            job_doc = sync_db.collection("jobs").document(job_id)
+            if job_doc.get().to_dict()["status"] != "CANCELED":
+                job_doc.update({"status": "FAILED"})
         except Exception:
             pass
         sys.exit(0)

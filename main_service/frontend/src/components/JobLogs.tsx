@@ -1,210 +1,292 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import { useLogsContext } from "@/contexts/LogsContext";
-import { Loader2 } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import { VariableSizeList as List } from "react-window";
 
 interface JobLogsProps {
-  jobId: string;
-  jobStatus?: string;
+    jobId: string;
+    jobStatus?: string;
 }
 
 const JobLogs = ({ jobId, jobStatus }: JobLogsProps) => {
-  const { logsByJobId, hasMoreByJobId, fetchInitialLogs, fetchMoreLogs } = useLogsContext();
-  const rawLogs = logsByJobId[jobId] || [];
-  const logs = [...rawLogs];
+    const { logsByJobId, startLiveStream, loadInitial, closeLiveStream } = useLogsContext();
+    const rawLogs = logsByJobId[jobId] || [];
+    const logs = [...rawLogs];
 
-  const [initialLoading, setInitialLoading] = useState(true);
-  const [hasAutoScrolled, setHasAutoScrolled] = useState(false);
-  const [windowWidth, setWindowWidth] = useState(window.innerWidth);
-  const [expandedLogs, setExpandedLogs] = useState<{ [id: string]: boolean }>({});
+    type RowItem =
+        | { type: "divider"; key: string; label: string }
+        | { type: "log"; key: string; id: string; createdAt: number; message: string };
 
-  const listRef = useRef<any>(null);
-  const isFetchInFlight = useRef(false);
-
-  const listMaxHeight = window.innerHeight - 250;
-
-  useEffect(() => {
-    const updateWidth = () => setWindowWidth(window.innerWidth);
-    window.addEventListener("resize", updateWidth);
-    return () => window.removeEventListener("resize", updateWidth);
-  }, []);
-
-  useEffect(() => {
-    const load = async () => {
-      setInitialLoading(true);
-      await fetchInitialLogs(jobId);
-      setInitialLoading(false);
+    const formatDateLabel = (tsSeconds: number) => {
+        const d = new Date(tsSeconds * 1000);
+        return d.toLocaleDateString("en-US", {
+            weekday: "long",
+            month: "long",
+            day: "numeric",
+            year: "numeric",
+        });
     };
-    load();
-  }, [jobId]);
 
-  useEffect(() => {
-    if (!initialLoading && logs.length > 0 && listRef.current && !hasAutoScrolled) {
-      listRef.current.scrollToItem(logs.length, "end");
-      setHasAutoScrolled(true);
-    }
-  }, [initialLoading, logs.length, hasAutoScrolled]);
+    const getDateKey = (tsSeconds: number) => {
+        const d = new Date(tsSeconds * 1000);
+        const y = d.getFullYear();
+        const m = String(d.getMonth() + 1).padStart(2, "0");
+        const da = String(d.getDate()).padStart(2, "0");
+        return `${y}-${m}-${da}`;
+    };
 
-  const refreshDisabled =
-    initialLoading || ((jobStatus === "COMPLETED" || jobStatus === "FAILED") && logs.length === 0);
+    const items: RowItem[] = useMemo(() => {
+        const result: RowItem[] = [];
+        let lastDateKey: string | null = null;
+        for (const entry of logs) {
+            const dateKey = getDateKey(entry.created_at);
+            if (lastDateKey !== dateKey) {
+                result.push({
+                    type: "divider",
+                    key: `divider-${dateKey}`,
+                    label: formatDateLabel(entry.created_at),
+                });
+                lastDateKey = dateKey;
+            }
+            const key = entry.id ?? `${entry.created_at}-${entry.message}`;
+            result.push({
+                type: "log",
+                key,
+                id: key,
+                createdAt: entry.created_at,
+                message: entry.message || "No message",
+            });
+        }
+        return result;
+    }, [logs]);
 
-  const handleManualRefresh = async () => {
-    setInitialLoading(true);
-    await fetchInitialLogs(jobId);
-    setInitialLoading(false);
-    setHasAutoScrolled(false);
-  };
+    const [hasAutoScrolled, setHasAutoScrolled] = useState(false);
+    const [windowWidth, setWindowWidth] = useState(window.innerWidth);
+    // All logs are expanded by default and non-interactive
 
-  const formatTime = (ts: number) => {
-    const date = new Date(ts * 1000);
-    const ms = String(date.getMilliseconds()).padStart(3, "0");
-    const main = date.toLocaleString(undefined, {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-      hour12: false,
-    });
-    return `${main}.${ms}`;
-  };
+    const listRef = useRef<any>(null);
+    const containerRef = useRef<HTMLDivElement | null>(null);
+    const [listHeight, setListHeight] = useState<number>(300);
+    const [hasMeasuredContainer, setHasMeasuredContainer] = useState<boolean>(false);
+    const sizeMapRef = useRef<Record<string, number>>({});
 
-  const toggleExpand = (id: string) => {
-    setExpandedLogs((prev) => {
-      const updated = { ...prev, [id]: !prev[id] };
-      setTimeout(() => {
-        listRef.current?.resetAfterIndex(0); // recalculate row heights
-      }, 0);
-      return updated;
-    });
-  };
+    const setSizeForKey = useCallback((key: string, size: number, fromIndex: number) => {
+        if (sizeMapRef.current[key] !== size) {
+            sizeMapRef.current[key] = size;
+            // Force the list to recompute sizes to avoid overlapping
+            listRef.current?.resetAfterIndex(fromIndex, true);
+        }
+    }, []);
 
-  const getItemSize = useCallback(
-    (index: number) => {
-      const log = logs[index - (logs.length >= 1000 ? 1 : 0)];
-      const id = log?.id ?? `${log?.created_at}-${log?.message}`;
-      return expandedLogs[id] ? 72 : 36;
-    },
-    [expandedLogs, logs]
-  );
+    useEffect(() => {
+        const updateWidth = () => setWindowWidth(window.innerWidth);
+        window.addEventListener("resize", updateWidth);
 
-  const handleFetchMorePreservePosition = async () => {
-    if (!listRef.current) return;
-    const scrollEl = listRef.current._outerRef;
-    const prevScrollHeight = scrollEl.scrollHeight;
-    const prevScrollTop = scrollEl.scrollTop;
+        let observer: ResizeObserver | null = null;
+        if (containerRef.current) {
+            observer = new ResizeObserver((entries) => {
+                const entry = entries[0];
+                if (!entry) return;
+                const h = Math.max(0, Math.floor(entry.contentRect.height));
+                setListHeight(h);
+                setHasMeasuredContainer(true);
+            });
+            observer.observe(containerRef.current);
+        }
 
-    await fetchMoreLogs(jobId);
+        return () => {
+            window.removeEventListener("resize", updateWidth);
+            if (observer && containerRef.current) observer.disconnect();
+        };
+    }, []);
 
-    requestAnimationFrame(() => {
-      const newScrollHeight = scrollEl.scrollHeight;
-      scrollEl.scrollTop = newScrollHeight - prevScrollHeight + prevScrollTop;
-    });
-  };
+    const [isInitialLoading, setIsInitialLoading] = useState(logs.length === 0);
 
-  const hasExtraRow = logs.length >= 1000;
-  const totalItemCount = logs.length + (hasExtraRow ? 1 : 0);
+    useEffect(() => {
+        let cancelled = false;
+        const run = async () => {
+            if (logs.length === 0) setIsInitialLoading(true);
+            try {
+                await loadInitial(jobId, 0, 2000);
+            } finally {
+                if (!cancelled) setIsInitialLoading(false);
+            }
+        };
+        run();
+        return () => {
+            cancelled = true;
+        };
+    }, [jobId, loadInitial]);
 
-  if (windowWidth <= 1000) {
-    return (
-      <div className="mt-4 mb-4 flex flex-col">
-        <div className="flex items-center justify-between mb-3">
-          <h2 className="text-lg font-semibold text-primary">Logs</h2>
-          <Button variant="outline" disabled>
-            Refresh
-          </Button>
-        </div>
-        <div className="text-gray-500 italic text-sm text-center p-4">
-          Logs are hidden on small screens.
-        </div>
-      </div>
+    // Open/close SSE based on jobStatus
+    useEffect(() => {
+        if (jobStatus === "RUNNING") {
+            const stop = startLiveStream(jobId);
+            return () => stop();
+        }
+        // not running: ensure any open stream is closed
+        closeLiveStream(jobId);
+        return () => {};
+    }, [jobId, jobStatus, startLiveStream, closeLiveStream]);
+
+    useEffect(() => {
+        if (logs.length > 0 && listRef.current && !hasAutoScrolled && hasMeasuredContainer) {
+            listRef.current.scrollToItem(logs.length, "end");
+            setHasAutoScrolled(true);
+        }
+    }, [logs.length, hasAutoScrolled, hasMeasuredContainer]);
+
+    // When job changes, clear cached sizes and auto-scroll state to avoid layout glitches
+    useEffect(() => {
+        sizeMapRef.current = {};
+        listRef.current?.resetAfterIndex(0, true);
+        setHasAutoScrolled(false);
+    }, [jobId]);
+
+    // (no expand/collapse state needed)
+
+    const formatTime = (ts: number) => {
+        const date = new Date(ts * 1000);
+        return date.toLocaleTimeString("en-US", {
+            hour: "numeric",
+            minute: "2-digit",
+            second: "2-digit",
+            hour12: true,
+        });
+    };
+
+    // (no interaction)
+
+    const getItemSize = useCallback(
+        (index: number) => {
+            const row = items[index];
+            if (!row) return 36;
+            if (row.type === "divider") return 40;
+            // All logs are expanded; use measured size or a small fallback until measured
+            return sizeMapRef.current[row.id] ?? 36;
+        },
+        [items]
     );
-  }
 
-  return (
-    <div className="mt-4 mb-4 flex flex-col" style={{ maxHeight: "calc(100vh - 140px)", overflow: "hidden" }}>
-      <div className="flex items-center justify-between mb-3">
-        <h2 className="text-lg font-semibold text-primary">Logs</h2>
-        <Button onClick={handleManualRefresh} variant="outline" disabled={refreshDisabled}>
-          {initialLoading ? (
-            <>
-              <Loader2 className="w-4 h-4 animate-spin mr-2" /> Refreshing
-            </>
-          ) : (
-            "Refresh"
-          )}
-        </Button>
-      </div>
+    const handleFetchMorePreservePosition = async () => {};
 
-      <div className="flex-1 bg-white border border-gray-200 rounded-lg shadow-sm relative">
-        {initialLoading ? (
-          <div className="flex h-full items-center justify-center py-10">
-            <Loader2 className="h-6 w-6 animate-spin text-primary" />
-          </div>
-        ) : logs.length === 0 ? (
-          <ul className="font-mono text-xs text-gray-800">
-            <li className="px-4 py-2 text-gray-400 text-sm text-center italic min-h-[75px] flex items-center justify-center">
-              No logs
-            </li>
-          </ul>
-        ) : (
-          <div className="font-mono text-xs text-gray-800 h-full">
-            <List
-              height={logs.length * 36 < listMaxHeight ? logs.length * 36 + 1 : listMaxHeight}
-              itemCount={totalItemCount}
-              itemSize={getItemSize}
-              width="100%"
-              ref={listRef}
-              onScroll={({ scrollOffset }) => {
-                const isNearTop = scrollOffset < 200;
-                if (isNearTop && hasMoreByJobId[jobId] && !isFetchInFlight.current) {
-                  isFetchInFlight.current = true;
-                  handleFetchMorePreservePosition().finally(() => {
-                    isFetchInFlight.current = false;
-                  });
-                }
-              }}
-            >
-              {({ index, style }) => {
-                if (hasExtraRow && index === 0) {
-                  return (
-                    <div style={style} className="text-center px-4 py-2 text-gray-400">
-                      {!hasMoreByJobId[jobId] ? "No more logs" : isFetchInFlight.current ? (
-                        <div className="flex justify-center items-center gap-2">
-                          <Loader2 className="h-4 w-4 animate-spin text-primary" /> Loading more…
+    const totalItemCount = items.length;
+
+    if (windowWidth <= 1000) {
+        return (
+            <div className="mt-4 mb-4 flex flex-col">
+                <div className="flex items-center justify-between mb-3">
+                    <h2 className="text-lg font-semibold text-primary">Logs</h2>
+                </div>
+                <div className="text-gray-500 italic text-sm text-center p-4">
+                    Logs are hidden on small screens.
+                </div>
+            </div>
+        );
+    }
+
+    return (
+        <div className="mt-4 mb-4 flex flex-col flex-1 min-h-0">
+            <div className="flex items-center justify-between mb-3">
+                <h2 className="text-lg font-semibold text-primary">Logs</h2>
+            </div>
+
+            <div className="flex-1 min-h-0 bg-white border border-gray-200 rounded-lg shadow-sm relative">
+                {isInitialLoading ? (
+                    <div
+                        ref={containerRef}
+                        className="h-full w-full flex items-center justify-center"
+                    >
+                        <div className="flex flex-col items-center text-gray-500">
+                            <div
+                                className="h-8 w-8 rounded-full border-2 border-gray-300 border-t-primary animate-spin"
+                                role="status"
+                                aria-label="Loading logs"
+                            />
+                            <div className="mt-2 text-sm">Loading logs…</div>
                         </div>
-                      ) : null}
                     </div>
-                  );
-                }
+                ) : logs.length === 0 ? (
+                    <div ref={containerRef} className="h-full w-full">
+                        <ul className="font-mono text-xs text-gray-800 h-full flex items-center justify-center">
+                            <li className="px-4 py-2 text-gray-400 text-sm text-center italic">
+                                No logs
+                            </li>
+                        </ul>
+                    </div>
+                ) : (
+                    <div ref={containerRef} className="font-mono text-xs text-gray-800 h-full">
+                        <List
+                            height={listHeight}
+                            itemCount={totalItemCount}
+                            itemSize={getItemSize}
+                            width="100%"
+                            ref={listRef}
+                            itemKey={(index) => items[index]?.key ?? index}
+                        >
+                            {({ index, style }) => {
+                                const row = items[index];
+                                if (!row) return null;
 
-                const log = logs[index - (hasExtraRow ? 1 : 0)];
-                const id = log.id ?? `${log.created_at}-${log.message}`;
-                const isExpanded = expandedLogs[id];
+                                if (row.type === "divider") {
+                                    return (
+                                        <div
+                                            key={row.key}
+                                            style={style}
+                                            className="px-4 py-2"
+                                            role="separator"
+                                            aria-label={`Logs for ${row.label}`}
+                                        >
+                                            <div className="w-full flex items-center gap-3 select-none">
+                                                <div
+                                                    className="h-px w-full bg-gray-200 dark:bg-gray-800"
+                                                    aria-hidden="true"
+                                                />
+                                                <span className="shrink-0 text-center text-xs sm:text-sm text-muted-foreground font-medium tracking-tight">
+                                                    {row.label}
+                                                </span>
+                                                <div
+                                                    className="h-px w-full bg-gray-200 dark:bg-gray-800"
+                                                    aria-hidden="true"
+                                                />
+                                            </div>
+                                        </div>
+                                    );
+                                }
 
-                return (
-                  <div
-                    key={id}
-                    style={style}
-                    onClick={() => toggleExpand(id)}
-                    className={`flex flex-col md:flex-row px-4 py-2 border-t border-gray-300 gap-1 md:gap-5 cursor-pointer hover:bg-gray-50 transition`}
-                  >
-                    <span className="text-gray-600 min-w-[220px]">{formatTime(log.created_at)}</span>
-                    <span className={isExpanded ? "whitespace-normal break-words" : "truncate"}>
-                      {log.message || "No message"}
-                    </span>
-                  </div>
-                );
-              }}
-            </List>
-          </div>
-        )}
-      </div>
-    </div>
-  );
+                                const background = index % 2 === 0 ? "bg-gray-50" : "";
+
+                                return (
+                                    <div key={row.key} style={style} className="">
+                                        <div
+                                            ref={(el) => {
+                                                if (!el) return;
+                                                requestAnimationFrame(() => {
+                                                    try {
+                                                        if (!el || !el.isConnected) return;
+                                                        const h = Math.ceil(el.offsetHeight);
+                                                        const desired = h;
+                                                        setSizeForKey(row.id, desired, index);
+                                                    } catch {}
+                                                });
+                                            }}
+                                            className={`grid grid-cols-[8rem,1fr] gap-2 px-4 py-2 border-t border-gray-200 transition ${background}`}
+                                        >
+                                            <div className="text-gray-500 text-left tabular-nums">
+                                                {formatTime(row.createdAt)}
+                                            </div>
+                                            <div className={"whitespace-pre-wrap break-words"}>
+                                                {row.message}
+                                            </div>
+                                        </div>
+                                    </div>
+                                );
+                            }}
+                        </List>
+                    </div>
+                )}
+            </div>
+        </div>
+    );
 };
 
 export default JobLogs;
-

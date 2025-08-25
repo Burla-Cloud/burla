@@ -1,6 +1,6 @@
 export type ClusterStatus = "ON" | "OFF" | "BOOTING" | "REBOOTING" | "STOPPING";
 export type NodeStatus = "READY" | "RUNNING" | "BOOTING" | "STOPPING" | "FAILED";
-export type JobsStatus = "PENDING" | "RUNNING" | "FAILED" | "COMPLETED";
+export type JobsStatus = "PENDING" | "RUNNING" | "FAILED" | "COMPLETED" | "CANCELED";
 
 // If we simply name it `Node`, it will conflict with the Node type in React.
 export interface BurlaNode {

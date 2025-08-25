@@ -134,6 +134,7 @@ export const JobsList = () => {
             PENDING: "bg-gray-400",
             RUNNING: "bg-yellow-500 animate-pulse",
             FAILED: "bg-red-500",
+            CANCELED: "bg-red-500",
             COMPLETED: "bg-green-500",
         };
         return cn("w-2 h-2 rounded-full", status ? statusClasses[status] : "");

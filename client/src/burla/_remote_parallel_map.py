@@ -67,6 +67,10 @@ class NodeDisconnected(Exception):
     pass
 
 
+class JobCanceled(Exception):
+    pass
+
+
 async def _num_booting_nodes(db: AsyncClient):
     filter_ = FieldFilter("status", "==", "BOOTING")
     nodes_snapshot = await db.collection("nodes").where(filter=filter_).get()
@@ -274,6 +278,7 @@ async def _execute_job(
             msg = f"Running {len(inputs)} inputs through `{function_.__name__}` "
             spinner.text = msg + f"(0/{len(inputs)} completed)"
 
+        JOB_CALCELED_MSG = ""
         if not background:
             # start sending "alive" pings to nodes
             ping_process = await run_in_subprocess(send_alive_pings, job_id)
@@ -281,10 +286,15 @@ async def _execute_job(
 
             # start stdout/stderr stream
             def _on_new_logs_doc(col_snapshot, changes, read_time):
+                nonlocal JOB_CALCELED_MSG
                 for change in changes:
                     for log in change.document.to_dict()["logs"]:
                         # ignore tb's written as log messages because errors are reraised here
-                        if not log.get("is_error"):
+                        if log.get("is_error"):
+                            job = SYNC_DB.collection("jobs").document(job_id).get().to_dict()
+                            if job["status"] == "CANCELED":
+                                JOB_CALCELED_MSG = log["message"]
+                        else:
                             spinner_compatible_print(log["message"])
 
             logs_collection = SYNC_DB.collection("jobs").document(job_id).collection("logs")
@@ -304,8 +314,13 @@ async def _execute_job(
                 except UnpicklingError as e:
                     if not "Memo value not found at index" in str(e):
                         raise e
-                    msg = f"Node {node['instance_name']} disconnected while transmitting results.\n"
-                    raise NodeDisconnected(msg)
+
+                    job_doc = await job_ref.get()
+                    if job_doc.to_dict()["status"] == "CANCELED":
+                        raise JobCanceled("Job canceled from dashboard.")
+                    else:
+                        msg = f"Node {node['instance_name']} disconnected while transmitting results.\n"
+                        raise NodeDisconnected(msg)
 
                 return_values = []
                 for input_index, is_error, result_pkl in node_status["results"]:
@@ -329,6 +344,9 @@ async def _execute_job(
                     await asyncio.sleep(0.3)
                 else:
                     await asyncio.sleep(0)
+
+            if JOB_CALCELED_MSG:
+                raise JobCanceled(f"\n\n{JOB_CALCELED_MSG}\n")
 
             total_parallelism = 0
             all_nodes_empty = True
@@ -510,7 +528,9 @@ def remote_parallel_map(
         # After a `FirestoreTimeout` further attempts to use firestore will take forever then fail.
         if not isinstance(e, FirestoreTimeout):
             try:
-                SYNC_DB.collection("jobs").document(job_id).update({"status": "FAILED"})
+                job_doc = SYNC_DB.collection("jobs").document(job_id)
+                if job_doc.get().to_dict()["status"] != "CANCELED":
+                    job_doc.update({"status": "FAILED"})
             except Exception:
                 pass
 

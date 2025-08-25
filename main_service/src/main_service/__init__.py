@@ -86,10 +86,6 @@ def get_logger(request: Request):
     return Logger(request)
 
 
-def get_user_email(request: Request):
-    return request.state.user_email
-
-
 def get_add_background_task_function(
     background_tasks: BackgroundTasks, logger: Logger = Depends(get_logger)
 ):

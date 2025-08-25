@@ -126,8 +126,14 @@ async def get_jobs(request: Request, page: int = 0, stream: bool = False):
 
 
 @router.post("/v1/jobs/{job_id}/stop")
-async def stop_job(job_id: str):
-    print("hi")
+async def stop_job(job_id: str, request: Request):
+    email = request.session.get("X-User-Email") or request.headers.get("X-User-Email")
+    msg = f"Job canceled by user: {email}"
+    timestamp = datetime.now(timezone.utc)
+    logs = [{"is_error": True, "message": msg, "timestamp": timestamp}]
+    job_doc = ASYNC_DB.collection("jobs").document(job_id)
+    await job_doc.collection("logs").add({"logs": logs, "timestamp": timestamp})
+    await job_doc.update({"status": "CANCELED"})
 
 
 @router.get("/v1/jobs/{job_id}/logs")

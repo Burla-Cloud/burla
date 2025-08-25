@@ -96,17 +96,21 @@ async def _job_watcher(
     await node_doc.set({"current_num_results": 0})
 
     JOB_FAILED = False
+    JOB_CANCELED = False
     LAST_CLIENT_PING_TIMESTAMP = time()
     neighboring_node = None
     neighbor_had_no_inputs_at = None
     seconds_neighbor_had_no_inputs = 0
 
     def _on_job_snapshot(doc_snapshot, changes, read_time):
-        nonlocal LAST_CLIENT_PING_TIMESTAMP, JOB_FAILED
+        nonlocal LAST_CLIENT_PING_TIMESTAMP, JOB_FAILED, JOB_CANCELED
         LAST_CLIENT_PING_TIMESTAMP = time()
         for change in changes:
             if change.document.to_dict()["status"] == "FAILED":
                 JOB_FAILED = True
+                break
+            elif change.document.to_dict()["status"] == "CANCELED":
+                JOB_CANCELED = True
                 break
 
     # Client intentionally updates the job doc every 2sec to signal that it's still listening.
@@ -173,11 +177,13 @@ async def _job_watcher(
             client_has_all_results = client_has_all_results or is_background_job
             job_is_done = total_results == n_inputs and client_has_all_results
 
-        if job_is_done or JOB_FAILED:
+        if job_is_done or JOB_FAILED or JOB_CANCELED:
             logger.log("Job has failed!" if JOB_FAILED else "Job is done!")
-            # check again in case `job_is_done` then failed
+            # check again in case `job_is_done` then failed or canceled
             job_snapshot = await job_doc.get()
-            if not job_snapshot.to_dict()["status"] == "FAILED":
+            JOB_FAILED = job_snapshot.to_dict()["status"] == "FAILED"
+            JOB_CANCELED = job_snapshot.to_dict()["status"] == "CANCELED"
+            if not (JOB_FAILED or JOB_CANCELED):
                 try:
                     await job_doc.update({"status": "COMPLETED"})
                 except Exception:

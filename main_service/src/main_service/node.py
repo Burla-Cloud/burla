@@ -364,44 +364,39 @@ class Node:
     def __get_startup_script(self):
         return f"""
         #! /bin/bash        
-
         set -Eeuo pipefail
-
-        exec > >(tee /var/log/burla_startup.log /dev/console) 2>&1
-
         handle_error() {{
-        	LINE_NUM="$1"
         	ACCESS_TOKEN=$(curl -s -H "Metadata-Flavor: Google" \
         	"http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token" \
         	| jq -r .access_token)
         
-        	MSG="Startup script failed at line $LINE_NUM. Deleting VM {self.instance_name}."
+        	MSG="Startup script failed! See Google Cloud Logging. Deleting VM {self.instance_name}."
         	DB_BASE_URL="https://firestore.googleapis.com/v1/projects/{PROJECT_ID}/databases/burla/documents"
-        	payload=$(jq -n --arg msg "$MSG" --arg ts "$(date +%s)" --rawfile log <(tail -n 1000 /var/log/burla_startup.log) '{{"fields":{{"msg":{{"stringValue":$msg}},"ts":{{"integerValue":$ts}},"log":{{"stringValue":$log}}}}}}')
+        	payload=$(jq -n --arg msg "$MSG" --arg ts "$(date +%s)" '{{"fields":{{"msg":{{"stringValue":$msg}},"ts":{{"integerValue":$ts}},}}}}')
         	curl -sS -X POST "$DB_BASE_URL/nodes/{self.instance_name}/logs" \
-            -H "Authorization: Bearer $ACCESS_TOKEN" \
-            -H "Content-Type: application/json" \
-            -d "$payload" || true
+                -H "Authorization: Bearer $ACCESS_TOKEN" \
+                -H "Content-Type: application/json" \
+                -d "$payload" || true
 
-		status_payload=$(jq -n '{{"fields":{{"status":{{"stringValue":"FAILED"}},"display_in_dashboard":{{"booleanValue":true}}}}}}')
-		curl -sS -X PATCH "$DB_BASE_URL/nodes/{self.instance_name}?updateMask.fieldPaths=status&updateMask.fieldPaths=display_in_dashboard" \
-            -H "Authorization: Bearer $ACCESS_TOKEN" \
-            -H "Content-Type: application/json" \
-            -d "$status_payload" || true
+            # set status as FAILED
+            status_payload=$(jq -n '{{"fields":{{"status":{{"stringValue":"FAILED"}},"display_in_dashboard":{{"booleanValue":true}}}}}}')
+            curl -sS -X PATCH "$DB_BASE_URL/nodes/{self.instance_name}?updateMask.fieldPaths=status&updateMask.fieldPaths=display_in_dashboard" \
+                -H "Authorization: Bearer $ACCESS_TOKEN" \
+                -H "Content-Type: application/json" \
+                -d "$status_payload" || true
 
+            # delete vm
         	INSTANCE_NAME=$(curl -s -H "Metadata-Flavor: Google" \
             "http://metadata.google.internal/computeMetadata/v1/instance/name")
         	ZONE=$(curl -s -H "Metadata-Flavor: Google" \
             "http://metadata.google.internal/computeMetadata/v1/instance/zone" | awk -F/ '{{print $NF}}')
-        
         	curl -sS -X DELETE \
             -H "Authorization: Bearer $ACCESS_TOKEN" \
             "https://compute.googleapis.com/compute/v1/projects/{PROJECT_ID}/zones/$ZONE/instances/$INSTANCE_NAME" || true
         
         	exit 1
         }}
-
-        trap 'handle_error $LINENO' ERR
+        trap 'handle_error' ERR
 
         ACCESS_TOKEN=$(curl -s -H "Metadata-Flavor: Google" \
         "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token" \

@@ -125,7 +125,7 @@ def _install(spinner):
     spinner.start()
     run_command(
         f"gcloud run deploy burla-main-service "
-        f"--image=burlacloud/main-service:latest "
+        f"--image=burlacloud/main-service:{__version__} "
         f"--project {PROJECT_ID} "
         f"--region=us-central1 "
         f"--service-account {main_svc_account_email} "
@@ -135,7 +135,6 @@ def _install(spinner):
         f"--cpu 1 "
         f"--timeout 60 "
         f"--concurrency 20 "
-        f"--startup-timeout-seconds 300 "
         f"--allow-unauthenticated"
     )
     run_command(
@@ -471,7 +470,16 @@ def _create_firestore_database(spinner):
                     raise e
         spinner.text = "Creating Firestore database ... Done."
         spinner.ok("✓")
+
+        # attempt to prevent spinner freeze: idk if this works
+        try:
+            client._firestore_api.transport.close()
+            del client
+        except Exception:
+            pass
+
         # This need's to be restarted here or it freezes because the firestore client steal's the
         # GIL and dosen't let it go for a bit. Commenting out the doc.set also works, idk why.
+        # it still freezes actually ? but didn't after adding this earlier?? :(
         spinner.stop()
         spinner.start()

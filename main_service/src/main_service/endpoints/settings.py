@@ -76,6 +76,11 @@ async def update_settings(request: Request):
     nodes[0]["containers"] = [container]
     config_ref.update({"Nodes": nodes})
 
+    if IN_LOCAL_DEV_MODE:
+        LOCAL_DEV_CONFIG["Nodes"] = nodes
+        LOCAL_DEV_CONFIG["Nodes"][0]["machine_type"] = "n4-standard-2"
+        LOCAL_DEV_CONFIG["Nodes"][0]["quantity"] = 1
+
     email = request.session.get("X-User-Email")
     authorization = request.session.get("Authorization")
     headers = {"Authorization": authorization, "X-User-Email": email}

@@ -1,5 +1,0 @@
-ARG BASE_IMAGE
-FROM ${BASE_IMAGE}:latest
-
-# works because worker_service in installed in -e mode.
-ADD . /burla/worker_service

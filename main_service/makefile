@@ -1,6 +1,7 @@
 .ONESHELL:
 .SILENT:
 
+BURLA_VERSION = 1.2.1
 WEBSERVICE_NAME = burla-main-service
 PYTHON_MODULE_NAME = main_service
 
@@ -42,8 +43,8 @@ publish:
 	); \
 	echo $${DOCKERHUB_TOKEN} | docker login -u jakezuliani --password-stdin; \
 	:; \
-	docker tag $${TEST_IMAGE_NAME} burlacloud/main-service:$${TEST_IMAGE_TAG}; \
-	docker push burlacloud/main-service:$${TEST_IMAGE_TAG}; \
+	docker tag $${TEST_IMAGE_NAME} burlacloud/main-service:$(BURLA_VERSION); \
+	docker push burlacloud/main-service:$(BURLA_VERSION); \
 	docker tag $${TEST_IMAGE_NAME} burlacloud/main-service:latest; \
 	docker push burlacloud/main-service:latest
 
@@ -89,4 +90,4 @@ container:
 		-e HOST_PWD=$(PWD) \
 		-e HOST_HOME_DIR=$${HOME} \
 		-p 5001:5001 \
-		--entrypoint poetry $${TEST_IMAGE_NAME} run bash
+		$${TEST_IMAGE_NAME}

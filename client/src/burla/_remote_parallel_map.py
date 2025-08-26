@@ -67,27 +67,8 @@ class NodeDisconnected(Exception):
     pass
 
 
-async def _wait_for_nodes_to_boot(db: AsyncClient, spinner: Union[bool, Spinner]):
-    n_booting_nodes = await _num_booting_nodes(db)
-    if n_booting_nodes == 0:
-        filter_ = FieldFilter("status", "==", "RUNNING")
-        running_nodes_generator = db.collection("nodes").where(filter=filter_).stream()
-        running_nodes = [n.to_dict() async for n in running_nodes_generator]
-        if running_nodes:
-            raise AllNodesBusy("All nodes are busy, please try again later.")
-        else:
-            main_service_url = json.loads(CONFIG_PATH.read_text())["cluster_dashboard_url"]
-            msg = "\n\nZero nodes are ready. Is your cluster turned on?\n"
-            msg += f'Go to {main_service_url} and hit "⏻ Start" to turn it on!\n\n'
-            raise NoNodes(msg)
-
-    ready_nodes = []
-    while n_booting_nodes != 0:
-        if spinner:
-            msg = f"{len(ready_nodes)} Nodes are ready, waiting for remaining {n_booting_nodes} "
-            spinner.text = msg + "to boot before starting ..."
-        await asyncio.sleep(0.1)
-        n_booting_nodes = await _num_booting_nodes(db)
+class JobCanceled(Exception):
+    pass
 
 
 async def _num_booting_nodes(db: AsyncClient):
@@ -96,9 +77,56 @@ async def _num_booting_nodes(db: AsyncClient):
     return len(nodes_snapshot)
 
 
+async def _num_running_nodes(db: AsyncClient):
+    filter_ = FieldFilter("status", "==", "RUNNING")
+    nodes_snapshot = await db.collection("nodes").where(filter=filter_).get()
+    return len(nodes_snapshot)
+
+
+async def _wait_for_nodes_to_be_ready(db: AsyncClient, spinner: Union[bool, Spinner]):
+    n_booting_nodes = await _num_booting_nodes(db)
+    n_running_nodes = await _num_running_nodes(db)
+
+    if n_running_nodes != 0:
+        start_time = time()
+        time_waiting = 0
+        while n_running_nodes != 0:
+            if spinner:
+                msg = f"Waiting for {n_running_nodes} running nodes to become ready..."
+                spinner.text = msg + f" (timeout in {4-time_waiting:.1f}s)"
+            await asyncio.sleep(0.01)
+            n_running_nodes = await _num_running_nodes(db)
+            ready_nodes = await _get_ready_nodes(db)
+            time_waiting = time() - start_time
+            if time_waiting > 4:
+                raise AllNodesBusy("All nodes are busy, please try again later.")
+
+    elif n_booting_nodes != 0:
+        ready_nodes = await _get_ready_nodes(db)
+        while n_booting_nodes != 0:
+            if spinner:
+                msg = f"{len(ready_nodes)} Nodes are ready, waiting for remaining {n_booting_nodes}"
+                spinner.text = msg + " to boot before starting ..."
+            await asyncio.sleep(0.1)
+            n_booting_nodes = await _num_booting_nodes(db)
+            ready_nodes = await _get_ready_nodes(db)
+        if not ready_nodes:
+            main_service_url = json.loads(CONFIG_PATH.read_text())["cluster_dashboard_url"]
+            msg = "\n\nZero nodes are ready after Booting. Did they fail to boot?\n"
+            msg += f"Check your clsuter dashboard at: {main_service_url}\n\n"
+            raise NoNodes(msg)
+
+    ready_nodes = await _get_ready_nodes(db)
+    if n_booting_nodes == 0 and n_running_nodes == 0 and len(ready_nodes) == 0:
+        main_service_url = json.loads(CONFIG_PATH.read_text())["cluster_dashboard_url"]
+        msg = "\n\nZero nodes are ready. Is your cluster turned on?\n"
+        msg += f'Go to {main_service_url} and hit "⏻ Start" to turn it on!\n\n'
+        raise NoNodes(msg)
+    return ready_nodes
+
+
 async def _get_ready_nodes(db: AsyncClient):
-    filter_ = FieldFilter("status", "==", "READY")
-    docs = await db.collection("nodes").where(filter=filter_).get()
+    docs = await db.collection("nodes").where(filter=FieldFilter("status", "==", "READY")).get()
     return [d.to_dict() for d in docs]
 
 
@@ -111,13 +139,7 @@ async def _select_nodes_to_assign_to_job(
 ):
     ready_nodes = await _get_ready_nodes(db)
     if not ready_nodes:
-        await _wait_for_nodes_to_boot(db, spinner)
-        ready_nodes = await _get_ready_nodes(db)
-        if not ready_nodes:
-            main_service_url = json.loads(CONFIG_PATH.read_text())["cluster_dashboard_url"]
-            msg = "\n\nZero nodes are ready after Booting. Did they fail to boot?\n"
-            msg += f"Check your clsuter dashboard at: {main_service_url}\n\n"
-            raise NoNodes(msg)
+        ready_nodes = await _wait_for_nodes_to_be_ready(db, spinner)
 
     if ready_nodes[0]["node_svc_version"] != __version__:
         raise Exception("version mismatch :(")
@@ -259,18 +281,27 @@ async def _execute_job(
             msg = f"Running {len(inputs)} inputs through `{function_.__name__}` "
             spinner.text = msg + f"(0/{len(inputs)} completed)"
 
+        JOB_CALCELED_MSG = ""
         if not background:
             # start sending "alive" pings to nodes
             ping_process = await run_in_subprocess(send_alive_pings, job_id)
             stack.callback(ping_process.kill)
 
             # start stdout/stderr stream
-            def _on_new_log_message(col_snapshot, changes, read_time):
+            def _on_new_logs_doc(col_snapshot, changes, read_time):
+                nonlocal JOB_CALCELED_MSG
                 for change in changes:
-                    spinner_compatible_print(change.document.to_dict()["msg"])
+                    for log in change.document.to_dict()["logs"]:
+                        # ignore tb's written as log messages because errors are reraised here
+                        if log.get("is_error"):
+                            job = SYNC_DB.collection("jobs").document(job_id).get().to_dict()
+                            if job["status"] == "CANCELED":
+                                JOB_CALCELED_MSG = log["message"]
+                        else:
+                            spinner_compatible_print(log["message"])
 
             logs_collection = SYNC_DB.collection("jobs").document(job_id).collection("logs")
-            log_stream = logs_collection.on_snapshot(_on_new_log_message)
+            log_stream = logs_collection.on_snapshot(_on_new_logs_doc)
             stack.callback(log_stream.unsubscribe)
 
         async def _check_single_node(node: dict):
@@ -286,8 +317,13 @@ async def _execute_job(
                 except UnpicklingError as e:
                     if not "Memo value not found at index" in str(e):
                         raise e
-                    msg = f"Node {node['instance_name']} disconnected while transmitting results.\n"
-                    raise NodeDisconnected(msg)
+
+                    job_doc = await job_ref.get()
+                    if job_doc.to_dict()["status"] == "CANCELED":
+                        raise JobCanceled("Job canceled from dashboard.")
+                    else:
+                        msg = f"Node {node['instance_name']} disconnected while transmitting results.\n"
+                        raise NodeDisconnected(msg)
 
                 return_values = []
                 for input_index, is_error, result_pkl in node_status["results"]:
@@ -311,6 +347,9 @@ async def _execute_job(
                     await asyncio.sleep(0.3)
                 else:
                     await asyncio.sleep(0)
+
+            if JOB_CALCELED_MSG:
+                raise JobCanceled(f"\n\n{JOB_CALCELED_MSG}\n")
 
             total_parallelism = 0
             all_nodes_empty = True
@@ -492,7 +531,9 @@ def remote_parallel_map(
         # After a `FirestoreTimeout` further attempts to use firestore will take forever then fail.
         if not isinstance(e, FirestoreTimeout):
             try:
-                SYNC_DB.collection("jobs").document(job_id).update({"status": "FAILED"})
+                job_doc = SYNC_DB.collection("jobs").document(job_id)
+                if job_doc.get().to_dict()["status"] != "CANCELED":
+                    job_doc.update({"status": "FAILED"})
             except Exception:
                 pass
 

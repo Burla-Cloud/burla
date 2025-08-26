@@ -8,13 +8,16 @@ interface SettingsContextType {
 }
 
 const defaultSettings: SettingsData = {
-    containerImage: "burlacloud/default-image-py3.12",
-    pythonVersion: "3.12",
-    machineType: "n4-standard-4",
+    containerImage: "if you can see this",
+    pythonVersion: "",
+    machineType: "then something is broken!",
     machineQuantity: 1,
-    diskSize: 50,
-    inactivityTimeout: 10,
+    diskSize: 20,
+    inactivityTimeout: 5,
+    gcpRegion: " :) ",
     users: [],
+    burlaVersion: " :( ",
+    googleCloudProjectId: " :) ",
 };
 
 const SettingsContext = createContext<SettingsContextType | undefined>(undefined);

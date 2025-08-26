@@ -3,13 +3,12 @@ import pickle
 import traceback
 import asyncio
 import aiohttp
-from time import time, sleep
+from time import time
 
 from google.cloud import firestore
 from google.cloud.firestore import FieldFilter, And
 from google.cloud.firestore_v1.field_path import FieldPath
 from google.cloud.firestore_v1.async_client import AsyncClient
-from aiohttp.client_exceptions import ServerDisconnectedError
 
 from node_service import PROJECT_ID, SELF, INSTANCE_NAME, REINIT_SELF
 from node_service.helpers import Logger, format_traceback
@@ -96,19 +95,27 @@ async def _job_watcher(
     node_doc = node_docs_collection.document(INSTANCE_NAME)
     await node_doc.set({"current_num_results": 0})
 
+    JOB_FAILED = False
+    JOB_CANCELED = False
     LAST_CLIENT_PING_TIMESTAMP = time()
     neighboring_node = None
     neighbor_had_no_inputs_at = None
     seconds_neighbor_had_no_inputs = 0
 
     def _on_job_snapshot(doc_snapshot, changes, read_time):
-        nonlocal LAST_CLIENT_PING_TIMESTAMP
+        nonlocal LAST_CLIENT_PING_TIMESTAMP, JOB_FAILED, JOB_CANCELED
         LAST_CLIENT_PING_TIMESTAMP = time()
+        for change in changes:
+            if change.document.to_dict()["status"] == "FAILED":
+                JOB_FAILED = True
+                break
+            elif change.document.to_dict()["status"] == "CANCELED":
+                JOB_CANCELED = True
+                break
 
-    if not is_background_job:
-        # Client intentionally updates the job doc every 2sec to signal that it's still listening.
-        sync_job_doc = sync_db.collection("jobs").document(SELF["current_job"])
-        job_watch = sync_job_doc.on_snapshot(_on_job_snapshot)
+    # Client intentionally updates the job doc every 2sec to signal that it's still listening.
+    sync_job_doc = sync_db.collection("jobs").document(SELF["current_job"])
+    job_watch = sync_job_doc.on_snapshot(_on_job_snapshot)
 
     all_workers_idle = False
     all_workers_empty = False
@@ -170,14 +177,19 @@ async def _job_watcher(
             client_has_all_results = client_has_all_results or is_background_job
             job_is_done = total_results == n_inputs and client_has_all_results
 
-        if job_is_done:
-            logger.log("Job is done, updating job status ...")
-            try:
-                await job_doc.update({"status": "COMPLETED"})
-            except Exception:
-                # ignore because this can get hit by like 100's of nodes at once
-                # one of them will succeed and the others will throw errors we can ignore.
-                pass
+        if job_is_done or JOB_FAILED or JOB_CANCELED:
+            logger.log("Job has failed!" if JOB_FAILED else "Job is done!")
+            # check again in case `job_is_done` then failed or canceled
+            job_snapshot = await job_doc.get()
+            JOB_FAILED = job_snapshot.to_dict()["status"] == "FAILED"
+            JOB_CANCELED = job_snapshot.to_dict()["status"] == "CANCELED"
+            if not (JOB_FAILED or JOB_CANCELED):
+                try:
+                    await job_doc.update({"status": "COMPLETED"})
+                except Exception:
+                    # ignore because this can get hit by like 100's of nodes at once
+                    # one of them will succeed and the others will throw errors we can ignore.
+                    pass
             await reinit_workers(session, logger, async_db)
             break
 

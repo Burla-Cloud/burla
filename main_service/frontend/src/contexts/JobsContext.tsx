@@ -28,7 +28,7 @@ export const JobsProvider = ({ children }: { children: React.ReactNode }) => {
     const fetchJobs = useCallback(async () => {
         setIsLoading(true);
         try {
-            const response = await fetch(`/v1/jobs_paginated?page=${page}`);
+            const response = await fetch(`/v1/jobs?page=${page}`);
             const json = await response.json();
             const jobList = (json.jobs ?? []).map(createNewJob);
 
@@ -52,7 +52,7 @@ export const JobsProvider = ({ children }: { children: React.ReactNode }) => {
                 setTotalPages(1);
             }
         } catch (err) {
-            console.error("❌ Error fetching paginated jobs:", err);
+            console.error("Error fetching jobs:", err);
         } finally {
             setIsLoading(false);
         }
@@ -63,61 +63,98 @@ export const JobsProvider = ({ children }: { children: React.ReactNode }) => {
     }, [page, fetchJobs]);
 
     useEffect(() => {
-        const eventSource = new EventSource("/v1/jobs_paginated?stream=true");
+        let source: EventSource | null = null;
+        let rotateTimeoutId: number | undefined;
+        let closingForRotate = false;
+        let stopped = false;
 
-        eventSource.onmessage = (event) => {
-            try {
-                const data = JSON.parse(event.data);
-                if (data.deleted) return;
+        const ROTATE_MS = 55_000;
 
-                const newJob: BurlaJob = {
-                    id: data.jobId,
-                    status: data.status as JobsStatus,
-                    user: data.user || "Unknown",
-                    checked: false,
-                    n_inputs: typeof data.n_inputs === "number" ? data.n_inputs : 0,
-                    n_results: typeof data.n_results === "number" ? data.n_results : 0,
-                    function_name:
-                        typeof data.function_name === "string" ? data.function_name : "Unknown",
-                    started_at:
-                        typeof data.started_at === "number"
-                            ? new Date(data.started_at * 1000)
-                            : undefined,
-                };
-
-                setJobs((prevJobs) => {
-                    const idx = prevJobs.findIndex((j) => j.id === newJob.id);
-                    if (idx !== -1) {
-                        const updated = [...prevJobs];
-                        updated[idx] = { ...updated[idx], ...newJob };
-                        return updated;
-                    }
-
-                    if (page === 0) {
-                        return [newJob, ...prevJobs]
-                            .filter(
-                                (job, index, arr) => arr.findIndex((j) => j.id === job.id) === index
-                            )
-                            .sort(
-                                (a, b) =>
-                                    (b.started_at?.getTime() || 0) - (a.started_at?.getTime() || 0)
-                            )
-                            .slice(0, 15);
-                    }
-
-                    return prevJobs;
-                });
-            } catch (err) {
-                console.error("❌ Failed to parse SSE job update:", err);
-            }
+        const armRotationTimer = () => {
+            if (rotateTimeoutId) window.clearTimeout(rotateTimeoutId);
+            rotateTimeoutId = window.setTimeout(() => {
+                if (stopped) return;
+                closingForRotate = true;
+                if (source) source.close();
+                window.setTimeout(() => {
+                    closingForRotate = false;
+                    open();
+                }, 0);
+            }, ROTATE_MS);
         };
 
-        eventSource.onerror = (err) => {
-            console.error("❌ SSE failed:", err);
-            eventSource.close();
+        const open = () => {
+            if (stopped) return;
+            if (source) source.close();
+            source = new EventSource(`/v1/jobs?stream=true&page=${page}`);
+
+            source.onopen = () => {
+                armRotationTimer();
+            };
+
+            source.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    if (data.deleted) return;
+
+                    const newJob: BurlaJob = {
+                        id: data.jobId,
+                        status: data.status as JobsStatus,
+                        user: data.user || "Unknown",
+                        checked: false,
+                        n_inputs: typeof data.n_inputs === "number" ? data.n_inputs : 0,
+                        n_results: typeof data.n_results === "number" ? data.n_results : 0,
+                        function_name:
+                            typeof data.function_name === "string" ? data.function_name : "Unknown",
+                        started_at:
+                            typeof data.started_at === "number"
+                                ? new Date(data.started_at * 1000)
+                                : undefined,
+                    };
+
+                    setJobs((prevJobs) => {
+                        const idx = prevJobs.findIndex((j) => j.id === newJob.id);
+                        if (idx !== -1) {
+                            const updated = [...prevJobs];
+                            updated[idx] = { ...updated[idx], ...newJob };
+                            return updated;
+                        }
+
+                        if (page === 0) {
+                            return [newJob, ...prevJobs]
+                                .filter(
+                                    (job, index, arr) =>
+                                        arr.findIndex((j) => j.id === job.id) === index
+                                )
+                                .sort(
+                                    (a, b) =>
+                                        (b.started_at?.getTime() || 0) -
+                                        (a.started_at?.getTime() || 0)
+                                )
+                                .slice(0, 15);
+                        }
+
+                        return prevJobs;
+                    });
+                } catch (err) {
+                    console.error("Failed to parse SSE job update:", err);
+                }
+            };
+
+            source.onerror = (err) => {
+                if (closingForRotate) return; // intentional close
+                if (rotateTimeoutId) window.clearTimeout(rotateTimeoutId);
+                console.error("SSE error (jobs_paginated), retry in 5s:", err);
+            };
         };
 
-        return () => eventSource.close();
+        open();
+
+        return () => {
+            stopped = true;
+            if (rotateTimeoutId) window.clearTimeout(rotateTimeoutId);
+            if (source) source.close();
+        };
     }, [page]);
 
     return (

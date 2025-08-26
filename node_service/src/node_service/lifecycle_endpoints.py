@@ -233,8 +233,9 @@ def reboot_containers(
             _pull_image_if_missing(spec.image, logger, docker_client)
             num_workers = INSTANCE_N_CPUS if NUM_GPUS == 0 else NUM_GPUS
             for i in range(num_workers):
-                # have just one worker send logs to gcl, too many will break gcl
-                install_worker = (i == 0) and (not IN_LOCAL_DEV_MODE)
+                # have just one worker install the worker svc, then share through docker volume
+                # (too many will ddoss github / be slow)
+                install_worker = i == 0
                 args = (spec.python_version, spec.image)
                 futures.append(executor.submit(Worker, *args, install_worker=install_worker))
 

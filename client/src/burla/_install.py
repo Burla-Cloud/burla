@@ -103,6 +103,14 @@ def _install(spinner):
 
     _open_port_8080_to_VMs_with_tag_burla_cluster_node(spinner)
 
+    # create cluster id token secret (must exist for service accounts to be created)
+    cmd = 'gcloud secrets create burla-cluster-id-token --replication-policy="automatic"'
+    create_cmd_result = run_command(cmd, raise_error=False)
+    cmd_threw_error = create_cmd_result.returncode != 0
+    if cmd_threw_error and ("already exists" not in create_cmd_result.stderr.decode()):
+        spinner.fail("✗")
+        raise VerboseCalledProcessError(cmd, create_cmd_result.stderr)
+
     # create service accounts: main-service, compute-engine-default, client-user
     main_svc_account_email, client_svc_account_key = _create_service_accounts(spinner, PROJECT_ID)
 
@@ -251,28 +259,20 @@ def _open_port_8080_to_VMs_with_tag_burla_cluster_node(spinner):
 
 
 def _register_cluster_and_save_cluster_id_token(spinner, PROJECT_ID, client_svc_account_key):
-    spinner.text = "Creating secrets ... "
+    spinner.text = "Creating/Rotating secrets ... "
     spinner.start()
 
-    # create cluster id token secret
+    # get cluster_id_token secret value
     cluster_id_token = None
     cmd = "gcloud secrets versions access latest --secret=burla-cluster-id-token"
     result = run_command(cmd, raise_error=False)
     if result.returncode != 0 and "NOT_FOUND" in result.stderr.decode():
-        # ensure secret exists
-        already_created = False
-        cmd = 'gcloud secrets create burla-cluster-id-token --replication-policy="automatic"'
-        create_cmd_result = run_command(cmd, raise_error=False)
-        cmd_threw_error = create_cmd_result.returncode != 0
-        # consider case where secret exists, but the `latest` version was never committed
-        if cmd_threw_error and ("already exists" not in create_cmd_result.stderr.decode()):
-            spinner.fail("✗")
-            raise VerboseCalledProcessError(cmd, create_cmd_result.stderr)
+        # means secret exists, but no `latest` version created yet
+        pass
     elif result.returncode != 0:
         spinner.fail("✗")
         raise VerboseCalledProcessError(cmd, result.stderr)
     else:
-        already_created = True
         cluster_id_token = result.stdout.decode().strip()
 
     # register cluster
@@ -316,10 +316,7 @@ def _register_cluster_and_save_cluster_id_token(spinner, PROJECT_ID, client_svc_
     response = requests.post(users_url, json={"new_user": cluster_owner_email}, headers=headers)
     response.raise_for_status()
 
-    if already_created:
-        spinner.text = "Creating secret ... Secret already exists."
-    else:
-        spinner.text = "Creating secret ... Done."
+    spinner.text = "Creating/Rotating secrets ...  Done."
     spinner.ok("✓")
     return cluster_id_token
 
@@ -373,15 +370,10 @@ def _create_service_accounts(spinner, PROJECT_ID):
             raise Exception("svc account not found 120s after successful create cmd.")
 
     # apply roles to burla-main-service svc account:
-    run_command(cmd)
-    condition_title = "Allow Firestore access to burla db only"
-    condition_expression = f'resource.name=="projects/{PROJECT_ID}/databases/burla"'
-    cmd = (
-        f"gcloud projects add-iam-policy-binding {PROJECT_ID} "
-        f"--member=serviceAccount:{main_svc_email} "
-        f"--role=roles/datastore.user "
-        f"--condition='expression={condition_expression},title={condition_title}'"
-    )
+    # can't attach `burla db only` condition to this, in addition to others for some reason:
+    cmd = f"gcloud projects add-iam-policy-binding {PROJECT_ID}"
+    cmd += f" --member=serviceAccount:{main_svc_email} --role=roles/datastore.user"
+    cmd += f" --condition=None"
     run_command(cmd)
     cmd = f"gcloud projects add-iam-policy-binding {PROJECT_ID}"
     cmd += f" --member=serviceAccount:{main_svc_email} --role=roles/logging.logWriter"
@@ -448,12 +440,14 @@ def _create_service_accounts(spinner, PROJECT_ID):
 def _create_firestore_database(spinner):
     spinner.text = "Creating Firestore database ... "
     spinner.start()
+    client = Client(database="burla")
+
     cmd = "gcloud firestore databases create --database=burla"
     cmd += f" --location=us-central1 --type=firestore-native"
     result = run_command(cmd, raise_error=False)
     if result.returncode != 0 and "already exists" in result.stderr.decode():
         try:
-            collection = Client(database="burla").collection("cluster_config")
+            collection = client.collection("cluster_config")
             collection.document("cluster_config").update(DEFAULT_CLUSTER_CONFIG)
         except NotFound:
             collection.document("cluster_config").set(DEFAULT_CLUSTER_CONFIG)
@@ -467,7 +461,7 @@ def _create_firestore_database(spinner):
         start = time()
         while True:
             try:
-                collection = Client(database="burla").collection("cluster_config")
+                collection = client.collection("cluster_config")
                 collection.document("cluster_config").set(DEFAULT_CLUSTER_CONFIG)
                 break
             except NotFound as e:
@@ -476,3 +470,7 @@ def _create_firestore_database(spinner):
                     raise e
         spinner.text = "Creating Firestore database ... Done."
         spinner.ok("✓")
+        # This need's to be restarted here or it freezes because the firestore client steal's the
+        # GIL and dosen't let it go for a bit. Commenting out the doc.set also works, idk why.
+        spinner.stop()
+        spinner.start()

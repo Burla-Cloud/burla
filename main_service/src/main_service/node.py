@@ -370,7 +370,7 @@ class Node:
         	"http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token" \
         	| jq -r .access_token)
         
-        	MSG="Startup script failed! See Google Cloud Logging. Deleting VM {self.instance_name}."
+        	MSG="Startup script failed! See Google Cloud Logging. Deleting VM {self.instance_name} ... "
         	DB_BASE_URL="https://firestore.googleapis.com/v1/projects/{PROJECT_ID}/databases/burla/documents"
         	payload=$(jq -n --arg msg "$MSG" --arg ts "$(date +%s)" '{{"fields":{{"msg":{{"stringValue":$msg}},"ts":{{"integerValue":$ts}},}}}}')
         	curl -sS -X POST "$DB_BASE_URL/nodes/{self.instance_name}/logs" \
@@ -393,7 +393,6 @@ class Node:
         	curl -sS -X DELETE \
             -H "Authorization: Bearer $ACCESS_TOKEN" \
             "https://compute.googleapis.com/compute/v1/projects/{PROJECT_ID}/zones/$ZONE/instances/$INSTANCE_NAME" || true
-        
         	exit 1
         }}
         trap 'handle_error' ERR
@@ -416,7 +415,6 @@ class Node:
         git sparse-checkout set node_service
         git checkout {CURRENT_BURLA_VERSION}
         cd node_service
-        false
         python -m pip install --break-system-packages .
 
         MSG="Successfully installed node service."

@@ -103,16 +103,6 @@ def _install(spinner):
 
     _open_port_8080_to_VMs_with_tag_burla_cluster_node(spinner)
 
-    # create cluster id token secret
-    cmd = "gcloud secrets versions access latest --secret=burla-cluster-id-token"
-    result = run_command(cmd, raise_error=False)
-    if result.returncode != 0 and "NOT_FOUND" in result.stderr.decode():
-        cmd = 'gcloud secrets create burla-cluster-id-token --replication-policy="automatic"'
-        run_command(cmd)
-    elif result.returncode != 0:
-        spinner.fail("✗")
-        raise VerboseCalledProcessError(cmd, result.stderr)
-
     # create service accounts: main-service, compute-engine-default, client-user
     main_svc_account_email, client_svc_account_key = _create_service_accounts(spinner, PROJECT_ID)
 
@@ -269,9 +259,15 @@ def _register_cluster_and_save_cluster_id_token(spinner, PROJECT_ID, client_svc_
     cmd = "gcloud secrets versions access latest --secret=burla-cluster-id-token"
     result = run_command(cmd, raise_error=False)
     if result.returncode != 0 and "NOT_FOUND" in result.stderr.decode():
+        # ensure secret exists
         already_created = False
         cmd = 'gcloud secrets create burla-cluster-id-token --replication-policy="automatic"'
-        run_command(cmd)
+        create_cmd_result = run_command(cmd, raise_error=False)
+        cmd_threw_error = create_cmd_result.returncode != 0
+        # consider case where secret exists, but the `latest` version was never committed
+        if cmd_threw_error and ("already exists" not in create_cmd_result.stderr.decode()):
+            spinner.fail("✗")
+            raise VerboseCalledProcessError(cmd, create_cmd_result.stderr)
     elif result.returncode != 0:
         spinner.fail("✗")
         raise VerboseCalledProcessError(cmd, result.stderr)
@@ -377,11 +373,12 @@ def _create_service_accounts(spinner, PROJECT_ID):
             raise Exception("svc account not found 120s after successful create cmd.")
 
     # apply roles to burla-main-service svc account:
+    run_command(cmd)
     condition_title = "Allow Firestore access to burla db only"
     condition_expression = f'resource.name=="projects/{PROJECT_ID}/databases/burla"'
     cmd = (
         f"gcloud projects add-iam-policy-binding {PROJECT_ID} "
-        f"--member=serviceAccount:{client_svc_email} "
+        f"--member=serviceAccount:{main_svc_email} "
         f"--role=roles/datastore.user "
         f"--condition='expression={condition_expression},title={condition_title}'"
     )

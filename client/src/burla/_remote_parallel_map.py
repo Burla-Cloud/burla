@@ -71,6 +71,10 @@ class JobCanceled(Exception):
     pass
 
 
+class VersionMismatch(Exception):
+    pass
+
+
 async def _num_booting_nodes(db: AsyncClient):
     filter_ = FieldFilter("status", "==", "BOOTING")
     nodes_snapshot = await db.collection("nodes").where(filter=filter_).get()
@@ -141,8 +145,22 @@ async def _select_nodes_to_assign_to_job(
     if not ready_nodes:
         ready_nodes = await _wait_for_nodes_to_be_ready(db, spinner)
 
-    if ready_nodes[0]["node_svc_version"] != __version__:
-        raise Exception("version mismatch :(")
+    node_svc_version = ready_nodes[0]["node_svc_version"]
+    if node_svc_version != __version__:
+        cluster_version_list = [int(x) for x in node_svc_version.split(".")]
+        client_version_list = [int(x) for x in __version__.split(".")]
+        cluster_version_more_recent = cluster_version_list > client_version_list
+
+        msg = "\n\nIncompatible cluster and client versions!\n"
+        if cluster_version_more_recent:
+            msg += f"Your cluster is on v{node_svc_version}, but your client is on v{__version__}\n"
+            msg += f"Please update your client using the command: "
+            msg += f"`pip install burla=={node_svc_version}`"
+        else:
+            msg += f"Your client is on v{__version__}, but your cluster is on v{node_svc_version}\n"
+            msg += f"Please update your cluster to v{__version__} by running the command: "
+            msg += f"`burla_install`"
+        raise VersionMismatch(msg + "\n")
 
     planned_initial_job_parallelism = 0
     nodes_to_assign = []

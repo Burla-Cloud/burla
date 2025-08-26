@@ -1,7 +1,7 @@
 from time import sleep
 from burla import remote_parallel_map
 
-my_inputs = list(range(100))
+my_inputs = list(range(1000))
 
 
 def my_function5(my_input):

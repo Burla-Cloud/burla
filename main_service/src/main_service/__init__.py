@@ -22,6 +22,7 @@ os.environ["GRPC_VERBOSITY"] = "ERROR"
 os.environ["GLOG_minloglevel"] = "2"
 
 CURRENT_BURLA_VERSION = "1.2.2"
+print(f"CURRENT_BURLA_VERSION: {CURRENT_BURLA_VERSION}")
 
 # This is the only possible alternative "mode".
 # In this mode everything runs locally in docker containers.

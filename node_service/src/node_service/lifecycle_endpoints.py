@@ -28,6 +28,7 @@ from node_service import (
     NUM_GPUS,
     get_logger,
     get_add_background_task_function,
+    __version__,
 )
 from node_service.helpers import Logger
 from node_service.worker import Worker

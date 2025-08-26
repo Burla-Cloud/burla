@@ -22,7 +22,7 @@ from starlette.datastructures import UploadFile
 from google.cloud import logging, secretmanager, firestore
 from google.cloud.compute_v1 import InstancesClient
 
-__version__ = "1.2.1"
+__version__ = "1.2.2"
 CREDENTIALS, PROJECT_ID = google.auth.default()
 BURLA_BACKEND_URL = "https://backend.burla.dev"
 
@@ -167,13 +167,13 @@ async def lifespan(app: FastAPI):
     # this won't work because this whole file re-runs, and SELF is reset when reloading.)
 
     try:
-        # boot containers before accepting any requests.
-        containers = [Container(**c) for c in json.loads(os.environ["CONTAINERS"])]
-        await run_in_threadpool(reboot_containers, new_container_config=containers, logger=logger)
-
         if INACTIVITY_SHUTDOWN_TIME_SEC:
             asyncio.create_task(shutdown_if_idle_for_too_long(logger=logger))
             logger.log(f"Set to shutdown if idle for {INACTIVITY_SHUTDOWN_TIME_SEC} sec.")
+
+        # boot containers before accepting any requests.
+        containers = [Container(**c) for c in json.loads(os.environ["CONTAINERS"])]
+        await run_in_threadpool(reboot_containers, new_container_config=containers, logger=logger)
 
     except Exception as e:
         SELF["FAILED"] = True

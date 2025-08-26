@@ -1,7 +1,7 @@
 .ONESHELL:
 .SILENT:
 
-BURLA_VERSION = 1.2.1
+BURLA_VERSION = 1.2.2
 WEBSERVICE_NAME = burla-main-service
 PYTHON_MODULE_NAME = main_service
 
@@ -44,9 +44,7 @@ publish:
 	echo $${DOCKERHUB_TOKEN} | docker login -u jakezuliani --password-stdin; \
 	:; \
 	docker tag $${TEST_IMAGE_NAME} burlacloud/main-service:$(BURLA_VERSION); \
-	docker push burlacloud/main-service:$(BURLA_VERSION); \
-	docker tag $${TEST_IMAGE_NAME} burlacloud/main-service:latest; \
-	docker push burlacloud/main-service:latest
+	docker push burlacloud/main-service:$(BURLA_VERSION)
 
 image:
 	set -e; \
@@ -64,14 +62,10 @@ image:
 	); \
 	NEW_TEST_IMAGE_TAG=$$(($${TEST_IMAGE_TAG} + 1)); \
 	TEST_IMAGE_NAME_SEQUENTIAL=$$( echo $${TEST_IMAGE_BASE_NAME}:$${NEW_TEST_IMAGE_TAG} ); \
-	TEST_IMAGE_NAME_LATEST=$$( echo $${TEST_IMAGE_BASE_NAME}:latest ); \
 	docker build --platform linux/amd64 -t $${TEST_IMAGE_NAME_SEQUENTIAL} .; \
 	docker push $${TEST_IMAGE_NAME_SEQUENTIAL}; \
-	docker tag $${TEST_IMAGE_NAME_SEQUENTIAL} $${TEST_IMAGE_NAME_LATEST}; \
-	docker push $${TEST_IMAGE_NAME_LATEST}; \
 	echo "Successfully built Docker Image:"; \
 	echo "$${TEST_IMAGE_NAME_SEQUENTIAL}"; \
-	echo "$${TEST_IMAGE_NAME_LATEST}"; \
 	echo "";
 
 container:

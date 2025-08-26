@@ -90,6 +90,8 @@ class Worker:
                     echo "Installing local dev version ..."
                     mkdir -p /worker_service_python_env
                     mkdir -p /burla/worker_service
+                    # del everything in /worker_service_python_env except `worker_service` (mounted)
+                    find /worker_service_python_env -mindepth 1 -maxdepth 1 ! -name worker_service -exec rm -rf {{}} +
                     cd /burla/worker_service
                     $python_cmd -m pip install . --break-system-packages --no-cache-dir \
                         --only-binary=:all: --target /worker_service_python_env

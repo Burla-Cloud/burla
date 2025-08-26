@@ -103,6 +103,16 @@ def _install(spinner):
 
     _open_port_8080_to_VMs_with_tag_burla_cluster_node(spinner)
 
+    # create cluster id token secret
+    cmd = "gcloud secrets versions access latest --secret=burla-cluster-id-token"
+    result = run_command(cmd, raise_error=False)
+    if result.returncode != 0 and "NOT_FOUND" in result.stderr.decode():
+        cmd = 'gcloud secrets create burla-cluster-id-token --replication-policy="automatic"'
+        run_command(cmd)
+    elif result.returncode != 0:
+        spinner.fail("✗")
+        raise VerboseCalledProcessError(cmd, result.stderr)
+
     # create service accounts: main-service, compute-engine-default, client-user
     main_svc_account_email, client_svc_account_key = _create_service_accounts(spinner, PROJECT_ID)
 

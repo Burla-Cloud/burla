@@ -165,7 +165,6 @@ def reboot_containers(
             "target_parallelism": None,
             "started_booting_at": time(),
             "all_inputs_received": False,
-            "node_svc_version": __version__,
         }
     )
     msg = f"Booting {INSTANCE_N_CPUS if NUM_GPUS == 0 else NUM_GPUS} workers ..."

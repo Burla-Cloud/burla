@@ -154,6 +154,7 @@ class Node:
 
         current_state = dict(self.__dict__)  # <- create copy to modify / save
         current_state["status"] = "BOOTING"
+        current_state["main_svc_version"] = CURRENT_BURLA_VERSION
         current_state["display_in_dashboard"] = True
         current_state["containers"] = [container.to_dict() for container in containers]
         attrs_to_not_save = ["db", "logger", "instance_client", "node_ref", "auth_headers"]

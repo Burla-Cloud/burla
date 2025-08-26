@@ -367,6 +367,8 @@ class Node:
 
         set -Eeuo pipefail
 
+        exec > >(tee /var/log/burla_startup.log /dev/console) 2>&1
+
         handle_error() {{
         	LINE_NUM="$1"
         	ACCESS_TOKEN=$(curl -s -H "Metadata-Flavor: Google" \
@@ -375,11 +377,17 @@ class Node:
         
         	MSG="Startup script failed at line $LINE_NUM. Deleting VM {self.instance_name}."
         	DB_BASE_URL="https://firestore.googleapis.com/v1/projects/{PROJECT_ID}/databases/burla/documents"
-        	payload=$(jq -n --arg msg "$MSG" --arg ts "$(date +%s)" '{{"fields":{{"msg":{{"stringValue":$msg}},"ts":{{"integerValue":$ts}}}}}}')
+        	payload=$(jq -n --arg msg "$MSG" --arg ts "$(date +%s)" --rawfile log <(tail -n 1000 /var/log/burla_startup.log) '{{"fields":{{"msg":{{"stringValue":$msg}},"ts":{{"integerValue":$ts}},"log":{{"stringValue":$log}}}}}}')
         	curl -sS -X POST "$DB_BASE_URL/nodes/{self.instance_name}/logs" \
             -H "Authorization: Bearer $ACCESS_TOKEN" \
             -H "Content-Type: application/json" \
             -d "$payload" || true
+
+		status_payload=$(jq -n '{{"fields":{{"status":{{"stringValue":"FAILED"}},"display_in_dashboard":{{"booleanValue":true}}}}}}')
+		curl -sS -X PATCH "$DB_BASE_URL/nodes/{self.instance_name}?updateMask.fieldPaths=status&updateMask.fieldPaths=display_in_dashboard" \
+            -H "Authorization: Bearer $ACCESS_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "$status_payload" || true
 
         	INSTANCE_NAME=$(curl -s -H "Metadata-Flavor: Google" \
             "http://metadata.google.internal/computeMetadata/v1/instance/name")

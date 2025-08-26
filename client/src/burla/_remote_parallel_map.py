@@ -35,7 +35,7 @@ from burla._helpers import (
 )
 
 
-# WARNING: if you warm up the connections here then back to back RPM calls cause GRPC issues!
+# WARNING: if you warm up the connections here, back to back RPM calls cause GRPC issues!
 # this is possible to fix but not a priority right now.
 # try:
 #     SYNC_DB, ASYNC_DB = get_db_clients()
@@ -118,6 +118,9 @@ async def _select_nodes_to_assign_to_job(
             msg = "\n\nZero nodes are ready after Booting. Did they fail to boot?\n"
             msg += f"Check your clsuter dashboard at: {main_service_url}\n\n"
             raise NoNodes(msg)
+
+    if ready_nodes[0]["node_svc_version"] != __version__:
+        raise Exception("version mismatch :(")
 
     planned_initial_job_parallelism = 0
     nodes_to_assign = []

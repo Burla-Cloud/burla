@@ -28,6 +28,7 @@ from node_service import (
     NUM_GPUS,
     get_logger,
     get_add_background_task_function,
+    __version__,
 )
 from node_service.helpers import Logger
 from node_service.worker import Worker
@@ -164,6 +165,7 @@ def reboot_containers(
             "target_parallelism": None,
             "started_booting_at": time(),
             "all_inputs_received": False,
+            "node_svc_version": __version__,
         }
     )
     msg = f"Booting {INSTANCE_N_CPUS if NUM_GPUS == 0 else NUM_GPUS} workers ..."

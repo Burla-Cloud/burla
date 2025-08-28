@@ -1,4 +1,4 @@
-import clusterImage from "@/assets/burla_logo.png";
+import clusterImage from "@/assets/logo.svg";
 import { Link } from "react-router-dom";
 
 const Sidebar = () => {

@@ -167,7 +167,6 @@ async def logout(request: Request, response: Response):
 @app.get("/jobs")
 @app.get("/jobs/{job_id}")
 @app.get("/settings")
-@app.get("/__error-test")
 def dashboard():
     return FileResponse("src/main_service/static/index.html")
 

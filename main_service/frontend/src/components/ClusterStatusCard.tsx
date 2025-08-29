@@ -33,7 +33,7 @@ export const ClusterStatusCard = ({
 
     return (
         <Card className="inline-block">
-            <CardContent className="px-7 pb-4 text-center">
+            <CardContent className="p-0 px-7 py-3 text-center">
                 <div className="flex items-center justify-center w-full gap-4">
                     <div className="flex items-center gap-2">
                         <div
@@ -41,7 +41,7 @@ export const ClusterStatusCard = ({
                                 "animate-pulse": config.pulse,
                             })}
                         />
-                        <span className="text-lg text-gray-800 font-medium">{config.text}</span>
+                        <span className="text-xl text-gray-800 font-medium">{config.text}</span>
                     </div>
 
                     <div
@@ -50,7 +50,7 @@ export const ClusterStatusCard = ({
                             showStats ? "max-w-[1000px] opacity-100" : "max-w-0 opacity-0"
                         )}
                     >
-                        <span className="text-base font-medium text-gray-700 leading-tight whitespace-nowrap">
+                        <span className="text-lg font-medium text-gray-700 leading-tight whitespace-nowrap">
                             {summary}
                         </span>
                     </div>

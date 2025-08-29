@@ -238,35 +238,36 @@ remote_parallel_map(my_function, [1, 2, 3, 4])`;
                         >
                             <X className="h-6 w-6" />
                         </button>
-                        <CardHeader className="pb-2">
+                        <CardHeader className="pb-4">
                             <CardTitle className="text-[1.45rem] font-semibold text-primary">
                                 Welcome to Burla!
                             </CardTitle>
                         </CardHeader>
-                        <CardContent className="space-y-4">
+                        <CardContent className="space-y-6">
                             <div className="grid grid-cols-1 gap-4">
-                                <div className="space-y-3">
-                                    <ol className="list-none space-y-2">
+                                <div className="space-y-4">
+                                    <ol className="list-none space-y-3">
                                         <li>
-                                            ⚡️ Hit <span className="font-semibold">⏻ Start</span>{" "}
-                                            to boot some machines.
+                                            🔌 &nbsp;Hit{" "}
+                                            <span className="font-semibold">⏻ Start</span> to boot
+                                            some machines.
                                         </li>
                                         <li>
-                                            📦 Run{" "}
+                                            📦 &nbsp;Run{" "}
                                             <code className="bg-gray-100 px-1 py-0.5 rounded">
                                                 pip install burla
                                             </code>
                                         </li>
                                         <li>
-                                            🔑 Run{" "}
+                                            🔑 &nbsp;Run{" "}
                                             <code className="bg-gray-100 px-1 py-0.5 rounded">
                                                 burla login
                                             </code>
                                         </li>
                                         <li>
-                                            🚀 Run some code:
+                                            🚀 &nbsp;Run some code:
                                             <br />
-                                            <div className="relative mt-2 inline-block w-fit max-w-full">
+                                            <div className="relative mt-3 inline-block w-fit max-w-full">
                                                 <button
                                                     type="button"
                                                     aria-label="Copy code"
@@ -288,7 +289,7 @@ remote_parallel_map(my_function, [1, 2, 3, 4])`;
                                                 >
                                                     <span className="inline-flex items-center gap-1">
                                                         <Copy className="h-3 w-3" />
-                                                        {copied ? "Copied" : "Copy"}
+                                                        {copied ? "Copied!" : "Copy"}
                                                     </span>
                                                 </button>
                                                 <pre className="bg-gray-50 border rounded p-3 overflow-x-auto text-sm font-mono pr-14 w-fit max-w-full">

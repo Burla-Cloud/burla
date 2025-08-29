@@ -166,11 +166,11 @@ const Dashboard = () => {
 
     return (
         <div className="flex-1 flex flex-col justify-start px-12 pt-6">
-            <div className="max-w-6xl mx-auto w-full">
+            <div className="max-w-6xl mx-auto w-full flex-1 flex flex-col">
                 {/* Move Dashboard Heading Up Precisely */}
                 <h1 className="text-3xl font-bold mt-2 mb-6 text-primary">Cluster Status</h1>
 
-                <div className="space-y-8">
+                <div className="space-y-8 flex-1">
                     <div className="grid grid-cols-1 md:grid-cols-4 gap-8">
                         <div className="md:col-span-3 justify-self-start">
                             {loading ? (
@@ -239,13 +239,12 @@ const Dashboard = () => {
                     ) : (
                         <NodesList nodes={nodes} />
                     )}
-
-                    <div className="text-center text-sm text-gray-500 mt-auto pt-8">
-                        Need help? Email me!{" "}
-                        <a href="mailto:jake@burla.dev" className="text-blue-500 hover:underline">
-                            jake@burla.dev
-                        </a>
-                    </div>
+                </div>
+                <div className="text-center text-sm text-gray-500 mt-auto pt-8">
+                    Need help? Email me!{" "}
+                    <a href="mailto:jake@burla.dev" className="text-blue-500 hover:underline">
+                        jake@burla.dev
+                    </a>
                 </div>
             </div>
         </div>

@@ -25,6 +25,7 @@ export const ClusterControls = ({
     const isStopping = status === "STOPPING";
     const isOn = status === "ON";
     const isOff = status === "OFF";
+    const isStartDisabled = isStarting || isStopping || isRebooting || disableStartButton;
 
     let startButtonIcon;
     let startButtonText;
@@ -37,17 +38,16 @@ export const ClusterControls = ({
     }
 
     return (
-        <div className="flex space-x-4">
+        <div className="flex space-x-5">
             <Button
                 size="lg"
                 onClick={onReboot}
-                disabled={isStarting || isStopping || isRebooting || disableStartButton}
+                disabled={isStartDisabled}
                 className={cn(
                     "w-32 text-white bg-primary hover:bg-primary/90 disabled:bg-gray-400",
                     highlightStart &&
                         !isOn &&
-                        !isRebooting &&
-                        !isStarting &&
+                        !isStartDisabled &&
                         "bg-blue-700 hover:bg-blue-800 animate-pulse glow-pulse-blue ring-4 ring-blue-500 ring-offset-2 ring-offset-background transition-shadow transform transition-transform hover:scale-105"
                 )}
             >

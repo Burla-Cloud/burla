@@ -67,7 +67,7 @@ const SettingsPage = () => {
 
     return (
         <div className="flex-1 flex flex-col justify-start px-12 pt-6">
-            <div className="max-w-6xl mx-auto w-full">
+            <div className="max-w-6xl mx-auto w-full flex-1 flex flex-col">
                 <div className="flex items-center justify-between mt-2 mb-6">
                     <h1 className="text-3xl font-bold text-primary">Settings</h1>
                     <Button
@@ -78,7 +78,7 @@ const SettingsPage = () => {
                         {isEditing ? "Save" : "Edit"}
                     </Button>
                 </div>
-                <div className="space-y-8">
+                <div className="space-y-8 flex-1">
                     {loading ? (
                         <Card className="w-full animate-pulse">
                             <CardHeader>
@@ -131,6 +131,12 @@ const SettingsPage = () => {
                             isEditing={isEditing}
                         />
                     )}
+                </div>
+                <div className="text-center text-sm text-gray-500 mt-auto pt-8">
+                    Need help? Email me!{" "}
+                    <a href="mailto:jake@burla.dev" className="text-blue-500 hover:underline">
+                        jake@burla.dev
+                    </a>
                 </div>
             </div>
         </div>

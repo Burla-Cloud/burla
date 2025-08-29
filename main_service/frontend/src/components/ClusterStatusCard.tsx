@@ -33,8 +33,8 @@ export const ClusterStatusCard = ({
 
     return (
         <Card className="inline-block">
-            <CardContent className="py-3">
-                <div className="flex items-center">
+            <CardContent className="px-7 pb-4 text-center">
+                <div className="flex items-center justify-center w-full gap-4">
                     <div className="flex items-center gap-2">
                         <div
                             className={cn("w-3 h-3 rounded-full", config.color, {
@@ -47,7 +47,7 @@ export const ClusterStatusCard = ({
                     <div
                         className={cn(
                             "overflow-hidden transition-all duration-500 ease-in-out",
-                            showStats ? "ml-6 max-w-[1000px] opacity-100" : "ml-0 max-w-0 opacity-0"
+                            showStats ? "max-w-[1000px] opacity-100" : "max-w-0 opacity-0"
                         )}
                     >
                         <span className="text-base font-medium text-gray-700 leading-tight whitespace-nowrap">

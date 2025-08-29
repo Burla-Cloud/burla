@@ -66,9 +66,9 @@ const SettingsPage = () => {
     };
 
     return (
-        <div className="flex-1 flex flex-col justify-start px-12 pt-0">
+        <div className="flex-1 flex flex-col justify-start px-12 pt-6">
             <div className="max-w-6xl mx-auto w-full">
-                <div className="flex items-center justify-between mt-[-4px] mb-[15px]">
+                <div className="flex items-center justify-between mt-2 mb-6">
                     <h1 className="text-3xl font-bold text-primary">Settings</h1>
                     <Button
                         onClick={handleToggleEdit}
@@ -78,7 +78,7 @@ const SettingsPage = () => {
                         {isEditing ? "Save" : "Edit"}
                     </Button>
                 </div>
-                <div className="space-y-6">
+                <div className="space-y-8">
                     {loading ? (
                         <Card className="w-full animate-pulse">
                             <CardHeader>
@@ -86,25 +86,25 @@ const SettingsPage = () => {
                                     <Skeleton className="h-6 w-40 mb-2" />
                                 </CardTitle>
                             </CardHeader>
-                            <CardContent className="space-y-8 pt-6">
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <CardContent className="space-y-10 pt-8">
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                                     <Skeleton className="h-10 w-full" />
                                     <Skeleton className="h-10 w-full" />
                                 </div>
-                                <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mt-6">
+                                <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mt-8">
                                     <Skeleton className="h-10 w-full" />
                                     <Skeleton className="h-10 w-full" />
                                     <Skeleton className="h-10 w-full" />
                                     <Skeleton className="h-10 w-full" />
                                 </div>
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-6">
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-8">
                                     <Skeleton className="h-10 w-full" />
                                     <Skeleton className="h-10 w-full" />
                                 </div>
-                                <div className="mt-8">
+                                <div className="mt-10">
                                     <Skeleton className="h-8 w-40 mb-2" />
                                     <Skeleton className="h-10 w-full" />
-                                    <div className="flex gap-2 mt-2">
+                                    <div className="flex gap-3 mt-3">
                                         <Skeleton className="h-8 w-24 rounded-md" />
                                         <Skeleton className="h-8 w-24 rounded-md" />
                                     </div>

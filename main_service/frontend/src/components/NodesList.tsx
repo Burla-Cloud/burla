@@ -9,6 +9,7 @@ import {
     TableRow,
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Cpu, X, ChevronRight, Copy } from "lucide-react";
 import { NodeStatus, BurlaNode } from "@/types/coreTypes";
 import React, { useEffect, useState, useRef } from "react";
@@ -228,108 +229,116 @@ remote_parallel_map(my_function, [1, 2, 3, 4])`;
     return (
         <div className="space-y-6">
             {showWelcome && (
-                <Card className="w-full relative">
-                    <button
-                        onClick={handleDismissWelcome}
-                        className="absolute top-2 right-2 p-1 hover:bg-gray-100 rounded-full"
-                        aria-label="Dismiss welcome message"
-                    >
-                        <X className="h-4 w-4" />
-                    </button>
-                    <CardHeader className="pb-4">
-                        <CardTitle className="text-xl font-semibold text-blue-700">
-                            Welcome to Burla!
-                        </CardTitle>
-                    </CardHeader>
-                    <CardContent className="space-y-4">
-                        <div className="grid grid-cols-1 gap-4">
-                            <div className="space-y-3">
-                                <ol className="list-decimal pl-5 space-y-2">
-                                    <li>
-                                        Hit <span className="font-semibold">⏻ Start</span> to boot
-                                        some machines.
-                                    </li>
-                                    <li>
-                                        Run{" "}
-                                        <code className="bg-gray-100 px-1 py-0.5 rounded">
-                                            pip install burla
-                                        </code>
-                                    </li>
-                                    <li>
-                                        Run{" "}
-                                        <code className="bg-gray-100 px-1 py-0.5 rounded">
-                                            burla login
-                                        </code>
-                                    </li>
-                                    <li>
-                                        Run the code:
-                                        <br />
-                                        <div className="relative mt-2 inline-block w-fit max-w-full">
-                                            <button
-                                                type="button"
-                                                aria-label="Copy code"
-                                                onClick={async () => {
-                                                    try {
-                                                        await navigator.clipboard.writeText(
-                                                            pythonExampleCode
-                                                        );
-                                                        setCopied(true);
-                                                        window.setTimeout(
-                                                            () => setCopied(false),
-                                                            1400
-                                                        );
-                                                    } catch (e) {
-                                                        console.error("Failed to copy", e);
-                                                    }
-                                                }}
-                                                className="absolute top-2 right-2 z-10 px-2 py-1 text-xs bg-white/90 hover:bg-white border rounded shadow-sm text-gray-700"
-                                            >
-                                                <span className="inline-flex items-center gap-1">
-                                                    <Copy className="h-3 w-3" />
-                                                    {copied ? "Copied" : "Copy"}
-                                                </span>
-                                            </button>
-                                            <pre className="bg-gray-50 border rounded p-3 overflow-x-auto text-sm font-mono pr-14 w-fit max-w-full">
-                                                <code>
-                                                    <span className="text-blue-700">from</span>{" "}
-                                                    burla{" "}
-                                                    <span className="text-blue-700">import</span>{" "}
-                                                    remote_parallel_map
-                                                    <br />
-                                                    <br />
-                                                    <span className="text-blue-700">def</span>{" "}
-                                                    <span className="text-amber-800">
-                                                        my_function
+                <div className="spotlight-surface rounded-xl my-8">
+                    <Card className="w-full relative rounded-xl shadow-lg shadow-black/5 bg-white/90 backdrop-blur">
+                        <button
+                            onClick={handleDismissWelcome}
+                            className="absolute top-2 right-2 p-1 hover:bg-gray-100 rounded-full"
+                            aria-label="Dismiss welcome message"
+                        >
+                            <X className="h-6 w-6" />
+                        </button>
+                        <CardHeader className="pb-2">
+                            <CardTitle className="text-[1.45rem] font-semibold text-primary">
+                                Welcome to Burla!
+                            </CardTitle>
+                        </CardHeader>
+                        <CardContent className="space-y-4">
+                            <div className="grid grid-cols-1 gap-4">
+                                <div className="space-y-3">
+                                    <ol className="list-none space-y-2">
+                                        <li>
+                                            ⚡️ Hit <span className="font-semibold">⏻ Start</span>{" "}
+                                            to boot some machines.
+                                        </li>
+                                        <li>
+                                            📦 Run{" "}
+                                            <code className="bg-gray-100 px-1 py-0.5 rounded">
+                                                pip install burla
+                                            </code>
+                                        </li>
+                                        <li>
+                                            🔑 Run{" "}
+                                            <code className="bg-gray-100 px-1 py-0.5 rounded">
+                                                burla login
+                                            </code>
+                                        </li>
+                                        <li>
+                                            🚀 Run some code:
+                                            <br />
+                                            <div className="relative mt-2 inline-block w-fit max-w-full">
+                                                <button
+                                                    type="button"
+                                                    aria-label="Copy code"
+                                                    onClick={async () => {
+                                                        try {
+                                                            await navigator.clipboard.writeText(
+                                                                pythonExampleCode
+                                                            );
+                                                            setCopied(true);
+                                                            window.setTimeout(
+                                                                () => setCopied(false),
+                                                                1400
+                                                            );
+                                                        } catch (e) {
+                                                            console.error("Failed to copy", e);
+                                                        }
+                                                    }}
+                                                    className="absolute top-2 right-2 z-10 px-2 py-1 text-xs bg-white/90 hover:bg-white border rounded shadow-sm text-gray-700"
+                                                >
+                                                    <span className="inline-flex items-center gap-1">
+                                                        <Copy className="h-3 w-3" />
+                                                        {copied ? "Copied" : "Copy"}
                                                     </span>
-                                                    (x):
-                                                    <br />
-                                                    {"    "}print(
-                                                    <span className="text-red-700">f</span>
-                                                    <span className="text-red-700">
-                                                        "Running on a remote computer in the cloud!
-                                                        #
-                                                    </span>
-                                                    {"{"}x{"}"}
-                                                    <span className="text-red-700">"</span>)
-                                                    <br />
-                                                    <br />
-                                                    remote_parallel_map(
-                                                    <span className="text-amber-800">
-                                                        my_function
-                                                    </span>
-                                                    , [<span className="text-emerald-700">1</span>,{" "}
-                                                    <span className="text-emerald-700">2</span>,{" "}
-                                                    <span className="text-emerald-700">3</span>,{" "}
-                                                    <span className="text-emerald-700">4</span>])
-                                                </code>
-                                            </pre>
-                                        </div>
-                                    </li>
-                                </ol>
+                                                </button>
+                                                <pre className="bg-gray-50 border rounded p-3 overflow-x-auto text-sm font-mono pr-14 w-fit max-w-full">
+                                                    <code>
+                                                        <span className="text-blue-700">from</span>{" "}
+                                                        burla{" "}
+                                                        <span className="text-blue-700">
+                                                            import
+                                                        </span>{" "}
+                                                        remote_parallel_map
+                                                        <br />
+                                                        <br />
+                                                        <span className="text-blue-700">
+                                                            def
+                                                        </span>{" "}
+                                                        <span className="text-amber-800">
+                                                            my_function
+                                                        </span>
+                                                        (x):
+                                                        <br />
+                                                        {"    "}print(
+                                                        <span className="text-red-700">f</span>
+                                                        <span className="text-red-700">
+                                                            "Running on a remote computer in the
+                                                            cloud! #
+                                                        </span>
+                                                        {"{"}x{"}"}
+                                                        <span className="text-red-700">"</span>)
+                                                        <br />
+                                                        <br />
+                                                        remote_parallel_map(
+                                                        <span className="text-amber-800">
+                                                            my_function
+                                                        </span>
+                                                        , [
+                                                        <span className="text-emerald-700">1</span>,{" "}
+                                                        <span className="text-emerald-700">2</span>,{" "}
+                                                        <span className="text-emerald-700">3</span>,{" "}
+                                                        <span className="text-emerald-700">4</span>
+                                                        ])
+                                                    </code>
+                                                </pre>
+                                            </div>
+                                        </li>
+                                    </ol>
+                                </div>
                             </div>
-                        </div>
-                    </CardContent>
-                </Card>
+                        </CardContent>
+                    </Card>
+                </div>
             )}
 
             <Card className="w-full">
@@ -337,135 +346,162 @@ remote_parallel_map(my_function, [1, 2, 3, 4])`;
                     <CardTitle className="text-xl font-semibold text-primary">Nodes</CardTitle>
                 </CardHeader>
                 <CardContent>
-                    <Table className="table-auto w-full">
-                        <TableHeader>
-                            <TableRow>
-                                <TableHead className="w-8 pl-6 pr-4 py-2" />
-                                <TableHead className="w-24 pl-6 pr-4 py-2">Status</TableHead>
-                                <TableHead className="w-48 pl-6 pr-4 py-2">Name</TableHead>
-                                <TableHead className="w-24 pl-6 pr-4 py-2">CPUs</TableHead>
-                                <TableHead className="w-24 pl-6 pr-4 py-2">RAM</TableHead>
-                                <TableHead className="w-24 pl-6 pr-4 py-2">GPUs</TableHead>
-                                <TableHead className="w-8 pl-6 pr-2 py-2" />
-                            </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                            {nodes.map((node) => (
-                                <React.Fragment key={node.id}>
-                                    <TableRow
-                                        onClick={() => toggleExpanded(node.id)}
-                                        className="cursor-pointer"
+                    {nodes.length === 0 ? (
+                        <div className="border-2 border-dashed rounded-lg p-8 text-center text-muted-foreground">
+                            <div className="text-sm">
+                                Zero nodes running, hit{" "}
+                                <span className="font-semibold">⏻ Start</span> to launch some!
+                            </div>
+                            <div className="mt-6 space-y-2">
+                                {[...Array(3)].map((_, i) => (
+                                    <div
+                                        key={i}
+                                        className="flex items-center gap-4 py-2 justify-center"
                                     >
-                                        <TableCell className="w-8 pl-6 pr-4 py-2">
-                                            <ChevronRight
-                                                className={cn(
-                                                    "h-4 w-4 transition-transform duration-200",
-                                                    { "rotate-90": expandedNodeId === node.id }
-                                                )}
-                                            />
-                                        </TableCell>
-                                        <TableCell className="w-24 pl-6 pr-4 py-2">
-                                            <div className="flex items-center space-x-2">
-                                                <div className={getStatusClass(node.status)} />
-                                                <span
-                                                    className={cn(
-                                                        "text-sm capitalize",
-                                                        node.status
-                                                    )}
-                                                >
-                                                    {node.status}
-                                                </span>
-                                            </div>
-                                        </TableCell>
-                                        <TableCell className="w-48 pl-6 pr-4 py-2 whitespace-nowrap">
-                                            {node.name}
-                                        </TableCell>
-                                        <TableCell className="w-24 pl-6 pr-4 py-2">
-                                            <div className="inline-flex items-center space-x-1 justify-center">
-                                                <Cpu className="h-4 w-4" />
-                                                <span>
-                                                    {node.cpus ?? extractCpuCount(node.type) ?? "?"}
-                                                </span>
-                                            </div>
-                                        </TableCell>
-                                        <TableCell className="w-24 pl-6 pr-4 py-2">
-                                            {parseRamDisplay(node.type)}
-                                        </TableCell>
-                                        <TableCell className="w-24 pl-6 pr-4 py-2">
-                                            {parseGpuDisplay(node.type)}
-                                        </TableCell>
-                                        <TableCell className="w-8 pl-6 pr-2 py-2 text-center">
-                                            {(String(node.status) === "FAILED" ||
-                                                String(node.status) === "DELETED") && (
-                                                <button
-                                                    onClick={(e) => {
-                                                        e.stopPropagation();
-                                                        deleteNode(node.id); // Always call deleteNode for both statuses
-                                                    }}
-                                                    className="text-gray-400 hover:text-red-600"
-                                                    aria-label="Dismiss node"
-                                                >
-                                                    <X className="h-4 w-4" />
-                                                </button>
-                                            )}
-                                        </TableCell>
-                                    </TableRow>
-
-                                    {expandedNodeId === node.id && (
+                                        <span className="w-4 h-4 rounded-full bg-muted/60" />
+                                        <Skeleton className="h-4 w-24" />
+                                        <Skeleton className="h-4 w-16" />
+                                        <Skeleton className="h-4 w-16" />
+                                        <Skeleton className="h-4 w-24" />
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    ) : (
+                        <Table className="table-auto w-full">
+                            <TableHeader>
+                                <TableRow>
+                                    <TableHead className="w-8 pl-6 pr-4 py-2" />
+                                    <TableHead className="w-24 pl-6 pr-4 py-2">Status</TableHead>
+                                    <TableHead className="w-48 pl-6 pr-4 py-2">Name</TableHead>
+                                    <TableHead className="w-24 pl-6 pr-4 py-2">CPUs</TableHead>
+                                    <TableHead className="w-24 pl-6 pr-4 py-2">RAM</TableHead>
+                                    <TableHead className="w-24 pl-6 pr-4 py-2">GPUs</TableHead>
+                                    <TableHead className="w-8 pl-6 pr-2 py-2" />
+                                </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                                {nodes.map((node, idx) => (
+                                    <React.Fragment key={node.id}>
                                         <TableRow
-                                            key={`${node.id}-error`}
-                                            className={cn("transition-all duration-300", {
-                                                "bg-gray-50": expandedNodeId === node.id,
-                                            })}
+                                            onClick={() => toggleExpanded(node.id)}
+                                            className={cn("cursor-pointer animate-row-in")}
+                                            style={{ animationDelay: `${idx * 50}ms` }}
                                         >
-                                            <TableCell colSpan={7} className="p-0">
-                                                <div
+                                            <TableCell className="w-8 pl-6 pr-4 py-2">
+                                                <ChevronRight
                                                     className={cn(
-                                                        "overflow-y-auto transition-all duration-300",
-                                                        {
-                                                            "max-h-0": expandedNodeId !== node.id,
-                                                            "h-[400px] resize-y py-2 px-4":
-                                                                expandedNodeId === node.id,
-                                                        }
+                                                        "h-4 w-4 transition-transform duration-200",
+                                                        { "rotate-90": expandedNodeId === node.id }
                                                     )}
-                                                >
-                                                    {logsLoading[node.id] ? (
-                                                        <div className="flex flex-col items-center justify-center h-40 w-full text-gray-500">
-                                                            <svg
-                                                                className="animate-spin h-8 w-8 text-primary mb-2"
-                                                                viewBox="0 0 24 24"
-                                                                fill="none"
-                                                                xmlns="http://www.w3.org/2000/svg"
-                                                            >
-                                                                <circle
-                                                                    cx="12"
-                                                                    cy="12"
-                                                                    r="10"
-                                                                    stroke="currentColor"
-                                                                    strokeWidth="4"
-                                                                    opacity="0.2"
-                                                                />
-                                                                <path
-                                                                    d="M22 12a10 10 0 0 1-10 10"
-                                                                    stroke="currentColor"
-                                                                    strokeWidth="4"
-                                                                    strokeLinecap="round"
-                                                                />
-                                                            </svg>
-                                                        </div>
-                                                    ) : (
-                                                        <pre className="whitespace-pre-wrap text-gray-600 text-sm">
-                                                            {nodeLogs[node.id]?.join("\n")}
-                                                        </pre>
-                                                    )}
+                                                />
+                                            </TableCell>
+                                            <TableCell className="w-24 pl-6 pr-4 py-2">
+                                                <div className="flex items-center space-x-2">
+                                                    <div className={getStatusClass(node.status)} />
+                                                    <span
+                                                        className={cn(
+                                                            "text-sm capitalize",
+                                                            node.status
+                                                        )}
+                                                    >
+                                                        {node.status}
+                                                    </span>
                                                 </div>
                                             </TableCell>
+                                            <TableCell className="w-48 pl-6 pr-4 py-2 whitespace-nowrap">
+                                                {node.name}
+                                            </TableCell>
+                                            <TableCell className="w-24 pl-6 pr-4 py-2">
+                                                <div className="inline-flex items-center space-x-1 justify-center">
+                                                    <Cpu className="h-4 w-4" />
+                                                    <span>
+                                                        {node.cpus ??
+                                                            extractCpuCount(node.type) ??
+                                                            "?"}
+                                                    </span>
+                                                </div>
+                                            </TableCell>
+                                            <TableCell className="w-24 pl-6 pr-4 py-2">
+                                                {parseRamDisplay(node.type)}
+                                            </TableCell>
+                                            <TableCell className="w-24 pl-6 pr-4 py-2">
+                                                {parseGpuDisplay(node.type)}
+                                            </TableCell>
+                                            <TableCell className="w-8 pl-6 pr-2 py-2 text-center">
+                                                {(String(node.status) === "FAILED" ||
+                                                    String(node.status) === "DELETED") && (
+                                                    <button
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            deleteNode(node.id);
+                                                        }}
+                                                        className="text-gray-400 hover:text-red-600"
+                                                        aria-label="Dismiss node"
+                                                    >
+                                                        <X className="h-4 w-4" />
+                                                    </button>
+                                                )}
+                                            </TableCell>
                                         </TableRow>
-                                    )}
-                                </React.Fragment>
-                            ))}
-                        </TableBody>
-                    </Table>
+
+                                        {expandedNodeId === node.id && (
+                                            <TableRow
+                                                key={`${node.id}-error`}
+                                                className={cn("transition-all duration-300", {
+                                                    "bg-gray-50": expandedNodeId === node.id,
+                                                })}
+                                            >
+                                                <TableCell colSpan={7} className="p-0">
+                                                    <div
+                                                        className={cn(
+                                                            "overflow-y-auto transition-all duration-300",
+                                                            {
+                                                                "max-h-0":
+                                                                    expandedNodeId !== node.id,
+                                                                "h-[400px] resize-y py-2 px-4":
+                                                                    expandedNodeId === node.id,
+                                                            }
+                                                        )}
+                                                    >
+                                                        {logsLoading[node.id] ? (
+                                                            <div className="flex flex-col items-center justify-center h-40 w-full text-gray-500">
+                                                                <svg
+                                                                    className="animate-spin h-8 w-8 text-primary mb-2"
+                                                                    viewBox="0 0 24 24"
+                                                                    fill="none"
+                                                                    xmlns="http://www.w3.org/2000/svg"
+                                                                >
+                                                                    <circle
+                                                                        cx="12"
+                                                                        cy="12"
+                                                                        r="10"
+                                                                        stroke="currentColor"
+                                                                        strokeWidth="4"
+                                                                        opacity="0.2"
+                                                                    />
+                                                                    <path
+                                                                        d="M22 12a10 10 0 0 1-10 10"
+                                                                        stroke="currentColor"
+                                                                        strokeWidth="4"
+                                                                        strokeLinecap="round"
+                                                                    />
+                                                                </svg>
+                                                            </div>
+                                                        ) : (
+                                                            <pre className="whitespace-pre-wrap text-gray-600 text-sm">
+                                                                {nodeLogs[node.id]?.join("\n")}
+                                                            </pre>
+                                                        )}
+                                                    </div>
+                                                </TableCell>
+                                            </TableRow>
+                                        )}
+                                    </React.Fragment>
+                                ))}
+                            </TableBody>
+                        </Table>
+                    )}
                 </CardContent>
             </Card>
         </div>

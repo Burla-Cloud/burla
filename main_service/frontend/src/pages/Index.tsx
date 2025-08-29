@@ -165,41 +165,44 @@ const Dashboard = () => {
     };
 
     return (
-        <div className="flex-1 flex flex-col justify-start px-12 pt-0">
+        <div className="flex-1 flex flex-col justify-start px-12 pt-6">
             <div className="max-w-6xl mx-auto w-full">
                 {/* Move Dashboard Heading Up Precisely */}
-                <h1 className="text-3xl font-bold mt-[-4px] mb-4 text-primary">Cluster Status</h1>
+                <h1 className="text-3xl font-bold mt-2 mb-6 text-primary">Cluster Status</h1>
 
-                <div className="space-y-6">
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        {loading ? (
-                            <Card className="w-full animate-pulse">
-                                <CardHeader className="pb-2">
-                                    <CardTitle className="text-xl font-semibold text-primary">
-                                        <Skeleton className="h-6 w-40 mb-2" />
-                                    </CardTitle>
-                                </CardHeader>
-                                <CardContent className="mt-6">
-                                    <div className="flex items-center gap-4">
-                                        <Skeleton className="w-6 h-6 rounded-full" />
-                                        <Skeleton className="h-5 w-24" />
-                                        <Skeleton className="h-5 w-16 ml-8" />
-                                    </div>
-                                    <div className="mt-6 flex gap-2">
-                                        <Skeleton className="h-4 w-20" />
-                                        <Skeleton className="h-4 w-10" />
-                                    </div>
-                                </CardContent>
-                            </Card>
-                        ) : (
-                            <ClusterStatusCard
-                                status={clusterStatus}
-                                parallelism={parallelism}
-                                totalRam={totalRam}
-                                gpuSummary={gpuSummary}
-                            />
-                        )}
-                        <div className="flex items-center justify-center">
+                <div className="space-y-8">
+                    <div className="grid grid-cols-1 md:grid-cols-4 gap-8">
+                        <div className="md:col-span-3 justify-self-start">
+                            {loading ? (
+                                <Card className="w-full animate-pulse">
+                                    <CardHeader className="pb-2">
+                                        <CardTitle className="text-xl font-semibold text-primary">
+                                            <Skeleton className="h-6 w-40 mb-2" />
+                                        </CardTitle>
+                                    </CardHeader>
+                                    <CardContent className="mt-6">
+                                        <div className="flex items-center gap-4">
+                                            <Skeleton className="w-6 h-6 rounded-full" />
+                                            <Skeleton className="h-5 w-24" />
+                                            <Skeleton className="h-5 w-16 ml-8" />
+                                        </div>
+                                        <div className="mt-6 flex gap-2">
+                                            <Skeleton className="h-4 w-20" />
+                                            <Skeleton className="h-4 w-10" />
+                                        </div>
+                                    </CardContent>
+                                </Card>
+                            ) : (
+                                <ClusterStatusCard
+                                    status={clusterStatus}
+                                    parallelism={parallelism}
+                                    totalRam={totalRam}
+                                    gpuSummary={gpuSummary}
+                                    gpuCount={Object.values(gpuCountMap).reduce((a, b) => a + b, 0)}
+                                />
+                            )}
+                        </div>
+                        <div className="flex items-center justify-center md:col-span-1">
                             <ClusterControls
                                 status={clusterStatus}
                                 onReboot={handleReboot}
@@ -237,7 +240,7 @@ const Dashboard = () => {
                         <NodesList nodes={nodes} />
                     )}
 
-                    <div className="text-center text-sm text-gray-500 mt-8">
+                    <div className="text-center text-sm text-gray-500 mt-auto pt-8">
                         Need help? Email me!{" "}
                         <a href="mailto:jake@burla.dev" className="text-blue-500 hover:underline">
                             jake@burla.dev

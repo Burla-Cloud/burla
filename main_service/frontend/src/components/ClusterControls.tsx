@@ -1,6 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { Power, PowerOff, RefreshCw } from "lucide-react";
+import { Loader2, Power, PowerOff, RefreshCw } from "lucide-react";
 import { ClusterStatus } from "@/types/coreTypes";
 
 interface ClusterControlsProps {
@@ -29,7 +29,13 @@ export const ClusterControls = ({
 
     let startButtonIcon;
     let startButtonText;
-    if (isOn || isRebooting) {
+    if (isStarting) {
+        startButtonIcon = <Loader2 className="mr-2 h-4 w-4 animate-spin" />;
+        startButtonText = "Starting…";
+    } else if (isRebooting) {
+        startButtonIcon = <Loader2 className="mr-2 h-4 w-4 animate-spin" />;
+        startButtonText = "Restarting…";
+    } else if (isOn) {
         startButtonIcon = <RefreshCw className="mr-2 h-4 w-4" />;
         startButtonText = "Restart";
     } else {
@@ -43,8 +49,12 @@ export const ClusterControls = ({
                 size="lg"
                 onClick={onReboot}
                 disabled={isStartDisabled}
+                aria-busy={isStarting || isRebooting}
                 className={cn(
-                    "w-32 text-white bg-primary hover:bg-primary/90 disabled:bg-gray-400",
+                    "w-32 text-white transition-all duration-300 ease-in-out",
+                    isStarting || isRebooting
+                        ? "bg-primary hover:bg-primary/90"
+                        : "bg-primary hover:bg-primary/90 disabled:bg-gray-400",
                     highlightStart &&
                         !isOn &&
                         !isStartDisabled &&

@@ -41,7 +41,9 @@ export const ClusterStatusCard = ({
                                 "animate-pulse": config.pulse,
                             })}
                         />
-                        <span className="text-xl text-gray-800 font-medium">{config.text}</span>
+                        <span className="text-[1.14rem] text-gray-800 font-medium">
+                            {config.text}
+                        </span>
                     </div>
 
                     <div
@@ -50,7 +52,7 @@ export const ClusterStatusCard = ({
                             showStats ? "max-w-[1000px] opacity-100" : "max-w-0 opacity-0"
                         )}
                     >
-                        <span className="text-lg font-medium text-gray-700 leading-tight whitespace-nowrap">
+                        <span className="text-[1.04rem] font-medium text-gray-700 leading-tight whitespace-nowrap">
                             {summary}
                         </span>
                     </div>

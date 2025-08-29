@@ -9,7 +9,7 @@ import {
     TableRow,
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
-import { Cpu, X, ChevronRight } from "lucide-react";
+import { Cpu, X, ChevronRight, Copy } from "lucide-react";
 import { NodeStatus, BurlaNode } from "@/types/coreTypes";
 import React, { useEffect, useState, useRef } from "react";
 import { useNodes } from "@/contexts/NodesContext";
@@ -21,6 +21,13 @@ interface NodesListProps {
 export const NodesList = ({ nodes }: NodesListProps) => {
     const { setNodes } = useNodes();
     const [showWelcome, setShowWelcome] = useState(true);
+    const [copied, setCopied] = useState(false);
+    const pythonExampleCode = `from burla import remote_parallel_map
+
+def my_function(x):
+    print(f"Running on a remote computer in the cloud! #{x}")
+
+remote_parallel_map(my_function, [1, 2, 3, 4])`;
 
     useEffect(() => {
         const isWelcomeHidden = localStorage.getItem("welcomeMessageHidden") === "true";
@@ -30,6 +37,7 @@ export const NodesList = ({ nodes }: NodesListProps) => {
     const handleDismissWelcome = () => {
         setShowWelcome(false);
         localStorage.setItem("welcomeMessageHidden", "true");
+        window.dispatchEvent(new CustomEvent("welcomeVisibilityChanged", { detail: false }));
     };
 
     const getStatusClass = (nodeStatus: NodeStatus | string | null) => {
@@ -228,41 +236,96 @@ export const NodesList = ({ nodes }: NodesListProps) => {
                     >
                         <X className="h-4 w-4" />
                     </button>
-                    <CardHeader>
-                        <CardTitle className="text-xl font-semibold text-primary">
+                    <CardHeader className="pb-4">
+                        <CardTitle className="text-xl font-semibold text-blue-700">
                             Welcome to Burla!
                         </CardTitle>
                     </CardHeader>
                     <CardContent className="space-y-4">
                         <div className="grid grid-cols-1 gap-4">
-                            <div>
-                                Click "Start" to boot the cluster,
-                                <br />
-                                See the{" "}
-                                <Link to="/settings" className="text-blue-500 hover:underline">
-                                    settings tab
-                                </Link>{" "}
-                                to change the machine type, quantity, or container your code runs
-                                inside.
-                                <br />
-                                <br />
-                                Don't hesitate to{" "}
-                                <a
-                                    href="mailto:jake@burla.dev"
-                                    className="text-blue-500 hover:underline"
-                                >
-                                    email us
-                                </a>{" "}
-                                with feature requests, changes, or for free 1 on 1 help!
-                                <br />
-                                Be sure to check out our{" "}
-                                <a
-                                    href="https://docs.burla.dev"
-                                    className="text-blue-500 hover:underline"
-                                >
-                                    documentation
-                                </a>
-                                , and thank you for using Burla!
+                            <div className="space-y-3">
+                                <ol className="list-decimal pl-5 space-y-2">
+                                    <li>
+                                        Hit <span className="font-semibold">⏻ Start</span> to boot
+                                        some machines.
+                                    </li>
+                                    <li>
+                                        Run{" "}
+                                        <code className="bg-gray-100 px-1 py-0.5 rounded">
+                                            pip install burla
+                                        </code>
+                                    </li>
+                                    <li>
+                                        Run{" "}
+                                        <code className="bg-gray-100 px-1 py-0.5 rounded">
+                                            burla login
+                                        </code>
+                                    </li>
+                                    <li>
+                                        Run the code:
+                                        <br />
+                                        <div className="relative mt-2 inline-block w-fit max-w-full">
+                                            <button
+                                                type="button"
+                                                aria-label="Copy code"
+                                                onClick={async () => {
+                                                    try {
+                                                        await navigator.clipboard.writeText(
+                                                            pythonExampleCode
+                                                        );
+                                                        setCopied(true);
+                                                        window.setTimeout(
+                                                            () => setCopied(false),
+                                                            1400
+                                                        );
+                                                    } catch (e) {
+                                                        console.error("Failed to copy", e);
+                                                    }
+                                                }}
+                                                className="absolute top-2 right-2 z-10 px-2 py-1 text-xs bg-white/90 hover:bg-white border rounded shadow-sm text-gray-700"
+                                            >
+                                                <span className="inline-flex items-center gap-1">
+                                                    <Copy className="h-3 w-3" />
+                                                    {copied ? "Copied" : "Copy"}
+                                                </span>
+                                            </button>
+                                            <pre className="bg-gray-50 border rounded p-3 overflow-x-auto text-sm font-mono pr-14 w-fit max-w-full">
+                                                <code>
+                                                    <span className="text-blue-700">from</span>{" "}
+                                                    burla{" "}
+                                                    <span className="text-blue-700">import</span>{" "}
+                                                    remote_parallel_map
+                                                    <br />
+                                                    <br />
+                                                    <span className="text-blue-700">def</span>{" "}
+                                                    <span className="text-amber-800">
+                                                        my_function
+                                                    </span>
+                                                    (x):
+                                                    <br />
+                                                    {"    "}print(
+                                                    <span className="text-red-700">f</span>
+                                                    <span className="text-red-700">
+                                                        "Running on a remote computer in the cloud!
+                                                        #
+                                                    </span>
+                                                    {"{"}x{"}"}
+                                                    <span className="text-red-700">"</span>)
+                                                    <br />
+                                                    <br />
+                                                    remote_parallel_map(
+                                                    <span className="text-amber-800">
+                                                        my_function
+                                                    </span>
+                                                    , [<span className="text-emerald-700">1</span>,{" "}
+                                                    <span className="text-emerald-700">2</span>,{" "}
+                                                    <span className="text-emerald-700">3</span>,{" "}
+                                                    <span className="text-emerald-700">4</span>])
+                                                </code>
+                                            </pre>
+                                        </div>
+                                    </li>
+                                </ol>
                             </div>
                         </div>
                     </CardContent>

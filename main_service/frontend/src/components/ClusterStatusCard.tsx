@@ -27,11 +27,7 @@ export const ClusterStatusCard = ({
 
     return (
         <Card className="w-full">
-            <CardHeader className="pb-2">
-                <CardTitle className="text-xl font-semibold text-primary">Cluster Status</CardTitle>
-            </CardHeader>
-
-            <CardContent className="mt-6">
+            <CardContent className="py-3">
                 <div className="relative flex items-center">
                     {/* Status section */}
                     <div className="flex items-center gap-2">

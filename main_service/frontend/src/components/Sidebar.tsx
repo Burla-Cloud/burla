@@ -24,7 +24,7 @@ const Sidebar = () => {
                     to="/"
                     className="flex items-center space-x-1 text-gray-700 hover:text-primary hover:bg-primary/10 p-2 rounded-md"
                 >
-                    <span>Dashboard</span>
+                    <span>Cluster Status</span>
                 </Link>
                 <Link
                     to="/jobs"

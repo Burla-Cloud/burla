@@ -4,7 +4,7 @@ import { NodesList } from "@/components/NodesList";
 import { useClusterControl } from "@/hooks/useClusterControl";
 import { useNodes } from "@/contexts/NodesContext";
 import { useCluster } from "@/contexts/ClusterContext";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 
@@ -16,6 +16,26 @@ const Dashboard = () => {
     // Add local state for disabling buttons
     const [disableStartButton, setDisableStartButton] = useState(false);
     const [disableStopButton, setDisableStopButton] = useState(false);
+    const [welcomeVisible, setWelcomeVisible] = useState(
+        () => localStorage.getItem("welcomeMessageHidden") !== "true"
+    );
+
+    useEffect(() => {
+        const handleWelcomeVisibility = (event: Event) => {
+            const custom = event as CustomEvent<boolean>;
+            setWelcomeVisible(Boolean(custom.detail));
+        };
+        window.addEventListener(
+            "welcomeVisibilityChanged",
+            handleWelcomeVisibility as EventListener
+        );
+        return () => {
+            window.removeEventListener(
+                "welcomeVisibilityChanged",
+                handleWelcomeVisibility as EventListener
+            );
+        };
+    }, []);
 
     const extractCpuCount = (type: string): number | null => {
         const customMatch = type.match(/^custom-(\d+)-/);
@@ -148,7 +168,7 @@ const Dashboard = () => {
         <div className="flex-1 flex flex-col justify-start px-12 pt-0">
             <div className="max-w-6xl mx-auto w-full">
                 {/* Move Dashboard Heading Up Precisely */}
-                <h1 className="text-3xl font-bold mt-[-4px] mb-4 text-primary">Dashboard</h1>
+                <h1 className="text-3xl font-bold mt-[-4px] mb-4 text-primary">Cluster Status</h1>
 
                 <div className="space-y-6">
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -186,6 +206,7 @@ const Dashboard = () => {
                                 onStop={handleStop}
                                 disableStartButton={disableStartButton || loading}
                                 disableStopButton={disableStopButton || loading}
+                                highlightStart={welcomeVisible}
                             />
                         </div>
                     </div>

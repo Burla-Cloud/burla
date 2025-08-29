@@ -1,4 +1,5 @@
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import { Power, PowerOff, RefreshCw } from "lucide-react";
 import { ClusterStatus } from "@/types/coreTypes";
 
@@ -8,6 +9,7 @@ interface ClusterControlsProps {
     onStop: () => void;
     disableStartButton?: boolean;
     disableStopButton?: boolean;
+    highlightStart?: boolean;
 }
 
 export const ClusterControls = ({
@@ -16,6 +18,7 @@ export const ClusterControls = ({
     onStop,
     disableStartButton = false,
     disableStopButton = false,
+    highlightStart = false,
 }: ClusterControlsProps) => {
     const isRebooting = status === "REBOOTING";
     const isStarting = status === "BOOTING";
@@ -39,7 +42,14 @@ export const ClusterControls = ({
                 size="lg"
                 onClick={onReboot}
                 disabled={isStarting || isStopping || isRebooting || disableStartButton}
-                className="w-32 text-white bg-primary hover:bg-primary/90 disabled:bg-gray-400"
+                className={cn(
+                    "w-32 text-white bg-primary hover:bg-primary/90 disabled:bg-gray-400",
+                    highlightStart &&
+                        !isOn &&
+                        !isRebooting &&
+                        !isStarting &&
+                        "bg-blue-700 hover:bg-blue-800 animate-pulse glow-pulse-blue ring-4 ring-blue-500 ring-offset-2 ring-offset-background transition-shadow transform transition-transform hover:scale-105"
+                )}
             >
                 {startButtonIcon}
                 {startButtonText}

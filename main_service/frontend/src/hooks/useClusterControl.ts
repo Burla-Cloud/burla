@@ -10,13 +10,30 @@ export const useClusterControl = () => {
 
     const rebootCluster = async () => {
         try {
+            setClusterStatus("BOOTING");
             const response = await fetch("/v1/cluster/restart", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
             });
+
+            if (!response.ok) {
+                setClusterStatus(null);
+                toast({
+                    variant: "destructive",
+                    title: "Error",
+                    description: "Failed to start the cluster. Please try again.",
+                });
+                return false;
+            }
+
             return true;
         } catch (error) {
-            console.error("Error restarting cluster:", error);
+            setClusterStatus(null);
+            toast({
+                variant: "destructive",
+                title: "Error",
+                description: "Failed to start the cluster. Please try again.",
+            });
             return false;
         }
     };

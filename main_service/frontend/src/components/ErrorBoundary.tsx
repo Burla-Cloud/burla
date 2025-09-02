@@ -1,5 +1,5 @@
 import { Component, ErrorInfo, ReactNode } from "react";
-import clusterImage from "@/assets/burla_logo.png";
+import clusterImage from "@/assets/logo.svg";
 
 interface Props {
     children: ReactNode;

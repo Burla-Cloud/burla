@@ -21,7 +21,7 @@ from jinja2 import Environment, FileSystemLoader
 os.environ["GRPC_VERBOSITY"] = "ERROR"
 os.environ["GLOG_minloglevel"] = "2"
 
-CURRENT_BURLA_VERSION = "1.2.2"
+CURRENT_BURLA_VERSION = "1.2.3"
 
 # This is the only possible alternative "mode".
 # In this mode everything runs locally in docker containers.
@@ -38,10 +38,12 @@ secret_name = f"projects/{PROJECT_ID}/secrets/burla-cluster-id-token/versions/la
 response = secret_client.access_secret_version(request={"name": secret_name})
 CLUSTER_ID_TOKEN = response.payload.data.decode("UTF-8")
 
-config_doc = DB.collection("cluster_config").document("cluster_config").get()
-LOCAL_DEV_CONFIG = config_doc.to_dict()
-LOCAL_DEV_CONFIG["Nodes"][0]["machine_type"] = "n4-standard-2"
-LOCAL_DEV_CONFIG["Nodes"][0]["quantity"] = 1
+LOCAL_DEV_CONFIG = None
+if IN_LOCAL_DEV_MODE:
+    config_doc = DB.collection("cluster_config").document("cluster_config").get()
+    LOCAL_DEV_CONFIG = config_doc.to_dict()
+    LOCAL_DEV_CONFIG["Nodes"][0]["machine_type"] = "n4-standard-2"
+    LOCAL_DEV_CONFIG["Nodes"][0]["quantity"] = 1
 
 DEFAULT_CONFIG = {  # <- config used only when config is missing from firestore
     "Nodes": [
@@ -219,27 +221,49 @@ async def validate_requests(request: Request, call_next):
                     request.session["Authorization"] = f"Bearer {data['token']}"
                     request.session["profile_pic"] = data["profile_pic"]
                     request.session["name"] = data["name"]
+                elif response.status == 403:
+                    data = await response.json()
+                    rendered = env.get_template("login.html.j2").render(
+                        redirect_locally=IN_LOCAL_DEV_MODE,
+                        user_email=data["detail"]["email"],
+                        first_name=None,
+                    )
+                    return Response(content=rendered, status_code=403, media_type="text/html")
 
         base_url = f"{request.url.scheme}://{request.url.netloc}{request.url.path}"
         return RedirectResponse(url=base_url, status_code=303)
 
     email = request.session.get("X-User-Email") or request.headers.get("X-User-Email")
     authorization = request.session.get("Authorization") or request.headers.get("Authorization")
-    if not email or not authorization:
-        rendered = env.get_template("login.html.j2").render(user_email=None)
-        return Response(content=rendered, status_code=401, media_type="text/html")
+    if email and authorization:
+        async with aiohttp.ClientSession() as session:
+            url = f"{BURLA_BACKEND_URL}/v1/clusters/{PROJECT_ID}/users:validate"
+            headers = {"Authorization": authorization, "X-User-Email": email}
+            async with session.get(url, headers=headers) as response:
+                if response.status == 200:
+                    return await call_next(request)
+                elif response.status != 401:
+                    response.raise_for_status()
+        new_status = 403
+    else:
+        new_status = 401
 
+    first_name = None
+    url = f"{BURLA_BACKEND_URL}/v1/clusters/{PROJECT_ID}/users:welcome_name"
     async with aiohttp.ClientSession() as session:
-        url = f"{BURLA_BACKEND_URL}/v1/clusters/{PROJECT_ID}/users:validate"
-        headers = {"Authorization": authorization, "X-User-Email": email}
-        async with session.get(url, headers=headers) as response:
+        async with session.get(url) as response:
             if response.status == 200:
-                return await call_next(request)
-            elif response.status != 401:
+                data = await response.json()
+                first_name = data["first_name"]
+            elif response.status != 204:
                 response.raise_for_status()
 
-    rendered = env.get_template("login.html.j2").render(user_email=email)
-    return Response(content=rendered, status_code=403, media_type="text/html")
+    rendered = env.get_template("login.html.j2").render(
+        redirect_locally=IN_LOCAL_DEV_MODE,
+        user_email=email,
+        first_name=first_name,
+    )
+    return Response(content=rendered, status_code=new_status, media_type="text/html")
 
 
 @app.middleware("http")

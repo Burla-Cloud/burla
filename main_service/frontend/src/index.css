@@ -102,3 +102,88 @@
     font-family: 'Inter', sans-serif;
   }
 }
+
+/* Start button glow pulse animation */
+@keyframes glowPulseBlue {
+  0% {
+    box-shadow: 0 0 0 0 rgba(29, 78, 216, 0.35), 0 0 16px rgba(29, 78, 216, 0.65);
+  }
+  50% {
+    box-shadow: 0 0 0 8px rgba(29, 78, 216, 0.14), 0 0 28px rgba(29, 78, 216, 0.95);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(29, 78, 216, 0.14), 0 0 16px rgba(29, 78, 216, 0.65);
+  }
+}
+
+.glow-pulse-blue {
+  animation: glowPulseBlue 1.6s ease-in-out infinite;
+}
+
+/* Spotlight surface: soft elevation, animated gradient hairline, subtle radial wash */
+@keyframes spotlightRotate {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.spotlight-surface {
+  position: relative;
+  border-radius: 0.75rem; /* ~12px matches rounded-xl */
+  box-shadow: 0 20px 40px -24px rgba(0, 0, 0, 0.45), 0 8px 20px -16px rgba(0, 0, 0, 0.25);
+  isolation: isolate; /* ensure ::after can sit behind */
+}
+
+.spotlight-surface::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px; /* hairline thickness */
+  box-sizing: border-box;
+  background: conic-gradient(
+    from 0deg,
+    rgba(56, 189, 248, 0.22), /* sky-400 */
+    rgba(99, 102, 241, 0.22), /* indigo-500 */
+    rgba(56, 189, 248, 0.22)
+  );
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  pointer-events: none;
+  opacity: 0.18; /* fainter and static */
+}
+
+.spotlight-surface::after {
+  content: "";
+  position: absolute;
+  inset: -12% -10% -18% -10%;
+  border-radius: inherit;
+  background: radial-gradient(
+    900px circle at 50% -10%,
+    rgba(99, 102, 241, 0.12), /* indigo */
+    rgba(56, 189, 248, 0.08), /* sky */
+    transparent 60%
+  );
+  z-index: -1; /* sit behind content */
+  pointer-events: none;
+  filter: blur(12px);
+  opacity: 0.15; /* even subtler */
+}
+
+/* Subtle table row slide-in */
+@keyframes rowIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-row-in {
+  animation: rowIn 300ms ease-out both;
+}

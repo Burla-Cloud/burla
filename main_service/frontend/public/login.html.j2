@@ -9,10 +9,10 @@
   <style>
     body { margin:0; padding:96px 16px; display:flex; justify-content:center; font-family:'Inter',sans-serif; background:#ffffff; color:#36555c; }
     .card { width:100%; max-width:380px; background:white; border:1px solid #36555c33; border-radius:12px; box-shadow:0 4px 24px rgba(0,0,0,.06); padding:40px; display:flex; flex-direction:column; align-items:center; }
-    .card img.logo { width:100px; margin-bottom:20px; }
-    h1 { margin:0 0 10px; font-size:24px; font-weight:600; text-align:center; color:#36555c; }
-    p.tagline { margin:0 0 20px; font-size:14px; color:#36555c; text-align:center; }
-    .banner { background:#fdecea; color:#611a15; border:1px solid #f5c2c0; border-radius:6px; padding:12px; font-size:13px; width:100%; text-align:left; margin-bottom:20px; }
+    .card img.logo { width:100px; margin-bottom:28px; }
+    h1 { margin:0 0 16px; font-size:24px; font-weight:600; text-align:center; color:#36555c; }
+    p.tagline { margin:0 0 28px; font-size:14px; color:#36555c; text-align:center; }
+    .banner { background:#fdecea; color:#611a15; border:1px solid #f5c2c0; border-radius:6px; padding:12px; font-size:13px; width:100%; text-align:left; margin-bottom:24px; }
     .banner strong { display:block; margin-bottom:4px; }
     .google-btn { display:inline-flex; align-items:center; justify-content:center; gap:8px; height:44px; padding:0 20px; font-size:14px; font-weight:500; color:#36555c; background:white; border:1px solid #dadce0; border-radius:6px; text-decoration:none; transition:background .14s, box-shadow .14s; width:100%; }
     .google-btn:hover { background:#f6f8fa; box-shadow:0 2px 4px rgba(0,0,0,.05); }
@@ -22,8 +22,14 @@
 </head>
 <body>
   <div class="card">
-    <img src="/assets/burla_logo-f7NrYSYk.png" alt="Burla Logo" class="logo" />
-    <h1>Welcome to Burla</h1>
+    <img src="/assets/logo-CrV5d932.svg" alt="Burla Logo" class="logo" />
+    <h1>
+      {% if first_name %}
+        Hi {{ first_name }}, welcome to Burla!
+      {% else %}
+        Welcome to Burla
+      {% endif %}
+    </h1>
     <p class="tagline">The simplest way to scale Python.</p>
     {% if user_email %}
     <div class="banner">
@@ -31,7 +37,7 @@
       {{ user_email }} is not authorized.<br>Contact your admin to request access.
     </div>
     {% endif %}
-    <a id="login-btn" class="google-btn">
+    <a id="login-btn" href="#" class="google-btn">
       <img src="https://developers.google.com/identity/images/g-logo.png" alt="Google logo" />
       <span>Sign in with Google</span>
     </a>
@@ -40,10 +46,10 @@
     document.getElementById("login-btn").addEventListener("click", function (event) {
       event.preventDefault();
       const clientId = crypto.randomUUID();
-      const encodedDashboardUrl = encodeURIComponent(window.location.origin);
       const baseUrl = `https://backend.burla.dev/v1/login/${clientId}`;
-      const generateNewToken = "{{ 'false' if user_email else 'true' }}";
-      const queryParams = `?redirect_url=${encodedDashboardUrl}&generate_new_token=${generateNewToken}`;
+      const generateNewToken = {{ 'false' if user_email is not none else 'true' }};
+      const redirectLocally = {{ 'true' if redirect_locally else 'false' }};
+      const queryParams = `?redirect_locally=${redirectLocally}&generate_new_token=${generateNewToken}&logging_in_from_dashboard=true`;
       const loginUrl = baseUrl + queryParams;
       window.location.href = loginUrl;
     });

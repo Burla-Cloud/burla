@@ -15,6 +15,10 @@ import ErrorBoundary from "@/components/ErrorBoundary";
 import AppDataLoader from "@/components/AppDataLoader";
 import ProfilePicture from "@/components/ProfilePicture";
 
+const ForceError = () => {
+    throw new Error("Intentional test error");
+};
+
 const App = () => (
     <ErrorBoundary>
         <NodesProvider>
@@ -38,6 +42,10 @@ const App = () => (
                                                     element={<JobDetails />}
                                                 />
                                                 <Route path="/settings" element={<Settings />} />
+                                                <Route
+                                                    path="/__error-test"
+                                                    element={<ForceError />}
+                                                />
                                             </Routes>
                                         </div>
                                     </div>

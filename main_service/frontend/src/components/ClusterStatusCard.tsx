@@ -8,6 +8,7 @@ interface ClusterStatusCardProps {
     totalRam: string;
     gpuSummary: string;
     gpuCount?: number;
+    hasResources?: boolean;
 }
 
 const statusConfig = {
@@ -24,9 +25,10 @@ export const ClusterStatusCard = ({
     totalRam,
     gpuSummary,
     gpuCount,
+    hasResources = false,
 }: ClusterStatusCardProps) => {
     const config = statusConfig[status] || statusConfig["OFF"];
-    const showStats = status !== "OFF";
+    const showStats = hasResources;
     const summaryParts = [`${parallelism} CPUs`, `${totalRam} RAM`] as string[];
     if (gpuCount && gpuCount > 0) summaryParts.push(`${gpuCount} GPUs`);
     const summary = summaryParts.join(" · ");

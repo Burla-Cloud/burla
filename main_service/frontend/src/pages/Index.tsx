@@ -199,6 +199,7 @@ const Dashboard = () => {
                                     totalRam={totalRam}
                                     gpuSummary={gpuSummary}
                                     gpuCount={Object.values(gpuCountMap).reduce((a, b) => a + b, 0)}
+                                    hasResources={nodes.length > 0}
                                 />
                             )}
                         </div>

@@ -221,6 +221,14 @@ async def validate_requests(request: Request, call_next):
                     request.session["Authorization"] = f"Bearer {data['token']}"
                     request.session["profile_pic"] = data["profile_pic"]
                     request.session["name"] = data["name"]
+                elif response.status == 403:
+                    data = await response.json()
+                    rendered = env.get_template("login.html.j2").render(
+                        redirect_locally=IN_LOCAL_DEV_MODE,
+                        user_email=data["detail"]["email"],
+                        first_name=None,
+                    )
+                    return Response(content=rendered, status_code=403, media_type="text/html")
 
         base_url = f"{request.url.scheme}://{request.url.netloc}{request.url.path}"
         return RedirectResponse(url=base_url, status_code=303)

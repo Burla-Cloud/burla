@@ -28,7 +28,7 @@ export const NodesList = ({ nodes }: NodesListProps) => {
 def my_function(x):
     print(f"Running on a remote computer in the cloud! #{x}")
 
-remote_parallel_map(my_function, [1, 2, 3, 4])`;
+remote_parallel_map(my_function, list(range(1000)))`;
 
     useEffect(() => {
         const isWelcomeHidden = localStorage.getItem("welcomeMessageHidden") === "true";

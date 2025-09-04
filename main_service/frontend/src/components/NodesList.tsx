@@ -324,12 +324,14 @@ remote_parallel_map(my_function, [1, 2, 3, 4])`;
                                                         <span className="text-amber-800">
                                                             my_function
                                                         </span>
-                                                        , [
-                                                        <span className="text-emerald-700">1</span>,{" "}
-                                                        <span className="text-emerald-700">2</span>,{" "}
-                                                        <span className="text-emerald-700">3</span>,{" "}
-                                                        <span className="text-emerald-700">4</span>
-                                                        ])
+                                                        ,{" "}
+                                                        <span className="text-blue-700">list</span>(
+                                                        <span className="text-blue-700">range</span>
+                                                        (
+                                                        <span className="text-purple-700">
+                                                            1000
+                                                        </span>
+                                                        )))
                                                     </code>
                                                 </pre>
                                             </div>

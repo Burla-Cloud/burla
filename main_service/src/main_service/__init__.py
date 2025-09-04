@@ -21,7 +21,7 @@ from jinja2 import Environment, FileSystemLoader
 os.environ["GRPC_VERBOSITY"] = "ERROR"
 os.environ["GLOG_minloglevel"] = "2"
 
-CURRENT_BURLA_VERSION = "1.2.3"
+CURRENT_BURLA_VERSION = "1.2.4"
 
 # This is the only possible alternative "mode".
 # In this mode everything runs locally in docker containers.
@@ -169,6 +169,13 @@ async def logout(request: Request, response: Response):
 @app.get("/settings")
 def dashboard():
     return FileResponse("src/main_service/static/index.html")
+
+
+@app.get("/favicon.png")
+def favicon():
+    headers = {"Cache-Control": "no-store"}
+    path = "src/main_service/static/favicon.png"
+    return FileResponse(path, media_type="image/png", headers=headers)
 
 
 # must be mounted after the above endpoint (`/`) is declared, or this will overwrite that endpoint.

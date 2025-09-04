@@ -25,9 +25,9 @@ DEFAULT_CLUSTER_CONFIG = {
                     "python_version": _python_version,
                 }
             ],
-            "inactivity_shutdown_time_sec": 300,
-            "machine_type": "n4-standard-4",
-            "quantity": 1,
+            "inactivity_shutdown_time_sec": 900,
+            "machine_type": "n4-standard-80",
+            "quantity": 13,
             "disk_size_gb": 50,
             "gcp_region": "us-central1",
         }

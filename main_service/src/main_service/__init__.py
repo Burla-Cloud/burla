@@ -171,6 +171,13 @@ def dashboard():
     return FileResponse("src/main_service/static/index.html")
 
 
+@app.get("/favicon.png")
+def favicon():
+    headers = {"Cache-Control": "no-store"}
+    path = "src/main_service/static/favicon.png"
+    return FileResponse(path, media_type="image/png", headers=headers)
+
+
 # must be mounted after the above endpoint (`/`) is declared, or this will overwrite that endpoint.
 app.mount("/", StaticFiles(directory="src/main_service/static"), name="static")
 

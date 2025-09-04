@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "main_service"
-version = "1.2.4"
+version = "1.2.5"
 description = ""
 authors = ["Jacob Zuliani <jake@burla.dev>, Joseph Perry <joe@burla.dev>"]
 packages = [{include = "main_service", from = "src"}]

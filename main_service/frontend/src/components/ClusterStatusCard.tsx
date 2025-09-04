@@ -31,7 +31,7 @@ export const ClusterStatusCard = ({
     const showStats = hasResources;
     const summaryParts = [`${parallelism} CPUs`, `${totalRam} RAM`] as string[];
     if (gpuCount && gpuCount > 0) summaryParts.push(`${gpuCount} GPUs`);
-    const summary = summaryParts.join(" · ");
+    const summary = summaryParts.join("   ");
 
     return (
         <Card className="inline-block">

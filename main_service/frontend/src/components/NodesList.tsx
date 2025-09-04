@@ -250,7 +250,7 @@ remote_parallel_map(my_function, list(range(1000)))`;
                                         <li>
                                             🔌 &nbsp;Hit{" "}
                                             <span className="font-semibold">⏻ Start</span> to boot
-                                            some machines.
+                                            some machines (1-2 min)
                                         </li>
                                         <li>
                                             📦 &nbsp;Run{" "}

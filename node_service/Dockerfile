@@ -47,10 +47,10 @@ RUN ln -sf /usr/local/bin/python3.13 /usr/bin/python
 
 
 # Install latest node_service and pip install packages now to make node starts faster
-RUN git clone --depth 1 --branch 1.2.5 https://github.com/Burla-Cloud/burla.git --no-checkout
+RUN git clone --depth 1 --branch 1.2.6 https://github.com/Burla-Cloud/burla.git --no-checkout
 WORKDIR burla
 RUN git sparse-checkout init --cone && \
     git sparse-checkout set node_service && \
-    git checkout 1.2.5
+    git checkout 1.2.6
 WORKDIR node_service
 RUN python -m pip install --break-system-packages -e .

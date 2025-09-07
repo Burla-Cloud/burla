@@ -55,6 +55,10 @@ class Worker:
             export PYTHONPATH=/worker_service_python_env
             DB_BASE_URL="https://firestore.googleapis.com/v1/projects/{PROJECT_ID}/databases/burla/documents"
 
+            # install uv:
+            curl -LsSf https://astral.sh/uv/install.sh | sh
+            export PATH="$HOME/.cargo/bin:$PATH"
+
             # Find python version:
             python_cmd=""
             for py in python{self.python_version} python3 python; do
@@ -93,8 +97,8 @@ class Worker:
                     # del everything in /worker_service_python_env except `worker_service` (mounted)
                     find /worker_service_python_env -mindepth 1 -maxdepth 1 ! -name worker_service -exec rm -rf {{}} +
                     cd /burla/worker_service
-                    $python_cmd -m pip install . --break-system-packages --no-cache-dir \
-                        --only-binary=:all: --target /worker_service_python_env
+                    uv pip install --python $python_cmd --break-system-packages --no-cache-dir \
+                        --only-binary=:all: --target /worker_service_python_env .
                 else
                     # try with tarball first because faster
                     if curl -Ls -o burla.tar.gz https://github.com/Burla-Cloud/burla/archive/{__version__}.tar.gz; then
@@ -113,7 +117,7 @@ class Worker:
                         git sparse-checkout set worker_service
                         cd worker_service
                     fi
-                    $python_cmd -m pip install --break-system-packages --no-cache-dir \
+                    uv pip install --python $python_cmd --break-system-packages --no-cache-dir \
                         --only-binary=:all: --target /worker_service_python_env .
                 fi
 

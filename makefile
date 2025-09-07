@@ -1,6 +1,10 @@
 .ONESHELL:
 .SILENT:
 
+ifeq ($(USER),jakezuliani)
+  $(shell gcloud config set project burla-test >/dev/null)
+endif
+
 PROJECT_ID := $(shell gcloud config get-value project 2>/dev/null)
 PROJECT_NUM := $(shell gcloud projects describe $(PROJECT_ID) --format="value(projectNumber)")
 ACCESS_TOKEN := $(shell gcloud auth print-access-token)

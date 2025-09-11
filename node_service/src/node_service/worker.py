@@ -31,11 +31,13 @@ class Worker:
         self,
         python_version: str,
         image: str,
-        install_worker: bool = False,
+        elected_installer: bool = False,
         boot_timeout_sec: int = 120,
     ):
         self.is_idle = False
         self.is_empty = False
+        self.currently_installing_package = None
+        self.all_packages_installed = False
         self.container = None
         self.container_id = None
         if IN_LOCAL_DEV_MODE:
@@ -58,6 +60,7 @@ class Worker:
             # install uv:
             curl -LsSf https://astral.sh/uv/install.sh | sh
             export PATH="$HOME/.cargo/bin:$PATH"
+            export PATH="$HOME/.local/bin:$PATH"
 
             # Find python version:
             python_cmd=""
@@ -78,7 +81,7 @@ class Worker:
             fi
 
             # Install worker_service if missing
-            if [ "{install_worker}" = "True" ] && ! $python_cmd -c "import worker_service" 2>/dev/null; then
+            if [ "{elected_installer}" = "True" ] && ! $python_cmd -c "import worker_service" 2>/dev/null; then
 
                 MSG="Installing Burla worker-service inside container image: {image} ..."
                 TS=$(date +%s)
@@ -97,8 +100,8 @@ class Worker:
                     # del everything in /worker_service_python_env except `worker_service` (mounted)
                     find /worker_service_python_env -mindepth 1 -maxdepth 1 ! -name worker_service -exec rm -rf {{}} +
                     cd /burla/worker_service
-                    uv pip install --python $python_cmd --break-system-packages --no-cache-dir \
-                        --only-binary=:all: --target /worker_service_python_env .
+                    uv pip install --python $python_cmd --break-system-packages \
+                        --target /worker_service_python_env .
                 else
                     # try with tarball first because faster
                     if curl -Ls -o burla.tar.gz https://github.com/Burla-Cloud/burla/archive/{__version__}.tar.gz; then
@@ -117,8 +120,11 @@ class Worker:
                         git sparse-checkout set worker_service
                         cd worker_service
                     fi
-                    uv pip install --python $python_cmd --break-system-packages --no-cache-dir \
-                        --only-binary=:all: --target /worker_service_python_env .
+                    # can only do this with linux host, breaks in dev using macos host :(
+                    export UV_CACHE_DIR=/worker_service_python_env/.uv-cache
+                    mkdir -p "$UV_CACHE_DIR" /worker_service_python_env
+                    uv pip install --python $python_cmd --break-system-packages \
+                        --target /worker_service_python_env .
                 fi
 
                 MSG="Successfully installed worker-service."
@@ -132,7 +138,7 @@ class Worker:
             fi
 
             # Wait for worker_service to become importable when not installing
-            if [ "{install_worker}" != "True" ]; then
+            if [ "{elected_installer}" != "True" ]; then
                 start_time=$(date +%s)
                 until $python_cmd -c "import worker_service" 2>/dev/null; do
                     now=$(date +%s)
@@ -197,6 +203,7 @@ class Worker:
                 "GOOGLE_CLOUD_PROJECT": PROJECT_ID,
                 "IN_LOCAL_DEV_MODE": IN_LOCAL_DEV_MODE,
                 "WORKER_NAME": self.container_name,
+                "ELECTED_INSTALLER": elected_installer,
             },
             detach=True,
             runtime="nvidia" if NUM_GPUS != 0 else None,
@@ -221,7 +228,7 @@ class Worker:
 
         docker_client.close()
 
-        if install_worker:
+        if elected_installer:
             self._start_log_streaming()
 
         # wait until READY

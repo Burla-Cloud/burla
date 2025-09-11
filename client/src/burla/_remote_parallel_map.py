@@ -1,9 +1,11 @@
 import sys
 import pickle
 import json
+import types
 import inspect
 import asyncio
 import traceback
+from importlib import metadata
 from asyncio import create_task
 from time import time
 from six import reraise
@@ -73,6 +75,30 @@ class JobCanceled(Exception):
 
 class VersionMismatch(Exception):
     pass
+
+
+def _get_packages(function_):
+    function_module_names = set()
+    for global_var in function_.__globals__.values():
+        if isinstance(global_var, types.ModuleType):
+            function_module_names.add(global_var.__name__)
+        elif getattr(global_var, "__module__", None):
+            function_module_names.add(global_var.__module__)
+
+    packages = set()
+    package_module_mapping = metadata.packages_distributions()
+    for module_name in function_module_names:
+        possible_packages_from_module = package_module_mapping.get(module_name.split(".")[0])
+        if possible_packages_from_module:
+            packages.update(possible_packages_from_module)
+
+    package_versions = {}
+    for package in packages:
+        try:
+            package_versions[package] = metadata.version(package)
+        except metadata.PackageNotFoundError:
+            continue
+    return package_versions
 
 
 async def _num_booting_nodes(db: AsyncClient):
@@ -230,18 +256,21 @@ async def _execute_job(
         }
     )
 
+    packages = _get_packages(function_)
+
     async def assign_node(node: dict, session: aiohttp.ClientSession):
         request_json = {
             "parallelism": node["target_parallelism"],
             "is_background_job": background,
             "user_python_version": f"3.{sys.version_info.minor}",
             "n_inputs": len(inputs),
+            "packages": packages,
         }
         data = aiohttp.FormData()
         data.add_field("request_json", json.dumps(request_json))
         data.add_field("function_pkl", function_pkl)
         url = f"{node['host']}/jobs/{job_id}"
-        timeout = aiohttp.ClientTimeout(total=2)
+        timeout = aiohttp.ClientTimeout(total=30)
         request = session.post(url, data=data, headers=auth_headers, timeout=timeout)
         try:
             async with request as response:
@@ -295,9 +324,9 @@ async def _execute_job(
             await uploader_task
             return
 
-        if spinner:
-            msg = f"Running {len(inputs)} inputs through `{function_.__name__}` "
-            spinner.text = msg + f"(0/{len(inputs)} completed)"
+        # if spinner:
+        #     msg = f"Running {len(inputs)} inputs through `{function_.__name__}` "
+        #     spinner.text = msg + f"(0/{len(inputs)} completed)"
 
         JOB_CALCELED_MSG = ""
         if not background:
@@ -352,7 +381,13 @@ async def _execute_job(
                     else:
                         return_values.append(cloudpickle.loads(result_pkl))
 
-                return node_status["is_empty"], node_status["current_parallelism"], return_values
+                return (
+                    node_status["is_empty"],
+                    node_status["current_parallelism"],
+                    node_status["currently_installing_package"],
+                    node_status["all_packages_installed"],
+                    return_values,
+                )
 
         n_results = 0
         all_nodes_empty = False
@@ -372,8 +407,13 @@ async def _execute_job(
             total_parallelism = 0
             all_nodes_empty = True
             nodes_status = await asyncio.gather(*[_check_single_node(n) for n in nodes])
+            currently_installing_package = nodes_status[0][2]
+            all_packages_installed = nodes_status[0][3]
 
-            for is_empty, node_parallelism, return_values in nodes_status:
+            if spinner and currently_installing_package:
+                spinner.text = f"Installing package: {currently_installing_package} ..."
+
+            for is_empty, node_parallelism, _, _, return_values in nodes_status:
                 total_parallelism += node_parallelism
                 all_nodes_empty = all_nodes_empty and is_empty
                 for return_value in return_values:
@@ -388,7 +428,7 @@ async def _execute_job(
                 stderr = ping_process.stderr.read().decode("utf-8")
                 raise Exception(f"Ping process exited with code: {exit_code}\n{stderr}")
 
-            if spinner:
+            if spinner and all_packages_installed:
                 spinner.text = (
                     f"Running {len(inputs)} inputs through `{function_.__name__}` "
                     f"({n_results}/{len(inputs)} completed) "

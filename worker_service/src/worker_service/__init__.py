@@ -39,6 +39,8 @@ def REINIT_SELF(SELF):
     SELF["logs"] = verbose_list
     SELF["STOP_PROCESSING_EVENT"] = Event()
     SELF["INPUT_UPLOAD_IN_PROGRESS"] = False
+    SELF["CURRENTLY_INSTALLING_PACKAGE"] = None
+    SELF["ALL_PACKAGES_INSTALLED"] = False
 
 
 SELF = {}

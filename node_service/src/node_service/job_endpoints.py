@@ -1,7 +1,8 @@
 import pickle
+import json
 from time import time
 from queue import Empty
-from typing import Optional, Callable
+from typing import Optional
 
 import asyncio
 import aiohttp
@@ -109,6 +110,8 @@ async def get_results(job_id: str = Path(...)):
         "results": results,
         "current_parallelism": SELF["current_parallelism"],
         "is_empty": SELF["results_queue"].empty(),
+        "all_packages_installed": SELF["all_packages_installed"],  # <- required, see worker
+        "currently_installing_package": SELF["currently_installing_package"],
     }
     data = pickle.dumps(response_json)
     await asyncio.sleep(0)
@@ -159,7 +162,9 @@ async def execute(
 
     async def assign_worker(session, worker):
         data = aiohttp.FormData()
+        packages_json = json.dumps({"packages": request_json["packages"]})
         data.add_field("function_pkl", request_files["function_pkl"])
+        data.add_field("request_json", packages_json, content_type="application/json")
         async with session.post(f"{worker.url}/jobs/{job_id}", data=data) as response:
             if response.status == 200:
                 return worker

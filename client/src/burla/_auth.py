@@ -42,7 +42,7 @@ def _get_login_response(client_id, spinner, attempt=0):
     if attempt == AUTH_TIMEOUT_SECONDS / 2:
         raise AuthTimeoutException()
 
-    response = requests.get(f"{_BURLA_BACKEND_URL}/v1/login/{client_id}/token")
+    response = requests.get(f"{_BURLA_BACKEND_URL}/v2/login/client/{client_id}/token")
 
     if response.status_code == 404:
         sleep(2)
@@ -82,7 +82,8 @@ def login():
     redirect_locally = (result.returncode == 0) and (len(result.stdout.strip().splitlines()) > 1)
 
     client_id = uuid4().hex
-    login_url = f"{_BURLA_BACKEND_URL}/v1/login/{client_id}?redirect_locally={redirect_locally}"
+    login_url = f"{_BURLA_BACKEND_URL}/v2/login/client/{client_id}"
+    login_url += f"?redirect_locally={redirect_locally}"
     if IN_COLAB:
         print(f"Please navigate to the following URL to login:\n\n    {login_url}\n")
         print(f"(We are unable to automatically open this from a Google Colab notebook)")

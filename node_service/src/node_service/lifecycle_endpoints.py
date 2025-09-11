@@ -236,7 +236,7 @@ def reboot_containers(
                 # (too many will ddoss github / be slow)
                 install_worker = i == 0
                 args = (spec.python_version, spec.image)
-                futures.append(executor.submit(Worker, *args, install_worker=install_worker))
+                futures.append(executor.submit(Worker, *args, elected_installer=install_worker))
 
         docker_client.close()
         executor.shutdown(wait=True)

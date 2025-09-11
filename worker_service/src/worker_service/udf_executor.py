@@ -174,17 +174,16 @@ def _install_packages(packages: dict):
 
 def install_pkgs_and_execute_job(job_id: str, function_pkl: bytes, packages: dict):
     SELF["logs"].append(f"Starting job {job_id} with func-size {len(function_pkl)} bytes.")
-    all_packages_installed = _packages_are_importable(packages)
-    lock_path = Path("/worker_service_python_env/.CURRENTLY_INSTALLING")
-
-    if not all_packages_installed and os.environ.get("ELECTED_INSTALLER") == "True":
-        lock_path.touch()
+    all_packages_importable = _packages_are_importable(packages)
+    ENV_IS_READY_PATH = Path("/worker_service_python_env/.ALL_PACKAGES_INSTALLED")
+    if not all_packages_importable and os.environ.get("ELECTED_INSTALLER") == "True":
         _install_packages(packages)
-        lock_path.unlink(missing_ok=True)
-    elif not all_packages_installed:
+        ENV_IS_READY_PATH.touch()
+    elif not all_packages_importable:
         SELF["logs"].append("Waiting for packages ...")
-        # `_packages_are_importable` check needed to update spinner on client!
-        while (not _packages_are_importable(packages)) and lock_path.exists():
+        while not ENV_IS_READY_PATH.exists():
+            # run this to update CURRENTLY_INSTALLING_PACKAGE -> spinner on client!
+            _packages_are_importable(packages)
             sleep(0.01)
         SELF["logs"].append("Done waiting for packages.")
     else:

@@ -3,6 +3,7 @@ import sys
 import json
 import asyncio
 import traceback
+from pathlib import Path
 from uuid import uuid4
 from time import time
 from queue import Queue
@@ -33,6 +34,9 @@ INSTANCE_NAME = os.environ["INSTANCE_NAME"]
 INACTIVITY_SHUTDOWN_TIME_SEC = int(os.environ.get("INACTIVITY_SHUTDOWN_TIME_SEC"))
 INSTANCE_N_CPUS = 2 if IN_LOCAL_DEV_MODE else os.cpu_count()
 GCL_CLIENT = logging.Client().logger("node_service", labels=dict(INSTANCE_NAME=INSTANCE_NAME))
+
+# must be same path on worker service!
+ENV_IS_READY_PATH = Path("/worker_service_python_env/.ALL_PACKAGES_INSTALLED")
 
 secret_client = secretmanager.SecretManagerServiceClient()
 secret_name = f"projects/{PROJECT_ID}/secrets/burla-cluster-id-token/versions/latest"

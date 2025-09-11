@@ -10,7 +10,7 @@ from google.cloud.firestore import FieldFilter, And
 from google.cloud.firestore_v1.field_path import FieldPath
 from google.cloud.firestore_v1.async_client import AsyncClient
 
-from node_service import PROJECT_ID, SELF, INSTANCE_NAME, REINIT_SELF
+from node_service import PROJECT_ID, SELF, INSTANCE_NAME, REINIT_SELF, ENV_IS_READY_PATH
 from node_service.helpers import Logger, format_traceback
 from node_service.lifecycle_endpoints import reboot_containers
 
@@ -237,6 +237,9 @@ async def job_watcher_logged(n_inputs: int, is_background_job: bool, auth_header
 
 
 async def reinit_node(assigned_workers: list, async_db: AsyncClient):
+    # important to delete or workers wont install packages
+    ENV_IS_READY_PATH.unlink(missing_ok=True)
+
     current_container_config = SELF["current_container_config"]
     current_workers = assigned_workers + SELF["idle_workers"]
     authorized_users = SELF["authorized_users"]

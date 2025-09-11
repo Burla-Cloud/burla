@@ -26,6 +26,7 @@ from node_service import (
     BURLA_BACKEND_URL,
     CLUSTER_ID_TOKEN,
     NUM_GPUS,
+    ENV_IS_READY_PATH,
     get_logger,
     get_add_background_task_function,
     __version__,
@@ -155,6 +156,9 @@ def reboot_containers(
     Rebooting will reboot the containers that are currently/ were previously running.
     If new containers are passed with the reboot request, those containers will be booted instead.
     """
+    # important to delete or workers wont install packages
+    ENV_IS_READY_PATH.unlink(missing_ok=True)
+
     db = firestore.Client(project=PROJECT_ID, database="burla")
     node_doc = db.collection("nodes").document(INSTANCE_NAME)
     node_doc.update(
@@ -236,7 +240,7 @@ def reboot_containers(
                 # (too many will ddoss github / be slow)
                 install_worker = i == 0
                 args = (spec.python_version, spec.image)
-                futures.append(executor.submit(Worker, *args, install_worker=install_worker))
+                futures.append(executor.submit(Worker, *args, elected_installer=install_worker))
 
         docker_client.close()
         executor.shutdown(wait=True)

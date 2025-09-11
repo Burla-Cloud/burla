@@ -1,6 +1,10 @@
 .ONESHELL:
 .SILENT:
 
+ifeq ($(USER),jakezuliani)
+  $(shell gcloud config set project burla-test >/dev/null)
+endif
+
 PROJECT_ID := $(shell gcloud config get-value project 2>/dev/null)
 PROJECT_NUM := $(shell gcloud projects describe $(PROJECT_ID) --format="value(projectNumber)")
 ACCESS_TOKEN := $(shell gcloud auth print-access-token)
@@ -28,10 +32,7 @@ stop:
 		'from appdirs import user_config_dir' \
 		'from pathlib import Path' \
 		'' \
-		'appdata_dir = Path(user_config_dir(appname="burla", appauthor="burla"))' \
-		'config_path = appdata_dir / Path("burla_credentials.json")' \
-		'project_id = json.loads(config_path.read_text())["project_id"]' \
-		'db = firestore.Client(project=project_id, database="burla")' \
+		'db = firestore.Client(project="$(PROJECT_ID)", database="burla")' \
 		'booting_filter = FieldFilter("status", "==", "BOOTING")' \
 		'for document in db.collection("nodes").where(filter=booting_filter).get():' \
 		'    document.reference.delete()' \
@@ -43,6 +44,9 @@ stop:
 # All components (main_svc, node_svc, worker_svc) will restart when changes to code are made.
 local-dev:
 	set -e; \
+	rm -rf ./worker_service_python_env; \
+	mkdir -p ./worker_service_python_env; \
+	chmod 777 ./worker_service_python_env; \
 	docker network create local-burla-cluster 2>/dev/null || true; \
 	gcloud auth print-access-token > .temp_token.txt; \
 	docker run --rm -it \

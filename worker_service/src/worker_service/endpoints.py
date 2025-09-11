@@ -1,14 +1,17 @@
 import os
+import json
+import subprocess
 import pickle
 import asyncio
 import aiohttp
 from typing import Optional
 from queue import Empty
+import importlib.metadata as importlib_metadata
 
 from fastapi import APIRouter, Path, Response, Depends, Query
 
 from worker_service import SELF, REINIT_SELF, get_request_json, get_request_files
-from worker_service.udf_executor import execute_job
+from worker_service.udf_executor import install_pkgs_and_execute_job
 from worker_service.helpers import ThreadWithExc
 
 router = APIRouter()
@@ -67,6 +70,8 @@ async def get_results(job_id: str = Path(...)):
         "results": results,
         "is_idle": SELF["IDLE"],  # <- used to determine if job is done
         "is_empty": SELF["results_queue"].empty(),
+        "currently_installing_package": SELF["CURRENTLY_INSTALLING_PACKAGE"],
+        "all_packages_installed": SELF["ALL_PACKAGES_INSTALLED"],  # required, see udf_executor
     }
     data = pickle.dumps(response_json)
     await asyncio.sleep(0)
@@ -125,10 +130,11 @@ async def upload_inputs(
 async def start_job(
     job_id: str = Path(...),
     request_files: Optional[dict] = Depends(get_request_files),
+    request_json: dict = Depends(get_request_json),
 ):
     SELF["logs"].append(f"Assigned to job {job_id}.")
-    function_pkl = request_files["function_pkl"]
-    thread = ThreadWithExc(target=execute_job, args=(job_id, function_pkl), daemon=True)
+    args = (job_id, request_files["function_pkl"], request_json["packages"])
+    thread = ThreadWithExc(target=install_pkgs_and_execute_job, args=args, daemon=True)
     thread.start()
 
     SELF["current_job"] = job_id

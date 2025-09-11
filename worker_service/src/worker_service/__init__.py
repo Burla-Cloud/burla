@@ -3,6 +3,7 @@ import sys
 import json
 import requests
 import traceback
+from pathlib import Path
 from queue import Queue
 from threading import Event
 import logging as python_logging
@@ -14,6 +15,9 @@ from starlette.datastructures import UploadFile
 IN_LOCAL_DEV_MODE = os.environ.get("IN_LOCAL_DEV_MODE") == "True"
 PROJECT_ID = os.environ.get("GOOGLE_CLOUD_PROJECT")
 BURLA_BACKEND_URL = "https://backend.burla.dev"
+
+# must be same path on node service!
+ENV_IS_READY_PATH = Path("/worker_service_python_env/.ALL_PACKAGES_INSTALLED")
 
 from worker_service.helpers import VerboseList  # <- same as a list but prints stuff you append
 
@@ -39,6 +43,8 @@ def REINIT_SELF(SELF):
     SELF["logs"] = verbose_list
     SELF["STOP_PROCESSING_EVENT"] = Event()
     SELF["INPUT_UPLOAD_IN_PROGRESS"] = False
+    SELF["CURRENTLY_INSTALLING_PACKAGE"] = None
+    SELF["ALL_PACKAGES_INSTALLED"] = False
 
 
 SELF = {}

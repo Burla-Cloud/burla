@@ -21,7 +21,7 @@ from jinja2 import Environment, FileSystemLoader
 os.environ["GRPC_VERBOSITY"] = "ERROR"
 os.environ["GLOG_minloglevel"] = "2"
 
-CURRENT_BURLA_VERSION = "1.2.8"
+CURRENT_BURLA_VERSION = "1.2.9"
 
 # This is the only possible alternative "mode".
 # In this mode everything runs locally in docker containers.
@@ -32,7 +32,7 @@ BURLA_BACKEND_URL = "https://backend.burla.dev"
 GCL_CLIENT = logging.Client().logger("main_service")
 DB = firestore.Client(database="burla")
 
-env = Environment(loader=FileSystemLoader("src/main_service/static"))
+STATIC_FILES_ENV = Environment(loader=FileSystemLoader("src/main_service/static"))
 secret_client = secretmanager.SecretManagerServiceClient()
 secret_name = f"projects/{PROJECT_ID}/secrets/burla-cluster-id-token/versions/latest"
 response = secret_client.access_secret_version(request={"name": secret_name})
@@ -204,60 +204,31 @@ async def catch_errors(request: Request, call_next):
 
 @app.middleware("http")
 async def validate_requests(request: Request, call_next):
+    """
+    Login flow for totally new user:
+      - no `client_id` or `auth_cookie` user goes to login page
+      - login page -> backend svc -> google login -> backend svc -> here again but with client_id
+      - use client_id to get auth info, set auth cookie -> redirect here again but with auth cookie
+      - here again with auth cookie -> access granted
+    """
     # Allow Server-Sent Events to pass through without auth to prevent proxy/login HTML from breaking the stream
     # These endpoints read from Firestore only and do not perform privileged actions.
     accept_header = request.headers.get("accept", "")
     if "text/event-stream" in accept_header:
         return await call_next(request)
-
     # allow static asset requests (js/css/images) to pass through
     last_segment = request.url.path.rstrip("/").split("/")[-1]
     if "." in last_segment:
         return await call_next(request)
 
-    # convert temporary client_id to email/token
-    # client_id's are only valid once, and for a very short period of time
-    if request.query_params.get("client_id"):
-        client_id = request.query_params.get("client_id")
-        token_url = f"{BURLA_BACKEND_URL}/v1/login/{client_id}/token?project_id={PROJECT_ID}"
-        async with aiohttp.ClientSession() as session:
-            async with session.get(token_url) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    request.session["X-User-Email"] = data["email"]
-                    request.session["Authorization"] = f"Bearer {data['token']}"
-                    request.session["profile_pic"] = data["profile_pic"]
-                    request.session["name"] = data["name"]
-                elif response.status == 403:
-                    data = await response.json()
-                    rendered = env.get_template("login.html.j2").render(
-                        redirect_locally=IN_LOCAL_DEV_MODE,
-                        user_email=data["detail"]["email"],
-                        first_name=None,
-                    )
-                    return Response(content=rendered, status_code=403, media_type="text/html")
-
-        base_url = f"{request.url.scheme}://{request.url.netloc}{request.url.path}"
-        return RedirectResponse(url=base_url, status_code=303)
-
-    email = request.session.get("X-User-Email") or request.headers.get("X-User-Email")
-    authorization = request.session.get("Authorization") or request.headers.get("Authorization")
-    if email and authorization:
-        async with aiohttp.ClientSession() as session:
-            url = f"{BURLA_BACKEND_URL}/v1/clusters/{PROJECT_ID}/users:validate"
-            headers = {"Authorization": authorization, "X-User-Email": email}
-            async with session.get(url, headers=headers) as response:
-                if response.status == 200:
-                    return await call_next(request)
-                elif response.status != 401:
-                    response.raise_for_status()
-        new_status = 403
-    else:
-        new_status = 401
-
-    first_name = None
-    url = f"{BURLA_BACKEND_URL}/v1/clusters/{PROJECT_ID}/users:welcome_name"
+    client_id = request.query_params.get("client_id")
+    email = request.session.get("X-User-Email")
+    authorization = request.session.get("Authorization")
+    auth_cookie_exists = email and authorization
     async with aiohttp.ClientSession() as session:
+
+        first_name = None
+        url = f"{BURLA_BACKEND_URL}/v1/clusters/{PROJECT_ID}/users:welcome_name"
         async with session.get(url) as response:
             if response.status == 200:
                 data = await response.json()
@@ -265,12 +236,49 @@ async def validate_requests(request: Request, call_next):
             elif response.status != 204:
                 response.raise_for_status()
 
-    rendered = env.get_template("login.html.j2").render(
-        redirect_locally=IN_LOCAL_DEV_MODE,
-        user_email=email,
-        first_name=first_name,
-    )
-    return Response(content=rendered, status_code=new_status, media_type="text/html")
+        if client_id:
+            url = f"{BURLA_BACKEND_URL}/v2/login/dashboard/{client_id}/token"
+            async with session.get(url) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    request.session["X-User-Email"] = data["email"]
+                    request.session["Authorization"] = f"Bearer {data['token']}"
+                    request.session["profile_pic"] = data["profile_pic"]
+                    request.session["name"] = data["name"]
+                    base_url = f"{request.url.scheme}://{request.url.netloc}{request.url.path}"
+                    return RedirectResponse(url=base_url, status_code=303)
+                elif response.status == 403:
+                    data = await response.json()
+                    rendered = STATIC_FILES_ENV.get_template("login.html.j2").render(
+                        redirect_locally=IN_LOCAL_DEV_MODE,
+                        project_id=PROJECT_ID,
+                        user_email=data["detail"]["email"],
+                        first_name=first_name,
+                    )
+                    return Response(content=rendered, status_code=403, media_type="text/html")
+        elif auth_cookie_exists:
+            url = f"{BURLA_BACKEND_URL}/v1/clusters/{PROJECT_ID}/users:validate"
+            headers = {"Authorization": authorization, "X-User-Email": email}
+            async with session.get(url, headers=headers) as response:
+                if response.status == 200:
+                    return await call_next(request)
+                elif response.status != 401:
+                    response.raise_for_status()
+                else:
+                    rendered = STATIC_FILES_ENV.get_template("login.html.j2").render(
+                        redirect_locally=IN_LOCAL_DEV_MODE,
+                        project_id=PROJECT_ID,
+                        user_email=email,
+                        first_name=first_name,
+                    )
+                    return Response(content=rendered, status_code=401, media_type="text/html")
+
+        rendered = STATIC_FILES_ENV.get_template("login.html.j2").render(
+            redirect_locally=IN_LOCAL_DEV_MODE,
+            project_id=PROJECT_ID,
+            first_name=first_name,
+        )
+        return Response(content=rendered, status_code=200, media_type="text/html")
 
 
 @app.middleware("http")

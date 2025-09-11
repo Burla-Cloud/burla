@@ -10,7 +10,7 @@ from google.cloud.firestore import FieldFilter, And
 from google.cloud.firestore_v1.field_path import FieldPath
 from google.cloud.firestore_v1.async_client import AsyncClient
 
-from node_service import PROJECT_ID, SELF, INSTANCE_NAME, REINIT_SELF
+from node_service import PROJECT_ID, SELF, INSTANCE_NAME, REINIT_SELF, ENV_IS_READY_PATH
 from node_service.helpers import Logger, format_traceback
 from node_service.lifecycle_endpoints import reboot_containers
 
@@ -73,6 +73,8 @@ async def result_check_all_workers(session: aiohttp.ClientSession, logger: Logge
 
             worker.is_idle = response["is_idle"]
             worker.is_empty = response["is_empty"]
+            worker.currently_installing_package = response["currently_installing_package"]
+            worker.all_packages_installed = response["all_packages_installed"]
             return worker, http_response.status
 
     tasks = [_result_check_single_worker(w) for w in SELF["workers"]]
@@ -127,6 +129,8 @@ async def _job_watcher(
         # enqueue results from workers
         workers_info = await result_check_all_workers(session, logger)
         SELF["current_parallelism"] = sum(not w.is_idle for w in SELF["workers"])
+        SELF["currently_installing_package"] = SELF["workers"][0].currently_installing_package
+        SELF["all_packages_installed"] = any(w.all_packages_installed for w in SELF["workers"])
         all_workers_empty = all(w.is_empty for w in SELF["workers"])
         failed = [f"{w.container_name}:{status}" for w, status in workers_info if status != 200]
 
@@ -233,6 +237,9 @@ async def job_watcher_logged(n_inputs: int, is_background_job: bool, auth_header
 
 
 async def reinit_node(assigned_workers: list, async_db: AsyncClient):
+    # important to delete or workers wont install packages
+    ENV_IS_READY_PATH.unlink(missing_ok=True)
+
     current_container_config = SELF["current_container_config"]
     current_workers = assigned_workers + SELF["idle_workers"]
     authorized_users = SELF["authorized_users"]
@@ -302,27 +309,6 @@ async def restart_workers(session: aiohttp.ClientSession, logger: Logger, async_
         reboot_containers(logger=logger)
     else:
         await reinit_node(restarted_workers, async_db)
-
-
-async def result_check_all_workers(session: aiohttp.ClientSession, logger: Logger):
-    async def _result_check_single_worker(worker):
-        url = f"{worker.url}/jobs/{SELF['current_job']}/results"
-        async with session.get(url) as http_response:
-            if http_response.status != 200:
-                return worker, http_response.status
-
-            response_content = await http_response.content.read()
-            response = pickle.loads(response_content)
-            for result in response["results"]:
-                SELF["results_queue"].put(result)
-                SELF["num_results_received"] += 1
-
-            worker.is_idle = response["is_idle"]
-            worker.is_empty = response["is_empty"]
-            return worker, http_response.status
-
-    tasks = [_result_check_single_worker(w) for w in SELF["workers"]]
-    return await asyncio.gather(*tasks)
 
 
 async def send_inputs_to_workers(session: aiohttp.ClientSession, inputs_pkl_with_idx: list):

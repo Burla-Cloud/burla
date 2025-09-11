@@ -18,4 +18,4 @@ def my_function(x):
     print("Prediction:", model.predict(dtrain))
 
 
-remote_parallel_map(my_function, list(range(10)))
+remote_parallel_map(my_function, list(range(160)))

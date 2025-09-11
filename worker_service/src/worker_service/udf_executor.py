@@ -145,8 +145,7 @@ def _packages_are_installed(packages: dict):
             installed_version = None
         if installed_version != expected_version:
             SELF["CURRENTLY_INSTALLING_PACKAGE"] = package
-            msg = f"{package}=={installed_version} but we need {expected_version} ..."
-            SELF["logs"].append(msg)
+            # SELF["logs"].append(f"{package}=={installed_version} but we need {expected_version}")
             return False
 
     # `ALL_PACKAGES_INSTALLED != CURRENTLY_INSTALLING_PACKAGE == None` because it is none
@@ -199,7 +198,7 @@ def install_pkgs_and_execute_job(job_id: str, function_pkl: bytes, packages: dic
             if not logged_idle:
                 # SELF["logs"].append("Input queue empty, waiting for more inputs ...")
                 logged_idle = True
-            sleep(0.05)
+            sleep(0.01)
             continue
 
         is_error = False

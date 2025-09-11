@@ -120,6 +120,9 @@ class Worker:
                         git sparse-checkout set worker_service
                         cd worker_service
                     fi
+                    # can only do this with linux host, breaks in dev using macos host :(
+                    export UV_CACHE_DIR=/worker_service_python_env/.uv-cache
+                    mkdir -p "$UV_CACHE_DIR" /worker_service_python_env
                     uv pip install --python $python_cmd --break-system-packages \
                         --target /worker_service_python_env .
                 fi

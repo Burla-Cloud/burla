@@ -90,14 +90,34 @@ def _get_packages(function_):
     for module_name in function_module_names:
         possible_packages_from_module = package_module_mapping.get(module_name.split(".")[0])
         if possible_packages_from_module:
+            for dist in possible_packages_from_module:
+                norm = dist.lower().replace("_", "-")
+                if norm.startswith("types-") or norm.endswith("-stubs"):
+                    print(f"\n\n\n\nHERE{dist}\n\n\n\n\n")
+                    continue
             packages.update(possible_packages_from_module)
+
+    packages = set()
+    package_module_mapping = metadata.packages_distributions()
+    for module_name in function_module_names:
+        top_level = module_name.split(".")[0]
+        dists = package_module_mapping.get(top_level)
+        if not dists:
+            continue
+        for dist in dists:
+            norm = dist.lower().replace("_", "-")
+            if norm.startswith("types-") or norm.endswith("-stubs"):
+                continue
+            packages.add(dist)
 
     package_versions = {}
     for package in packages:
+        print(package)
         try:
             package_versions[package] = metadata.version(package)
         except metadata.PackageNotFoundError:
             continue
+
     return package_versions
 
 

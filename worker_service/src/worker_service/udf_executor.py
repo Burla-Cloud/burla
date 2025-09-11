@@ -137,7 +137,7 @@ def _serialize_error(exception_type, exception, traceback):
     return pickled_exception_info
 
 
-def _packages_are_installed(packages: dict):
+def _packages_are_importable(packages: dict):
     for package, expected_version in packages.items():
         try:
             installed_version = importlib_metadata.version(package)
@@ -149,7 +149,7 @@ def _packages_are_installed(packages: dict):
             return False
 
     # `ALL_PACKAGES_INSTALLED != CURRENTLY_INSTALLING_PACKAGE == None` because it is none
-    # before `_packages_are_installed` is checked causing client to switch spinner to "running"
+    # before `_packages_are_importable` is checked causing client to switch spinner to "running"
     # before we know it won't install packages.
     SELF["ALL_PACKAGES_INSTALLED"] = True
     SELF["CURRENTLY_INSTALLING_PACKAGE"] = None
@@ -164,21 +164,27 @@ def _install_packages(packages: dict):
     result = subprocess.run(cmd, capture_output=True)
     if result.returncode != 0:
         raise Exception(f"Failed to install packages:\nCMD:{cmd}\nERROR:{result.stderr}\n\n")
+        # this should fail the entire node
     else:
-        SELF["logs"].append(f"Successfully installed {len(packages)} packages.")
+        msg = f"Successfully installed {len(packages)} packages:\n\t{result.stderr}"
+        SELF["logs"].append(msg)
         SELF["ALL_PACKAGES_INSTALLED"] = True
         SELF["CURRENTLY_INSTALLING_PACKAGE"] = None
 
 
 def install_pkgs_and_execute_job(job_id: str, function_pkl: bytes, packages: dict):
     SELF["logs"].append(f"Starting job {job_id} with func-size {len(function_pkl)} bytes.")
-    all_packages_installed = _packages_are_installed(packages)
+    all_packages_installed = _packages_are_importable(packages)
+    lock_path = Path("/worker_service_python_env/.CURRENTLY_INSTALLING")
 
     if not all_packages_installed and os.environ.get("ELECTED_INSTALLER") == "True":
+        lock_path.touch()
         _install_packages(packages)
+        lock_path.unlink(missing_ok=True)
     elif not all_packages_installed:
         SELF["logs"].append("Waiting for packages ...")
-        while not _packages_are_installed(packages):
+        # `_packages_are_importable` check needed to update spinner on client!
+        while (not _packages_are_importable(packages)) and lock_path.exists():
             sleep(0.01)
         SELF["logs"].append("Done waiting for packages.")
     else:

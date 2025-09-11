@@ -11,7 +11,7 @@ import importlib.metadata as importlib_metadata
 from fastapi import APIRouter, Path, Response, Depends, Query
 
 from worker_service import SELF, REINIT_SELF, get_request_json, get_request_files
-from worker_service.udf_executor import execute_job
+from worker_service.udf_executor import install_pkgs_and_execute_job
 from worker_service.helpers import ThreadWithExc
 
 router = APIRouter()
@@ -71,7 +71,7 @@ async def get_results(job_id: str = Path(...)):
         "is_idle": SELF["IDLE"],  # <- used to determine if job is done
         "is_empty": SELF["results_queue"].empty(),
         "currently_installing_package": SELF["CURRENTLY_INSTALLING_PACKAGE"],
-        "all_packages_installed": SELF["ALL_PACKAGES_INSTALLED"],  # <- required, see start_job
+        "all_packages_installed": SELF["ALL_PACKAGES_INSTALLED"],  # required, see udf_executor
     }
     data = pickle.dumps(response_json)
     await asyncio.sleep(0)
@@ -133,54 +133,8 @@ async def start_job(
     request_json: dict = Depends(get_request_json),
 ):
     SELF["logs"].append(f"Assigned to job {job_id}.")
-
-    def _packages_are_installed(packages: dict):
-        for package, expected_version in packages.items():
-            try:
-                installed_version = importlib_metadata.version(package)
-            except importlib_metadata.PackageNotFoundError:
-                installed_version = None
-            if installed_version != expected_version:
-                SELF["CURRENTLY_INSTALLING_PACKAGE"] = package
-                msg = f"{package}=={installed_version} but we need {expected_version} ..."
-                SELF["logs"].append(msg)
-                return False
-
-        # `ALL_PACKAGES_INSTALLED != CURRENTLY_INSTALLING_PACKAGE == None` because it is none
-        # before `_packages_are_installed` is checked causing client to switch spinner to "running"
-        # before we know it won't install packages.
-        SELF["logs"].append(f"SETTING HERE!!!!!!!!!!!!!!!!!!!!!!")
-        SELF["ALL_PACKAGES_INSTALLED"] = True
-        SELF["CURRENTLY_INSTALLING_PACKAGE"] = None
-        return True
-
-    all_packages_installed = _packages_are_installed(request_json["packages"])
-    i_am_the_installer_worker = os.environ.get("ELECTED_INSTALLER") == "True"
-
-    if all_packages_installed:
-        SELF["logs"].append(f"{len(request_json['packages'])} packages are already installed.")
-
-    if not all_packages_installed and i_am_the_installer_worker:
-        cmd = ["uv", "pip", "install", "--target", "/worker_service_python_env", "--system"]
-        for package, version in request_json["packages"].items():
-            cmd.append(f"{package}=={version}")
-        msg = f"installing {len(request_json['packages'])} packages with CMD:\n\t{' '.join(cmd)}"
-        SELF["logs"].append(msg)
-        result = subprocess.run(cmd, capture_output=True)
-        if result.returncode != 0:
-            raise Exception(f"Failed to install packages:\nCMD:{cmd}\nERROR:{result.stderr}\n\n")
-        else:
-            SELF["logs"].append(f"Success!")
-            SELF["ALL_PACKAGES_INSTALLED"] = True
-            SELF["CURRENTLY_INSTALLING_PACKAGE"] = None
-    elif not all_packages_installed:
-        SELF["logs"].append("Waiting for packages ...")
-        while not _packages_are_installed(request_json["packages"]):
-            await asyncio.sleep(1)
-        SELF["logs"].append("Done waiting for packages.")
-
-    function_pkl = request_files["function_pkl"]
-    thread = ThreadWithExc(target=execute_job, args=(job_id, function_pkl), daemon=True)
+    args = (job_id, request_files["function_pkl"], request_json["packages"])
+    thread = ThreadWithExc(target=install_pkgs_and_execute_job, args=args, daemon=True)
     thread.start()
 
     SELF["current_job"] = job_id

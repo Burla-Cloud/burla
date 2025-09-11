@@ -1,12 +1,15 @@
+import os
 import sys
 import pickle
 import requests
 import traceback
+import subprocess
 from datetime import datetime, timezone
 from queue import Empty
 from time import sleep, time
 from pathlib import Path
 from threading import Lock, Event, Thread
+import importlib.metadata as importlib_metadata
 
 import cloudpickle
 from tblib import Traceback
@@ -134,8 +137,53 @@ def _serialize_error(exception_type, exception, traceback):
     return pickled_exception_info
 
 
-def execute_job(job_id: str, function_pkl: bytes):
+def _packages_are_installed(packages: dict):
+    for package, expected_version in packages.items():
+        try:
+            installed_version = importlib_metadata.version(package)
+        except importlib_metadata.PackageNotFoundError:
+            installed_version = None
+        if installed_version != expected_version:
+            SELF["CURRENTLY_INSTALLING_PACKAGE"] = package
+            msg = f"{package}=={installed_version} but we need {expected_version} ..."
+            SELF["logs"].append(msg)
+            return False
+
+    # `ALL_PACKAGES_INSTALLED != CURRENTLY_INSTALLING_PACKAGE == None` because it is none
+    # before `_packages_are_installed` is checked causing client to switch spinner to "running"
+    # before we know it won't install packages.
+    SELF["ALL_PACKAGES_INSTALLED"] = True
+    SELF["CURRENTLY_INSTALLING_PACKAGE"] = None
+    return True
+
+
+def _install_packages(packages: dict):
+    cmd = ["uv", "pip", "install", "--target", "/worker_service_python_env", "--system"]
+    for package, version in packages.items():
+        cmd.append(f"{package}=={version}")
+    SELF["logs"].append(f"Installing {len(packages)} packages with CMD:\n\t{' '.join(cmd)}")
+    result = subprocess.run(cmd, capture_output=True)
+    if result.returncode != 0:
+        raise Exception(f"Failed to install packages:\nCMD:{cmd}\nERROR:{result.stderr}\n\n")
+    else:
+        SELF["logs"].append(f"Successfully installed {len(packages)} packages.")
+        SELF["ALL_PACKAGES_INSTALLED"] = True
+        SELF["CURRENTLY_INSTALLING_PACKAGE"] = None
+
+
+def install_pkgs_and_execute_job(job_id: str, function_pkl: bytes, packages: dict):
     SELF["logs"].append(f"Starting job {job_id} with func-size {len(function_pkl)} bytes.")
+    all_packages_installed = _packages_are_installed(packages)
+
+    if not all_packages_installed and os.environ.get("ELECTED_INSTALLER") == "True":
+        _install_packages(packages)
+    elif not all_packages_installed:
+        SELF["logs"].append("Waiting for packages ...")
+        while not _packages_are_installed(packages):
+            sleep(0.01)
+        SELF["logs"].append("Done waiting for packages.")
+    else:
+        SELF["logs"].append(f"{len(packages)} packages are already installed.")
 
     firestore_stdout = _FirestoreStdout(job_id)
     user_defined_function = None

@@ -46,12 +46,11 @@
     document.getElementById("login-btn").addEventListener("click", function (event) {
       event.preventDefault();
       const clientId = crypto.randomUUID();
-      const baseUrl = `https://backend.burla.dev/v1/login/${clientId}`;
-      const generateNewToken = {{ 'false' if user_email is not none else 'true' }};
-      const redirectLocally = {{ 'true' if redirect_locally else 'false' }};
-      const queryParams = `?redirect_locally=${redirectLocally}&generate_new_token=${generateNewToken}&logging_in_from_dashboard=true`;
-      const loginUrl = baseUrl + queryParams;
-      window.location.href = loginUrl;
+      const baseUrl = `https://backend.burla.dev/v2/login/dashboard/${clientId}`;
+      const redirectLocally = {{ redirect_locally | tojson }};
+      const projectId = {{ project_id | tojson }};
+      const queryParams = `?redirect_locally=${redirectLocally}&project_id=${projectId}`;
+      window.location.href = baseUrl + queryParams;
     });
   </script>
 </body>

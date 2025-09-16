@@ -1,15 +1,8 @@
 .ONESHELL:
 .SILENT:
 
-ifeq ($(USER),jakezuliani)
-  $(shell gcloud config set project burla-test >/dev/null)
-endif
-
-PROJECT_ID := $(shell gcloud config get-value project 2>/dev/null)
-PROJECT_NUM := $(shell gcloud projects describe $(PROJECT_ID) --format="value(projectNumber)")
-ACCESS_TOKEN := $(shell gcloud auth print-access-token)
+PROJECT_ID := burla-test
 MAIN_SVC_IMAGE_NAME := us-docker.pkg.dev/$(PROJECT_ID)/burla-main-service/burla-main-service:latest
-
 
 demo:
 	poetry -C ./client run python examples/basic.py
@@ -32,7 +25,7 @@ stop:
 		'from appdirs import user_config_dir' \
 		'from pathlib import Path' \
 		'' \
-		'db = firestore.Client(project="$(PROJECT_ID)", database="burla")' \
+		'db = firestore.Client(database="burla")' \
 		'booting_filter = FieldFilter("status", "==", "BOOTING")' \
 		'for document in db.collection("nodes").where(filter=booting_filter).get():' \
 		'    document.reference.delete()' \

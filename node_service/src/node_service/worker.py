@@ -149,6 +149,10 @@ class Worker:
                     sleep 1
                 done
             fi
+
+            # go to user-workspace-dir, otherwise installer / non-installer containers are in different dir's
+            mkdir -p /workspace
+            cd /workspace
             
             # Start the worker service,
             # Restart automatically if it dies (IMPORTANT!):

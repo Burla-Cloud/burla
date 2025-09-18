@@ -163,9 +163,10 @@ def _install(spinner):
     # print success message
     msg = f"\nSuccessfully installed Burla v{__version__}!\n"
     msg += f"Quickstart:\n"
-    msg += f"  1. Run `burla login` to access your new dashboard.\n"
-    msg += f'  2. Hit "⏻ Start" on the homepage.\n'
-    msg += f"  3. Import and call `remote_parallel_map`!\n\n"
+    msg += f"  1. Open your new cluster dashboard: {dashboard_url}\n"
+    msg += f'  2. Hit "⏻ Start" to boot some machines!\n'
+    msg += f"  3. Run `burla login` to connect your laptop to the cluster.\n"
+    msg += f"  4. Import and call `remote_parallel_map`!\n\n"
     msg += f"Don't hesitate to E-Mail jake@burla.dev, or call me at 508-320-8778, thank you for using Burla!"
     spinner.write(msg)
 
@@ -446,10 +447,8 @@ def _create_firestore_database(spinner):
     cmd += f" --location=us-central1 --type=firestore-native"
     result = run_command(cmd, raise_error=False)
     if result.returncode != 0 and "already exists" in result.stderr.decode():
-        try:
+        if not client.collection("cluster_config").document("cluster_config").get().exists:
             collection = client.collection("cluster_config")
-            collection.document("cluster_config").update(DEFAULT_CLUSTER_CONFIG)
-        except NotFound:
             collection.document("cluster_config").set(DEFAULT_CLUSTER_CONFIG)
         spinner.text = "Creating Firestore database ... Database already exists."
         spinner.ok("✓")

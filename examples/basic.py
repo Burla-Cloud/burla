@@ -3,11 +3,9 @@ import os
 from burla import remote_parallel_map
 
 
-def my_function(x):
+def create_vector_embedding(x):
 
-    print(os.getcwd())
-
-    print(f"hi #{x}")
+    pass
 
 
-remote_parallel_map(my_function, list(range(10)))
+remote_parallel_map(create_vector_embedding, list(range(5956034)))

@@ -173,19 +173,10 @@ async def _select_nodes_to_assign_to_job(
 
     main_svc_version = ready_nodes[0]["main_svc_version"]
     if main_svc_version != __version__:
-        cluster_version_list = [int(x) for x in main_svc_version.split(".")]
-        client_version_list = [int(x) for x in __version__.split(".")]
-        cluster_version_more_recent = cluster_version_list > client_version_list
-
         msg = "\n\nIncompatible cluster and client versions!\n"
-        if cluster_version_more_recent:
-            msg += f"Your cluster is on v{main_svc_version}, but your client is on v{__version__}\n"
-            msg += f"Please update your client using the command: "
-            msg += f"`pip install burla=={main_svc_version}`"
-        else:
-            msg += f"Your client is on v{__version__}, but your cluster is on v{main_svc_version}\n"
-            msg += f"Please update your cluster to v{__version__} by running the command: "
-            msg += f"`burla_install`"
+        msg += f"Your cluster is on v{main_svc_version}, but your client is on v{__version__}\n"
+        msg += f"To use Burla now please run the command: "
+        msg += f"`pip install burla=={main_svc_version}`"
         raise VersionMismatch(msg + "\n")
 
     planned_initial_job_parallelism = 0

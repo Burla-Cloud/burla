@@ -223,6 +223,9 @@ async def _execute_job(
     spinner_compatible_print = lambda msg: spinner.write(msg) if spinner else print(msg)
     function_pkl = cloudpickle.dumps(function_)
 
+    print(f"Function pickle size: {len(function_pkl)} bytes")
+    print(1 / 0)
+
     nodes_to_assign, total_target_parallelism = await _select_nodes_to_assign_to_job(
         ASYNC_DB, max_parallelism, func_cpu, func_ram, spinner
     )
@@ -261,7 +264,7 @@ async def _execute_job(
         data.add_field("request_json", json.dumps(request_json))
         data.add_field("function_pkl", function_pkl)
         url = f"{node['host']}/jobs/{job_id}"
-        timeout = aiohttp.ClientTimeout(total=30)
+        timeout = aiohttp.ClientTimeout(total=300)
         request = session.post(url, data=data, headers=auth_headers, timeout=timeout)
         try:
             async with request as response:

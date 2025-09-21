@@ -370,6 +370,10 @@ def _create_service_accounts(spinner, PROJECT_ID):
             spinner.fail("✗")
             raise Exception("svc account not found 120s after successful create cmd.")
 
+    # wait service account to propagate, it sonetimes still does not exist even after
+    # `gcloud iam service-accounts describe` succeeds because it has yet to propagate fully.
+    sleep(5)
+
     # apply roles to burla-main-service svc account:
     # can't attach `burla db only` condition to this, in addition to others for some reason:
     cmd = f"gcloud projects add-iam-policy-binding {PROJECT_ID}"

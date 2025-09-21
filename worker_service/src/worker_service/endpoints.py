@@ -1,12 +1,9 @@
 import os
-import json
-import subprocess
 import pickle
 import asyncio
 import aiohttp
 from typing import Optional
 from queue import Empty
-import importlib.metadata as importlib_metadata
 
 from fastapi import APIRouter, Path, Response, Depends, Query
 
@@ -35,7 +32,7 @@ async def reinit():
 @router.get("/restart")
 async def restart():
     # Used to cancel running user jobs because I don't want to make them run in a
-    # process (cancelable) instead of a thread (not cancelable) rn.
+    # process (cancelable, slower) instead of a thread (faster, not cancelable).
     # This is automatically restarted by the while loop in the containers script.
     os._exit(0)
     # I think SELF["STOP_PROCESSING_EVENT"] is still important for other resons.

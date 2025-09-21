@@ -195,6 +195,8 @@ async def _job_watcher(
                     # one of them will succeed and the others will throw errors we can ignore.
                     pass
             await reinit_workers(session, logger, async_db)
+            # # switch to this after confirming ^ was ths issue:
+            # await restart_workers(session, logger, async_db)
             break
 
         # client still listening? (if this is NOT a background job)

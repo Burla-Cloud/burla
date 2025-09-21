@@ -1,11 +1,12 @@
-# from time import sleep
-import os
+from time import sleep
 from burla import remote_parallel_map
 
 
-def create_vector_embedding(x):
+def my_function(x):
 
-    pass
+    sleep(1)
+
+    print(f"I'm running on my own separate computer in the cloud! #{x}")
 
 
-remote_parallel_map(create_vector_embedding, list(range(5956034)))
+remote_parallel_map(my_function, list(range(1000)))

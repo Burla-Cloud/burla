@@ -194,9 +194,7 @@ async def _job_watcher(
                     # ignore because this can get hit by like 100's of nodes at once
                     # one of them will succeed and the others will throw errors we can ignore.
                     pass
-            await reinit_workers(session, logger, async_db)
-            # # switch to this after confirming ^ was ths issue:
-            # await restart_workers(session, logger, async_db)
+            await restart_workers(session, logger, async_db)
             break
 
         # client still listening? (if this is NOT a background job)
@@ -251,29 +249,6 @@ async def reinit_node(assigned_workers: list, async_db: AsyncClient):
     SELF["authorized_users"] = authorized_users
     node_doc = async_db.collection("nodes").document(INSTANCE_NAME)
     await node_doc.update({"status": "READY"})
-
-
-async def reinit_workers(session: aiohttp.ClientSession, logger: Logger, async_db: AsyncClient):
-    async def _reinit_single_worker(worker):
-        async with session.get(f"{worker.url}/reinit") as response:
-            if response.status != 200:
-                logs = worker.logs() if worker.exists() else "Unable to retrieve logs."
-                name = worker.container_name
-                msg = f"Worker {name} returned status {response.status}!"
-                msg += " REBOOTING NODE ...\n"
-                msg += f"{msg} Logs from container:\n{logs.strip()}"
-                node_ref = async_db.collection("nodes").document(INSTANCE_NAME)
-                node_ref.collection("logs").document().set({"msg": msg, "ts": time()})
-                logger.log(msg, severity="ERROR")
-                return None
-            return worker
-
-    tasks = [_reinit_single_worker(w) for w in SELF["workers"]]
-    reinitialized_workers = await asyncio.gather(*tasks)
-    if any(w is None for w in reinitialized_workers) and (not SELF["SHUTTING_DOWN"]):
-        reboot_containers(logger=logger)
-    else:
-        await reinit_node(reinitialized_workers, async_db)
 
 
 async def restart_workers(session: aiohttp.ClientSession, logger: Logger, async_db: AsyncClient):

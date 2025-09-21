@@ -165,7 +165,7 @@ tests-mypy = ["mypy (>=1.11.1)", "pytest-mypy-plugins"]
 
 [[package]]
 name = "burla"
-version = "1.2.13"
+version = "1.2.14"
 description = "The simplest way to run Python on lot's of computers."
 optional = false
 python-versions = "<4.0,>=3.10"

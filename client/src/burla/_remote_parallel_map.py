@@ -171,8 +171,9 @@ async def _select_nodes_to_assign_to_job(
     if not ready_nodes:
         ready_nodes = await _wait_for_nodes_to_be_ready(db, spinner)
 
+    in_local_dev = ready_nodes[0]["host"].startswith("http://node_")
     main_svc_version = ready_nodes[0]["main_svc_version"]
-    if main_svc_version != __version__:
+    if main_svc_version != __version__ and not in_local_dev:
         msg = "\n\nIncompatible cluster and client versions!\n"
         msg += f"Your cluster is on v{main_svc_version}, but your client is on v{__version__}\n"
         msg += f"To use Burla now please run the command: "
@@ -223,8 +224,8 @@ async def _execute_job(
     spinner_compatible_print = lambda msg: spinner.write(msg) if spinner else print(msg)
     function_pkl = cloudpickle.dumps(function_)
 
-    print(f"Function pickle size: {len(function_pkl)} bytes")
-    print(1 / 0)
+    function_size_gb = len(function_pkl) / (1024**3)
+    spinner_compatible_print(f"Function pickle size: {function_size_gb:.2f} GB")
 
     nodes_to_assign, total_target_parallelism = await _select_nodes_to_assign_to_job(
         ASYNC_DB, max_parallelism, func_cpu, func_ram, spinner

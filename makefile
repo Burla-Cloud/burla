@@ -50,6 +50,7 @@ local-dev:
 		-v /var/run/docker.sock:/var/run/docker.sock \
 		-e GOOGLE_CLOUD_PROJECT=$(PROJECT_ID) \
 		-e IN_LOCAL_DEV_MODE=True \
+		-e REDIRECT_LOCALLY_ON_LOGIN=True \
 		-e HOST_PWD=$(PWD) \
 		-e HOST_HOME_DIR=$${HOME} \
 		-p 5001:5001 \
@@ -68,6 +69,7 @@ remote-dev:
 		-v $(PWD)/main_service:/burla/main_service \
 		-v ~/.config/gcloud:/root/.config/gcloud \
 		-e GOOGLE_CLOUD_PROJECT=$(PROJECT_ID) \
+		-e REDIRECT_LOCALLY_ON_LOGIN=True \
 		-p 5001:5001 \
 		--entrypoint python3.13 \
 		$(MAIN_SVC_IMAGE_NAME) -m uvicorn main_service:app --host 0.0.0.0 --port 5001 --reload \

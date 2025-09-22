@@ -159,17 +159,24 @@ class Worker:
             # Because it kills itself intentionally when it needs to cancel a running job.
             while true; do
                 if [ "{IN_LOCAL_DEV_MODE}" = "True" ]; then
-                    echo "Starting worker service in local dev mode..."
                     $python_cmd -m uvicorn worker_service:app --host 0.0.0.0 \
                         --port {WORKER_INTERNAL_PORT} --workers 1 \
                         --timeout-keep-alive 30 --reload
                 else
-                    echo "Starting worker service in prod mode..."
                     $python_cmd -m uvicorn worker_service:app --host 0.0.0.0 \
                         --port {WORKER_INTERNAL_PORT} --workers 1 \
                         --timeout-keep-alive 30
                 fi
-                echo "Restarting worker service..."
+                
+                MSG="Restarting worker service..."
+                TS=$(date +%s)
+                payload='{{"fields":{{"msg":{{"stringValue":"'"$MSG"'"}}, "ts":{{"integerValue":"'"$TS"'"}}}}}}'
+                curl -sS -o /dev/null -X POST "$DB_BASE_URL/nodes/{INSTANCE_NAME}/logs" \\
+                    -H "Authorization: Bearer {CREDENTIALS.token}" \\
+                    -H "Content-Type: application/json" \\
+                    -d "$payload"
+                echo "$MSG"
+
             done
         """.strip()
         cmd = ["-c", cmd_script]

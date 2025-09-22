@@ -23,12 +23,6 @@ async def get_status():
         return {"status": "READY"}
 
 
-@router.get("/reinit")
-async def reinit():
-    REINIT_SELF(SELF)
-    SELF["logs"].append("Reinitialized successfully.")
-
-
 @router.get("/restart")
 async def restart():
     # Used to cancel running user jobs because I don't want to make them run in a

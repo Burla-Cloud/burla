@@ -1,13 +1,14 @@
 import os
 import pickle
 import asyncio
+import signal
 import aiohttp
 from typing import Optional
 from queue import Empty
 
 from fastapi import APIRouter, Path, Response, Depends, Query
 
-from worker_service import SELF, REINIT_SELF, get_request_json, get_request_files
+from worker_service import SELF, get_request_json, get_request_files
 from worker_service.udf_executor import install_pkgs_and_execute_job
 from worker_service.helpers import ThreadWithExc
 
@@ -25,12 +26,17 @@ async def get_status():
 
 @router.get("/restart")
 async def restart():
-    # Used to cancel running user jobs because I don't want to make them run in a
-    # process (cancelable, slower) instead of a thread (faster, not cancelable).
-    # This is automatically restarted by the while loop in the containers script.
-    os._exit(0)
-    # I think SELF["STOP_PROCESSING_EVENT"] is still important for other resons.
-    # (used to be used here to stop thread until I remembered not all user jobs are tiny)
+    # Used to cancel running user jobs.
+    # User jobs currently run in a thread (not cancelable)
+    # I don't want to make them run in process (cancelable) because it's slower and annoying.
+    # Here as a hack I just kill the entire worker service, from inside itself, it's automatically
+    # restarted by the while loop in the bash script the container was started with.
+
+    # dont need to append to logs because restart wipes it anyway
+    print(f"Restarting worker service, killing process: {os.getpid()}", flush=True)
+
+    os.kill(os.getpid(), signal.SIGTERM)
+    # Can't use SELF["STOP_PROCESSING_EVENT"] because it dosent force restart immmediately.
 
 
 def _check_udf_executor_thread():
@@ -48,7 +54,7 @@ async def get_results(job_id: str = Path(...)):
 
     results = []
     total_bytes = 0
-    while not SELF["results_queue"].empty() and (total_bytes < (1_000_000 * 0.2)):
+    while not SELF["results_queue"].empty() and (total_bytes < (1_000_000 * 0.1)):
         try:
             result = SELF["results_queue"].get_nowait()
             results.append(result)
@@ -105,6 +111,16 @@ async def upload_inputs(
 
     SELF["INPUT_UPLOAD_IN_PROGRESS"] = True
     pickled_inputs_pkl_with_idx = request_files["inputs_pkl_with_idx"]
+
+    # will this make the input queue too big?
+    size_limit_gb = SELF["io_queues_ram_limit_gb"] / 2
+    new_inputs_size_gb = len(pickled_inputs_pkl_with_idx) / (1024**3)
+    future_queue_size_gb = SELF["inputs_queue"].size_gb + new_inputs_size_gb
+    if future_queue_size_gb > size_limit_gb:
+        msg = f"Cannot accept {new_inputs_size_gb}GB input chunk, "
+        msg += f"input queue would exceed size limit of {size_limit_gb} GB"
+        return Response(msg, status_code=409)
+
     inputs_pkl_with_idx = pickle.loads(pickled_inputs_pkl_with_idx)
     await asyncio.sleep(0)
 
@@ -130,6 +146,7 @@ async def start_job(
 
     SELF["current_job"] = job_id
     SELF["udf_executor_thread"] = thread
+    SELF["io_queues_ram_limit_gb"] = request_json["io_queues_ram_limit_gb"]
     SELF["STARTED"] = True
     SELF["logs"].append(f"Successfully started job {job_id}.")
 
@@ -152,7 +169,13 @@ async def transfer_inputs(
     SELF["logs"].append(f"Received request to transfer inputs to {target_node_url}.")
 
     async with aiohttp.ClientSession() as session:
+
+        # TODO: it's possible to finish this input and return it after it's been sent to another
+        # node causing duplicate execution?
+        # instead check at the end if this input is done and send it last if not then immediately
+        # cancel so it can't finish
         chunk = [SELF["in_progress_input"]]
+
         total_bytes = len(SELF["in_progress_input"][1])
         total_inputs = 0
         while not SELF["inputs_queue"].empty():

@@ -1,3 +1,4 @@
+import queue
 import threading
 import sys
 import traceback
@@ -44,3 +45,18 @@ class ThreadWithExc(threading.Thread):
             traceback_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
             traceback_str = "".join(traceback_details)
             self.traceback_str = traceback_str
+
+
+class SizedQueue(queue.Queue):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.size_gb = 0
+
+    def _put(self, item):
+        self.size_gb += sys.getsizeof(item) / (1024**3)
+        super()._put(item)
+
+    def _get(self):
+        item = super()._get()
+        self.size_gb -= sys.getsizeof(item) / (1024**3)
+        return item

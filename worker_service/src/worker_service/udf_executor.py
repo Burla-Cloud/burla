@@ -19,6 +19,10 @@ FIRESTORE_URL = "https://firestore.googleapis.com"
 DB_BASE_URL = f"{FIRESTORE_URL}/v1/projects/{PROJECT_ID}/databases/burla/documents"
 
 
+class ResultTooBig(Exception):
+    pass
+
+
 def _get_gcp_auth_token():
     if IN_LOCAL_DEV_MODE:
         token = Path("/burla/.temp_token.txt").read_text().strip()
@@ -215,6 +219,15 @@ def install_pkgs_and_execute_job(job_id: str, function_pkl: bytes, packages: dic
                 return_value = user_defined_function(input_)
                 result_pkl = cloudpickle.dumps(return_value)
                 # SELF["logs"].append(f"UDF succeded on input #{input_index}.")
+
+                if (len(result_pkl) / (1024**3)) > 0.2:
+                    function_call_str = f"{user_defined_function.__name__}(inputs[{input_index}])"
+                    msg = f"\n\nThe object returned by the function call `{function_call_str}` is too big!\n"
+                    msg += "Objects return by your function must be less than 0.2GB.\n"
+                    msg += "Please upload any large results to cloud storage while inside your function, and return a reference.\n"
+                    msg += "We apologize for this temporary limitation! If this is confusing or blocking you, please tell us! (jake@burla.dev)\n\n"
+                    raise ResultTooBig(msg)
+
             except Exception:
                 # SELF["logs"].append(f"UDF raised an exception on input #{input_index}.")
                 exc_type, exc_value, exc_tb = sys.exc_info()
@@ -257,6 +270,16 @@ def install_pkgs_and_execute_job(job_id: str, function_pkl: bytes, packages: dic
                 # if you don't flush before adding the final result, the worker is restarted
                 # before the flush in .stop() can happen.
                 firestore_stdout.actually_flush()
+
+            # wait until space available in result queue
+            results_queue_full = True
+            while results_queue_full:
+                result_size_gb = len(result_pkl) / (1024**3)
+                future_queue_size_gb = SELF["results_queue"].size_gb + result_size_gb
+                results_queue_full = future_queue_size_gb > SELF["io_queues_ram_limit_gb"] / 2
+                if results_queue_full:
+                    SELF["logs"].append(f"Cannot add result ({result_size_gb}GB), queue full ...")
+                    sleep(0.05)
 
             SELF["results_queue"].put((input_index, is_error, result_pkl))
             SELF["in_progress_input"] = None

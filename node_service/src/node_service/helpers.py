@@ -1,3 +1,4 @@
+import queue
 import sys
 import requests
 from itertools import groupby
@@ -20,6 +21,21 @@ def format_traceback(traceback_details: list):
 class ResultsEndpointFilter(python_logging.Filter):
     def filter(self, record):
         return not record.args[2].endswith("/results")
+
+
+class SizedQueue(queue.Queue):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.size_gb = 0
+
+    def _put(self, item):
+        self.size_gb += sys.getsizeof(item) / (1024**3)
+        super()._put(item)
+
+    def _get(self):
+        item = super()._get()
+        self.size_gb -= sys.getsizeof(item) / (1024**3)
+        return item
 
 
 class FirestoreLogHandler(python_logging.Handler):

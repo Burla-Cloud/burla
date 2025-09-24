@@ -50,6 +50,11 @@ async def upload_inputs(
             url = f"{node['host']}/jobs/{job_id}/inputs"
             async with session.post(url, data=data, headers=auth_headers) as response:
                 response.raise_for_status()
+                rejected_input_chunk = pickle.loads(await response.read())
+                if rejected_input_chunk:
+                    print(f"{len(rejected_input_chunk)} inputs rejected by {node['host']}")
+                    node["input_chunks"].append(rejected_input_chunk)
+                    await asyncio.sleep(0.3)
 
         url = f"{node['host']}/jobs/{job_id}/inputs/done"
         async with session.post(url, headers=auth_headers) as response:
@@ -59,7 +64,7 @@ async def upload_inputs(
         inputs: list,
         start_index: int,
         min_chunk_size: int = 1_000_000 * 6,  # 6MB
-        max_chunk_size: int = 1_000_000 * 1000,  # 1GB
+        max_chunk_size: int = 1_000_000 * 200,  # 200MB
     ):
         current_chunk = []
         current_chunk_size = 0
@@ -76,8 +81,11 @@ async def upload_inputs(
                 total_bytes = 0
 
             if input_size > max_chunk_size:
-                # This exists to prevent theoretical (never demonstrated) memory issues
-                raise InputTooBig(f"Input of size {input_size} exceeds maximum size of 1GB.")
+                msg = f"\n\nInput at index {index} exceeds maximum size of 0.2GB.\n"
+                msg += "Please download large inputs from the internet once inside your function.\n"
+                msg += "We apologize for this temporary limitation! "
+                msg += "If this is confusing or blocking you, please tell us! (jake@burla.dev)\n\n"
+                raise InputTooBig(msg)
 
             next_chunk_too_small = current_chunk_size + input_size < min_chunk_size
             next_chunk_too_big = current_chunk_size + input_size > max_chunk_size

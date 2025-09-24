@@ -7,7 +7,7 @@
 
 # To create a new VM disk image, simply replicate the below commands on a raw debian-12 disk.
 
-# MAKE SURE YOU MAKE ANY NEW IMAGES PUBLIC!
+# MAKE SURE YOU MAKE ANY NEW MACHINE-IMAGES PUBLIC !!!
 # use this command:
 # gcloud compute images add-iam-policy-binding IMAGE_NAME \
 #   --member=allAuthenticatedUsers \

@@ -16,6 +16,7 @@ python-multipart = "^0.0.20"
 aiohttp = "^3.12.11"
 google-cloud-compute = "^1.31.0"
 google-cloud-secret-manager = "^2.24.0"
+psutil = "^7.1.0"
 
 [build-system]
 requires = ["poetry-core"]

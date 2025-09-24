@@ -77,6 +77,10 @@ class VersionMismatch(Exception):
     pass
 
 
+class FunctionTooBig(Exception):
+    pass
+
+
 def _get_packages(function_):
     function_module_names = set()
     for global_var in function_.__globals__.values():
@@ -171,6 +175,10 @@ async def _select_nodes_to_assign_to_job(
     if not ready_nodes:
         ready_nodes = await _wait_for_nodes_to_be_ready(db, spinner)
 
+    # it's really important to NOT ignore this check if you are in local dev
+    # it should not be necessary to ignore this in local/remote dev and you shouldn't ignore it
+    # because it's easy to accidentially start nodes that are on a prod version when you
+    # are in dev mode and think they are on your dev version.
     main_svc_version = ready_nodes[0]["main_svc_version"]
     if main_svc_version != __version__:
         msg = "\n\nIncompatible cluster and client versions!\n"
@@ -224,7 +232,13 @@ async def _execute_job(
     function_pkl = cloudpickle.dumps(function_)
 
     function_size_gb = len(function_pkl) / (1024**3)
-    spinner_compatible_print(f"Function pickle size: {function_size_gb:.2f} GB")
+    if function_size_gb > 0.1:
+        msg = f"\n\nYour function `{function_.__name__}` is referencing some large objects!\n"
+        msg += "Functions submitted to Burla, including objects they reference that are defined elsewhere, must be less than 0.1GB.\n"
+        msg += "Does your function reference any big numpy arrays, dataframes, or other objects defined elsewhere?\n"
+        msg += "Please pass these as inputs to your function, or download them from the internet once inside the function.\n"
+        msg += "We apologize for this temporary limitation! If this is confusing or blocking you, please tell us! (jake@burla.dev)\n\n"
+        raise FunctionTooBig(msg)
 
     nodes_to_assign, total_target_parallelism = await _select_nodes_to_assign_to_job(
         ASYNC_DB, max_parallelism, func_cpu, func_ram, spinner
@@ -350,6 +364,7 @@ async def _execute_job(
             async with session.get(url, headers=auth_headers) as response:
                 if response.status == 404:
                     nodes.remove(node)  # <- means node is likely rebooting and failed or is done
+                    return None
                 elif response.status != 200:
                     raise Exception(f"Result-check failed for node: {node['instance_name']}")
 
@@ -401,6 +416,10 @@ async def _execute_job(
             total_parallelism = 0
             all_nodes_empty = True
             nodes_status = await asyncio.gather(*[_check_single_node(n) for n in nodes])
+            nodes_status = [status for status in nodes_status if status is not None]
+            if not nodes_status:
+                raise Exception("Zero nodes working on job and we have not received all results!")
+
             currently_installing_package = nodes_status[0][2]
             all_packages_installed = nodes_status[0][3]
 

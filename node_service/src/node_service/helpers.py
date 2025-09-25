@@ -24,18 +24,26 @@ class ResultsEndpointFilter(python_logging.Filter):
 
 
 class SizedQueue(queue.Queue):
+    # Force user to submit size of their item because it's ususally already available and is slow
+    # to calculate for any given generic object, but fast for known objects like input_pkl_with_idx.
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.size_gb = 0
+        self.item_sizes_queue = queue.Queue()
+        self.size_bytes = 0
 
-    def _put(self, item):
-        self.size_gb += sys.getsizeof(item) / (1024**3)
+    def put(self, item, size_bytes):
         super()._put(item)
+        self.item_sizes_queue.put(size_bytes)
+        self.size_bytes += size_bytes
 
     def _get(self):
         item = super()._get()
-        self.size_gb -= sys.getsizeof(item) / (1024**3)
+        self.size_bytes -= self.item_sizes_queue.get()
         return item
+
+    @property
+    def size_gb(self):
+        return self.size_bytes / (1024**3)
 
 
 class FirestoreLogHandler(python_logging.Handler):

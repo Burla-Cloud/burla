@@ -68,7 +68,7 @@ async def result_check_all_workers(session: aiohttp.ClientSession, logger: Logge
             response_content = await http_response.content.read()
             response = pickle.loads(response_content)
             for result in response["results"]:
-                SELF["results_queue"].put(result)
+                SELF["results_queue"].put(result, len(result[2]))
                 SELF["num_results_received"] += 1
 
             worker.is_idle = response["is_idle"]
@@ -125,9 +125,13 @@ async def _job_watcher(
         if all_workers_empty:
             await asyncio.sleep(0.2)
 
+        # avoid race condition:
+        if SELF["job_watcher_stop_event"].is_set():
+            break
+
         # enqueue results from workers
-        result_queue_size_gb = SELF["results_queue"].total_bytes / 1024**3
-        result_queue_not_too_big = result_queue_size_gb < SELF["return_queue_ram_threshold_gb"]
+        threshold = SELF["return_queue_ram_threshold_gb"]
+        result_queue_not_too_big = SELF["results_queue"].size_gb < threshold
 
         if result_queue_not_too_big:
             workers_info = await result_check_all_workers(session, logger)
@@ -151,13 +155,20 @@ async def _job_watcher(
                 reboot_containers(logger=logger)
                 break
         else:
-            logger.log(f"Result queue is too big ({result_queue_size_gb}GB), skipping result check")
+            msg = f"Result queue is too big ({SELF['results_queue'].size_gb:.2f}GB)"
+            logger.log(f"{msg}, skipping result check...")
+
+        # attempt to send pending inputs to workers:
+        if SELF["pending_inputs"]:
+            SELF["pending_inputs"] = await send_inputs_to_workers(session, SELF["pending_inputs"])
 
         # has this node finished all it's inputs ?
         all_workers_idle_twice = all_workers_idle and SELF["current_parallelism"] == 0
         all_workers_idle = SELF["current_parallelism"] == 0
-        finished_all_assigned_inputs = all_workers_idle_twice and SELF["all_inputs_uploaded"]
-
+        no_pending_inputs = not SELF["pending_inputs"]
+        finished_all_assigned_inputs = (
+            all_workers_idle_twice and SELF["all_inputs_uploaded"] and no_pending_inputs
+        )
         if finished_all_assigned_inputs:
             logger.log("Finished all inputs.")
             neighboring_node = await get_neighboring_node(async_db)
@@ -184,6 +195,7 @@ async def _job_watcher(
         #  job ended ?
         job_is_done = False
         node_is_done = SELF["all_inputs_uploaded"] and all_workers_idle_twice
+        node_is_done = node_is_done and SELF["results_queue"].empty()
         neighbor_is_done = (not neighboring_node) or (seconds_neighbor_had_no_inputs > 2)
 
         if node_is_done and neighbor_is_done:
@@ -325,7 +337,7 @@ async def send_inputs_to_workers(session: aiohttp.ClientSession, inputs_pkl_with
                 return batch
             elif response.status != 200:
                 response.raise_for_status()
-                return []
+            return []
 
     tasks = []
     for batch in input_batches:

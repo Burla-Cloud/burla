@@ -29,7 +29,7 @@ async def get_inputs(job_id: str = Path(...), logger: Logger = Depends(get_logge
     if job_id != SELF["current_job"]:
         return Response("job not found", status_code=404)
     elif SELF["SHUTTING_DOWN"]:
-        return Response("Node is shutting down, can't give inputs.", status_code=409)
+        return Response("Node is shutting down, can't give inputs.", status_code=410)
 
     min_reply_size_bytes = 1_000_000 * 0.5
     min_reply_size_per_worker = min_reply_size_bytes / len(SELF["workers"])
@@ -74,10 +74,12 @@ async def upload_inputs(
     job_id: str = Path(...),
     request_files: Optional[dict] = Depends(get_request_files),
 ):
+    if SELF["pending_inputs"]:
+        return Response("No space for more inputs! retry later.", status_code=409)
     if job_id != SELF["current_job"]:
         return Response("job not found", status_code=404)
     elif SELF["SHUTTING_DOWN"]:
-        return Response("Node is shutting down, inputs not accepted.", status_code=409)
+        return Response("Node is shutting down, inputs not accepted.", status_code=410)
 
     # needs to be here so this is reset when transferring from another dying node
     SELF["current_input_batch_forwarded"] = False
@@ -88,12 +90,10 @@ async def upload_inputs(
     async with aiohttp.ClientSession() as session:
         # rejected = no space to store
         rejected_inputs_pkl_with_idx = await send_inputs_to_workers(session, inputs_pkl_with_idx)
+        # is emptied from the job_watcher thread, no more inputs accepted until it's empty
+        SELF["pending_inputs"] = rejected_inputs_pkl_with_idx
 
     SELF["current_input_batch_forwarded"] = True
-
-    # could be an empty list:
-    media_type = "application/octet-stream"
-    return Response(content=pickle.dumps(rejected_inputs_pkl_with_idx), media_type=media_type)
 
 
 @router.get("/jobs/{job_id}/results")
@@ -174,10 +174,14 @@ async def execute(
     # temp for testing:
     io_ram_limit_gb = 2
 
-    worker_io_ram_limit_gb = io_ram_limit_gb / len(workers_to_assign) + NODE_TO_WORKER_IO_RAM_RATIO
+    worker_io_ram_limit_gb = io_ram_limit_gb / (
+        len(workers_to_assign) + NODE_TO_WORKER_IO_RAM_RATIO
+    )
     # This isn't a limit, it can be exceeded
     # The node svc just dosen't ask for more results when it's over this size.
     SELF["return_queue_ram_threshold_gb"] = worker_io_ram_limit_gb * NODE_TO_WORKER_IO_RAM_RATIO
+
+    print(f"set return_queue_ram_threshold_gb to {SELF['return_queue_ram_threshold_gb']}")
 
     async def assign_worker(session, worker):
         data = aiohttp.FormData()

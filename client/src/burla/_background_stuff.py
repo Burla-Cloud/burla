@@ -47,14 +47,15 @@ async def upload_inputs(
             inputs_pkl_with_idx = pickle.dumps(input_chunk)
             data.add_field("inputs_pkl_with_idx", inputs_pkl_with_idx)
 
-            url = f"{node['host']}/jobs/{job_id}/inputs"
-            async with session.post(url, data=data, headers=auth_headers) as response:
-                response.raise_for_status()
-                rejected_input_chunk = pickle.loads(await response.read())
-                if rejected_input_chunk:
-                    print(f"{len(rejected_input_chunk)} inputs rejected by {node['host']}")
-                    node["input_chunks"].append(rejected_input_chunk)
-                    await asyncio.sleep(0.3)
+            status = 409
+            while status == 409:
+                url = f"{node['host']}/jobs/{job_id}/inputs"
+                async with session.post(url, data=data, headers=auth_headers) as response:
+                    if response.status == 409:
+                        await asyncio.sleep(0.5)
+                    else:
+                        response.raise_for_status()
+                    status = response.status
 
         url = f"{node['host']}/jobs/{job_id}/inputs/done"
         async with session.post(url, headers=auth_headers) as response:

@@ -116,6 +116,11 @@ async def upload_inputs(
     size_limit_gb = SELF["io_queues_ram_limit_gb"] / 2
     new_inputs_size_gb = len(pickled_inputs_pkl_with_idx) / (1024**3)
     future_queue_size_gb = SELF["inputs_queue"].size_gb + new_inputs_size_gb
+
+    SELF["logs"].append(f"queue_size_gb: {SELF['inputs_queue'].size_gb:.2f}")
+    SELF["logs"].append(f"new_inputs_size_gb: {new_inputs_size_gb:.2f}")
+    SELF["logs"].append(f"size_limit_gb: {size_limit_gb:.2f}")
+
     if future_queue_size_gb > size_limit_gb:
         msg = f"Cannot accept {new_inputs_size_gb}GB input chunk, "
         msg += f"input queue would exceed size limit of {size_limit_gb} GB"
@@ -123,13 +128,12 @@ async def upload_inputs(
 
     inputs_pkl_with_idx = pickle.loads(pickled_inputs_pkl_with_idx)
     await asyncio.sleep(0)
-
-    total_data = sum(len(input_pkl) for input_pkl in inputs_pkl_with_idx)
+    total_data = sum(len(input_pkl_with_idx[1]) for input_pkl_with_idx in inputs_pkl_with_idx)
     msg = f"Received {len(inputs_pkl_with_idx)} inputs for job {job_id} ({total_data} bytes)."
     SELF["logs"].append(msg)
 
     for input_pkl_with_idx in inputs_pkl_with_idx:
-        SELF["inputs_queue"].put(input_pkl_with_idx)
+        SELF["inputs_queue"].put(input_pkl_with_idx, len(input_pkl_with_idx[1]))
     SELF["INPUT_UPLOAD_IN_PROGRESS"] = False
 
 

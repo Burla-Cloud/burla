@@ -50,6 +50,7 @@ def REINIT_SELF(SELF):
     SELF["workers"] = []
     SELF["index_of_last_worker_given_inputs"] = 0
     SELF["results_queue"] = SizedQueue()
+    SELF["pending_inputs"] = []
     SELF["current_job"] = None
     SELF["current_parallelism"] = 0
     SELF["job_watcher_stop_event"] = Event()

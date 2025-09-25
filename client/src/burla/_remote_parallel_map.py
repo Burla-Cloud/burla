@@ -81,6 +81,14 @@ class FunctionTooBig(Exception):
     pass
 
 
+class UnPickleableUserFunctionException(Exception):
+    pass
+
+
+class InternalClusterError(Exception):
+    pass
+
+
 def _get_packages(function_):
     function_module_names = set()
     for global_var in function_.__globals__.values():
@@ -383,12 +391,19 @@ async def _execute_job(
 
                 return_values = []
                 for input_index, is_error, result_pkl in node_status["results"]:
-                    if is_error:
-                        exc_info = pickle.loads(result_pkl)
+
+                    if not is_error:
+                        return_values.append(cloudpickle.loads(result_pkl))
+                        continue
+
+                    exc_info = pickle.loads(result_pkl)
+                    if exc_info.get("traceback_dict"):
                         traceback = Traceback.from_dict(exc_info["traceback_dict"]).as_traceback()
                         reraise(tp=exc_info["type"], value=exc_info["exception"], tb=traceback)
-                    else:
-                        return_values.append(cloudpickle.loads(result_pkl))
+                    elif is_error:
+                        msg = f"\nThis exception had to be sent to your machine as a string:\n\n"
+                        msg += f"{exc_info['traceback_str']}\n"
+                        raise UnPickleableUserFunctionException(msg)
 
                 return (
                     node_status["is_empty"],
@@ -418,7 +433,10 @@ async def _execute_job(
             nodes_status = await asyncio.gather(*[_check_single_node(n) for n in nodes])
             nodes_status = [status for status in nodes_status if status is not None]
             if not nodes_status:
-                raise Exception("Zero nodes working on job and we have not received all results!")
+                msg = "\nZero nodes working on job and we have not received all results!\n"
+                msg += "This usually means a worker or node crashed, then restarted itself. \n"
+                msg += "See node logs in the dashboard for details.\n"
+                raise InternalClusterError(msg)
 
             currently_installing_package = nodes_status[0][2]
             all_packages_installed = nodes_status[0][3]

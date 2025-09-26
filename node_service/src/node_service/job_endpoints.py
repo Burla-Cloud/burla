@@ -176,8 +176,7 @@ async def execute(
     # This isn't a limit, it can be exceeded
     # The node svc just dosen't ask for more results when it's over this size.
     SELF["return_queue_ram_threshold_gb"] = worker_io_ram_limit_gb * NODE_TO_WORKER_IO_RAM_RATIO
-
-    print(f"set return_queue_ram_threshold_gb to {SELF['return_queue_ram_threshold_gb']}")
+    logger.log(f"set return_queue_ram_threshold_gb to {SELF['return_queue_ram_threshold_gb']}")
 
     async def assign_worker(session, worker):
         data = aiohttp.FormData()

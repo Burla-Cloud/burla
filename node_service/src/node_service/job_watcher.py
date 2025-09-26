@@ -288,9 +288,8 @@ async def restart_workers(session: aiohttp.ClientSession, logger: Logger, async_
 
         async def _wait_til_worker_ready(attempt=0):
             try:
-                async with session.get(f"{worker.url}/", timeout=0.5) as response:
+                async with session.get(f"{worker.url}/", timeout=1) as response:
                     status = response.status
-                    print(f"Got status {status} from worker after calling /restart")
             except Exception:
                 status = None
 

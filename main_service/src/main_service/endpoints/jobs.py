@@ -39,13 +39,17 @@ def job_stream(jobs_current_page: firestore.CollectionReference):
                 filter_ = firestore.FieldFilter("current_job", "==", job_id)
                 nodes = ASYNC_DB.collection("nodes").where(filter=filter_)
                 nodes_working_on_job = await nodes.get()
-                if not nodes_working_on_job:
+
+                # I think this situation is possible when uploading really large functions to many
+                # nodes, The timeout on that is 300s, so that's how long this has to  be true for
+                # here to cause an error.
+                if not nodes_working_on_job and (time() - start) > 300:
                     msg = "Job failed due to internal cluster error."
                     timestamp = datetime.now(timezone.utc)
                     logs = [{"message": msg, "timestamp": timestamp}]
                     job_doc = ASYNC_DB.collection("jobs").document(job_id)
                     await job_doc.collection("logs").add({"logs": logs, "timestamp": timestamp})
-                    msg = "main_svc: job running and but nodes working on it ??"
+                    msg = 'main_svc: job is "running" but no nodes working on it ???'
                     await job_doc.update({"status": "FAILED", "fail_reason": ArrayUnion([msg])})
                     return
 

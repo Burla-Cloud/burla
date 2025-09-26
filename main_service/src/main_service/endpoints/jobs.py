@@ -7,6 +7,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from starlette.responses import StreamingResponse
 from google.cloud import firestore
+from google.cloud.firestore import ArrayUnion
 
 from main_service import DB, PROJECT_ID
 
@@ -44,7 +45,8 @@ def job_stream(jobs_current_page: firestore.CollectionReference):
                     logs = [{"message": msg, "timestamp": timestamp}]
                     job_doc = ASYNC_DB.collection("jobs").document(job_id)
                     await job_doc.collection("logs").add({"logs": logs, "timestamp": timestamp})
-                    await job_doc.update({"status": "FAILED"})
+                    msg = "main_svc: job running and but nodes working on it ??"
+                    await job_doc.update({"status": "FAILED", "fail_reason": ArrayUnion([msg])})
                     return
 
     def on_changed_job_doc(col_snapshot, changes, read_time):

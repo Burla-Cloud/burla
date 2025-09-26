@@ -19,6 +19,7 @@ from pickle import UnpicklingError
 import aiohttp
 import cloudpickle
 from tblib import Traceback
+from google.cloud.firestore import ArrayUnion
 from google.cloud.firestore import FieldFilter
 from google.cloud.firestore_v1.async_client import AsyncClient
 from yaspin import yaspin, Spinner
@@ -269,6 +270,7 @@ async def _execute_job(
             "last_ping_from_client": time(),
             "is_background_job": background,
             "client_has_all_results": False,
+            "fail_reason": [],
         }
     )
 
@@ -307,7 +309,7 @@ async def _execute_job(
                 # mark first as failed with reason so user can inspect the issue
                 node_doc = ASYNC_DB.collection("nodes").document(node["instance_name"])
                 await node_doc.update({"status": "FAILED", "display_in_dashboard": True})
-                msg = f"Failed! This node didn't respond (in <2s) to client request to assign job."
+                msg = f"Failed! This node didn't respond (in<300s) to client request to assign job."
                 await node_doc.collection("logs").document().set({"msg": msg, "ts": time()})
                 # delete node
                 main_service_url = json.loads(CONFIG_PATH.read_text())["cluster_dashboard_url"]
@@ -622,7 +624,8 @@ def remote_parallel_map(
             try:
                 job_doc = SYNC_DB.collection("jobs").document(job_id)
                 if job_doc.get().to_dict()["status"] != "CANCELED":
-                    job_doc.update({"status": "FAILED"})
+                    msg = f"client exception: {e}"
+                    job_doc.update({"status": "FAILED", "fail_reason": ArrayUnion([msg])})
             except Exception:
                 pass
 

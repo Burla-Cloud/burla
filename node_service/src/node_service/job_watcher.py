@@ -6,7 +6,7 @@ import aiohttp
 from time import time
 
 from google.cloud import firestore
-from google.cloud.firestore import FieldFilter, And
+from google.cloud.firestore import FieldFilter, And, ArrayUnion
 from google.cloud.firestore_v1.field_path import FieldPath
 from google.cloud.firestore_v1.async_client import AsyncClient
 
@@ -235,7 +235,8 @@ async def _job_watcher(
                 msg += "setting job status to FAILED"
                 logger.log(msg)
                 try:
-                    await job_doc.update({"status": "FAILED"})
+                    msg = f"job watcher ({INSTANCE_NAME}) hasn't had client ping in the last 300s"
+                    await job_doc.update({"status": "FAILED", "fail_reason": ArrayUnion([msg])})
                 except Exception:
                     # ignore because this can get hit by like 100's of nodes at once
                     # one of them will succeed and the others will throw errors we can ignore.

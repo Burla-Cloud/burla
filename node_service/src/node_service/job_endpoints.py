@@ -170,10 +170,6 @@ async def execute(
     IO_RAM_TO_TOTAL_RAM_RATIO = 0.75  # percent of total ram input/output queues allowed to use
     NODE_TO_WORKER_IO_RAM_RATIO = 2  # node-service io queues can use 2x the ram of worker queues
     io_ram_limit_gb = (psutil.virtual_memory().total / 1024**3) * IO_RAM_TO_TOTAL_RAM_RATIO
-
-    # temp for testing:
-    io_ram_limit_gb = 2
-
     worker_io_ram_limit_gb = io_ram_limit_gb / (
         len(workers_to_assign) + NODE_TO_WORKER_IO_RAM_RATIO
     )

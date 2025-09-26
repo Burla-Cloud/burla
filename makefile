@@ -14,7 +14,8 @@ test:
 	poetry -C ./client run pytest client/tests/test.py -s -x --disable-warnings
 
 test-jupyter:
-	poetry -C ./client run jupyter-lab
+	cd .. ; \
+	poetry -C ./burla/client run jupyter-lab
 
 # remove all booting nodes from DB (only run in local-dev mode)
 stop:

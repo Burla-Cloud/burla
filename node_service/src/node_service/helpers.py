@@ -1,3 +1,4 @@
+import queue
 import sys
 import requests
 from itertools import groupby
@@ -20,6 +21,29 @@ def format_traceback(traceback_details: list):
 class ResultsEndpointFilter(python_logging.Filter):
     def filter(self, record):
         return not record.args[2].endswith("/results")
+
+
+class SizedQueue(queue.Queue):
+    # Force user to submit size of their item because it's ususally already available and is slow
+    # to calculate for any given generic object, but fast for known objects like input_pkl_with_idx.
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.item_sizes_queue = queue.Queue()
+        self.size_bytes = 0
+
+    def put(self, item, size_bytes):
+        super()._put(item)
+        self.item_sizes_queue.put(size_bytes)
+        self.size_bytes += size_bytes
+
+    def _get(self):
+        item = super()._get()
+        self.size_bytes -= self.item_sizes_queue.get()
+        return item
+
+    @property
+    def size_gb(self):
+        return self.size_bytes / (1024**3)
 
 
 class FirestoreLogHandler(python_logging.Handler):

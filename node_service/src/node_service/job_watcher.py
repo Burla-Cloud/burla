@@ -6,7 +6,7 @@ import aiohttp
 from time import time
 
 from google.cloud import firestore
-from google.cloud.firestore import FieldFilter, And
+from google.cloud.firestore import FieldFilter, And, ArrayUnion
 from google.cloud.firestore_v1.field_path import FieldPath
 from google.cloud.firestore_v1.async_client import AsyncClient
 
@@ -68,7 +68,7 @@ async def result_check_all_workers(session: aiohttp.ClientSession, logger: Logge
             response_content = await http_response.content.read()
             response = pickle.loads(response_content)
             for result in response["results"]:
-                SELF["results_queue"].put(result)
+                SELF["results_queue"].put(result, len(result[2]))
                 SELF["num_results_received"] += 1
 
             worker.is_idle = response["is_idle"]
@@ -77,8 +77,7 @@ async def result_check_all_workers(session: aiohttp.ClientSession, logger: Logge
             worker.all_packages_installed = response["all_packages_installed"]
             return worker, http_response.status
 
-    tasks = [_result_check_single_worker(w) for w in SELF["workers"]]
-    return await asyncio.gather(*tasks)
+    return await asyncio.gather(*[_result_check_single_worker(w) for w in SELF["workers"]])
 
 
 async def _job_watcher(
@@ -126,33 +125,50 @@ async def _job_watcher(
         if all_workers_empty:
             await asyncio.sleep(0.2)
 
-        # enqueue results from workers
-        workers_info = await result_check_all_workers(session, logger)
-        SELF["current_parallelism"] = sum(not w.is_idle for w in SELF["workers"])
-        SELF["currently_installing_package"] = SELF["workers"][0].currently_installing_package
-        SELF["all_packages_installed"] = any(w.all_packages_installed for w in SELF["workers"])
-        all_workers_empty = all(w.is_empty for w in SELF["workers"])
-        failed = [f"{w.container_name}:{status}" for w, status in workers_info if status != 200]
-
-        for worker, status in workers_info:
-            if status == 500:
-                logs = worker.logs() if worker.exists() else "Unable to retrieve container logs"
-                error_title = f"Worker {worker.container_name} returned status 500!"
-                msg = f"{error_title} Logs from container:\n{logs.strip()}"
-                firestore_client = firestore.Client(project=PROJECT_ID, database="burla")
-                node_ref = firestore_client.collection("nodes").document(INSTANCE_NAME)
-                node_ref.collection("logs").document().set({"msg": msg, "ts": time()})
-
-        if failed:
-            logger.log(f"workers failed: {', '.join(failed)}", severity="ERROR")
-            reboot_containers(logger=logger)
+        # avoid race condition:
+        if SELF["job_watcher_stop_event"].is_set():
             break
+
+        # enqueue results from workers
+        threshold = SELF["return_queue_ram_threshold_gb"]
+        result_queue_not_too_big = SELF["results_queue"].size_gb < threshold
+
+        if result_queue_not_too_big:
+            workers_info = await result_check_all_workers(session, logger)
+            SELF["current_parallelism"] = sum(not w.is_idle for w in SELF["workers"])
+            SELF["currently_installing_package"] = SELF["workers"][0].currently_installing_package
+            SELF["all_packages_installed"] = any(w.all_packages_installed for w in SELF["workers"])
+            all_workers_empty = all(w.is_empty for w in SELF["workers"])
+            failed = [f"{w.container_name}:{status}" for w, status in workers_info if status != 200]
+
+            for worker, status in workers_info:
+                if status == 500:
+                    logs = worker.logs() if worker.exists() else "Unable to retrieve container logs"
+                    error_title = f"Worker {worker.container_name} returned status 500!"
+                    msg = f"{error_title} Logs from container:\n{logs.strip()}"
+                    firestore_client = firestore.Client(project=PROJECT_ID, database="burla")
+                    node_ref = firestore_client.collection("nodes").document(INSTANCE_NAME)
+                    node_ref.collection("logs").document().set({"msg": msg, "ts": time()})
+
+            if failed:
+                logger.log(f"workers failed: {', '.join(failed)}", severity="ERROR")
+                reboot_containers(logger=logger)
+                break
+        else:
+            msg = f"Result queue is too big ({SELF['results_queue'].size_gb:.2f}GB)"
+            logger.log(f"{msg}, skipping result check...")
+
+        # attempt to send pending inputs to workers:
+        if SELF["pending_inputs"]:
+            SELF["pending_inputs"] = await send_inputs_to_workers(session, SELF["pending_inputs"])
 
         # has this node finished all it's inputs ?
         all_workers_idle_twice = all_workers_idle and SELF["current_parallelism"] == 0
         all_workers_idle = SELF["current_parallelism"] == 0
-        finished_all_assigned_inputs = all_workers_idle_twice and SELF["all_inputs_uploaded"]
-
+        no_pending_inputs = not SELF["pending_inputs"]
+        finished_all_assigned_inputs = (
+            all_workers_idle_twice and SELF["all_inputs_uploaded"] and no_pending_inputs
+        )
         if finished_all_assigned_inputs:
             logger.log("Finished all inputs.")
             neighboring_node = await get_neighboring_node(async_db)
@@ -160,10 +176,18 @@ async def _job_watcher(
                 neighboring_node, session, logger, auth_headers
             )
             if new_inputs:
+                logger.log(f"Got {len(new_inputs)} more inputs from {neighboring_node.id}")
                 neighbor_had_no_inputs_at = None
                 seconds_neighbor_had_no_inputs = 0
-                await send_inputs_to_workers(session, new_inputs)
-                logger.log(f"Got {len(new_inputs)} more inputs from {neighboring_node.id}")
+                rejected_inputs = await send_inputs_to_workers(session, new_inputs)
+                # rejected = no space to store
+                if rejected_inputs:
+                    # This is theoretically impossible because all nodes have the same
+                    # IO queue memory limits, and this node's input queues must first be empty
+                    # in order to attempt getting more inputs from another node.
+                    # Therefore this node should always be able to fit 100% of another node's inputs
+                    msg = "Recieved inputs from neighbor that I do not have space to store!"
+                    raise Exception(msg)
             else:
                 neighbor_had_no_inputs_at = neighbor_had_no_inputs_at or time()
                 seconds_neighbor_had_no_inputs = time() - neighbor_had_no_inputs_at
@@ -171,6 +195,7 @@ async def _job_watcher(
         #  job ended ?
         job_is_done = False
         node_is_done = SELF["all_inputs_uploaded"] and all_workers_idle_twice
+        node_is_done = node_is_done and SELF["results_queue"].empty()
         neighbor_is_done = (not neighboring_node) or (seconds_neighbor_had_no_inputs > 2)
 
         if node_is_done and neighbor_is_done:
@@ -194,7 +219,7 @@ async def _job_watcher(
                     # ignore because this can get hit by like 100's of nodes at once
                     # one of them will succeed and the others will throw errors we can ignore.
                     pass
-            await reinit_workers(session, logger, async_db)
+            await restart_workers(session, logger, async_db)
             break
 
         # client still listening? (if this is NOT a background job)
@@ -210,7 +235,9 @@ async def _job_watcher(
                 msg += "setting job status to FAILED"
                 logger.log(msg)
                 try:
-                    await job_doc.update({"status": "FAILED"})
+                    msg = f"job watcher ({INSTANCE_NAME}) hasn't had client ping in the last "
+                    msg += f"{CLIENT_DC_TIMEOUT_SEC}s"
+                    await job_doc.update({"status": "FAILED", "fail_reason": ArrayUnion([msg])})
                 except Exception:
                     # ignore because this can get hit by like 100's of nodes at once
                     # one of them will succeed and the others will throw errors we can ignore.
@@ -251,29 +278,6 @@ async def reinit_node(assigned_workers: list, async_db: AsyncClient):
     await node_doc.update({"status": "READY"})
 
 
-async def reinit_workers(session: aiohttp.ClientSession, logger: Logger, async_db: AsyncClient):
-    async def _reinit_single_worker(worker):
-        async with session.get(f"{worker.url}/reinit") as response:
-            if response.status != 200:
-                logs = worker.logs() if worker.exists() else "Unable to retrieve logs."
-                name = worker.container_name
-                msg = f"Worker {name} returned status {response.status}!"
-                msg += " REBOOTING NODE ...\n"
-                msg += f"{msg} Logs from container:\n{logs.strip()}"
-                node_ref = async_db.collection("nodes").document(INSTANCE_NAME)
-                node_ref.collection("logs").document().set({"msg": msg, "ts": time()})
-                logger.log(msg, severity="ERROR")
-                return None
-            return worker
-
-    tasks = [_reinit_single_worker(w) for w in SELF["workers"]]
-    reinitialized_workers = await asyncio.gather(*tasks)
-    if any(w is None for w in reinitialized_workers) and (not SELF["SHUTTING_DOWN"]):
-        reboot_containers(logger=logger)
-    else:
-        await reinit_node(reinitialized_workers, async_db)
-
-
 async def restart_workers(session: aiohttp.ClientSession, logger: Logger, async_db: AsyncClient):
     async def _restart_single_worker(worker):
         try:
@@ -286,25 +290,26 @@ async def restart_workers(session: aiohttp.ClientSession, logger: Logger, async_
 
         async def _wait_til_worker_ready(attempt=0):
             try:
-                async with session.get(f"{worker.url}/", timeout=0.2) as response:
+                async with session.get(f"{worker.url}/", timeout=1) as response:
                     status = response.status
             except Exception:
                 status = None
 
-            logger.log(f"got: {status} from /")
             if status == 200:
                 return worker
-            elif attempt > 100:
+            elif attempt > 20:
                 raise Exception(f"Worker {worker.container_name} not ready after 10s")
             else:
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(0.5)
                 return await _wait_til_worker_ready(attempt + 1)
 
         return await _wait_til_worker_ready()
 
-    tasks = [_restart_single_worker(w) for w in SELF["workers"]]
-    restarted_workers = await asyncio.gather(*tasks)
-    if any(w is None for w in restarted_workers) and (not SELF["SHUTTING_DOWN"]):
+    try:
+        tasks = [_restart_single_worker(w) for w in SELF["workers"]]
+        restarted_workers = await asyncio.gather(*tasks)
+    except Exception as e:
+        logger.log(f"Error restarting workers: {e}", severity="ERROR")
         logger.log("Some workers failed to restart, rebooting containers ...")
         reboot_containers(logger=logger)
     else:
@@ -329,7 +334,11 @@ async def send_inputs_to_workers(session: aiohttp.ClientSession, inputs_pkl_with
         data = aiohttp.FormData()
         data.add_field("inputs_pkl_with_idx", pickle.dumps(batch))
         async with session.post(url, data=data) as response:
-            response.raise_for_status()
+            if response.status == 409:
+                return batch
+            elif response.status != 200:
+                response.raise_for_status()
+            return []
 
     tasks = []
     for batch in input_batches:
@@ -344,4 +353,8 @@ async def send_inputs_to_workers(session: aiohttp.ClientSession, inputs_pkl_with
         current_worker = SELF["workers"][current_worker_index]
         url = f"{current_worker.url}/jobs/{SELF['current_job']}/inputs"
         tasks.append(_upload_to_single_worker(session, url, batch))
-    await asyncio.gather(*tasks)
+
+    # input batch rejected if worker has no memory available to store it.
+    rejected_batches = await asyncio.gather(*tasks)
+    rejected_inputs_pkl_with_idx = [input for batch in rejected_batches for input in batch]
+    return rejected_inputs_pkl_with_idx

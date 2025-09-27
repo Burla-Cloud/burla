@@ -1,5 +1,6 @@
 import os
 import sys
+import pty
 import pickle
 import requests
 import traceback
@@ -54,6 +55,11 @@ class _FirestoreStdout:
         self._stop_event = Event()
         self._flusher_thread = Thread(target=self._flush_loop, daemon=True)
         self._flusher_thread.start()
+        self._original_stdout_descriptor = None
+        self._original_stderr_descriptor = None
+        self._terminal_master_descriptor = None
+        self._terminal_slave_descriptor = None
+        self._reader_thread = None
 
     def stop(self):
         self.actually_flush()
@@ -100,7 +106,11 @@ class _FirestoreStdout:
                 response = requests.post(url, headers=DB_HEADERS, json=data, timeout=5)
                 response.raise_for_status()
             except Exception as e:
-                if response.status_code == 401 and IN_LOCAL_DEV_MODE:
+                try:
+                    status = response.status_code
+                except Exception:
+                    status = None
+                if status == 401 and IN_LOCAL_DEV_MODE:
                     msg = "401 error writing logs, YOU DEV TOKEN IS PROBABLY EXPIRED!\n"
                     msg += "         Re-run `make local-dev` (and reboot!) to refresh the token.\n"
                     SELF["logs"].append(msg)
@@ -112,29 +122,84 @@ class _FirestoreStdout:
         self._last_flush_time = time()
 
     def __enter__(self):
-        self.original_stdout = sys.stdout
+        self.original_stdout_object = sys.stdout
         sys.stdout = self
 
+        self._terminal_master_descriptor, self._terminal_slave_descriptor = pty.openpty()
+        self._original_stdout_descriptor = os.dup(1)
+        self._original_stderr_descriptor = os.dup(2)
+
+        os.dup2(self._terminal_slave_descriptor, 1)
+        os.dup2(self._terminal_slave_descriptor, 2)
+        os.close(self._terminal_slave_descriptor)
+        self._terminal_slave_descriptor = None
+
+        def reader_loop():
+            decoder = None
+            try:
+                import codecs
+
+                decoder = codecs.getincrementaldecoder("utf-8")()
+            except Exception:
+                decoder = None
+            while not self._stop_event.is_set():
+                try:
+                    data = os.read(self._terminal_master_descriptor, 8192)
+                    if not data:
+                        break
+                    if decoder:
+                        text = decoder.decode(data)
+                    else:
+                        text = data.decode("utf-8", errors="replace")
+                    self.write(text)
+                except OSError:
+                    break
+
+        self._reader_thread = Thread(target=reader_loop, daemon=True)
+        self._reader_thread.start()
+        return self
+
     def __exit__(self, exc_type, exc_value, traceback):
-        sys.stdout = self.original_stdout
-        sys.stdout.flush()
+        try:
+            if self._original_stdout_descriptor is not None:
+                os.dup2(self._original_stdout_descriptor, 1)
+            if self._original_stderr_descriptor is not None:
+                os.dup2(self._original_stderr_descriptor, 2)
+        finally:
+            try:
+                if self._original_stdout_descriptor is not None:
+                    os.close(self._original_stdout_descriptor)
+            except Exception:
+                pass
+            try:
+                if self._original_stderr_descriptor is not None:
+                    os.close(self._original_stderr_descriptor)
+            except Exception:
+                pass
+            self._original_stdout_descriptor = None
+            self._original_stderr_descriptor = None
+
+            try:
+                if self._terminal_master_descriptor is not None:
+                    os.close(self._terminal_master_descriptor)
+            except Exception:
+                pass
+            self._terminal_master_descriptor = None
+
+            if self._reader_thread is not None:
+                self._reader_thread.join(timeout=1)
+                self._reader_thread = None
+
+            sys.stdout = self.original_stdout_object
+            try:
+                sys.stdout.flush()
+            except Exception:
+                pass
 
     def _flush_loop(self):
         while not self._stop_event.wait(1.0):
             if (time() - self._last_flush_time) > 1:
                 self.actually_flush()
-
-
-def _serialize_error(exception_type, exception, traceback):
-    # exc_info is tuple returned by sys.exc_info()
-    pickled_exception_info = pickle.dumps(
-        dict(
-            type=exception_type,
-            exception=exception,
-            traceback_dict=Traceback(traceback).to_dict(),
-        )
-    )
-    return pickled_exception_info
 
 
 def _packages_are_importable(packages: dict):
@@ -215,11 +280,32 @@ def install_pkgs_and_execute_job(job_id: str, function_pkl: bytes, packages: dic
                 return_value = user_defined_function(input_)
                 result_pkl = cloudpickle.dumps(return_value)
                 # SELF["logs"].append(f"UDF succeded on input #{input_index}.")
+
+                size_gb = len(result_pkl) / (1024**3)
+                if size_gb > 0.2:
+                    function_call_str = f"{user_defined_function.__name__}(inputs[{input_index}])"
+                    msg = f"\n\nThe object returned by the function call `{function_call_str}` is too big! ({size_gb:.2f}GB)\n"
+                    msg += "Objects return by your function must be less than 0.2GB.\n"
+                    msg += "Please upload any large results to cloud storage while inside your function, and return a reference.\n"
+                    msg += "We apologize for this temporary limitation! If this is confusing or blocking you, please tell us! (jake@burla.dev)\n\n"
+                    raise ValueError(msg)
+
             except Exception:
                 # SELF["logs"].append(f"UDF raised an exception on input #{input_index}.")
-                exc_type, exc_value, exc_tb = sys.exc_info()
-                result_pkl = _serialize_error(exc_type, exc_value, exc_tb)
                 is_error = True
+                exc_type, exc_value, exc_tb = sys.exc_info()
+                traceback_str = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+                try:
+                    result = dict(
+                        type=exc_type,
+                        exception=exc_value,
+                        traceback_dict=Traceback(exc_tb).to_dict(),
+                        traceback_str=traceback_str,
+                    )
+                    result_pkl = pickle.dumps(result)
+                except:
+                    # SELF["logs"].append(f"Could not pickle exception, sending as string.")
+                    result_pkl = pickle.dumps(dict(traceback_str=traceback_str))
 
         if is_error:
             # write traceback as log message
@@ -258,7 +344,18 @@ def install_pkgs_and_execute_job(job_id: str, function_pkl: bytes, packages: dic
                 # before the flush in .stop() can happen.
                 firestore_stdout.actually_flush()
 
-            SELF["results_queue"].put((input_index, is_error, result_pkl))
+            # wait until space available in result queue
+            results_queue_full = True
+            while results_queue_full:
+                result_size_gb = len(result_pkl) / (1024**3)
+                future_queue_size_gb = SELF["results_queue"].size_gb + result_size_gb
+                results_queue_full = future_queue_size_gb > SELF["io_queues_ram_limit_gb"] / 2
+                if results_queue_full:
+                    msg = f"Cannot add result ({result_size_gb:.2f}GB), queue full ..."
+                    SELF["logs"].append(msg)
+                    sleep(0.1)
+
+            SELF["results_queue"].put((input_index, is_error, result_pkl), len(result_pkl))
             SELF["in_progress_input"] = None
             # SELF["logs"].append(f"Successfully enqueued result for input #{input_index}.")
 

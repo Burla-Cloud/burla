@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "burla"
-version = "1.2.13"
+version = "1.2.14"
 description = "The simplest way to run Python on lot's of computers."
 authors = ["Jake Zuliani <jake@burla.dev>"]
 
@@ -24,6 +24,7 @@ burla = "burla.__init__:init_cli"
 black = "^23.3.0"
 pytest = "^7.4.2"
 jupyterlab = "^4.3.1"
+tqdm = "^4.67.1"
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]

@@ -6,7 +6,6 @@ import traceback
 from pathlib import Path
 from uuid import uuid4
 from time import time
-from queue import Queue
 from typing import Callable
 import logging as python_logging
 from contextlib import asynccontextmanager
@@ -23,7 +22,7 @@ from starlette.datastructures import UploadFile
 from google.cloud import logging, secretmanager, firestore
 from google.cloud.compute_v1 import InstancesClient
 
-__version__ = "1.2.13"
+__version__ = "1.2.14"
 CREDENTIALS, PROJECT_ID = google.auth.default()
 BURLA_BACKEND_URL = "https://backend.burla.dev"
 
@@ -43,12 +42,15 @@ secret_name = f"projects/{PROJECT_ID}/secrets/burla-cluster-id-token/versions/la
 response = secret_client.access_secret_version(request={"name": secret_name})
 CLUSTER_ID_TOKEN = response.payload.data.decode("UTF-8")
 
+from node_service.helpers import ResultsEndpointFilter, Logger, SizedQueue
+
 
 # SELF = state of this current instance of the node service
 def REINIT_SELF(SELF):
     SELF["workers"] = []
     SELF["index_of_last_worker_given_inputs"] = 0
-    SELF["results_queue"] = Queue()
+    SELF["results_queue"] = SizedQueue()
+    SELF["pending_inputs"] = []
     SELF["current_job"] = None
     SELF["current_parallelism"] = 0
     SELF["job_watcher_stop_event"] = Event()
@@ -64,11 +66,11 @@ def REINIT_SELF(SELF):
     SELF["num_results_received"] = 0
     SELF["currently_installing_package"] = None
     SELF["all_packages_installed"] = False
+    SELF["return_queue_ram_threshold_gb"] = None
 
 
 SELF = {}
 REINIT_SELF(SELF)
-from node_service.helpers import ResultsEndpointFilter, Logger
 
 # Silence fastapi logs coming from the `/results` endpoint, there are so many it slows stuff down.
 python_logging.getLogger("uvicorn.access").addFilter(ResultsEndpointFilter())

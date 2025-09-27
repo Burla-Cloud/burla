@@ -156,6 +156,10 @@ def reboot_containers(
     Rebooting will reboot the containers that are currently/ were previously running.
     If new containers are passed with the reboot request, those containers will be booted instead.
     """
+    # immediately stop watcher thread, this IS set in REINIT_SELF below
+    # but watcher breaks sometimes if it's not set right away.
+    SELF["job_watcher_stop_event"].set()
+
     # important to delete or workers wont install packages
     ENV_IS_READY_PATH.unlink(missing_ok=True)
 

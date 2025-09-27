@@ -4,12 +4,19 @@ import json
 import requests
 import traceback
 from pathlib import Path
-from queue import Queue
 from threading import Event
 import logging as python_logging
 
 from fastapi import FastAPI, Request, Response
 from starlette.datastructures import UploadFile
+
+
+# silence logs so they are not picked up and sent to user
+python_logging.getLogger("uvicorn").disabled = True
+python_logging.getLogger("uvicorn.error").disabled = True
+python_logging.getLogger("uvicorn.access").disabled = True
+python_logging.getLogger("fastapi").disabled = True
+python_logging.getLogger("starlette").disabled = True
 
 # Defined before importing helpers/endpoints to prevent cyclic imports
 IN_LOCAL_DEV_MODE = os.environ.get("IN_LOCAL_DEV_MODE") == "True"
@@ -19,45 +26,23 @@ BURLA_BACKEND_URL = "https://backend.burla.dev"
 # must be same path on node service!
 ENV_IS_READY_PATH = Path("/worker_service_python_env/.ALL_PACKAGES_INSTALLED")
 
-from worker_service.helpers import VerboseList  # <- same as a list but prints stuff you append
+from worker_service.helpers import VerboseList, SizedQueue
 
-
-def REINIT_SELF(SELF):
-    # we append all logs to a list instead of sending them to google cloud logging because
-    # there are so many logs that logging them all causes issues and slowness.
-    # By adding them to a list we can write the logs out if an an error occurs,
-    # or simply do nothing with them when there is no error.
-    verbose_list = VerboseList(print_on_append=IN_LOCAL_DEV_MODE)
-
-    if SELF.get("udf_executor_thread"):
-        SELF["STOP_PROCESSING_EVENT"].set()
-        SELF["udf_executor_thread"].join()
-
-    SELF["STARTED"] = False
-    SELF["IDLE"] = False
-    SELF["current_job"] = None
-    SELF["udf_executor_thread"] = None
-    SELF["inputs_queue"] = Queue()
-    SELF["in_progress_input"] = None  # needed so we can send ALL inputs elsewhere on shutdown
-    SELF["results_queue"] = Queue()
-    SELF["logs"] = verbose_list
-    SELF["STOP_PROCESSING_EVENT"] = Event()
-    SELF["INPUT_UPLOAD_IN_PROGRESS"] = False
-    SELF["CURRENTLY_INSTALLING_PACKAGE"] = None
-    SELF["ALL_PACKAGES_INSTALLED"] = False
-
-
-SELF = {}
-REINIT_SELF(SELF)
-
-
-# Silence fastapi logs coming from the /results endpoint, there are so many it slows stuff down.
-class ResultsEndpointFilter(python_logging.Filter):
-    def filter(self, record):
-        return not record.args[2].endswith("/results")
-
-
-python_logging.getLogger("uvicorn.access").addFilter(ResultsEndpointFilter())
+SELF = {
+    "STARTED": False,
+    "IDLE": False,
+    "current_job": None,
+    "udf_executor_thread": None,
+    "inputs_queue": SizedQueue(),
+    "in_progress_input": None,  # needed so we can send ALL inputs elsewhere on shutdown
+    "results_queue": SizedQueue(),
+    "logs": VerboseList(print_on_append=IN_LOCAL_DEV_MODE),  # Buffer in list and flush on error
+    "STOP_PROCESSING_EVENT": Event(),
+    "INPUT_UPLOAD_IN_PROGRESS": False,
+    "CURRENTLY_INSTALLING_PACKAGE": None,
+    "ALL_PACKAGES_INSTALLED": False,
+    "io_queues_ram_limit_gb": None,
+}
 
 
 async def get_request_json(request: Request):

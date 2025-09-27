@@ -13,6 +13,7 @@ from threading import Event
 
 import cloudpickle
 from yaspin import Spinner
+from google.cloud.firestore import ArrayUnion
 
 from burla import _BURLA_BACKEND_URL, CONFIG_PATH
 
@@ -101,7 +102,8 @@ def install_signal_handlers(
             sync_db, _ = get_db_clients()
             job_doc = sync_db.collection("jobs").document(job_id)
             if job_doc.get().to_dict()["status"] != "CANCELED":
-                job_doc.update({"status": "FAILED"})
+                msg = "Cancel signal from client."
+                job_doc.update({"status": "FAILED", "fail_reason": ArrayUnion([msg])})
         except Exception:
             pass
         sys.exit(0)

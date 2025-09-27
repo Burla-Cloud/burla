@@ -19,6 +19,7 @@ from pickle import UnpicklingError
 import aiohttp
 import cloudpickle
 from tblib import Traceback
+from google.cloud.firestore import ArrayUnion
 from google.cloud.firestore import FieldFilter
 from google.cloud.firestore_v1.async_client import AsyncClient
 from yaspin import yaspin, Spinner
@@ -74,6 +75,18 @@ class JobCanceled(Exception):
 
 
 class VersionMismatch(Exception):
+    pass
+
+
+class FunctionTooBig(Exception):
+    pass
+
+
+class UnPickleableUserFunctionException(Exception):
+    pass
+
+
+class InternalClusterError(Exception):
     pass
 
 
@@ -171,6 +184,10 @@ async def _select_nodes_to_assign_to_job(
     if not ready_nodes:
         ready_nodes = await _wait_for_nodes_to_be_ready(db, spinner)
 
+    # it's really important to NOT ignore this check if you are in local dev
+    # it should not be necessary to ignore this in local/remote dev and you shouldn't ignore it
+    # because it's easy to accidentially start nodes that are on a prod version when you
+    # are in dev mode and think they are on your dev version.
     main_svc_version = ready_nodes[0]["main_svc_version"]
     if main_svc_version != __version__:
         msg = "\n\nIncompatible cluster and client versions!\n"
@@ -223,6 +240,15 @@ async def _execute_job(
     spinner_compatible_print = lambda msg: spinner.write(msg) if spinner else print(msg)
     function_pkl = cloudpickle.dumps(function_)
 
+    function_size_gb = len(function_pkl) / (1024**3)
+    if function_size_gb > 0.1:
+        msg = f"\n\nYour function `{function_.__name__}` is referencing some large objects!\n"
+        msg += "Functions submitted to Burla, including objects they reference that are defined elsewhere, must be less than 0.1GB.\n"
+        msg += "Does your function reference any big numpy arrays, dataframes, or other objects defined elsewhere?\n"
+        msg += "Please pass these as inputs to your function, or download them from the internet once inside the function.\n"
+        msg += "We apologize for this temporary limitation! If this is confusing or blocking you, please tell us! (jake@burla.dev)\n\n"
+        raise FunctionTooBig(msg)
+
     nodes_to_assign, total_target_parallelism = await _select_nodes_to_assign_to_job(
         ASYNC_DB, max_parallelism, func_cpu, func_ram, spinner
     )
@@ -244,6 +270,7 @@ async def _execute_job(
             "last_ping_from_client": time(),
             "is_background_job": background,
             "client_has_all_results": False,
+            "fail_reason": [],
         }
     )
 
@@ -261,7 +288,7 @@ async def _execute_job(
         data.add_field("request_json", json.dumps(request_json))
         data.add_field("function_pkl", function_pkl)
         url = f"{node['host']}/jobs/{job_id}"
-        timeout = aiohttp.ClientTimeout(total=30)
+        timeout = aiohttp.ClientTimeout(total=300)
         request = session.post(url, data=data, headers=auth_headers, timeout=timeout)
         try:
             async with request as response:
@@ -282,7 +309,7 @@ async def _execute_job(
                 # mark first as failed with reason so user can inspect the issue
                 node_doc = ASYNC_DB.collection("nodes").document(node["instance_name"])
                 await node_doc.update({"status": "FAILED", "display_in_dashboard": True})
-                msg = f"Failed! This node didn't respond (in <2s) to client request to assign job."
+                msg = f"Failed! This node didn't respond (in<300s) to client request to assign job."
                 await node_doc.collection("logs").document().set({"msg": msg, "ts": time()})
                 # delete node
                 main_service_url = json.loads(CONFIG_PATH.read_text())["cluster_dashboard_url"]
@@ -299,25 +326,9 @@ async def _execute_job(
         connector = aiohttp.TCPConnector(limit=500, limit_per_host=100)
         session = await stack.enter_async_context(aiohttp.ClientSession(connector=connector))
 
-        # send function to every node
-        assign_node_tasks = [assign_node(node, session) for node in nodes_to_assign]
-        nodes = [node for node in await asyncio.gather(*assign_node_tasks) if node]
-        if not nodes:
-            raise Exception("Job refused by all available Nodes!")
-
-        # start uploading inputs
-        upload_inputs_args = (job_id, nodes, inputs, session, auth_headers, job_canceled_event)
-        uploader_task = create_task(upload_inputs(*upload_inputs_args))
-
-        if background:
-            if spinner:
-                spinner.text = f"Uploading {len(inputs)} inputs to {len(nodes)} nodes ..."
-            await uploader_task
-            return
-
-        # if spinner:
-        #     msg = f"Running {len(inputs)} inputs through `{function_.__name__}` "
-        #     spinner.text = msg + f"(0/{len(inputs)} completed)"
+        if spinner:
+            msg = f"Uploading function `{function_.__name__}` to {len(nodes_to_assign)} nodes ..."
+            spinner.text = msg
 
         JOB_CALCELED_MSG = ""
         if not background:
@@ -342,11 +353,28 @@ async def _execute_job(
             log_stream = logs_collection.on_snapshot(_on_new_logs_doc)
             stack.callback(log_stream.unsubscribe)
 
+        # send function to every node
+        assign_node_tasks = [assign_node(node, session) for node in nodes_to_assign]
+        nodes = [node for node in await asyncio.gather(*assign_node_tasks) if node]
+        if not nodes:
+            raise Exception("Job refused by all available Nodes!")
+
+        # start uploading inputs
+        upload_inputs_args = (job_id, nodes, inputs, session, auth_headers, job_canceled_event)
+        uploader_task = create_task(upload_inputs(*upload_inputs_args))
+
+        if background:
+            if spinner:
+                spinner.text = f"Uploading {len(inputs)} inputs to {len(nodes)} nodes ..."
+            await uploader_task
+            return
+
         async def _check_single_node(node: dict):
             url = f"{node['host']}/jobs/{job_id}/results"
             async with session.get(url, headers=auth_headers) as response:
                 if response.status == 404:
                     nodes.remove(node)  # <- means node is likely rebooting and failed or is done
+                    return None
                 elif response.status != 200:
                     raise Exception(f"Result-check failed for node: {node['instance_name']}")
 
@@ -365,12 +393,19 @@ async def _execute_job(
 
                 return_values = []
                 for input_index, is_error, result_pkl in node_status["results"]:
-                    if is_error:
-                        exc_info = pickle.loads(result_pkl)
+
+                    if not is_error:
+                        return_values.append(cloudpickle.loads(result_pkl))
+                        continue
+
+                    exc_info = pickle.loads(result_pkl)
+                    if exc_info.get("traceback_dict"):
                         traceback = Traceback.from_dict(exc_info["traceback_dict"]).as_traceback()
                         reraise(tp=exc_info["type"], value=exc_info["exception"], tb=traceback)
-                    else:
-                        return_values.append(cloudpickle.loads(result_pkl))
+                    elif is_error:
+                        msg = f"\nThis exception had to be sent to your machine as a string:\n\n"
+                        msg += f"{exc_info['traceback_str']}\n"
+                        raise UnPickleableUserFunctionException(msg)
 
                 return (
                     node_status["is_empty"],
@@ -398,6 +433,13 @@ async def _execute_job(
             total_parallelism = 0
             all_nodes_empty = True
             nodes_status = await asyncio.gather(*[_check_single_node(n) for n in nodes])
+            nodes_status = [status for status in nodes_status if status is not None]
+            if not nodes_status:
+                msg = "\nZero nodes working on job and we have not received all results!\n"
+                msg += "This usually means a worker or node crashed, then restarted itself. \n"
+                msg += "See node logs in the dashboard for details.\n"
+                raise InternalClusterError(msg)
+
             currently_installing_package = nodes_status[0][2]
             all_packages_installed = nodes_status[0][3]
 
@@ -582,7 +624,8 @@ def remote_parallel_map(
             try:
                 job_doc = SYNC_DB.collection("jobs").document(job_id)
                 if job_doc.get().to_dict()["status"] != "CANCELED":
-                    job_doc.update({"status": "FAILED"})
+                    msg = f"client exception: {e}"
+                    job_doc.update({"status": "FAILED", "fail_reason": ArrayUnion([msg])})
             except Exception:
                 pass
 

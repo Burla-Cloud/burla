@@ -1,5 +1,6 @@
 import pickle
 import json
+import psutil
 from time import time
 from queue import Empty
 from typing import Optional
@@ -28,7 +29,7 @@ async def get_inputs(job_id: str = Path(...), logger: Logger = Depends(get_logge
     if job_id != SELF["current_job"]:
         return Response("job not found", status_code=404)
     elif SELF["SHUTTING_DOWN"]:
-        return Response("Node is shutting down, can't give inputs.", status_code=409)
+        return Response("Node is shutting down, can't give inputs.", status_code=410)
 
     min_reply_size_bytes = 1_000_000 * 0.5
     min_reply_size_per_worker = min_reply_size_bytes / len(SELF["workers"])
@@ -73,10 +74,12 @@ async def upload_inputs(
     job_id: str = Path(...),
     request_files: Optional[dict] = Depends(get_request_files),
 ):
+    if SELF["pending_inputs"]:
+        return Response("No space for more inputs! retry later.", status_code=409)
     if job_id != SELF["current_job"]:
         return Response("job not found", status_code=404)
     elif SELF["SHUTTING_DOWN"]:
-        return Response("Node is shutting down, inputs not accepted.", status_code=409)
+        return Response("Node is shutting down, inputs not accepted.", status_code=410)
 
     # needs to be here so this is reset when transferring from another dying node
     SELF["current_input_batch_forwarded"] = False
@@ -85,7 +88,10 @@ async def upload_inputs(
     inputs_pkl_with_idx = pickle.loads(request_files["inputs_pkl_with_idx"])
     await asyncio.sleep(0)
     async with aiohttp.ClientSession() as session:
-        await send_inputs_to_workers(session, inputs_pkl_with_idx)
+        # rejected = no space to store
+        rejected_inputs_pkl_with_idx = await send_inputs_to_workers(session, inputs_pkl_with_idx)
+        # is emptied from the job_watcher thread, no more inputs accepted until it's empty
+        SELF["pending_inputs"] = rejected_inputs_pkl_with_idx
 
     SELF["current_input_batch_forwarded"] = True
 
@@ -160,9 +166,26 @@ async def execute(
         msg += f" - update your local python version to be one of {versions}"
         return Response(msg, status_code=409)
 
+    # RAM limits on input/output queues prevent worker/node-service from getting fucked
+    IO_RAM_TO_TOTAL_RAM_RATIO = 0.75  # percent of total ram input/output queues allowed to use
+    NODE_TO_WORKER_IO_RAM_RATIO = 2  # node-service io queues can use 2x the ram of worker queues
+    io_ram_limit_gb = (psutil.virtual_memory().total / 1024**3) * IO_RAM_TO_TOTAL_RAM_RATIO
+    worker_io_ram_limit_gb = io_ram_limit_gb / (
+        len(workers_to_assign) + NODE_TO_WORKER_IO_RAM_RATIO
+    )
+    # This isn't a limit, it can be exceeded
+    # The node svc just dosen't ask for more results when it's over this size.
+    SELF["return_queue_ram_threshold_gb"] = worker_io_ram_limit_gb * NODE_TO_WORKER_IO_RAM_RATIO
+    logger.log(f"set return_queue_ram_threshold_gb to {SELF['return_queue_ram_threshold_gb']}")
+
     async def assign_worker(session, worker):
         data = aiohttp.FormData()
-        packages_json = json.dumps({"packages": request_json["packages"]})
+        packages_json = json.dumps(
+            {
+                "packages": request_json["packages"],
+                "io_queues_ram_limit_gb": worker_io_ram_limit_gb,
+            }
+        )
         data.add_field("function_pkl", request_files["function_pkl"])
         data.add_field("request_json", packages_json, content_type="application/json")
         async with session.post(f"{worker.url}/jobs/{job_id}", data=data) as response:

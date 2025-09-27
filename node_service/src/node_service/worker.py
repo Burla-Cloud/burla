@@ -158,18 +158,9 @@ class Worker:
             # Restart automatically if it dies (IMPORTANT!):
             # Because it kills itself intentionally when it needs to cancel a running job.
             while true; do
-                if [ "{IN_LOCAL_DEV_MODE}" = "True" ]; then
-                    echo "Starting worker service in local dev mode..."
-                    $python_cmd -m uvicorn worker_service:app --host 0.0.0.0 \
-                        --port {WORKER_INTERNAL_PORT} --workers 1 \
-                        --timeout-keep-alive 30 --reload
-                else
-                    echo "Starting worker service in prod mode..."
-                    $python_cmd -m uvicorn worker_service:app --host 0.0.0.0 \
-                        --port {WORKER_INTERNAL_PORT} --workers 1 \
-                        --timeout-keep-alive 30
-                fi
-                echo "Restarting worker service..."
+                $python_cmd -m uvicorn worker_service:app --host 0.0.0.0 \
+                    --port {WORKER_INTERNAL_PORT} --workers 1 \
+                    --timeout-keep-alive 30
             done
         """.strip()
         cmd = ["-c", cmd_script]

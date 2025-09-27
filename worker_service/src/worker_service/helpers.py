@@ -1,3 +1,4 @@
+import queue
 import threading
 import sys
 import traceback
@@ -23,10 +24,10 @@ class VerboseList(list):
     def append(self, item):
         if self.start_time is None:
             self.start_time = time()
-        time_since_start = time() - self.start_time
-        msg = f"T+{time_since_start:.2f}s: {item}"
-        if self.print_on_append:
-            self.logger.info(msg)
+        # time_since_start = time() - self.start_time
+        # msg = f"T+{time_since_start:.2f}s: {item}"
+        # if self.print_on_append:
+        #     self.logger.info(msg)
         super().append(item)
 
 
@@ -44,3 +45,26 @@ class ThreadWithExc(threading.Thread):
             traceback_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
             traceback_str = "".join(traceback_details)
             self.traceback_str = traceback_str
+
+
+class SizedQueue(queue.Queue):
+    # Force user to submit size of their item because it's ususally already available and is slow
+    # to calculate for any given generic object, but fast for known objects like input_pkl_with_idx.
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.item_sizes_queue = queue.Queue()
+        self.size_bytes = 0
+
+    def put(self, item, size_bytes):
+        super()._put(item)
+        self.item_sizes_queue.put(size_bytes)
+        self.size_bytes += size_bytes
+
+    def _get(self):
+        item = super()._get()
+        self.size_bytes -= self.item_sizes_queue.get()
+        return item
+
+    @property
+    def size_gb(self):
+        return self.size_bytes / (1024**3)

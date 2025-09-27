@@ -21,11 +21,13 @@ from jinja2 import Environment, FileSystemLoader
 os.environ["GRPC_VERBOSITY"] = "ERROR"
 os.environ["GLOG_minloglevel"] = "2"
 
-CURRENT_BURLA_VERSION = "1.2.13"
+CURRENT_BURLA_VERSION = "1.2.14"
 
-# This is the only possible alternative "mode".
-# In this mode everything runs locally in docker containers.
+# In this mode EVERYTHING runs locally in docker containers.
+# possible modes: local-dev-mode (everything local), remote-dev-mode (only main-service local), prod
 IN_LOCAL_DEV_MODE = os.environ.get("IN_LOCAL_DEV_MODE") == "True"
+# This is needed because remote-dev-mode is not local-dev-mode, and needs local redirect on login.
+REDIRECT_LOCALLY_ON_LOGIN = os.environ.get("REDIRECT_LOCALLY_ON_LOGIN") == "True"
 
 CREDENTIALS, PROJECT_ID = google.auth.default()
 BURLA_BACKEND_URL = "https://backend.burla.dev"
@@ -250,7 +252,7 @@ async def validate_requests(request: Request, call_next):
                 elif response.status == 403:
                     data = await response.json()
                     rendered = STATIC_FILES_ENV.get_template("login.html.j2").render(
-                        redirect_locally=IN_LOCAL_DEV_MODE,
+                        redirect_locally=REDIRECT_LOCALLY_ON_LOGIN,
                         project_id=PROJECT_ID,
                         user_email=data["detail"]["email"],
                         first_name=first_name,
@@ -266,7 +268,7 @@ async def validate_requests(request: Request, call_next):
                     response.raise_for_status()
                 else:
                     rendered = STATIC_FILES_ENV.get_template("login.html.j2").render(
-                        redirect_locally=IN_LOCAL_DEV_MODE,
+                        redirect_locally=REDIRECT_LOCALLY_ON_LOGIN,
                         project_id=PROJECT_ID,
                         user_email=email,
                         first_name=first_name,
@@ -274,7 +276,7 @@ async def validate_requests(request: Request, call_next):
                     return Response(content=rendered, status_code=401, media_type="text/html")
 
         rendered = STATIC_FILES_ENV.get_template("login.html.j2").render(
-            redirect_locally=IN_LOCAL_DEV_MODE,
+            redirect_locally=REDIRECT_LOCALLY_ON_LOGIN,
             project_id=PROJECT_ID,
             first_name=first_name,
         )

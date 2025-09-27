@@ -24,10 +24,10 @@ class VerboseList(list):
     def append(self, item):
         if self.start_time is None:
             self.start_time = time()
-        time_since_start = time() - self.start_time
-        msg = f"T+{time_since_start:.2f}s: {item}"
-        if self.print_on_append:
-            self.logger.info(msg)
+        # time_since_start = time() - self.start_time
+        # msg = f"T+{time_since_start:.2f}s: {item}"
+        # if self.print_on_append:
+        #     self.logger.info(msg)
         super().append(item)
 
 

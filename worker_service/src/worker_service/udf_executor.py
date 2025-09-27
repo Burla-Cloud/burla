@@ -1,5 +1,6 @@
 import os
 import sys
+import pty
 import pickle
 import requests
 import traceback
@@ -54,6 +55,11 @@ class _FirestoreStdout:
         self._stop_event = Event()
         self._flusher_thread = Thread(target=self._flush_loop, daemon=True)
         self._flusher_thread.start()
+        self._original_stdout_descriptor = None
+        self._original_stderr_descriptor = None
+        self._terminal_master_descriptor = None
+        self._terminal_slave_descriptor = None
+        self._reader_thread = None
 
     def stop(self):
         self.actually_flush()
@@ -100,7 +106,11 @@ class _FirestoreStdout:
                 response = requests.post(url, headers=DB_HEADERS, json=data, timeout=5)
                 response.raise_for_status()
             except Exception as e:
-                if response.status_code == 401 and IN_LOCAL_DEV_MODE:
+                try:
+                    status = response.status_code
+                except Exception:
+                    status = None
+                if status == 401 and IN_LOCAL_DEV_MODE:
                     msg = "401 error writing logs, YOU DEV TOKEN IS PROBABLY EXPIRED!\n"
                     msg += "         Re-run `make local-dev` (and reboot!) to refresh the token.\n"
                     SELF["logs"].append(msg)
@@ -112,12 +122,79 @@ class _FirestoreStdout:
         self._last_flush_time = time()
 
     def __enter__(self):
-        self.original_stdout = sys.stdout
+        self.original_stdout_object = sys.stdout
         sys.stdout = self
 
+        self._terminal_master_descriptor, self._terminal_slave_descriptor = pty.openpty()
+        self._original_stdout_descriptor = os.dup(1)
+        self._original_stderr_descriptor = os.dup(2)
+
+        os.dup2(self._terminal_slave_descriptor, 1)
+        os.dup2(self._terminal_slave_descriptor, 2)
+        os.close(self._terminal_slave_descriptor)
+        self._terminal_slave_descriptor = None
+
+        def reader_loop():
+            decoder = None
+            try:
+                import codecs
+
+                decoder = codecs.getincrementaldecoder("utf-8")()
+            except Exception:
+                decoder = None
+            while not self._stop_event.is_set():
+                try:
+                    data = os.read(self._terminal_master_descriptor, 8192)
+                    if not data:
+                        break
+                    if decoder:
+                        text = decoder.decode(data)
+                    else:
+                        text = data.decode("utf-8", errors="replace")
+                    self.write(text)
+                except OSError:
+                    break
+
+        self._reader_thread = Thread(target=reader_loop, daemon=True)
+        self._reader_thread.start()
+        return self
+
     def __exit__(self, exc_type, exc_value, traceback):
-        sys.stdout = self.original_stdout
-        sys.stdout.flush()
+        try:
+            if self._original_stdout_descriptor is not None:
+                os.dup2(self._original_stdout_descriptor, 1)
+            if self._original_stderr_descriptor is not None:
+                os.dup2(self._original_stderr_descriptor, 2)
+        finally:
+            try:
+                if self._original_stdout_descriptor is not None:
+                    os.close(self._original_stdout_descriptor)
+            except Exception:
+                pass
+            try:
+                if self._original_stderr_descriptor is not None:
+                    os.close(self._original_stderr_descriptor)
+            except Exception:
+                pass
+            self._original_stdout_descriptor = None
+            self._original_stderr_descriptor = None
+
+            try:
+                if self._terminal_master_descriptor is not None:
+                    os.close(self._terminal_master_descriptor)
+            except Exception:
+                pass
+            self._terminal_master_descriptor = None
+
+            if self._reader_thread is not None:
+                self._reader_thread.join(timeout=1)
+                self._reader_thread = None
+
+            sys.stdout = self.original_stdout_object
+            try:
+                sys.stdout.flush()
+            except Exception:
+                pass
 
     def _flush_loop(self):
         while not self._stop_event.wait(1.0):

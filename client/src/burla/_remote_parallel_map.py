@@ -326,25 +326,9 @@ async def _execute_job(
         connector = aiohttp.TCPConnector(limit=500, limit_per_host=100)
         session = await stack.enter_async_context(aiohttp.ClientSession(connector=connector))
 
-        # send function to every node
-        assign_node_tasks = [assign_node(node, session) for node in nodes_to_assign]
-        nodes = [node for node in await asyncio.gather(*assign_node_tasks) if node]
-        if not nodes:
-            raise Exception("Job refused by all available Nodes!")
-
-        # start uploading inputs
-        upload_inputs_args = (job_id, nodes, inputs, session, auth_headers, job_canceled_event)
-        uploader_task = create_task(upload_inputs(*upload_inputs_args))
-
-        if background:
-            if spinner:
-                spinner.text = f"Uploading {len(inputs)} inputs to {len(nodes)} nodes ..."
-            await uploader_task
-            return
-
-        # if spinner:
-        #     msg = f"Running {len(inputs)} inputs through `{function_.__name__}` "
-        #     spinner.text = msg + f"(0/{len(inputs)} completed)"
+        if spinner:
+            msg = f"Uploading function `{function_.__name__}` to {len(nodes_to_assign)} nodes ..."
+            spinner.text = msg
 
         JOB_CALCELED_MSG = ""
         if not background:
@@ -368,6 +352,22 @@ async def _execute_job(
             logs_collection = SYNC_DB.collection("jobs").document(job_id).collection("logs")
             log_stream = logs_collection.on_snapshot(_on_new_logs_doc)
             stack.callback(log_stream.unsubscribe)
+
+        # send function to every node
+        assign_node_tasks = [assign_node(node, session) for node in nodes_to_assign]
+        nodes = [node for node in await asyncio.gather(*assign_node_tasks) if node]
+        if not nodes:
+            raise Exception("Job refused by all available Nodes!")
+
+        # start uploading inputs
+        upload_inputs_args = (job_id, nodes, inputs, session, auth_headers, job_canceled_event)
+        uploader_task = create_task(upload_inputs(*upload_inputs_args))
+
+        if background:
+            if spinner:
+                spinner.text = f"Uploading {len(inputs)} inputs to {len(nodes)} nodes ..."
+            await uploader_task
+            return
 
         async def _check_single_node(node: dict):
             url = f"{node['host']}/jobs/{job_id}/results"

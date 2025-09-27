@@ -10,6 +10,14 @@ import logging as python_logging
 from fastapi import FastAPI, Request, Response
 from starlette.datastructures import UploadFile
 
+
+# silence logs so they are not picked up and sent to user
+python_logging.getLogger("uvicorn").disabled = True
+python_logging.getLogger("uvicorn.error").disabled = True
+python_logging.getLogger("uvicorn.access").disabled = True
+python_logging.getLogger("fastapi").disabled = True
+python_logging.getLogger("starlette").disabled = True
+
 # Defined before importing helpers/endpoints to prevent cyclic imports
 IN_LOCAL_DEV_MODE = os.environ.get("IN_LOCAL_DEV_MODE") == "True"
 PROJECT_ID = os.environ.get("GOOGLE_CLOUD_PROJECT")
@@ -35,15 +43,6 @@ SELF = {
     "ALL_PACKAGES_INSTALLED": False,
     "io_queues_ram_limit_gb": None,
 }
-
-
-# Silence fastapi logs coming from the /results endpoint, there are so many it slows stuff down.
-class ResultsEndpointFilter(python_logging.Filter):
-    def filter(self, record):
-        return not record.args[2].endswith("/results")
-
-
-python_logging.getLogger("uvicorn.access").addFilter(ResultsEndpointFilter())
 
 
 async def get_request_json(request: Request):

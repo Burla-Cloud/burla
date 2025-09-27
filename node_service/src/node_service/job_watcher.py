@@ -235,7 +235,8 @@ async def _job_watcher(
                 msg += "setting job status to FAILED"
                 logger.log(msg)
                 try:
-                    msg = f"job watcher ({INSTANCE_NAME}) hasn't had client ping in the last 300s"
+                    msg = f"job watcher ({INSTANCE_NAME}) hasn't had client ping in the last "
+                    msg += f"{CLIENT_DC_TIMEOUT_SEC}s"
                     await job_doc.update({"status": "FAILED", "fail_reason": ArrayUnion([msg])})
                 except Exception:
                     # ignore because this can get hit by like 100's of nodes at once

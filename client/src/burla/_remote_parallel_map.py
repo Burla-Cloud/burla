@@ -233,6 +233,7 @@ async def _execute_job(
     background: bool,
     spinner: Union[bool, Spinner],
     job_canceled_event: Event,
+    start_time: float,
 ):
     auth_headers = get_auth_headers()
     SYNC_DB, ASYNC_DB = get_db_clients()
@@ -266,7 +267,8 @@ async def _execute_job(
             "target_parallelism": total_target_parallelism,
             "user": auth_headers["X-User-Email"],
             "function_name": function_.__name__,
-            "started_at": time(),
+            "function_size_gb": function_size_gb,
+            "started_at": start_time,
             "last_ping_from_client": time(),
             "is_background_job": background,
             "client_has_all_results": False,
@@ -275,6 +277,8 @@ async def _execute_job(
     )
 
     packages = _get_packages(function_)
+    # is imported in all notebooks by default but (almost certainly) not needed inside burla function
+    del packages["ipython"]
 
     async def assign_node(node: dict, session: aiohttp.ClientSession):
         request_json = {
@@ -326,10 +330,6 @@ async def _execute_job(
         connector = aiohttp.TCPConnector(limit=500, limit_per_host=100)
         session = await stack.enter_async_context(aiohttp.ClientSession(connector=connector))
 
-        if spinner:
-            msg = f"Uploading function `{function_.__name__}` to {len(nodes_to_assign)} nodes ..."
-            spinner.text = msg
-
         JOB_CALCELED_MSG = ""
         if not background:
             # start sending "alive" pings to nodes
@@ -353,6 +353,12 @@ async def _execute_job(
             log_stream = logs_collection.on_snapshot(_on_new_logs_doc)
             stack.callback(log_stream.unsubscribe)
 
+        if spinner:
+            function_size_mb = len(function_pkl) / 1024**2
+            total_data_gb = function_size_gb * len(nodes_to_assign)
+            msg = f"Uploading function `{function_.__name__}` ({(function_size_mb):.2f}MB) to {len(nodes_to_assign)} nodes ({total_data_gb:.2f}GB) ..."
+            spinner.text = msg
+
         # send function to every node
         assign_node_tasks = [assign_node(node, session) for node in nodes_to_assign]
         nodes = [node for node in await asyncio.gather(*assign_node_tasks) if node]
@@ -362,6 +368,9 @@ async def _execute_job(
         # start uploading inputs
         upload_inputs_args = (job_id, nodes, inputs, session, auth_headers, job_canceled_event)
         uploader_task = create_task(upload_inputs(*upload_inputs_args))
+
+        exec_start_latency = time() - start_time
+        await job_ref.update({"exec_start_latency_sec": exec_start_latency})
 
         if background:
             if spinner:
@@ -523,6 +532,7 @@ def remote_parallel_map(
         For more info see our overview: https://docs.burla.dev/overview
         or API-Reference: https://docs.burla.dev/api-reference
     """
+    start_time = time()
     if not inputs and not generator:
         return []
     elif not inputs and generator:
@@ -571,6 +581,7 @@ def remote_parallel_map(
                         background=background,
                         spinner=spinner,
                         job_canceled_event=job_canceled_event,
+                        start_time=start_time,
                     )
                 )
             except Exception as e:

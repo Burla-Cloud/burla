@@ -280,6 +280,11 @@ class Node:
                 "INACTIVITY_SHUTDOWN_TIME_SEC": self.inactivity_shutdown_time_sec,
                 "NUM_GPUS": 0,
                 "BOOTING_FOR_FIRST_TIME": "True",
+                "GRPC_LOG_TO_STDERR": "0",
+                "GRPC_LOG_FILENAME": "/dev/null",
+                "GRPC_VERBOSITY": "ERROR",
+                "ABSL_LOGGING_MIN_LOG_LEVEL": "3",
+                "GLOG_minloglevel": "2",
             },
             detach=True,
         )
@@ -433,6 +438,13 @@ class Node:
         export PROJECT_ID="{PROJECT_ID}"
         export CONTAINERS='{json.dumps([c.to_dict() for c in self.containers])}'
         export INACTIVITY_SHUTDOWN_TIME_SEC="{self.inactivity_shutdown_time_sec}"
+
+        # silence grpc logs:
+        export GRPC_LOG_TO_STDERR=0
+        export GRPC_LOG_FILENAME=/dev/null
+        export GRPC_VERBOSITY=ERROR
+        export ABSL_LOGGING_MIN_LOG_LEVEL=3
+        export GLOG_minloglevel=2
 
         python -m uvicorn node_service:app --host 0.0.0.0 --port {self.port} --workers 1 --timeout-keep-alive 600
         """

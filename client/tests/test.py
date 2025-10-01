@@ -9,7 +9,7 @@ from burla import remote_parallel_map
 N_INPUTS = 160
 
 
-def _test_base():
+def test_base():
 
     def test_function(test_input):
         return test_input
@@ -39,7 +39,7 @@ def _test_big_inputs():
     results = remote_parallel_map(test_function, my_inputs)
 
 
-def test_big_returns():
+def _test_big_returns():
 
     RETURN_SIZE = 100 * 1_000_000
 

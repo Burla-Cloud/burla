@@ -33,7 +33,7 @@ async def restart():
     # restarted by the while loop in the bash script the container was started with.
 
     # dont need to append to logs because restart wipes it anyway
-    print(f"Restarting worker service, killing process: {os.getpid()}", flush=True)
+    # print(f"Restarting worker service, killing process: {os.getpid()}", flush=True)
 
     os.kill(os.getpid(), signal.SIGTERM)
     # Can't use SELF["STOP_PROCESSING_EVENT"] because it dosent force restart immmediately.

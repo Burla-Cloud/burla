@@ -133,6 +133,7 @@ async def execute(
     request_files: Optional[dict] = Depends(get_request_files),
     logger: Logger = Depends(get_logger),
 ):
+    print(f"STARTING JOB (FROM ENDPOINT) {job_id}")
     if SELF["RUNNING"] or SELF["BOOTING"]:
         return Response("Node currently running or booting, request refused.", status_code=409)
 

@@ -11,16 +11,17 @@ import logging as python_logging
 from contextlib import asynccontextmanager
 from threading import Event
 
-import aiohttp
 import google.auth
 from google.auth.transport.requests import Request
+from google.cloud import logging, secretmanager, firestore
+from google.cloud.compute_v1 import InstancesClient
+import aiohttp
 from starlette.concurrency import run_in_threadpool
 from fastapi import FastAPI, Request, BackgroundTasks, Depends
 from fastapi.responses import Response
 from starlette.requests import ClientDisconnect
 from starlette.datastructures import UploadFile
-from google.cloud import logging, secretmanager, firestore
-from google.cloud.compute_v1 import InstancesClient
+
 
 __version__ = "1.2.15"
 CREDENTIALS, PROJECT_ID = google.auth.default()
@@ -208,7 +209,39 @@ async def lifespan(app: FastAPI):
     yield
 
 
+async def on_job_start(scope, first_event):
+    job_id = scope.get("path", "").split("/jobs/")[-1]
+    print(f"STARTING JOB {job_id}")
+
+
+class CallHookOnJobStartMiddleware:
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        is_post_request = scope.get("method") == "POST"
+        is_jobs_request = scope.get("path", "").startswith("/jobs/")
+        is_job_execution_request = is_post_request and is_jobs_request
+
+        if is_job_execution_request:
+            started = False
+
+            async def wrapped_receive():
+                nonlocal started
+                event = await receive()
+                job_starting = event.get("type") == "http.request" and not started
+
+                if job_starting:
+                    started = True
+                    await on_job_start(scope, event)
+                return event
+
+            return await self.app(scope, wrapped_receive, send)
+        return await self.app(scope, receive, send)
+
+
 app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None)
+app.add_middleware(CallHookOnJobStartMiddleware)
 app.include_router(job_endpoints_router)
 app.include_router(lifecycle_endpoints_router)
 

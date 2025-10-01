@@ -11,21 +11,30 @@ import logging as python_logging
 from contextlib import asynccontextmanager
 from threading import Event
 
-import aiohttp
+# throws some uncatchable, unimportant, warnings
+python_logging.getLogger("google.api_core.bidi").setLevel(python_logging.ERROR)
+# prevent some annoying grpc logs / warnings
+os.environ["GRPC_VERBOSITY"] = "ERROR"  # only log ERROR/FATAL
+os.environ["GLOG_minloglevel"] = "2"  # 0-INFO, 1-WARNING, 2-ERROR, 3-FATAL
+
 import google.auth
 from google.auth.transport.requests import Request
+from google.cloud import logging, secretmanager, firestore
+from google.cloud.compute_v1 import InstancesClient
+from google.cloud.firestore_v1.async_client import AsyncClient
+import aiohttp
 from starlette.concurrency import run_in_threadpool
 from fastapi import FastAPI, Request, BackgroundTasks, Depends
 from fastapi.responses import Response
 from starlette.requests import ClientDisconnect
 from starlette.datastructures import UploadFile
-from google.cloud import logging, secretmanager, firestore
-from google.cloud.compute_v1 import InstancesClient
 
-__version__ = "1.2.14"
+
+__version__ = "1.2.15"
 CREDENTIALS, PROJECT_ID = google.auth.default()
 BURLA_BACKEND_URL = "https://backend.burla.dev"
 
+ASYNC_DB = AsyncClient(project=PROJECT_ID, database="burla")
 IN_LOCAL_DEV_MODE = os.environ.get("IN_LOCAL_DEV_MODE") == "True"  # Cluster running locally
 
 NUM_GPUS = int(os.environ.get("NUM_GPUS"))
@@ -64,9 +73,14 @@ def REINIT_SELF(SELF):
     SELF["all_inputs_uploaded"] = False
     SELF["current_input_batch_forwarded"] = True
     SELF["num_results_received"] = 0
+    SELF["return_queue_ram_threshold_gb"] = None
     SELF["currently_installing_package"] = None
     SELF["all_packages_installed"] = False
-    SELF["return_queue_ram_threshold_gb"] = None
+    SELF["all_packages_installed_sent_to_client"] = False
+    SELF["udf_start_latency"] = None
+    SELF["udf_start_latency_sent_to_client"] = False
+    SELF["packages_to_install"] = None
+    SELF["packages_to_install_sent_to_client"] = False
 
 
 SELF = {}
@@ -208,7 +222,49 @@ async def lifespan(app: FastAPI):
     yield
 
 
+async def on_job_start(scope, first_event):
+    SELF["RUNNING"] = True
+    SELF["current_job"] = scope.get("path", "").split("/jobs/")[-1]
+
+    async def set_node_running(job_id: str):
+        node_doc = ASYNC_DB.collection("nodes").document(INSTANCE_NAME)
+        await node_doc.update({"status": "RUNNING", "current_job": job_id})
+
+    asyncio.create_task(set_node_running(SELF["current_job"]))
+
+
+class CallHookOnJobStartMiddleware:
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        is_post_request = scope.get("method") == "POST"
+        is_jobs_request = scope.get("path", "").startswith("/jobs/")
+        is_jobs_request = "inputs" not in scope.get("path", "") and is_jobs_request
+        is_job_execution_request = is_post_request and is_jobs_request
+
+        if is_job_execution_request:
+            started = False
+            if SELF["RUNNING"] or SELF["BOOTING"]:
+                msg = "Node currently running or booting, request refused."
+                return await Response(msg, status_code=409)(scope, receive, send)
+
+            async def wrapped_receive():
+                nonlocal started
+                event = await receive()
+                job_starting = event.get("type") == "http.request" and not started
+
+                if job_starting:
+                    started = True
+                    await on_job_start(scope, event)
+                return event
+
+            return await self.app(scope, wrapped_receive, send)
+        return await self.app(scope, receive, send)
+
+
 app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None)
+app.add_middleware(CallHookOnJobStartMiddleware)
 app.include_router(job_endpoints_router)
 app.include_router(lifecycle_endpoints_router)
 

@@ -13,7 +13,6 @@ from threading import Event
 
 import cloudpickle
 from yaspin import Spinner
-from google.cloud.firestore import ArrayUnion
 
 from burla import _BURLA_BACKEND_URL, CONFIG_PATH
 
@@ -31,6 +30,7 @@ os.environ["GLOG_minloglevel"] = "2"  # 0-INFO, 1-WARNING, 2-ERROR, 3-FATAL
 
 # needs to be imported after ^
 from google.cloud.firestore import Client
+from google.cloud.firestore import ArrayUnion
 from google.cloud.firestore_v1.async_client import AsyncClient
 from google.oauth2 import service_account
 
@@ -40,6 +40,7 @@ class GoogleLoginError(Exception):
 
 
 async def run_in_subprocess(func, *args):
+    # I do it like this so it works in google colab, multiprocesing doesn't
     code = textwrap.dedent(
         """
         import sys, cloudpickle
@@ -120,9 +121,21 @@ def restore_signal_handlers(original_signal_handlers):
 
 def log_telemetry(message, severity="INFO", **kwargs):
     try:
-        json = {"message": message, **kwargs}
-        response = requests.post(f"{_BURLA_BACKEND_URL}/v1/telemetry/log/{severity}", json=json)
+        json_payload = {"message": message, **kwargs}
+        url = f"{_BURLA_BACKEND_URL}/v1/telemetry/log/{severity}"
+        response = requests.post(url, json=json_payload)
         response.raise_for_status()
+    except Exception:
+        pass
+
+
+async def log_telemetry_async(message, session, severity="INFO", **kwargs):
+    try:
+        json_payload = {"message": message, **kwargs}
+        url = f"{_BURLA_BACKEND_URL}/v1/telemetry/log/{severity}"
+        async with session.post(url, json=json_payload) as response:
+            await response.text()
+            response.raise_for_status()
     except Exception:
         pass
 

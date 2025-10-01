@@ -23,14 +23,16 @@ stop:
 		'import json' \
 		'from google.cloud import firestore' \
 		'from google.cloud.firestore_v1 import FieldFilter' \
-		'from appdirs import user_config_dir' \
-		'from pathlib import Path' \
 		'' \
-		'db = firestore.Client(database="burla")' \
+		'db = firestore.Client(project="burla-test", database="burla")' \
 		'booting_filter = FieldFilter("status", "==", "BOOTING")' \
-		'for document in db.collection("nodes").where(filter=booting_filter).get():' \
-		'    document.reference.delete()' \
-		'    print(f"Deleted node doc: {document.id}")' \
+		'booting_nodes = db.collection("nodes").where(filter=booting_filter).get()' \
+		'if not booting_nodes:' \
+		'    print("No booting nodes found")' \
+		'else:' \
+		'    for document in booting_nodes:' \
+		'        document.reference.delete()' \
+		'        print(f"Deleted node doc: {document.id}")' \
 	| poetry -C ./client run python -
 
 temp:

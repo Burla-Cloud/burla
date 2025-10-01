@@ -71,10 +71,16 @@ async def result_check_all_workers(session: aiohttp.ClientSession, logger: Logge
                 SELF["results_queue"].put(result, len(result[2]))
                 SELF["num_results_received"] += 1
 
+            if response.get("udf_start_latency"):
+                SELF["udf_start_latency"] = response["udf_start_latency"]
+            if response.get("packages_to_install"):
+                SELF["packages_to_install"] = response["packages_to_install"]
+            if response.get("all_packages_installed"):
+                SELF["all_packages_installed"] = response["all_packages_installed"]
+
             worker.is_idle = response["is_idle"]
             worker.is_empty = response["is_empty"]
             worker.currently_installing_package = response["currently_installing_package"]
-            worker.all_packages_installed = response["all_packages_installed"]
             return worker, http_response.status
 
     return await asyncio.gather(*[_result_check_single_worker(w) for w in SELF["workers"]])
@@ -91,7 +97,6 @@ async def _job_watcher(
     sync_db = firestore.Client(project=PROJECT_ID, database="burla")
     job_doc = async_db.collection("jobs").document(SELF["current_job"])
     node_doc = async_db.collection("nodes").document(INSTANCE_NAME)
-    await node_doc.update({"status": "RUNNING", "current_job": SELF["current_job"]})
     node_docs_collection = job_doc.collection("assigned_nodes")
     node_doc = node_docs_collection.document(INSTANCE_NAME)
     await node_doc.set({"current_num_results": 0})
@@ -137,7 +142,6 @@ async def _job_watcher(
             workers_info = await result_check_all_workers(session, logger)
             SELF["current_parallelism"] = sum(not w.is_idle for w in SELF["workers"])
             SELF["currently_installing_package"] = SELF["workers"][0].currently_installing_package
-            SELF["all_packages_installed"] = any(w.all_packages_installed for w in SELF["workers"])
             all_workers_empty = all(w.is_empty for w in SELF["workers"])
             failed = [f"{w.container_name}:{status}" for w, status in workers_info if status != 200]
 
@@ -214,11 +218,24 @@ async def _job_watcher(
             JOB_CANCELED = job_snapshot.to_dict()["status"] == "CANCELED"
             if not (JOB_FAILED or JOB_CANCELED):
                 try:
-                    await job_doc.update({"status": "COMPLETED"})
+                    doc = {"status": "COMPLETED"}
+                    if SELF["udf_start_latency"]:
+                        doc["udf_start_latency"] = SELF["udf_start_latency"]
+                    if SELF["packages_to_install"]:
+                        doc["packages_to_install"] = SELF["packages_to_install"]
+                    await job_doc.update(doc)
                 except Exception:
                     # ignore because this can get hit by like 100's of nodes at once
                     # one of them will succeed and the others will throw errors we can ignore.
                     pass
+            else:
+                doc = {}
+                if SELF["udf_start_latency"]:
+                    doc["udf_start_latency"] = SELF["udf_start_latency"]
+                if SELF["packages_to_install"]:
+                    doc["packages_to_install"] = SELF["packages_to_install"]
+                if doc:
+                    await job_doc.update(doc)
             await restart_workers(session, logger, async_db)
             break
 
@@ -266,6 +283,12 @@ async def job_watcher_logged(n_inputs: int, is_background_job: bool, auth_header
 async def reinit_node(assigned_workers: list, async_db: AsyncClient):
     # important to delete or workers wont install packages
     ENV_IS_READY_PATH.unlink(missing_ok=True)
+
+    # reset per-job fields on preserved workers to avoid leaking prior job state
+    for w in SELF["workers"]:
+        w.packages_to_install = None
+        w.is_idle = False
+        w.is_empty = False
 
     current_container_config = SELF["current_container_config"]
     current_workers = assigned_workers + SELF["idle_workers"]

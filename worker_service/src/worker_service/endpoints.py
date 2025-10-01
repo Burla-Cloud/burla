@@ -68,8 +68,13 @@ async def get_results(job_id: str = Path(...)):
         "is_idle": SELF["IDLE"],  # <- used to determine if job is done
         "is_empty": SELF["results_queue"].empty(),
         "currently_installing_package": SELF["CURRENTLY_INSTALLING_PACKAGE"],
-        "all_packages_installed": SELF["ALL_PACKAGES_INSTALLED"],  # required, see udf_executor
     }
+    if SELF["udf_start_latency"]:
+        response_json["udf_start_latency"] = SELF["udf_start_latency"]
+    if SELF["packages_to_install"]:
+        response_json["packages_to_install"] = SELF["packages_to_install"]
+    if SELF["ALL_PACKAGES_INSTALLED"]:
+        response_json["all_packages_installed"] = SELF["ALL_PACKAGES_INSTALLED"]
     data = pickle.dumps(response_json)
     await asyncio.sleep(0)
     headers = {"Content-Disposition": 'attachment; filename="results.pkl"'}
@@ -144,7 +149,12 @@ async def start_job(
     request_json: dict = Depends(get_request_json),
 ):
     SELF["logs"].append(f"Assigned to job {job_id}.")
-    args = (job_id, request_files["function_pkl"], request_json["packages"])
+    args = (
+        job_id,
+        request_files["function_pkl"],
+        request_json["packages"],
+        request_json["start_time"],
+    )
     thread = ThreadWithExc(target=install_pkgs_and_execute_job, args=args, daemon=True)
     thread.start()
 

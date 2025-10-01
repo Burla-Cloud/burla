@@ -116,9 +116,19 @@ async def get_results(job_id: str = Path(...)):
         "results": results,
         "current_parallelism": SELF["current_parallelism"],
         "is_empty": SELF["results_queue"].empty(),
-        "all_packages_installed": SELF["all_packages_installed"],  # <- required, see worker
         "currently_installing_package": SELF["currently_installing_package"],
     }
+
+    if SELF["udf_start_latency"] and not SELF["udf_start_latency_sent_to_client"]:
+        response_json["udf_start_latency"] = SELF["udf_start_latency"]
+        SELF["udf_start_latency_sent_to_client"] = True
+    if SELF["packages_to_install"] and not SELF["packages_to_install_sent_to_client"]:
+        response_json["packages_to_install"] = SELF["packages_to_install"]
+        SELF["packages_to_install_sent_to_client"] = True
+    if SELF["all_packages_installed"] and not SELF["all_packages_installed_sent_to_client"]:
+        response_json["all_packages_installed"] = SELF["all_packages_installed"]
+        SELF["all_packages_installed_sent_to_client"] = True
+
     data = pickle.dumps(response_json)
     await asyncio.sleep(0)
     headers = {"Content-Disposition": 'attachment; filename="results.pkl"'}
@@ -180,6 +190,7 @@ async def execute(
         data = aiohttp.FormData()
         packages_json = json.dumps(
             {
+                "start_time": request_json["start_time"],
                 "packages": request_json["packages"],
                 "io_queues_ram_limit_gb": worker_io_ram_limit_gb,
             }

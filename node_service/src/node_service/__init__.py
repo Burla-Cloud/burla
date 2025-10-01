@@ -73,9 +73,14 @@ def REINIT_SELF(SELF):
     SELF["all_inputs_uploaded"] = False
     SELF["current_input_batch_forwarded"] = True
     SELF["num_results_received"] = 0
+    SELF["return_queue_ram_threshold_gb"] = None
     SELF["currently_installing_package"] = None
     SELF["all_packages_installed"] = False
-    SELF["return_queue_ram_threshold_gb"] = None
+    SELF["all_packages_installed_sent_to_client"] = False
+    SELF["udf_start_latency"] = None
+    SELF["udf_start_latency_sent_to_client"] = False
+    SELF["packages_to_install"] = None
+    SELF["packages_to_install_sent_to_client"] = False
 
 
 SELF = {}

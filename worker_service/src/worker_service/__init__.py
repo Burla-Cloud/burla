@@ -42,6 +42,8 @@ SELF = {
     "CURRENTLY_INSTALLING_PACKAGE": None,
     "ALL_PACKAGES_INSTALLED": False,
     "io_queues_ram_limit_gb": None,
+    "udf_start_latency": None,
+    "packages_to_install": None,
 }
 
 

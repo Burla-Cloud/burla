@@ -34,10 +34,13 @@ class Worker:
         elected_installer: bool = False,
         boot_timeout_sec: int = 120,
     ):
+        #
+        # WORKERS CLASS INSTANCES ARE PERSERVED ACROSS JOBS
+        # THUS, THEY NEED TO BE RESET PER JOB
+        #
         self.is_idle = False
         self.is_empty = False
-        self.currently_installing_package = None
-        self.all_packages_installed = False
+        self.packages_to_install = None
         self.container = None
         self.container_id = None
         if IN_LOCAL_DEV_MODE:

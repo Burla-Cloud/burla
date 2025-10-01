@@ -34,6 +34,7 @@ from burla._helpers import (
     parallelism_capacity,
     has_explicit_return,
     log_telemetry,
+    log_telemetry_async,
     run_in_subprocess,
 )
 
@@ -234,6 +235,9 @@ async def _execute_job(
     spinner: Union[bool, Spinner],
     job_canceled_event: Event,
     start_time: float,
+    project_id: str,
+    generator: bool,
+    user_function_error: Event,
 ):
     auth_headers = get_auth_headers()
     SYNC_DB, ASYNC_DB = get_db_clients()
@@ -278,7 +282,8 @@ async def _execute_job(
 
     packages = _get_packages(function_)
     # is imported in all notebooks by default but (almost certainly) not needed inside burla function
-    del packages["ipython"]
+    if "ipython" in packages:
+        del packages["ipython"]
 
     async def assign_node(node: dict, session: aiohttp.ClientSession):
         request_json = {
@@ -287,6 +292,7 @@ async def _execute_job(
             "user_python_version": f"3.{sys.version_info.minor}",
             "n_inputs": len(inputs),
             "packages": packages,
+            "start_time": start_time,
         }
         data = aiohttp.FormData()
         data.add_field("request_json", json.dumps(request_json))
@@ -330,6 +336,14 @@ async def _execute_job(
         connector = aiohttp.TCPConnector(limit=500, limit_per_host=100)
         session = await stack.enter_async_context(aiohttp.ClientSession(connector=connector))
 
+        function_size_str = f" ({function_size_gb:.3f}GB)" if function_size_gb > 0.001 else ""
+        msg = f"Calling function `{function_.__name__}`{function_size_str} on {len(inputs)} "
+        msg += f"inputs with {len(nodes_to_assign)} {nodes_to_assign[0]['machine_type']} nodes and "
+        msg += f"{func_cpu}vCPUs/{func_ram}GB RAM per function.\n"
+        msg += f"background={background}, generator={generator}, spinner={bool(spinner)}, "
+        msg += f"max_parallelism={max_parallelism}, job_id={job_id}"
+        asyncio.create_task(log_telemetry_async(msg, session, project_id=project_id))
+
         JOB_CALCELED_MSG = ""
         if not background:
             # start sending "alive" pings to nodes
@@ -372,9 +386,6 @@ async def _execute_job(
         upload_inputs_args = (job_id, nodes, inputs, session, auth_headers, job_canceled_event)
         uploader_task = create_task(upload_inputs(*upload_inputs_args))
 
-        exec_start_latency = time() - start_time
-        await job_ref.update({"exec_start_latency_sec": exec_start_latency})
-
         if background:
             if spinner:
                 spinner.text = f"Uploading {len(inputs)} inputs to {len(nodes)} nodes ..."
@@ -413,27 +424,36 @@ async def _execute_job(
                     exc_info = pickle.loads(result_pkl)
                     if exc_info.get("traceback_dict"):
                         traceback = Traceback.from_dict(exc_info["traceback_dict"]).as_traceback()
+                        user_function_error.set()
+                        msg = f"Job {job_id} failed due to user function error."
+                        await log_telemetry_async(msg, session, project_id=project_id)
                         reraise(tp=exc_info["type"], value=exc_info["exception"], tb=traceback)
                     elif is_error:
                         msg = f"\nThis exception had to be sent to your machine as a string:\n\n"
                         msg += f"{exc_info['traceback_str']}\n"
                         raise UnPickleableUserFunctionException(msg)
 
-                return (
-                    node_status["is_empty"],
-                    node_status["current_parallelism"],
-                    node_status["currently_installing_package"],
-                    node_status["all_packages_installed"],
-                    return_values,
-                )
+                status = {
+                    "udf_start_latency": node_status.get("udf_start_latency"),
+                    "packages_to_install": node_status.get("packages_to_install"),
+                    "all_packages_installed": node_status.get("all_packages_installed"),
+                    "is_empty": node_status["is_empty"],
+                    "current_parallelism": node_status["current_parallelism"],
+                    "currently_installing_package": node_status["currently_installing_package"],
+                    "return_values": return_values,
+                }
+                return status
 
         n_results = 0
+        result_loop_start = time()
         all_nodes_empty = False
-        start = time()
+        udf_start_latency = None
+        packages_to_install = None
+        all_packages_installed = False
         while n_results < len(inputs):
 
             if all_nodes_empty:
-                elapsed_time = time() - start
+                elapsed_time = time() - result_loop_start
                 if elapsed_time > 3:
                     await asyncio.sleep(0.3)
                 else:
@@ -452,16 +472,22 @@ async def _execute_job(
                 msg += "See node logs in the dashboard for details.\n"
                 raise InternalClusterError(msg)
 
-            currently_installing_package = nodes_status[0][2]
-            all_packages_installed = nodes_status[0][3]
-
+            currently_installing_package = nodes_status[0]["currently_installing_package"]
             if spinner and currently_installing_package:
                 spinner.text = f"Installing package: {currently_installing_package} ..."
 
-            for is_empty, node_parallelism, _, _, return_values in nodes_status:
-                total_parallelism += node_parallelism
-                all_nodes_empty = all_nodes_empty and is_empty
-                for return_value in return_values:
+            for status in nodes_status:
+
+                if status.get("udf_start_latency"):
+                    udf_start_latency = status["udf_start_latency"]
+                if status.get("packages_to_install"):
+                    packages_to_install = status["packages_to_install"]
+                if status.get("all_packages_installed"):
+                    all_packages_installed = status["all_packages_installed"]
+
+                total_parallelism += status["current_parallelism"]
+                all_nodes_empty = all_nodes_empty and status["is_empty"]
+                for return_value in status["return_values"]:
                     return_queue.put_nowait(return_value)
                     n_results += 1
 
@@ -483,6 +509,12 @@ async def _execute_job(
             if len(nodes) == 0 and return_queue.empty():  # nodes removed in _check_single_node
                 raise Exception("Zero nodes working on job and we have not received all results!")
 
+        total_runtime = time() - start_time
+        msg = f"Job {job_id} completed successfully, udf_start_latency={udf_start_latency:.2f}s"
+        msg += f", total_runtime={total_runtime:.2f}s."
+        if packages_to_install:
+            msg += f"\nInstalled packages: {packages_to_install}"
+        asyncio.create_task(log_telemetry_async(msg, session, project_id=project_id))
         await job_ref.update({"client_has_all_results": True})
 
 
@@ -536,6 +568,7 @@ def remote_parallel_map(
         or API-Reference: https://docs.burla.dev/api-reference
     """
     start_time = time()
+    user_function_error = Event()
     if not inputs and not generator:
         return []
     elif not inputs and generator:
@@ -585,6 +618,9 @@ def remote_parallel_map(
                         spinner=spinner,
                         job_canceled_event=job_canceled_event,
                         start_time=start_time,
+                        project_id=project_id,
+                        generator=generator,
+                        user_function_error=user_function_error,
                     )
                 )
             except Exception as e:
@@ -592,12 +628,6 @@ def remote_parallel_map(
 
         t = Thread(target=execute_job, daemon=True)
         t.start()
-
-        msg = f"RPM called with: {len(inputs)} inputs, func_cpu={func_cpu}, func_ram={func_ram}, "
-        msg += f"background={background}, generator={generator}, spinner={spinner}, "
-        msg += f"max_parallelism={max_parallelism}, job_id={job_id}"
-        log_telemetry(msg, project_id=project_id)
-
         t.join()
 
         if hasattr(execute_job, "exc_info"):
@@ -624,7 +654,6 @@ def remote_parallel_map(
             spinner.text = msg
             spinner.ok("✔")
 
-        log_telemetry(f"Job {job_id} returned successfully.", project_id=project_id)
         return _output_generator() if generator else list(_output_generator())
 
     except Exception as e:
@@ -643,15 +672,17 @@ def remote_parallel_map(
             except Exception:
                 pass
 
-        try:
+        if not user_function_error.is_set():
             # Report errors back to Burla's cloud.
-            exc_type, exc_value, exc_traceback = sys.exc_info()
-            traceback_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
-            traceback_str = "".join(traceback_details)
-            kwargs = dict(traceback=traceback_str, project_id=project_id, job_id=job_id)
-            log_telemetry(exc_type, severity="ERROR", **kwargs)
-        except:
-            pass
+            try:
+                exc_type, exc_value, exc_traceback = sys.exc_info()
+                traceback_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
+                traceback_str = "".join(traceback_details)
+                kwargs = dict(traceback=traceback_str, project_id=project_id, job_id=job_id)
+                msg = f"Job {job_id} FAILED due to NON-UDF-ERROR:\n```{traceback_str}```"
+                log_telemetry(msg, severity="ERROR", **kwargs)
+            except:
+                pass
 
         raise
     finally:

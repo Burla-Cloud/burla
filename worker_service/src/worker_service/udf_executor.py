@@ -216,12 +216,12 @@ def _packages_are_importable(packages: dict):
     # `ALL_PACKAGES_INSTALLED != CURRENTLY_INSTALLING_PACKAGE == None` because it is none
     # before `_packages_are_importable` is checked causing client to switch spinner to "running"
     # before we know it won't install packages.
-    SELF["ALL_PACKAGES_INSTALLED"] = True
     SELF["CURRENTLY_INSTALLING_PACKAGE"] = None
     return True
 
 
 def _install_packages(packages: dict):
+    SELF["packages_to_install"] = packages
     cmd = ["uv", "pip", "install", "--target", "/worker_service_python_env", "--system"]
     for package, version in packages.items():
         cmd.append(f"{package}=={version}")
@@ -237,11 +237,14 @@ def _install_packages(packages: dict):
         SELF["CURRENTLY_INSTALLING_PACKAGE"] = None
 
 
-def install_pkgs_and_execute_job(job_id: str, function_pkl: bytes, packages: dict):
+def install_pkgs_and_execute_job(
+    job_id: str, function_pkl: bytes, packages: dict, start_time: float
+):
     SELF["logs"].append(f"Starting job {job_id} with func-size {len(function_pkl)} bytes.")
     all_packages_importable = _packages_are_importable(packages)
     ENV_IS_READY_PATH = Path("/worker_service_python_env/.ALL_PACKAGES_INSTALLED")
-    if not all_packages_importable and os.environ.get("ELECTED_INSTALLER") == "True":
+    am_elected_installer_worker = os.environ.get("ELECTED_INSTALLER") == "True"
+    if not all_packages_importable and am_elected_installer_worker:
         _install_packages(packages)
         ENV_IS_READY_PATH.touch()
     elif not all_packages_importable:
@@ -257,6 +260,7 @@ def install_pkgs_and_execute_job(job_id: str, function_pkl: bytes, packages: dic
     firestore_stdout = _FirestoreStdout(job_id)
     user_defined_function = None
     logged_idle = False
+    udf_start_latency_logged = False
     while not SELF["STOP_PROCESSING_EVENT"].is_set():
         try:
             SELF["in_progress_input"] = SELF["inputs_queue"].get_nowait()
@@ -277,6 +281,11 @@ def install_pkgs_and_execute_job(job_id: str, function_pkl: bytes, packages: dic
                 if user_defined_function is None:
                     user_defined_function = cloudpickle.loads(function_pkl)
                 input_ = cloudpickle.loads(input_pkl)
+
+                if am_elected_installer_worker and not udf_start_latency_logged:
+                    SELF["udf_start_latency"] = time() - start_time
+                    udf_start_latency_logged = True
+
                 return_value = user_defined_function(input_)
                 result_pkl = cloudpickle.dumps(return_value)
                 # SELF["logs"].append(f"UDF succeded on input #{input_index}.")

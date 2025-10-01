@@ -133,12 +133,9 @@ async def execute(
     request_files: Optional[dict] = Depends(get_request_files),
     logger: Logger = Depends(get_logger),
 ):
-    print(f"STARTING JOB (FROM ENDPOINT) {job_id}")
-    if SELF["RUNNING"] or SELF["BOOTING"]:
-        return Response("Node currently running or booting, request refused.", status_code=409)
-
-    SELF["current_job"] = job_id
-    SELF["RUNNING"] = True
+    # The `on_job_start` function in __init__.py is run as soon as upload to this endpoint starts.
+    # It exists to set `SELF["current_job"]` and set this node to RUNNING in the db as soon as
+    # upload starts if the user's function is big.
 
     # determine which workers to call
     workers_to_assign = []

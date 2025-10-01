@@ -91,7 +91,6 @@ async def _job_watcher(
     sync_db = firestore.Client(project=PROJECT_ID, database="burla")
     job_doc = async_db.collection("jobs").document(SELF["current_job"])
     node_doc = async_db.collection("nodes").document(INSTANCE_NAME)
-    await node_doc.update({"status": "RUNNING", "current_job": SELF["current_job"]})
     node_docs_collection = job_doc.collection("assigned_nodes")
     node_doc = node_docs_collection.document(INSTANCE_NAME)
     await node_doc.set({"current_num_results": 0})

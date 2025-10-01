@@ -11,10 +11,17 @@ import logging as python_logging
 from contextlib import asynccontextmanager
 from threading import Event
 
+# throws some uncatchable, unimportant, warnings
+python_logging.getLogger("google.api_core.bidi").setLevel(python_logging.ERROR)
+# prevent some annoying grpc logs / warnings
+os.environ["GRPC_VERBOSITY"] = "ERROR"  # only log ERROR/FATAL
+os.environ["GLOG_minloglevel"] = "2"  # 0-INFO, 1-WARNING, 2-ERROR, 3-FATAL
+
 import google.auth
 from google.auth.transport.requests import Request
 from google.cloud import logging, secretmanager, firestore
 from google.cloud.compute_v1 import InstancesClient
+from google.cloud.firestore_v1.async_client import AsyncClient
 import aiohttp
 from starlette.concurrency import run_in_threadpool
 from fastapi import FastAPI, Request, BackgroundTasks, Depends
@@ -27,6 +34,7 @@ __version__ = "1.2.15"
 CREDENTIALS, PROJECT_ID = google.auth.default()
 BURLA_BACKEND_URL = "https://backend.burla.dev"
 
+ASYNC_DB = AsyncClient(project=PROJECT_ID, database="burla")
 IN_LOCAL_DEV_MODE = os.environ.get("IN_LOCAL_DEV_MODE") == "True"  # Cluster running locally
 
 NUM_GPUS = int(os.environ.get("NUM_GPUS"))
@@ -210,8 +218,14 @@ async def lifespan(app: FastAPI):
 
 
 async def on_job_start(scope, first_event):
-    job_id = scope.get("path", "").split("/jobs/")[-1]
-    print(f"STARTING JOB {job_id}")
+    SELF["RUNNING"] = True
+    SELF["current_job"] = scope.get("path", "").split("/jobs/")[-1]
+
+    async def set_node_running(job_id: str):
+        node_doc = ASYNC_DB.collection("nodes").document(INSTANCE_NAME)
+        await node_doc.update({"status": "RUNNING", "current_job": job_id})
+
+    asyncio.create_task(set_node_running(SELF["current_job"]))
 
 
 class CallHookOnJobStartMiddleware:
@@ -221,10 +235,14 @@ class CallHookOnJobStartMiddleware:
     async def __call__(self, scope, receive, send):
         is_post_request = scope.get("method") == "POST"
         is_jobs_request = scope.get("path", "").startswith("/jobs/")
+        is_jobs_request = "inputs" not in scope.get("path", "") and is_jobs_request
         is_job_execution_request = is_post_request and is_jobs_request
 
         if is_job_execution_request:
             started = False
+            if SELF["RUNNING"] or SELF["BOOTING"]:
+                msg = "Node currently running or booting, request refused."
+                return await Response(msg, status_code=409)(scope, receive, send)
 
             async def wrapped_receive():
                 nonlocal started

@@ -279,12 +279,6 @@ class Node:
                 "CONTAINERS": json.dumps([c.to_dict() for c in self.containers]),
                 "INACTIVITY_SHUTDOWN_TIME_SEC": self.inactivity_shutdown_time_sec,
                 "NUM_GPUS": 0,
-                "BOOTING_FOR_FIRST_TIME": "True",
-                "GRPC_LOG_TO_STDERR": "0",
-                "GRPC_LOG_FILENAME": "/dev/null",
-                "GRPC_VERBOSITY": "ERROR",
-                "ABSL_LOGGING_MIN_LOG_LEVEL": "3",
-                "GLOG_minloglevel": "2",
             },
             detach=True,
         )

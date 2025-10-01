@@ -356,7 +356,10 @@ async def _execute_job(
         if spinner:
             function_size_mb = len(function_pkl) / 1024**2
             total_data_gb = function_size_gb * len(nodes_to_assign)
-            msg = f"Uploading function `{function_.__name__}` ({(function_size_mb):.2f}MB) to {len(nodes_to_assign)} nodes ({total_data_gb:.2f}GB) ..."
+            msg = f"Uploading function `{function_.__name__}` to {len(nodes_to_assign)} nodes ..."
+            if total_data_gb > 0.01:
+                msg = f"Uploading function `{function_.__name__}` ({(function_size_mb):.2f}MB) "
+                msg += f"to {len(nodes_to_assign)} nodes ({total_data_gb:.2f}GB) ..."
             spinner.text = msg
 
         # send function to every node

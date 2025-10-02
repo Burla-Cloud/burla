@@ -48,10 +48,14 @@ local-dev:
 	echo "Killing all node_* and worker_* containers"; \
 	ids=$$(docker ps -a --format '{{.Names}} {{.ID}}' | awk '$$1 ~ /^(node_|worker_)/ {print $$2}'); \
 	if [ -n "$$ids" ]; then docker rm -f $$ids; fi
-	echo "Removing worker_service_python_env"; \
-	rm -rf ./worker_service_python_env; \
-	mkdir -p ./worker_service_python_env; \
-	chmod 777 ./worker_service_python_env; \
+	echo "Removing _worker_service_python_env"; \
+	rm -rf ./_worker_service_python_env; \
+	mkdir -p ./_worker_service_python_env; \
+	chmod 777 ./_worker_service_python_env; \
+	echo "Removing _shared_workspace"; \
+	rm -rf ./_shared_workspace; \
+	mkdir -p ./_shared_workspace; \
+	chmod 777 ./_shared_workspace; \
 	echo "Starting local dev"; \
 	docker network create local-burla-cluster 2>/dev/null || true; \
 	gcloud auth print-access-token > .temp_token.txt; \
@@ -68,8 +72,12 @@ local-dev:
 		-e HOST_HOME_DIR=$${HOME} \
 		-p 5001:5001 \
 		--entrypoint python3.13 \
-		$(MAIN_SVC_IMAGE_NAME) -m uvicorn main_service:app --host 0.0.0.0 --port 5001 --reload \
-			--reload-exclude main_service/frontend/node_modules/ --timeout-keep-alive 600
+		$(MAIN_SVC_IMAGE_NAME) -m uvicorn main_service:app \
+			--host 0.0.0.0 \
+			--port 5001 \
+			--reload --reload-exclude main_service/frontend/node_modules/ \
+			--timeout-keep-alive 600 \
+			--timeout-graceful-shutdown 0
 
 # Only the `main_service` is run locally, nodes are started as GCE VM's in the test cloud.
 # Uses cluster config from firestore doc: `/databases/burla/cluster_config/cluster_config`

@@ -154,8 +154,8 @@ class Worker:
             fi
 
             # go to user-workspace-dir, otherwise installer / non-installer containers are in different dir's
-            mkdir -p /workspace
-            cd /workspace
+            mkdir -p /shared_workspace
+            cd /shared_workspace
             
             # Start the worker service,
             # Restart automatically if it dies (IMPORTANT!):
@@ -175,7 +175,8 @@ class Worker:
                     f"{os.environ['HOST_HOME_DIR']}/.config/gcloud": "/root/.config/gcloud",
                     f"{os.environ['HOST_PWD']}/worker_service": "/burla/worker_service",
                     f"{os.environ['HOST_PWD']}/worker_service/src/worker_service": "/worker_service_python_env/worker_service",
-                    f"{os.environ['HOST_PWD']}/worker_service_python_env": "/worker_service_python_env",
+                    f"{os.environ['HOST_PWD']}/_shared_workspace": "/shared_workspace",
+                    f"{os.environ['HOST_PWD']}/_worker_service_python_env": "/worker_service_python_env",
                     f"{os.environ['HOST_PWD']}/.temp_token.txt": "/burla/.temp_token.txt",
                 },
             )
@@ -186,7 +187,10 @@ class Worker:
                 port_bindings={WORKER_INTERNAL_PORT: ("127.0.0.1", None)},
                 ipc_mode="host",
                 device_requests=device_requests,
-                binds={"/worker_service_python_env": "/worker_service_python_env"},
+                binds={
+                    "/worker_service_python_env": "/worker_service_python_env",
+                    "/shared_workspace": "/shared_workspace",
+                },
             )
 
         # start container

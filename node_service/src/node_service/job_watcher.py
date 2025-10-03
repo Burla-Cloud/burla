@@ -321,6 +321,7 @@ async def restart_workers(session: aiohttp.ClientSession, logger: Logger, async_
             if status == 200:
                 return worker
             elif attempt > 20:
+                worker.log_debug_info()
                 raise Exception(f"Worker {worker.container_name} not ready after 10s")
             else:
                 await asyncio.sleep(0.5)

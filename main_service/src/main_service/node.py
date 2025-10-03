@@ -426,8 +426,7 @@ class Node:
             -H "Content-Type: application/json" \
             -d "$payload"
 
-        # make uv work, this is an oppsie from when building the disk image:
-        # curl -LsSf https://astral.sh/uv/install.sh | sh
+        # make uv work, this is an oopsie from when building the disk image:
         export PATH="/root/.cargo/bin:$PATH"
         export PATH="/root/.local/bin:$PATH"
 

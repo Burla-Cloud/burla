@@ -96,39 +96,39 @@ class Worker:
                 echo "$MSG"
 
                 # install local worker_service in edit mode or use version on github if not in DEV
-                if [ "{IN_LOCAL_DEV_MODE}" = "True" ]; then
-                    echo "Installing local dev version ..."
-                    mkdir -p /worker_service_python_env
-                    mkdir -p /burla/worker_service
-                    # del everything in /worker_service_python_env except `worker_service` (mounted)
-                    find /worker_service_python_env -mindepth 1 -maxdepth 1 ! -name worker_service -exec rm -rf {{}} +
-                    cd /burla/worker_service
-                    uv pip install --python $python_cmd --break-system-packages \
-                        --target /worker_service_python_env .
-                else
-                    # try with tarball first because faster
-                    if curl -Ls -o burla.tar.gz https://github.com/Burla-Cloud/burla/archive/{__version__}.tar.gz; then
-                        echo "Installing from tarball ..."
-                        tar -xzf burla.tar.gz
-                        cd burla-{__version__}/worker_service
-                    else
-                        echo "Tarball not found, falling back to git..."
-                        # Ensure git is installed
-                        if ! command -v git >/dev/null 2>&1; then
-                            echo "git not found, installing..."
-                            apt-get update && apt-get install -y git
-                        fi
-                        git clone --depth 1 --filter=blob:none --sparse --branch {__version__} https://github.com/Burla-Cloud/burla.git
-                        cd burla
-                        git sparse-checkout set worker_service
-                        cd worker_service
-                    fi
-                    # can only do this with linux host, breaks in dev using macos host :(
-                    export UV_CACHE_DIR=/worker_service_python_env/.uv-cache
-                    mkdir -p "$UV_CACHE_DIR" /worker_service_python_env
-                    uv pip install --python $python_cmd --break-system-packages \
-                        --target /worker_service_python_env .
-                fi
+                # if [ "{IN_LOCAL_DEV_MODE}" = "True" ]; then
+                echo "Installing local dev version ..."
+                mkdir -p /worker_service_python_env
+                mkdir -p /burla/worker_service
+                # del everything in /worker_service_python_env except `worker_service` (mounted)
+                find /worker_service_python_env -mindepth 1 -maxdepth 1 ! -name worker_service -exec rm -rf {{}} +
+                cd /burla/worker_service
+                uv pip install --python $python_cmd --break-system-packages \
+                    --target /worker_service_python_env .
+                # else
+                #     # try with tarball first because faster
+                #     if curl -Ls -o burla.tar.gz https://github.com/Burla-Cloud/burla/archive/{__version__}.tar.gz; then
+                #         echo "Installing from tarball ..."
+                #         tar -xzf burla.tar.gz
+                #         cd burla-{__version__}/worker_service
+                #     else
+                #         echo "Tarball not found, falling back to git..."
+                #         # Ensure git is installed
+                #         if ! command -v git >/dev/null 2>&1; then
+                #             echo "git not found, installing..."
+                #             apt-get update && apt-get install -y git
+                #         fi
+                #         git clone --depth 1 --filter=blob:none --sparse --branch {__version__} https://github.com/Burla-Cloud/burla.git
+                #         cd burla
+                #         git sparse-checkout set worker_service
+                #         cd worker_service
+                #     fi
+                #     # can only do this with linux host, breaks in dev using macos host :(
+                #     export UV_CACHE_DIR=/worker_service_python_env/.uv-cache
+                #     mkdir -p "$UV_CACHE_DIR" /worker_service_python_env
+                #     uv pip install --python $python_cmd --break-system-packages \
+                #         --target /worker_service_python_env .
+                # fi
 
                 MSG="Successfully installed worker-service."
                 TS=$(date +%s)
@@ -164,6 +164,7 @@ class Worker:
                 $python_cmd -m uvicorn worker_service:app --host 0.0.0.0 \
                     --port {WORKER_INTERNAL_PORT} --workers 1 \
                     --timeout-keep-alive 30
+                echo "HERE!"
             done
         """.strip()
         cmd = ["-c", cmd_script]

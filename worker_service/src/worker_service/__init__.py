@@ -12,11 +12,11 @@ from starlette.datastructures import UploadFile
 
 
 # silence logs so they are not picked up and sent to user
-python_logging.getLogger("uvicorn").disabled = True
-python_logging.getLogger("uvicorn.error").disabled = True
-python_logging.getLogger("uvicorn.access").disabled = True
-python_logging.getLogger("fastapi").disabled = True
-python_logging.getLogger("starlette").disabled = True
+# python_logging.getLogger("uvicorn").disabled = True
+# python_logging.getLogger("uvicorn.error").disabled = True
+# python_logging.getLogger("uvicorn.access").disabled = True
+# python_logging.getLogger("fastapi").disabled = True
+# python_logging.getLogger("starlette").disabled = True
 
 # Defined before importing helpers/endpoints to prevent cyclic imports
 IN_LOCAL_DEV_MODE = os.environ.get("IN_LOCAL_DEV_MODE") == "True"

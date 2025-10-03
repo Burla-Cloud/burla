@@ -153,19 +153,20 @@ class Worker:
 
             # go to user-workspace-dir, otherwise installer / non-installer containers are in different dir's
             mkdir -p /shared_workspace
-            cd /shared_workspace
             
             # Start the worker service,
             # Restart automatically if it dies (IMPORTANT!):
             # Because it kills itself intentionally when it needs to cancel a running job.
             while true; do
-                echo "STARTING"
+
+                # very important to start process from dir that is not /shared_workspace
+                # otherwise it hammers gcsfuse slows everything down causing timeouts!
+                # the worker service switches it's working dir to in the app after booting.
+                cd /
                 $python_cmd -m uvicorn worker_service:app --host 0.0.0.0 \
                     --port {WORKER_INTERNAL_PORT} --workers 1 \
                     --timeout-keep-alive 30
-                echo "RESTARTING"
             done
-            echo "EXITING???"
         """.strip()
         cmd = ["-c", cmd_script]
         if IN_LOCAL_DEV_MODE:

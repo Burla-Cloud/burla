@@ -24,6 +24,12 @@ async def get_status():
         return {"status": "READY"}
 
 
+@router.get("/pid")
+async def get_pid():
+    # used to detect when worker actually done restarting
+    return {"pid": os.getpid()}
+
+
 @router.get("/restart")
 async def restart():
     # Used to cancel running user jobs.

@@ -246,7 +246,7 @@ class Node:
             network_mode="local-burla-cluster",
             binds={
                 f"{os.environ['HOST_HOME_DIR']}/.config/gcloud": "/root/.config/gcloud",
-                f"{os.environ['HOST_PWD']}/node_service": "/burla/node_service",
+                f"{os.environ['HOST_PWD']}/node_service": "/opt/burla/node_service",
                 f"{os.environ['HOST_PWD']}/_shared_workspace": "/shared_workspace",
                 f"{os.environ['HOST_PWD']}/_worker_service_python_env": "/worker_service_python_env",
                 "/var/run/docker.sock": "/var/run/docker.sock",

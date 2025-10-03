@@ -303,6 +303,14 @@ async def reinit_node(assigned_workers: list, async_db: AsyncClient):
 
 async def restart_workers(session: aiohttp.ClientSession, logger: Logger, async_db: AsyncClient):
     async def _restart_single_worker(worker):
+        # checks that PID's change to prevent scenario where:
+        # /restart called
+        # / called and returns 200, but service hasn't actually restarted yet
+        # thinks it did restart and continues.
+        async with session.get(f"{worker.url}/pid", timeout=1) as response:
+            response_json = await response.json()
+            PID_BEFORE_RESTART = response_json["pid"]
+
         try:
             async with session.get(f"{worker.url}/restart", timeout=1):
                 pass
@@ -313,14 +321,16 @@ async def restart_workers(session: aiohttp.ClientSession, logger: Logger, async_
 
         async def _wait_til_worker_ready(attempt=0):
             try:
-                async with session.get(f"{worker.url}/", timeout=1) as response:
-                    status = response.status
+                async with session.get(f"{worker.url}/pid", timeout=1) as response:
+                    response_json = await response.json()
+                    PID_AFTER_RESTART = response_json["pid"]
             except Exception:
-                status = None
+                PID_AFTER_RESTART = PID_BEFORE_RESTART
 
-            if status == 200:
+            if PID_AFTER_RESTART != PID_BEFORE_RESTART:
                 return worker
             elif attempt > 20:
+                worker.log_debug_info()
                 raise Exception(f"Worker {worker.container_name} not ready after 10s")
             else:
                 await asyncio.sleep(0.5)

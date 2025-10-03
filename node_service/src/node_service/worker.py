@@ -103,31 +103,29 @@ class Worker:
                     # del everything in /worker_service_python_env except `worker_service` (mounted)
                     find /worker_service_python_env -mindepth 1 -maxdepth 1 ! -name worker_service -exec rm -rf {{}} +
                     cd /burla/worker_service
-                    uv pip install --python $python_cmd --break-system-packages \
-                        --target /worker_service_python_env .
+                    uv pip install --python $python_cmd --target /worker_service_python_env .
                 else
                     # try with tarball first because faster
-                    if curl -Ls -o burla.tar.gz https://github.com/Burla-Cloud/burla/archive/{__version__}.tar.gz; then
-                        echo "Installing from tarball ..."
-                        tar -xzf burla.tar.gz
-                        cd burla-{__version__}/worker_service
-                    else
-                        echo "Tarball not found, falling back to git..."
-                        # Ensure git is installed
-                        if ! command -v git >/dev/null 2>&1; then
-                            echo "git not found, installing..."
-                            apt-get update && apt-get install -y git
-                        fi
-                        git clone --depth 1 --filter=blob:none --sparse --branch {__version__} https://github.com/Burla-Cloud/burla.git
-                        cd burla
-                        git sparse-checkout set worker_service
-                        cd worker_service
+                    # if curl -Ls -o burla.tar.gz https://github.com/Burla-Cloud/burla/archive/{__version__}.tar.gz; then
+                    #     echo "Installing from tarball ..."
+                    #     tar -xzf burla.tar.gz
+                    #     cd burla-{__version__}/worker_service
+                    # else
+                    echo "Tarball not found, falling back to git..."
+                    # Ensure git is installed
+                    if ! command -v git >/dev/null 2>&1; then
+                        echo "git not found, installing..."
+                        apt-get update && apt-get install -y git
                     fi
+                    git clone --depth 1 --filter=blob:none --sparse --branch {__version__} https://github.com/Burla-Cloud/burla.git
+                    cd burla
+                    git sparse-checkout set worker_service
+                    cd worker_service
+                    # fi
                     # can only do this with linux host, breaks in dev using macos host :(
                     export UV_CACHE_DIR=/worker_service_python_env/.uv-cache
                     mkdir -p "$UV_CACHE_DIR" /worker_service_python_env
-                    uv pip install --python $python_cmd --break-system-packages \
-                        --target /worker_service_python_env .
+                    uv pip install --python $python_cmd --target /worker_service_python_env .
                 fi
 
                 MSG="Successfully installed worker-service."
@@ -154,13 +152,17 @@ class Worker:
             fi
 
             # go to user-workspace-dir, otherwise installer / non-installer containers are in different dir's
-            mkdir -p /workspace
-            cd /workspace
+            mkdir -p /shared_workspace
             
             # Start the worker service,
             # Restart automatically if it dies (IMPORTANT!):
             # Because it kills itself intentionally when it needs to cancel a running job.
             while true; do
+
+                # very important to start process from dir that is not /shared_workspace
+                # otherwise it hammers gcsfuse slows everything down causing timeouts!
+                # the worker service switches it's working dir to in the app after booting.
+                cd /
                 $python_cmd -m uvicorn worker_service:app --host 0.0.0.0 \
                     --port {WORKER_INTERNAL_PORT} --workers 1 \
                     --timeout-keep-alive 30
@@ -175,7 +177,8 @@ class Worker:
                     f"{os.environ['HOST_HOME_DIR']}/.config/gcloud": "/root/.config/gcloud",
                     f"{os.environ['HOST_PWD']}/worker_service": "/burla/worker_service",
                     f"{os.environ['HOST_PWD']}/worker_service/src/worker_service": "/worker_service_python_env/worker_service",
-                    f"{os.environ['HOST_PWD']}/worker_service_python_env": "/worker_service_python_env",
+                    f"{os.environ['HOST_PWD']}/_shared_workspace": "/shared_workspace",
+                    f"{os.environ['HOST_PWD']}/_worker_service_python_env": "/worker_service_python_env",
                     f"{os.environ['HOST_PWD']}/.temp_token.txt": "/burla/.temp_token.txt",
                 },
             )
@@ -186,7 +189,10 @@ class Worker:
                 port_bindings={WORKER_INTERNAL_PORT: ("127.0.0.1", None)},
                 ipc_mode="host",
                 device_requests=device_requests,
-                binds={"/worker_service_python_env": "/worker_service_python_env"},
+                binds={
+                    "/worker_service_python_env": "/worker_service_python_env",
+                    "/shared_workspace": "/shared_workspace",
+                },
             )
 
         # start container

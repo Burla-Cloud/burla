@@ -94,7 +94,7 @@ remote-dev:
 		-p 5001:5001 \
 		--entrypoint python3.13 \
 		$(MAIN_SVC_IMAGE_NAME) -m uvicorn main_service:app --host 0.0.0.0 --port 5001 --reload \
-			--reload-exclude main_service/frontend/node_modules/
+			--reload-exclude main_service/frontend/node_modules/ --timeout-graceful-shutdown 0
 
 # raise error if local node service is different from remote-dev version
 # does the node service have a git diff?

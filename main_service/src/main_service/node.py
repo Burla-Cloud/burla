@@ -448,26 +448,26 @@ class Node:
             -H "Content-Type: application/json" \
             -d "$payload"
 
-        # # start gcsfuse to sync working dirs with GCS bucket if specified
-        # cd /
-        # mkdir -p /shared_workspace
-        # if [ "{self.sync_gcs_bucket_name}" != "None" ]; then
-        #     mkdir -p /var/cache/gcsfuse
-        #     gcsfuse \
-        #         --client-protocol=http2 \
-        #         --only-dir=shared_workspace \
-        #         --metadata-cache-ttl-secs=1 \
-        #         --cache-dir=/var/cache/gcsfuse \
-        #         {self.sync_gcs_bucket_name} /shared_workspace
-        #     cd /opt/burla/node_service
+        # start gcsfuse to sync working dirs with GCS bucket if specified
+        cd /
+        mkdir -p /shared_workspace
+        if [ "{self.sync_gcs_bucket_name}" != "None" ]; then
+            mkdir -p /var/cache/gcsfuse
+            gcsfuse \
+                --client-protocol=http2 \
+                --only-dir=shared_workspace \
+                --metadata-cache-ttl-secs=1 \
+                --cache-dir=/var/cache/gcsfuse \
+                {self.sync_gcs_bucket_name} /shared_workspace
+            cd /opt/burla/node_service
 
-        #     MSG="Started GCSFuse: syncing /shared_workspace with gs://{self.sync_gcs_bucket_name}/shared_workspace"
-        #     payload=$(jq -n --arg msg "$MSG" --arg ts "$(date +%s)" '{{"fields":{{"msg":{{"stringValue":$msg}},"ts":{{"integerValue":$ts}}}}}}')
-        #     curl -sS -X POST "$DB_BASE_URL/nodes/{self.instance_name}/logs" \
-        #         -H "Authorization: Bearer $ACCESS_TOKEN" \
-        #         -H "Content-Type: application/json" \
-        #         -d "$payload"
-        # fi
+            MSG="Started GCSFuse: syncing /shared_workspace with gs://{self.sync_gcs_bucket_name}/shared_workspace"
+            payload=$(jq -n --arg msg "$MSG" --arg ts "$(date +%s)" '{{"fields":{{"msg":{{"stringValue":$msg}},"ts":{{"integerValue":$ts}}}}}}')
+            curl -sS -X POST "$DB_BASE_URL/nodes/{self.instance_name}/logs" \
+                -H "Authorization: Bearer $ACCESS_TOKEN" \
+                -H "Content-Type: application/json" \
+                -d "$payload"
+        fi
 
         # authenticate docker:
         echo "$ACCESS_TOKEN" | docker login -u oauth2accesstoken --password-stdin https://us-docker.pkg.dev

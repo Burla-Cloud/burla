@@ -426,6 +426,11 @@ class Node:
             -H "Content-Type: application/json" \
             -d "$payload"
 
+        # make uv work, this is an oppsie from when building the disk image:
+        # curl -LsSf https://astral.sh/uv/install.sh | sh
+        export PATH="/root/.cargo/bin:$PATH"
+        export PATH="/root/.local/bin:$PATH"
+
         cd /opt
         # git clone --depth 1 --branch {CURRENT_BURLA_VERSION} https://github.com/Burla-Cloud/burla.git  --no-checkout
         cd burla

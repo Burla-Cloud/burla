@@ -6,8 +6,6 @@ ENV PATH="/root/.local/bin:${PATH}"
 
 ADD . /burla/main_service
 WORKDIR /burla/main_service
-# RUN python3.13 -m pip install -e .
 RUN uv pip install --system -e .
 
-ENTRYPOINT ["python", "-m", "uvicorn", "main_service:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "1", "--timeout-keep-alive", "60"]
-
+CMD ["python", "-m", "uvicorn", "main_service:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "1", "--timeout-keep-alive", "60"]

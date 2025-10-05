@@ -1,9 +1,6 @@
 .ONESHELL:
 .SILENT:
 
-PROJECT_ID := burla-test
-MAIN_SVC_IMAGE_NAME := us-docker.pkg.dev/$(PROJECT_ID)/burla-main-service/burla-main-service:latest
-
 demo:
 	poetry -C ./client run python examples/basic.py
 
@@ -19,12 +16,14 @@ test-jupyter:
 
 # remove all booting nodes from DB (only run in local-dev mode)
 stop:
+	set -e; \
+	PROJECT_ID=$$(gcloud config get-value project 2>/dev/null); \
 	printf '%s\n' \
 		'import json' \
 		'from google.cloud import firestore' \
 		'from google.cloud.firestore_v1 import FieldFilter' \
 		'' \
-		'db = firestore.Client(project="burla-test", database="burla")' \
+		'db = firestore.Client(project="$${PROJECT_ID}", database="burla")' \
 		'booting_filter = FieldFilter("status", "==", "BOOTING")' \
 		'booting_nodes = db.collection("nodes").where(filter=booting_filter).get()' \
 		'if not booting_nodes:' \
@@ -35,19 +34,18 @@ stop:
 		'        print(f"Deleted node doc: {document.id}")' \
 	| poetry -C ./client run python -
 
-temp:
-	set -e; \
-	ids=$$(docker ps -a --format '{{.Names}} {{.ID}}' | awk '$$1 ~ /^(node_|worker_)/ {print $$2}'); \
-	if [ -n "$$ids" ]; then docker rm -f $$ids; fi
-
 # start ONLY the main service, in local dev mode
 # The cluster is run 100% locally using the config `LOCAL_DEV_CONFIG` in `main_service.__init__.py`
 # All components (main_svc, node_svc, worker_svc) will restart when changes to code are made.
 local-dev:
 	set -e; \
+	PROJECT_ID=$$(gcloud config get-value project 2>/dev/null); \
+	IMAGE_NAME=$$( echo \
+		"us-docker.pkg.dev/$${PROJECT_ID}/burla-main-service/burla-main-service:latest" \
+	); \
 	echo "Killing all node_* and worker_* containers"; \
 	ids=$$(docker ps -a --format '{{.Names}} {{.ID}}' | awk '$$1 ~ /^(node_|worker_)/ {print $$2}'); \
-	if [ -n "$$ids" ]; then docker rm -f $$ids; fi
+	if [ -n "$$ids" ]; then docker rm -f $$ids; fi; \
 	echo "Removing _worker_service_python_env"; \
 	rm -rf ./_worker_service_python_env; \
 	mkdir -p ./_worker_service_python_env; \
@@ -65,14 +63,14 @@ local-dev:
 		-v $(PWD)/main_service:/burla/main_service \
 		-v ~/.config/gcloud:/root/.config/gcloud \
 		-v /var/run/docker.sock:/var/run/docker.sock \
-		-e GOOGLE_CLOUD_PROJECT=$(PROJECT_ID) \
+		-e GOOGLE_CLOUD_PROJECT=$${PROJECT_ID} \
 		-e IN_LOCAL_DEV_MODE=True \
 		-e REDIRECT_LOCALLY_ON_LOGIN=True \
 		-e HOST_PWD=$(PWD) \
 		-e HOST_HOME_DIR=$${HOME} \
 		-p 5001:5001 \
 		--entrypoint python \
-		$(MAIN_SVC_IMAGE_NAME) -m uvicorn main_service:app \
+		$${IMAGE_NAME} -m uvicorn main_service:app \
 			--host 0.0.0.0 \
 			--port 5001 \
 			--reload --reload-exclude main_service/frontend/node_modules/ \
@@ -83,17 +81,21 @@ local-dev:
 # Uses cluster config from firestore doc: `/databases/burla/cluster_config/cluster_config`
 remote-dev:
 	set -e; \
+	PROJECT_ID=$$(gcloud config get-value project 2>/dev/null); \
+	IMAGE_NAME=$$( echo \
+		"us-docker.pkg.dev/$${PROJECT_ID}/burla-main-service/burla-main-service:latest" \
+	); \
 	$(MAKE) __check-node-service-up-to-date && echo "" || exit 1; \
 	:; \
 	docker run --rm -it \
 		--name main_service \
 		-v $(PWD)/main_service:/burla/main_service \
 		-v ~/.config/gcloud:/root/.config/gcloud \
-		-e GOOGLE_CLOUD_PROJECT=$(PROJECT_ID) \
+		-e GOOGLE_CLOUD_PROJECT=$${PROJECT_ID} \
 		-e REDIRECT_LOCALLY_ON_LOGIN=True \
 		-p 5001:5001 \
-		--entrypoint python3.13 \
-		$(MAIN_SVC_IMAGE_NAME) -m uvicorn main_service:app --host 0.0.0.0 --port 5001 --reload \
+		--entrypoint python \
+		$${IMAGE_NAME} -m uvicorn main_service:app --host 0.0.0.0 --port 5001 --reload \
 			--reload-exclude main_service/frontend/node_modules/ --timeout-graceful-shutdown 0
 
 # raise error if local node service is different from remote-dev version

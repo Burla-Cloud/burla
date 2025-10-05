@@ -115,6 +115,7 @@ def get_add_background_task_function(
 from main_service.endpoints.cluster import router as cluster_router
 from main_service.endpoints.settings import router as settings_router
 from main_service.endpoints.jobs import router as jobs_router
+from main_service.endpoints.storage import router as storage_router
 
 
 @asynccontextmanager
@@ -145,6 +146,7 @@ app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None)
 app.include_router(cluster_router)
 app.include_router(settings_router)
 app.include_router(jobs_router)
+app.include_router(storage_router)
 
 
 @app.get("/api/user")
@@ -169,6 +171,7 @@ async def logout(request: Request, response: Response):
 @app.get("/jobs")
 @app.get("/jobs/{job_id}")
 @app.get("/settings")
+@app.get("/storage")
 def dashboard():
     return FileResponse("src/main_service/static/index.html")
 

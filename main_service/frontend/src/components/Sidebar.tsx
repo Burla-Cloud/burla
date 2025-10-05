@@ -33,6 +33,12 @@ const Sidebar = () => {
                     <span>Jobs</span>
                 </Link>
                 <Link
+                    to="/storage"
+                    className="flex items-center space-x-1 text-gray-700 hover:text-primary hover:bg-primary/10 p-2 rounded-md"
+                >
+                    <span>Network Storage</span>
+                </Link>
+                <Link
                     to="/settings"
                     className="flex items-center space-x-1 text-gray-700 hover:text-primary hover:bg-primary/10 p-2 rounded-md"
                 >

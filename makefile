@@ -1,8 +1,8 @@
 .ONESHELL:
 .SILENT:
 
-PROJECT_ID := burla-test
-MAIN_SVC_IMAGE_NAME := us-docker.pkg.dev/$(PROJECT_ID)/burla-main-service/burla-main-service:latest
+PROJECT_ID := burla-test-joe
+MAIN_SVC_IMAGE_NAME := us-docker.pkg.dev/$(PROJECT_ID)/burla-main-service/burla-main-service:7
 
 demo:
 	poetry -C ./client run python examples/basic.py
@@ -71,7 +71,7 @@ local-dev:
 		-e HOST_PWD=$(PWD) \
 		-e HOST_HOME_DIR=$${HOME} \
 		-p 5001:5001 \
-		--entrypoint python3.13 \
+		--entrypoint python \
 		$(MAIN_SVC_IMAGE_NAME) -m uvicorn main_service:app \
 			--host 0.0.0.0 \
 			--port 5001 \

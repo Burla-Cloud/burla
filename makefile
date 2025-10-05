@@ -1,8 +1,8 @@
 .ONESHELL:
 .SILENT:
 
-PROJECT_ID := burla-test-joe
-MAIN_SVC_IMAGE_NAME := us-docker.pkg.dev/$(PROJECT_ID)/burla-main-service/burla-main-service:7
+PROJECT_ID := burla-test
+MAIN_SVC_IMAGE_NAME := us-docker.pkg.dev/$(PROJECT_ID)/burla-main-service/burla-main-service:latest
 
 demo:
 	poetry -C ./client run python examples/basic.py

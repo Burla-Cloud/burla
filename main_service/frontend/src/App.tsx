@@ -4,7 +4,7 @@ import Dashboard from "@/pages/Index";
 import Jobs from "@/pages/Jobs";
 import Settings from "@/pages/Settings";
 import JobDetails from "@/pages/JobDetails";
-import Storage from "@/pages/Storage";
+import Filesystem from "@/pages/Filesystem";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { NodesProvider } from "@/contexts/NodesContext";
@@ -43,7 +43,10 @@ const App = () => (
                                                     element={<JobDetails />}
                                                 />
                                                 <Route path="/settings" element={<Settings />} />
-                                                <Route path="/storage" element={<Storage />} />
+                                                <Route
+                                                    path="/filesystem"
+                                                    element={<Filesystem />}
+                                                />
                                                 <Route
                                                     path="/__error-test"
                                                     element={<ForceError />}

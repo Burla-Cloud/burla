@@ -35,7 +35,7 @@ function formatBytes(bytes: number) {
     return `${value.toFixed(precision)} ${units[exponent]}`;
 }
 
-export default function Storage() {
+export default function Filesystem() {
     const fmRef = React.useRef<FileManagerComponent | null>(null);
     const maxUploadSizeBytes = 10 * 1024 ** 4;
     const [activeUpload, setActiveUpload] = React.useState<ActiveUploadState | null>(null);
@@ -52,6 +52,11 @@ export default function Storage() {
 
     const handleBeforeSend = React.useCallback(async (args: any) => {
         console.log("FileManager beforeSend args:\n" + JSON.stringify(args, null, 2));
+
+        if (args.action === "Search") {
+            args.cancel = true;
+            return;
+        }
 
         if (args.action === "Upload") {
             args.cancel = true;
@@ -172,6 +177,8 @@ export default function Storage() {
                           }
                         : current
                 );
+
+                fmRef.current?.refreshFiles();
             } catch (error) {
                 const isAbort =
                     (error instanceof DOMException && error.name === "AbortError") ||
@@ -221,12 +228,19 @@ export default function Storage() {
         fmRef.current?.uploadObj?.clearAll();
     }, []);
 
+    const handleSuccess = React.useCallback((args: any) => {
+        if (!args || args.action !== "move") return;
+        fmRef.current?.refreshFiles();
+    }, []);
+
     return (
         <div className="flex-1 flex flex-col justify-start px-12 pt-6 pb-12 min-h-0">
             <div className="max-w-7xl mx-auto w-full flex-1 flex flex-col min-h-0">
-                <div className="relative flex-1 rounded-3xl border border-gray-200 bg-white shadow-sm storage-shell">
+                <div className="relative flex-1 rounded-3xl border border-gray-200 bg-white shadow-sm filesystem-shell">
                     <FileManagerComponent
+                        view="Details"
                         ref={fmRef}
+                        allowDragAndDrop
                         ajaxSettings={{
                             url: "/api/sf/filemanager",
                             uploadUrl: "/api/sf/upload",
@@ -235,24 +249,19 @@ export default function Storage() {
                             maxFileSize: maxUploadSizeBytes,
                         }}
                         navigationPaneSettings={{ visible: false }}
+                        success={handleSuccess}
                         toolbarSettings={{
-                            enableFloating: false,
                             items: [
                                 "NewFolder",
                                 "Upload",
-                                "SortBy",
-                                "Cut",
-                                "Copy",
-                                "Paste",
                                 "Delete",
                                 "Rename",
                                 "Download",
-                                "ClearSelection",
                                 "Refresh",
                                 "Selection",
                             ],
                         }}
-                        cssClass="storage-filemanager"
+                        cssClass="filesystem-filemanager"
                         beforeSend={handleBeforeSend}
                         height="100%"
                         width="100%"

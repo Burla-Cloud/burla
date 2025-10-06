@@ -58,7 +58,7 @@ def _restart_cluster(request: Request, logger: Logger):
             containers=containers,
             auth_headers=auth_headers,
             service_port=node_service_port,
-            sync_gcs_bucket_name="burla-test-shared-workspace",
+            sync_gcs_bucket_name="burla-test-joe-shared-workspace",
             as_local_container=IN_LOCAL_DEV_MODE,  # <- start in a container if IN_LOCAL_DEV_MODE
             inactivity_shutdown_time_sec=inactivity_time,
             disk_size=disk_size,

@@ -13,7 +13,7 @@ from starlette.concurrency import run_in_threadpool
 router = APIRouter()
 
 
-BUCKET_NAME = "burla-test-shared-workspace"
+BUCKET_NAME = "burla-test-joe-shared-workspace"
 
 
 def normalize_prefix(path: str) -> str:

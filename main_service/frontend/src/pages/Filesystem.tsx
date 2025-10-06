@@ -5,6 +5,7 @@ import {
     NavigationPane,
     DetailsView,
     Toolbar,
+    ContextMenu,
 } from "@syncfusion/ej2-react-filemanager";
 
 import "@syncfusion/ej2-base/styles/material.css";
@@ -26,6 +27,14 @@ type ActiveUploadState = {
     state: "uploading" | "error" | "done" | "cancelled";
 };
 
+type FileManagerEntry = {
+    name?: string;
+    path?: string;
+    filterPath?: string;
+    isFile?: boolean;
+    type?: string;
+};
+
 function formatBytes(bytes: number) {
     if (bytes === 0) return "0 B";
     const units = ["B", "KB", "MB", "GB", "TB", "PB"];
@@ -35,11 +44,67 @@ function formatBytes(bytes: number) {
     return `${value.toFixed(precision)} ${units[exponent]}`;
 }
 
+function isFileEntry(entry: FileManagerEntry): boolean {
+    if (typeof entry.isFile === "boolean") {
+        return entry.isFile;
+    }
+    if (entry.type === "folder") {
+        return false;
+    }
+    return true;
+}
+
+function normalizeServerPath(path: string | null | undefined): string {
+    if (!path) {
+        return "/";
+    }
+    let normalized = path.trim();
+    if (normalized === "") {
+        return "/";
+    }
+    if (!normalized.startsWith("/")) {
+        normalized = `/${normalized}`;
+    }
+    if (normalized !== "/" && !normalized.endsWith("/")) {
+        normalized = `${normalized}/`;
+    }
+    return normalized;
+}
+
 export default function Filesystem() {
     const fmRef = React.useRef<FileManagerComponent | null>(null);
     const maxUploadSizeBytes = 10 * 1024 ** 4;
     const [activeUpload, setActiveUpload] = React.useState<ActiveUploadState | null>(null);
     const abortControllerRef = React.useRef<AbortController | null>(null);
+    const detailsViewColumns = React.useMemo(
+        () => [
+            {
+                field: "name",
+                headerText: "Name",
+                minWidth: 120,
+                template: '<span class="e-fe-text">${name}</span>',
+                customAttributes: { class: "e-fe-grid-name" },
+            },
+            {
+                field: "_fm_modified",
+                headerText: "DateModified",
+                type: "dateTime",
+                format: "MMMM dd, yyyy HH:mm",
+                minWidth: 120,
+                width: "190",
+                template: '<span class="e-fe-date-value">${_fm_modified}</span>',
+            },
+            {
+                field: "size",
+                headerText: "Size",
+                minWidth: 90,
+                width: "110",
+                template: '<span class="e-fe-size">${size}</span>',
+                format: "n2",
+            },
+        ],
+        []
+    );
 
     React.useEffect(() => {
         if (!activeUpload || activeUpload.state === "uploading") return undefined;
@@ -234,7 +299,7 @@ export default function Filesystem() {
     return (
         <div className="flex-1 flex flex-col justify-start px-12 pt-6 pb-12 min-h-0">
             <div className="max-w-7xl mx-auto w-full flex-1 flex flex-col min-h-0">
-                <div className="relative flex-1 rounded-3xl border border-gray-200 bg-white shadow-sm filesystem-shell">
+                <div className="relative flex-1 rounded-lg border border-gray-200 bg-white shadow-sm filesystem-shell">
                     <FileManagerComponent
                         view="Details"
                         ref={fmRef}
@@ -246,7 +311,15 @@ export default function Filesystem() {
                         uploadSettings={{
                             maxFileSize: maxUploadSizeBytes,
                         }}
+                        detailsViewSettings={{
+                            columns: detailsViewColumns,
+                        }}
                         navigationPaneSettings={{ visible: false }}
+                        contextMenuSettings={{
+                            file: ["Download", "Delete", "Rename"],
+                            folder: ["Open", "Delete", "Rename"],
+                            layout: ["NewFolder", "Upload", "Refresh"],
+                        }}
                         success={handleSuccess}
                         toolbarSettings={{
                             items: [
@@ -264,11 +337,11 @@ export default function Filesystem() {
                         height="100%"
                         width="100%"
                     >
-                        <Inject services={[NavigationPane, Toolbar, DetailsView]} />
+                        <Inject services={[NavigationPane, Toolbar, DetailsView, ContextMenu]} />
                     </FileManagerComponent>
                     {activeUpload && (
                         <div className="absolute inset-0 z-20 flex items-center justify-center bg-slate-900/45 backdrop-blur-sm">
-                            <div className="pointer-events-auto relative w-80 max-w-full rounded-3xl bg-white/95 p-5 shadow-2xl">
+                            <div className="pointer-events-auto relative w-80 max-w-full rounded-lg bg-white/95 p-5 shadow-2xl">
                                 {activeUpload.state === "uploading" && (
                                     <button
                                         type="button"

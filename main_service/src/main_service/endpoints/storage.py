@@ -188,31 +188,47 @@ def read_action(bucket: storage.Bucket, payload: Dict[str, Any]) -> Dict[str, An
 
 def create_action(bucket: storage.Bucket, payload: Dict[str, Any]) -> Dict[str, Any]:
 
-    print(f"CREATE ACTION PAYLOAD: \n{payload}\n-----------------\n")
-
     directory_prefix = normalize_directory_path(payload.get("path"))
-    print(f"HERE! {directory_prefix}")
-
-    entries = []
-    if not payload.get("data"):
-        print(f"NO ITEMS PROVIDED FOR CREATE ACTION: payload.get('data'): {payload.get('data')}")
-        raise ValueError("No items provided for create action")
+    entries: List[Dict[str, Any]] = []
 
     payload_name = payload.get("name")
-    for item in payload.get("data"):
-        raw_name = item.get("name") or payload_name
+    candidate_names: List[str] = []
+    if payload_name:
+        candidate_names.append(payload_name)
+
+    data_items = payload.get("data") or []
+    if not candidate_names and not data_items:
+        raise ValueError("No items provided for create action")
+
+    for item in data_items:
+        raw_name = item.get("name")
+        if not raw_name:
+            continue
+        if "/" in raw_name or "\\" in raw_name:
+            continue
+        candidate_names.append(raw_name)
+
+    unique_names = []
+    seen = set()
+    for raw_name in candidate_names:
+        if raw_name in seen:
+            continue
+        seen.add(raw_name)
+        unique_names.append(raw_name)
+
+    if not unique_names:
+        raise ValueError("No items provided for create action")
+
+    for raw_name in unique_names:
         name = validate_entry_name(raw_name)
         folder_prefix = f"{directory_prefix}{name}/"
         file_blob = bucket.get_blob(f"{directory_prefix}{name}")
         if file_blob is not None:
-            print(f"FILE ALREADY EXISTS: {name}")
             raise ValueError(f"A file named '{name}' already exists")
         if folder_exists(bucket, folder_prefix):
-            print(f"FOLDER EXISTS: {folder_prefix}")
             metadata = build_directory_metadata(bucket, folder_prefix, directory_prefix)
             entries.append(metadata)
             continue
-        print(f"FOLDER DOES NOT EXIST: {folder_prefix}")
         placeholder_blob_name = f"{folder_prefix}{FOLDER_PLACEHOLDER_NAME}"
         if bucket.get_blob(placeholder_blob_name) is None:
             placeholder_blob = bucket.blob(placeholder_blob_name)
@@ -222,8 +238,6 @@ def create_action(bucket: storage.Bucket, payload: Dict[str, Any]) -> Dict[str, 
             datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
         )
         entries.append(metadata)
-
-    print(f"ENTRIES: {entries}")
     return {"files": entries}
 
 
@@ -416,3 +430,28 @@ def signed_resumable(
         headers={"x-goog-resumable": "start"},
     )
     return {"url": url}
+
+
+@router.get("/signed-download")
+def signed_download(
+    name: str = Query(...),
+    path: Optional[str] = Query("/"),
+    expires_in_seconds: int = Query(900, ge=1, le=604800),
+):
+    directory_prefix = normalize_directory_path(path)
+    entry_name = validate_entry_name(name)
+    object_key = f"{directory_prefix}{entry_name}"
+    client = storage.Client()
+    bucket = client.bucket(BUCKET_NAME)
+    blob = bucket.get_blob(object_key)
+    if blob is None:
+        raise NotFound(f"File '{entry_name}' not found")
+    expiration = datetime.timedelta(seconds=expires_in_seconds)
+    safe_filename = entry_name.replace('"', '\\"')
+    url = blob.generate_signed_url(
+        version="v4",
+        expiration=expiration,
+        method="GET",
+        response_disposition=f'attachment; filename="{safe_filename}"',
+    )
+    return {"url": url, "contentType": blob.content_type or "application/octet-stream"}

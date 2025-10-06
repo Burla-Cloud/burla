@@ -236,6 +236,54 @@
     font-size: 0.94rem !important;
   }
 
+  .filesystem-shell .e-grid .e-gridheader .e-headercell .e-headercelldiv,
+  .filesystem-shell .e-grid .e-gridheader .e-headercell .e-headerchkcelldiv,
+  .filesystem-shell .e-grid .e-gridheader .e-headercell .e-sortfilterdiv
+  {
+    margin-left: -3px;
+  }
+
+  .filesystem-shell .e-grid .e-gridheader .e-fe-checkbox,
+  .filesystem-shell .e-grid .e-gridheader .e-fe-grid-icon
+  {
+    padding-left: 6px !important;
+  }
+
+  .filesystem-shell .e-checkbox-wrapper .e-frame.e-check,
+  .filesystem-shell .e-checkbox-wrapper .e-frame.e-stop,
+  .filesystem-shell .e-css.e-checkbox-wrapper .e-frame.e-check,
+  .filesystem-shell .e-css.e-checkbox-wrapper .e-frame.e-stop
+  {
+    background-color: hsl(var(--brand)) !important;
+    border-color: hsl(var(--brand)) !important;
+    color: #fff !important;
+  }
+
+  .filesystem-shell .e-checkbox-wrapper .e-icons.e-check,
+  .filesystem-shell .e-css.e-checkbox-wrapper .e-icons.e-check
+  {
+    font-size: 10px !important;
+    line-height: 1 !important;
+  }
+
+  .filesystem-shell .e-checkbox-wrapper .e-checkbox:focus + .e-frame,
+  .filesystem-shell .e-checkbox-wrapper .e-checkbox:active + .e-frame,
+  .filesystem-shell .e-css.e-checkbox-wrapper .e-checkbox:focus + .e-frame,
+  .filesystem-shell .e-css.e-checkbox-wrapper .e-checkbox:active + .e-frame
+  {
+    border-color: hsl(var(--brand)) !important;
+    box-shadow: 0 0 0 2px #fff, 0 0 0 4px hsl(var(--brand)) !important;
+  }
+
+  .filesystem-shell .e-checkbox-wrapper:hover .e-frame.e-check,
+  .filesystem-shell .e-checkbox-wrapper:hover .e-frame.e-stop,
+  .filesystem-shell .e-css.e-checkbox-wrapper:hover .e-frame.e-check,
+  .filesystem-shell .e-css.e-checkbox-wrapper:hover .e-frame.e-stop
+  {
+    background-color: hsl(var(--brand)) !important;
+    border-color: hsl(var(--brand)) !important;
+  }
+
   .filesystem-shell .e-toolbar .e-icons,
   .filesystem-shell .e-toolbar .e-btn-icon,
   .filesystem-shell .e-toolbar .e-icons::before,

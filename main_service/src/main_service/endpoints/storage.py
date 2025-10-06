@@ -1,7 +1,7 @@
 import datetime
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from google.api_core.exceptions import GoogleAPIError, NotFound
 from google.cloud import storage
 
@@ -432,26 +432,38 @@ def signed_resumable(
     return {"url": url}
 
 
+def sanitize_object_name(raw_name: str) -> str:
+    normalized = raw_name.lstrip("/")
+    if normalized.endswith("/"):
+        raise HTTPException(status_code=400, detail="Cannot download a folder path")
+    if not normalized:
+        raise HTTPException(status_code=400, detail="Object name is required")
+    segments = []
+    for segment in normalized.split("/"):
+        if segment in ("", "."):
+            continue
+        if segment == "..":
+            raise HTTPException(status_code=400, detail="Invalid object path")
+        segments.append(segment)
+    if not segments:
+        raise HTTPException(status_code=400, detail="Object name is required")
+    return "/".join(segments)
+
+
 @router.get("/signed-download")
-def signed_download(
-    name: str = Query(...),
-    path: Optional[str] = Query("/"),
-    expires_in_seconds: int = Query(900, ge=1, le=604800),
-):
-    directory_prefix = normalize_directory_path(path)
-    entry_name = validate_entry_name(name)
-    object_key = f"{directory_prefix}{entry_name}"
+def signed_download(object_name: str = Query(...), download_name: Optional[str] = Query(None)):
+    sanitized_object_name = sanitize_object_name(object_name)
     client = storage.Client()
-    bucket = client.bucket(BUCKET_NAME)
-    blob = bucket.get_blob(object_key)
-    if blob is None:
-        raise NotFound(f"File '{entry_name}' not found")
-    expiration = datetime.timedelta(seconds=expires_in_seconds)
-    safe_filename = entry_name.replace('"', '\\"')
+    blob = client.bucket(BUCKET_NAME).blob(sanitized_object_name)
+    if not blob.exists(client=client):
+        raise HTTPException(status_code=404, detail=f"File '{sanitized_object_name}' not found")
+    fallback_name = sanitized_object_name.split("/")[-1] or "download"
+    safe_download_name = (download_name or fallback_name).replace('"', "").replace("'", "")
+    disposition = f'attachment; filename="{safe_download_name}"'
     url = blob.generate_signed_url(
         version="v4",
-        expiration=expiration,
+        expiration=datetime.timedelta(minutes=10),
         method="GET",
-        response_disposition=f'attachment; filename="{safe_filename}"',
+        response_disposition=disposition,
     )
-    return {"url": url, "contentType": blob.content_type or "application/octet-stream"}
+    return {"url": url}

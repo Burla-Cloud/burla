@@ -1,4 +1,5 @@
 import React from "react";
+import type { BeforeDownloadEventArgs } from "@syncfusion/ej2-filemanager";
 import {
     FileManagerComponent,
     Inject,
@@ -71,6 +72,26 @@ function normalizeServerPath(path: string | null | undefined): string {
     return normalized;
 }
 
+function storageObjectName(entry: FileManagerEntry, fallbackPath: string): string {
+    const directoryPath = normalizeServerPath(entry.path ?? fallbackPath);
+    const prefix = directoryPath === "/" ? "" : directoryPath.slice(1);
+    if (!entry.name) {
+        throw new Error("Entry name is required");
+    }
+    return `${prefix}${entry.name}`;
+}
+
+function triggerDownload(url: string, fileName: string) {
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = fileName;
+    anchor.rel = "noopener";
+    anchor.style.display = "none";
+    document.body.append(anchor);
+    anchor.click();
+    anchor.remove();
+}
+
 export default function Filesystem() {
     const fmRef = React.useRef<FileManagerComponent | null>(null);
     const maxUploadSizeBytes = 10 * 1024 ** 4;
@@ -91,14 +112,14 @@ export default function Filesystem() {
                 type: "dateTime",
                 format: "MMMM dd, yyyy HH:mm",
                 minWidth: 120,
-                width: "190",
+                width: "260",
                 template: '<span class="e-fe-date-value">${_fm_modified}</span>',
             },
             {
                 field: "size",
                 headerText: "Size",
                 minWidth: 90,
-                width: "110",
+                width: "200",
                 template: '<span class="e-fe-size">${size}</span>',
                 format: "n2",
             },
@@ -296,6 +317,57 @@ export default function Filesystem() {
         fmRef.current?.refreshFiles();
     }, []);
 
+    const handleBeforeDownload = React.useCallback(async (args: BeforeDownloadEventArgs) => {
+        args.cancel = true;
+
+        const payload = (args.data ?? {}) as {
+            path?: string;
+            names?: string[];
+            data?: FileManagerEntry[];
+        };
+
+        const fallbackPath = normalizeServerPath(payload.path);
+        const rawEntries = (payload.data ?? []).filter(Boolean) as FileManagerEntry[];
+        const entries = rawEntries.length
+            ? rawEntries.filter((entry) => isFileEntry(entry))
+            : (payload.names ?? []).map((name) => ({
+                  name,
+                  path: payload.path,
+                  isFile: true,
+              }));
+
+        if (!entries.length) {
+            window.alert("Select a file to download.");
+            return;
+        }
+
+        for (const entry of entries) {
+            if (!isFileEntry(entry) || !entry.name) {
+                continue;
+            }
+            const objectName = storageObjectName(entry, fallbackPath);
+            try {
+                const response = await fetch(
+                    `/signed-download?object_name=${encodeURIComponent(
+                        objectName
+                    )}&download_name=${encodeURIComponent(entry.name)}`
+                );
+                if (!response.ok) {
+                    throw new Error(`Request failed with status ${response.status}`);
+                }
+                const data = (await response.json()) as { url?: string };
+                if (!data.url) {
+                    throw new Error("Missing download URL");
+                }
+                triggerDownload(data.url, entry.name);
+            } catch (error) {
+                console.error("Download failed", error);
+                window.alert("Download failed. Please try again.");
+                break;
+            }
+        }
+    }, []);
+
     return (
         <div className="flex-1 flex flex-col justify-start px-12 pt-6 pb-12 min-h-0">
             <div className="max-w-7xl mx-auto w-full flex-1 flex flex-col min-h-0">
@@ -333,6 +405,7 @@ export default function Filesystem() {
                             ],
                         }}
                         cssClass="filesystem-filemanager"
+                        beforeDownload={handleBeforeDownload}
                         beforeSend={handleBeforeSend}
                         height="100%"
                         width="100%"

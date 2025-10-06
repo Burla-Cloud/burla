@@ -377,7 +377,7 @@ remote_parallel_map(my_function, list(range(1000)))`;
                                     <TableHead className="w-8 pl-6 pr-4 py-2" />
                                     <TableHead className="w-24 pl-6 pr-4 py-2">Status</TableHead>
                                     <TableHead className="w-48 pl-6 pr-4 py-2">Name</TableHead>
-                                    <TableHead className="w-24 pl-6 pr-4 py-2">CPUs</TableHead>
+                                    <TableHead className="w-24 pl-6 pr-4 py-2">vCPUs</TableHead>
                                     <TableHead className="w-24 pl-6 pr-4 py-2">RAM</TableHead>
                                     <TableHead className="w-24 pl-6 pr-4 py-2">GPUs</TableHead>
                                     <TableHead className="w-8 pl-6 pr-2 py-2" />

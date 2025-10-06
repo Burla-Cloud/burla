@@ -186,6 +186,107 @@
     width: calc(100% - 2.5rem);
   }
 
+  .filesystem-filemanager .e-address {
+    display: flex;
+    align-items: center !important;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.5rem 1rem !important;
+    min-height: 58px;
+    background: #fff;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.25);
+    box-sizing: border-box;
+  }
+
+  .filesystem-filemanager .e-address .e-addressbar-ul {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    margin: 0;
+    padding: 0;
+    flex: 1 1 auto;
+  }
+
+  .filesystem-filemanager .e-address .e-address-list-item {
+    display: inline-flex;
+    align-items: center;
+  }
+
+  .filesystem-filemanager .e-address .e-search-wrap {
+    min-width: 260px;
+    max-width: 340px;
+    border-radius: 18px;
+    border: 1px solid rgba(148, 163, 184, 0.45);
+    background: rgba(248, 249, 251, 0.96);
+    padding: 0;
+    margin-left: auto !important;
+    margin-top: 0 !important;
+    margin-bottom: 0 !important;
+    align-self: center !important;
+    justify-self: flex-end;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 2.4rem;
+    transition: border-color 140ms ease, box-shadow 140ms ease;
+    position: relative;
+    box-sizing: border-box;
+  }
+
+  .filesystem-filemanager .e-address .e-search-wrap:focus-within {
+    border-color: rgba(99, 102, 241, 0.5);
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.12);
+  }
+
+  .filesystem-filemanager .e-address .e-search-wrap .e-input-group {
+    width: 100%;
+    background: transparent;
+    border: none;
+    display: flex;
+    align-items: center;
+    gap: 0;
+    height: 100%;
+    border-radius: inherit;
+    position: relative;
+  }
+
+  .filesystem-filemanager .e-address .e-search-wrap .e-input-group input,
+  .filesystem-filemanager .e-address .e-search-wrap .e-input-group .e-search-text {
+    font-family: 'Inter', sans-serif !important;
+    font-size: 0.92rem !important;
+    padding: 0.5rem 0.65rem 0.5rem 1.95rem !important;
+    height: 100% !important;
+    border: none !important;
+    background: transparent !important;
+    color: #1f2937 !important;
+    flex: 1 1 auto;
+    box-sizing: border-box;
+  }
+
+  .filesystem-filemanager .e-address .e-search-wrap .e-input-group input::placeholder,
+  .filesystem-filemanager .e-address .e-search-wrap .e-input-group .e-search-text::placeholder {
+    color: #94a3b8 !important;
+    opacity: 1;
+  }
+
+  .filesystem-filemanager .e-address .e-search-wrap .e-input-group input:focus,
+  .filesystem-filemanager .e-address .e-search-wrap .e-input-group .e-search-text:focus {
+    box-shadow: none !important;
+  }
+
+  .filesystem-filemanager .e-address .e-search-wrap .e-input-group .e-input-group-icon {
+    font-size: 0.95rem !important;
+    color: #64748b !important;
+    line-height: 1;
+    flex: 0 0 auto;
+    position: absolute;
+    left: 0.8rem;
+    top: 50%;
+    transform: translateY(-50%);
+    margin: 0;
+  }
+
   .filesystem-shell .e-toolbar .e-tbar-btn,
   .filesystem-shell .e-toolbar .e-tbar-btn-text,
   .filesystem-shell .e-toolbar .e-tbar-btn-text .e-tbar-btn-text
@@ -195,6 +296,7 @@
     font-weight: 600 !important;
     padding: 0.4rem 0.75rem !important;
     line-height: 1.35 !important;
+    color: #374151 !important;
   }
 
   .filesystem-shell .e-toolbar .e-toolbar-item .e-tbar-btn-text,
@@ -203,6 +305,7 @@
     font-size: 1rem !important;
     font-weight: 600 !important;
     line-height: 1.35 !important;
+    color: #374151 !important;
   }
 
   .filesystem-shell .e-grid .e-rowcell,
@@ -221,6 +324,7 @@
   {
     font-size: 1.1rem !important;
     line-height: 1 !important;
+    color: #64748b !important;
   }
 
   .filesystem-shell .e-toolbar .e-btn-icon {

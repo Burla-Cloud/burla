@@ -51,8 +51,6 @@ export default function Filesystem() {
     }, [activeUpload]);
 
     const handleBeforeSend = React.useCallback(async (args: any) => {
-        console.log("FileManager beforeSend args:\n" + JSON.stringify(args, null, 2));
-
         if (args.action === "Search") {
             args.cancel = true;
             return;
@@ -277,7 +275,7 @@ export default function Filesystem() {
                                         className="absolute right-4 top-4 inline-flex h-7 w-7 items-center justify-center rounded-full border border-gray-200 bg-white text-gray-500 transition hover:border-gray-300 hover:text-gray-800"
                                         onClick={handleCancelUpload}
                                     >
-                                        <span className="sr-only">Cancel upload</span>×
+                                        <span className="sr-only">Cancel upload</span>
                                     </button>
                                 )}
                                 <p className="text-sm font-semibold text-gray-700 truncate">

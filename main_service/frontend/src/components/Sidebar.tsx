@@ -36,7 +36,7 @@ const Sidebar = () => {
                     to="/storage"
                     className="flex items-center space-x-1 text-gray-700 hover:text-primary hover:bg-primary/10 p-2 rounded-md"
                 >
-                    <span>Network Storage</span>
+                    <span>Storage</span>
                 </Link>
                 <Link
                     to="/settings"

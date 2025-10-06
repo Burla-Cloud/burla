@@ -103,6 +103,172 @@
   }
 }
 
+@layer components {
+  .storage-filemanager .e-search-wrap {
+    display: none !important;
+  }
+
+  .storage-filemanager .e-upload-dialog,
+  .storage-filemanager .e-upload-popup,
+  .storage-filemanager .e-upload-list-wrap {
+    display: none !important;
+  }
+
+  .storage-shell > .storage-filemanager {
+    border-radius: inherit;
+    overflow: hidden;
+    border: none;
+    font-family: 'Inter', sans-serif !important;
+    font-size: 1rem;
+  }
+
+  .storage-shell .e-treeview,
+  .storage-shell .e-toolbar,
+  .storage-shell .e-grid,
+  .storage-shell .e-grid * {
+    font-family: 'Inter', sans-serif !important;
+  }
+
+  .storage-filemanager,
+  .storage-filemanager .e-splitter,
+  .storage-filemanager .e-grid,
+  .storage-filemanager .e-grid .e-gridheader,
+  .storage-filemanager .e-grid .e-gridcontent,
+  .storage-filemanager .e-grid .e-content,
+  .storage-filemanager .e-grid .e-content .e-table,
+  .storage-filemanager .e-grid .e-content .e-row,
+  .storage-filemanager .e-grid .e-content .e-rowcell,
+  .storage-filemanager .e-toolbar,
+  .storage-filemanager .e-toolbar .e-horizontal-toolbar,
+  .storage-filemanager .e-grid .e-headercontent,
+  .storage-filemanager .e-grid .e-headercontent .e-table,
+  .storage-filemanager .e-grid .e-headercontent .e-row
+  {
+    border-radius: inherit;
+  }
+
+  .storage-filemanager .e-splitter,
+  .storage-filemanager .e-grid,
+  .storage-filemanager .e-toolbar,
+  .storage-filemanager .e-grid .e-gridheader,
+  .storage-filemanager .e-grid .e-gridcontent,
+  .storage-filemanager .e-grid .e-content
+  {
+    border: none;
+  }
+
+  .storage-filemanager .e-toolbar {
+    border-radius: 0 !important;
+    margin-bottom: 0 !important;
+    background-color: #f8f9fb;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.35);
+    min-height: 52px;
+    padding: 0.4rem 0.9rem !important;
+    display: flex;
+    align-items: center;
+  }
+
+  .storage-filemanager .e-address {
+    height: 0 !important;
+    min-height: 0 !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    border: none !important;
+    overflow: hidden !important;
+  }
+
+  .storage-filemanager .e-address * {
+    display: none !important;
+  }
+
+  .storage-filemanager .e-grid .e-gridcontent,
+  .storage-filemanager .e-grid .e-content,
+  .storage-filemanager .e-grid .e-gridheader
+  {
+    overflow: hidden;
+  }
+
+  .storage-filemanager .e-grid .e-gridheader {
+    display: none;
+  }
+
+  .storage-shell .e-toolbar .e-toolbar-items {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 0 0.75rem;
+    width: calc(100% - 2.5rem);
+  }
+
+  .storage-shell .e-toolbar .e-tbar-btn,
+  .storage-shell .e-toolbar .e-tbar-btn-text,
+  .storage-shell .e-toolbar .e-tbar-btn-text .e-tbar-btn-text
+  {
+    font-family: 'Inter', sans-serif !important;
+    font-size: 1rem !important;
+    font-weight: 600 !important;
+    padding: 0.45rem 0.85rem !important;
+    line-height: 1.35 !important;
+  }
+
+  .storage-shell .e-toolbar .e-toolbar-item .e-tbar-btn-text,
+  .storage-shell .e-toolbar .e-toolbar-item .e-tbar-btn-text span {
+    font-family: 'Inter', sans-serif !important;
+    font-size: 1rem !important;
+    font-weight: 600 !important;
+    line-height: 1.35 !important;
+  }
+
+  .storage-shell .e-grid .e-rowcell,
+  .storage-shell .e-grid .e-rowcell .e-fe-text,
+  .storage-shell .e-treeview .e-list-text
+  {
+    font-size: 0.94rem;
+    padding-top: 0.75rem !important;
+    padding-bottom: 0.75rem !important;
+  }
+
+  .storage-shell .e-toolbar .e-icons,
+  .storage-shell .e-toolbar .e-btn-icon,
+  .storage-shell .e-toolbar .e-icons::before,
+  .storage-shell .e-toolbar .e-btn-icon::before
+  {
+    font-size: 1.1rem !important;
+    line-height: 1 !important;
+  }
+
+  .storage-shell .e-toolbar .e-btn-icon {
+    margin-right: 0.5rem !important;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .storage-shell .e-toolbar .e-btn,
+  .storage-shell .e-toolbar .e-button,
+  .storage-shell .e-toolbar .e-btn.e-tbar-btn {
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    border-radius: 1rem;
+    height: 2.75rem;
+    min-width: 2.75rem;
+    display: inline-flex;
+    align-items: center;
+    transition: background-color 120ms ease, border-color 120ms ease;
+    padding-inline: 0.8rem !important;
+  }
+
+  .storage-shell .e-toolbar .e-btn.e-tbar-btn:hover,
+  .storage-shell .e-toolbar .e-btn.e-tbar-btn:focus {
+    background: rgba(99, 102, 241, 0.12) !important;
+  }
+
+  .storage-shell .e-toolbar .e-separator {
+    display: none;
+  }
+}
+
 /* Start button glow pulse animation */
 @keyframes glowPulseBlue {
   0% {

@@ -14,6 +14,7 @@ from google.cloud import firestore, logging, secretmanager
 from fastapi.responses import Response, FileResponse, RedirectResponse
 from fastapi import FastAPI, Request, BackgroundTasks, Depends, status
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.datastructures import UploadFile
 from jinja2 import Environment, FileSystemLoader
@@ -148,6 +149,15 @@ app.include_router(settings_router)
 app.include_router(jobs_router)
 app.include_router(storage_router)
 
+# Allow cross-origin requests for local development and to satisfy Syncfusion preflights
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 @app.get("/api/user")
 async def get_user_info(request: Request):
@@ -216,6 +226,11 @@ async def validate_requests(request: Request, call_next):
       - use client_id to get auth info, set auth cookie -> redirect here again but with auth cookie
       - here again with auth cookie -> access granted
     """
+    # Allow unauthenticated access for storage stub endpoints and resumable signing during development
+    # These are non-privileged helpers used by the storage UI.
+    if request.url.path.startswith("/api/sf/") or request.url.path == "/signed-resumable":
+        return await call_next(request)
+
     # Allow Server-Sent Events to pass through without auth to prevent proxy/login HTML from breaking the stream
     # These endpoints read from Firestore only and do not perform privileged actions.
     accept_header = request.headers.get("accept", "")

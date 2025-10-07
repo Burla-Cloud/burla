@@ -118,6 +118,92 @@
     font-size: 1rem;
   }
 
+  .filesystem-filemanager .e-fe-overlay,
+  .filesystem-filemanager .e-upload-drag-hover .e-fe-overlay {
+    border-color: hsl(var(--brand)) !important;
+  }
+
+  .filesystem-filemanager .e-large-icons .e-list-item.e-fe-drop-folder,
+  .filesystem-filemanager .e-grid .e-row.e-fe-drop-folder .e-rowcell {
+    border-color: hsl(var(--brand)) !important;
+  }
+
+  .filesystem-filemanager .e-grid .e-content tr.e-row.e-fe-drop-folder .e-rowcell {
+    box-shadow:
+      0 2px 0 -1px hsl(var(--brand)) inset,
+      0 -2px 0 -1px hsl(var(--brand)) inset !important;
+  }
+
+  .filesystem-filemanager .e-grid .e-content tr.e-row.e-fe-drop-folder .e-rowcell:first-child {
+    box-shadow:
+      1px 0 0 1px hsl(var(--brand)) inset,
+      0 2px 0 -1px hsl(var(--brand)) inset,
+      0 -2px 0 -1px hsl(var(--brand)) inset !important;
+  }
+
+  .filesystem-filemanager .e-grid .e-content tr.e-row.e-fe-drop-folder .e-rowcell:last-child {
+    box-shadow:
+      -1px 0 0 1px hsl(var(--brand)) inset,
+      0 2px 0 -1px hsl(var(--brand)) inset,
+      0 -2px 0 -1px hsl(var(--brand)) inset !important;
+  }
+
+  .filesystem-filemanager .e-treeview .e-list-parent .e-list-item.e-fe-drop-folder.e-hover > .e-fullrow {
+    border-color: hsl(var(--brand)) !important;
+  }
+
+  .filesystem-filemanager .e-large-icons .e-large-icon.e-hover.e-fe-drop-folder,
+  .filesystem-filemanager .e-large-icons .e-large-icon:hover.e-fe-drop-folder {
+    border-color: hsl(var(--brand)) !important;
+  }
+
+  .filesystem-filemanager .e-large-icons .e-checkbox-wrapper .e-icons.e-check {
+    background-color: hsl(var(--brand)) !important;
+    border-color: hsl(var(--brand)) !important;
+  }
+
+  .filesystem-filemanager .e-fe-clone .e-fe-count {
+    background-color: hsl(var(--brand)) !important;
+    border-color: hsl(var(--brand)) !important;
+  }
+
+  .filesystem-filemanager .e-fe-popup .e-fe-dot,
+  .filesystem-filemanager .e-fe-popup .e-fe-tick {
+    color: hsl(var(--brand)) !important;
+  }
+
+  .filesystem-filemanager .e-fe-popup .e-fe-error {
+    color: hsl(var(--brand)) !important;
+  }
+
+  .filesystem-shell .e-spinner-pane .e-spinner-inner .e-spin-material,
+  .filesystem-shell .e-spinner-pane .e-spinner-inner .e-spin-material3,
+  .filesystem-shell .e-spinner-pane .e-spinner-inner .e-spin-tailwind3,
+  .filesystem-shell .e-spinner-pane .e-spinner-inner .e-spin-tailwind,
+  .filesystem-shell .e-spinner-pane .e-spinner-inner .e-spin-fluent,
+  .filesystem-shell .e-spinner-pane .e-spinner-inner .e-spin-fluent2,
+  .filesystem-shell .e-spinner-pane .e-spinner-inner .e-spin-fabric,
+  .filesystem-shell .e-spinner-pane .e-spinner-inner .e-spin-high-contrast,
+  .filesystem-shell .e-spinner-pane .e-spinner-inner .e-spin-bootstrap4,
+  .filesystem-shell .e-spinner-pane .e-spinner-inner .e-spin-bootstrap5,
+  .filesystem-shell .e-spinner-pane .e-spinner-inner .e-spin-bootstrap5v3 {
+    stroke: hsl(var(--brand)) !important;
+  }
+
+  .filesystem-shell .e-spinner-pane .e-spinner-inner .e-spin-bootstrap {
+    fill: hsl(var(--brand)) !important;
+    stroke: hsl(var(--brand)) !important;
+  }
+
+  .filesystem-shell .e-spinner-pane .e-spinner-inner svg path,
+  .filesystem-shell .e-spinner-pane .e-spinner-inner svg circle {
+    stroke: hsl(var(--brand)) !important;
+  }
+
+  .filesystem-shell .e-spinner-pane .e-spinner-inner svg circle {
+    fill: transparent;
+  }
+
   .filesystem-shell .e-treeview,
   .filesystem-shell .e-toolbar,
   .filesystem-shell .e-grid,
@@ -149,6 +235,115 @@
   .filesystem-filemanager .e-grid .e-headercontent .e-row
   {
     border-radius: inherit;
+  }
+
+  .filesystem-shell .e-dialog {
+    border-radius: 0.85rem !important;
+    overflow: hidden;
+    border: 1px solid rgba(15, 23, 42, 0.08) !important;
+    box-shadow:
+      0 18px 40px -24px rgba(15, 23, 42, 0.45),
+      0 12px 24px -18px rgba(15, 23, 42, 0.35) !important;
+  }
+
+  .filesystem-shell .e-dialog .e-dlg-header-content,
+  .filesystem-shell .e-dialog .e-dlg-content,
+  .filesystem-shell .e-dialog .e-footer-content {
+    border-radius: 0.85rem !important;
+  }
+
+  .filesystem-shell .e-dialog .e-input-group,
+  .filesystem-shell .e-dialog .e-input-group.e-control-wrapper,
+  .filesystem-shell .e-dialog .e-float-input,
+  .filesystem-shell .e-dialog .e-float-input.e-control-wrapper {
+    border: none !important;
+    background-image: none !important;
+    border-radius: 0 !important;
+    padding-bottom: 0.25rem;
+  }
+
+  .filesystem-shell .e-dialog .e-input-group.e-input-focus,
+  .filesystem-shell .e-dialog .e-input-group:hover,
+  .filesystem-shell .e-dialog .e-float-input.e-input-focus,
+  .filesystem-shell .e-dialog .e-float-input:hover,
+  .filesystem-shell .e-dialog input.e-input:focus,
+  .filesystem-shell .e-dialog textarea.e-input:focus {
+    border-bottom-color: hsl(var(--brand)) !important;
+    box-shadow: none;
+  }
+
+  .filesystem-shell .e-dialog input.e-input,
+  .filesystem-shell .e-dialog textarea.e-input {
+    border: none !important;
+    border-bottom: 2px solid rgba(15, 23, 42, 0.16) !important;
+    border-radius: 0 !important;
+    padding-left: 0;
+    padding-right: 0;
+    background-image: none !important;
+  }
+
+  .filesystem-shell .e-dialog input.e-input:focus,
+  .filesystem-shell .e-dialog textarea.e-input:focus {
+    border-bottom-color: hsl(var(--brand)) !important;
+  }
+
+  .filesystem-shell .e-dialog .e-float-line,
+  .filesystem-shell .e-dialog .e-float-line::before,
+  .filesystem-shell .e-dialog .e-float-line::after {
+    background: none !important;
+    border: none !important;
+    content: "";
+    height: 0 !important;
+    transform: none !important;
+  }
+
+  .filesystem-shell .e-dialog .e-input-group::before,
+  .filesystem-shell .e-dialog .e-input-group::after,
+  .filesystem-shell .e-dialog .e-input-group .e-input-in-wrap::before,
+  .filesystem-shell .e-dialog .e-input-group .e-input-in-wrap::after,
+  .filesystem-shell .e-dialog .e-input-group.e-control-wrapper::before,
+  .filesystem-shell .e-dialog .e-input-group.e-control-wrapper::after {
+    content: none !important;
+    display: none !important;
+    background: none !important;
+  }
+
+  .e-dlg-container .e-dialog ::selection,
+  .e-dlg-container .e-dialog ::-moz-selection,
+  .e-dlg-container .e-dialog input.e-input::selection,
+  .e-dlg-container .e-dialog textarea.e-input::selection,
+  .e-dlg-container .e-dialog input.e-input::-moz-selection,
+  .e-dlg-container .e-dialog textarea.e-input::-moz-selection,
+  .e-dlg-container .e-dialog .e-input-group input.e-input::selection,
+  .e-dlg-container .e-dialog .e-input-group textarea.e-input::selection,
+  .e-dlg-container .e-dialog .e-input-group input.e-input::-moz-selection,
+  .e-dlg-container .e-dialog .e-input-group textarea.e-input::-moz-selection,
+  .e-dlg-container .e-dialog .e-float-input input::selection,
+  .e-dlg-container .e-dialog .e-float-input textarea::selection,
+  .e-dlg-container .e-dialog .e-float-input input::-moz-selection,
+  .e-dlg-container .e-dialog .e-float-input textarea::-moz-selection {
+    background-color: rgba(148, 163, 184, 0.35) !important;
+    color: inherit !important;
+  }
+
+  .filesystem-shell .e-dialog .e-footer-content .e-btn.e-primary,
+  .filesystem-shell .e-dialog .e-footer-content .e-btn.e-flat.e-primary {
+    background-color: hsl(var(--brand)) !important;
+    border-color: hsl(var(--brand)) !important;
+    color: white !important;
+    box-shadow: 0 12px 24px -16px hsl(var(--brand) / 0.6) !important;
+  }
+
+  .filesystem-shell .e-dialog .e-footer-content .e-btn.e-primary:hover,
+  .filesystem-shell .e-dialog .e-footer-content .e-btn.e-flat.e-primary:hover {
+    background-color: hsl(var(--brand) / 0.92) !important;
+    border-color: hsl(var(--brand)) !important;
+  }
+
+  .filesystem-shell .e-dialog .e-footer-content .e-btn.e-primary:focus-visible,
+  .filesystem-shell .e-dialog .e-footer-content .e-btn.e-flat.e-primary:focus-visible {
+    outline: 2px solid hsl(var(--brand)) !important;
+    outline-offset: 2px;
   }
 
   .filesystem-filemanager .e-splitter,
@@ -280,6 +475,13 @@
     line-height: 1 !important;
   }
 
+  .filesystem-shell .e-checkbox-wrapper .e-icons.e-stop,
+  .filesystem-shell .e-css.e-checkbox-wrapper .e-icons.e-stop
+  {
+    font-size: 9px !important;
+    line-height: 1 !important;
+  }
+
   .filesystem-shell .e-checkbox-wrapper .e-checkbox:focus + .e-frame,
   .filesystem-shell .e-checkbox-wrapper .e-checkbox:active + .e-frame,
   .filesystem-shell .e-css.e-checkbox-wrapper .e-checkbox:focus + .e-frame,
@@ -332,7 +534,7 @@
   }
 
   .filesystem-shell .e-toolbar .e-btn.e-tbar-btn:hover,
-  .filesystem-shell .e-toolbar .e-btn.e-tbar-btn:focus {
+  .filesystem-shell .e-toolbar .e-btn.e-tbar-btn:focus-visible {
     background: rgba(99, 102, 241, 0.12) !important;
   }
 

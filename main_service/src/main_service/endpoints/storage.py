@@ -1,7 +1,11 @@
 import datetime
+import tempfile
+import zipfile
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import StreamingResponse
 from google.api_core.exceptions import GoogleAPIError, NotFound
 from google.cloud import storage
 
@@ -450,6 +454,48 @@ def sanitize_object_name(raw_name: str) -> str:
     return "/".join(segments)
 
 
+def sanitize_archive_filename(raw_name: Optional[str]) -> str:
+    candidate = (raw_name or "").strip()
+    if not candidate:
+        candidate = "files.zip"
+    sanitized = Path(candidate).name or "files.zip"
+    if not sanitized.lower().endswith(".zip"):
+        sanitized = f"{sanitized}.zip"
+    return sanitized.replace('"', "").replace("'", "")
+
+
+def sanitize_archive_item_path(raw_path: Optional[str], fallback: str) -> str:
+    candidate = (raw_path or "").strip()
+    selected = candidate or fallback
+    normalized = selected.replace("\\", "/")
+    segments: List[str] = []
+    for segment in normalized.split("/"):
+        if segment in ("", "."):
+            continue
+        if segment == "..":
+            raise HTTPException(status_code=400, detail="Invalid archive path")
+        segments.append(segment)
+    if not segments:
+        raise HTTPException(status_code=400, detail="Invalid archive path")
+    return "/".join(segments)
+
+
+def sanitize_folder_prefix(raw_prefix: Optional[str]) -> str:
+    if not isinstance(raw_prefix, str):
+        raise HTTPException(status_code=400, detail="Folder path is required")
+    normalized = raw_prefix.strip().replace("\\", "/")
+    segments: List[str] = []
+    for segment in normalized.split("/"):
+        if segment in ("", "."):
+            continue
+        if segment == "..":
+            raise HTTPException(status_code=400, detail="Invalid folder path")
+        segments.append(segment)
+    if not segments:
+        raise HTTPException(status_code=400, detail="Folder path is required")
+    return "/".join(segments) + "/"
+
+
 @router.get("/signed-download")
 def signed_download(object_name: str = Query(...), download_name: Optional[str] = Query(None)):
     sanitized_object_name = sanitize_object_name(object_name)
@@ -467,3 +513,186 @@ def signed_download(object_name: str = Query(...), download_name: Optional[str] 
         response_disposition=disposition,
     )
     return {"url": url}
+
+
+@router.post("/batch-download")
+def batch_download(payload: Dict[str, Any]):
+    raw_items = payload.get("items")
+    if not isinstance(raw_items, list) or not raw_items:
+        raise HTTPException(status_code=400, detail="No files provided for download")
+    file_requests: List[Dict[str, str]] = []
+    folder_requests: List[Dict[str, str]] = []
+    file_seen: set[str] = set()
+    folder_seen: set[str] = set()
+    for raw_item in raw_items:
+        if not isinstance(raw_item, dict):
+            continue
+        item_type = raw_item.get("type")
+        if item_type == "folder":
+            folder_prefix = raw_item.get("prefix")
+            archive_root_name = raw_item.get("archivePath") or raw_item.get("name")
+            if isinstance(archive_root_name, str):
+                archive_root_name = archive_root_name.strip()
+            sanitized_prefix = sanitize_folder_prefix(folder_prefix)
+            if sanitized_prefix in folder_seen:
+                continue
+            try:
+                archive_root = validate_entry_name(archive_root_name)
+            except ValueError as error:
+                raise HTTPException(status_code=400, detail=str(error)) from error
+            folder_seen.add(sanitized_prefix)
+            folder_requests.append(
+                {
+                    "prefix": sanitized_prefix,
+                    "archive_root": archive_root,
+                }
+            )
+            continue
+        object_name = raw_item.get("objectName")
+        if not isinstance(object_name, str):
+            continue
+        sanitized_object_name = sanitize_object_name(object_name)
+        if sanitized_object_name in file_seen:
+            continue
+        archive_path_value = raw_item.get("archivePath")
+        archive_path = sanitize_archive_item_path(
+            archive_path_value if isinstance(archive_path_value, str) else None,
+            sanitized_object_name,
+        )
+        file_seen.add(sanitized_object_name)
+        file_requests.append(
+            {
+                "object_name": sanitized_object_name,
+                "archive_path": archive_path,
+            }
+        )
+    if not file_requests and not folder_requests:
+        raise HTTPException(status_code=400, detail="No files provided for download")
+    archive_name = sanitize_archive_filename(payload.get("archiveName"))
+    client = storage.Client()
+    bucket = client.bucket(BUCKET_NAME)
+    temp_file = tempfile.SpooledTemporaryFile(max_size=268_435_456)
+    try:
+        with zipfile.ZipFile(temp_file, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
+            written_entries: set[str] = set()
+
+            def archive_path_for(root: str, relative_path: str) -> str:
+                if not root:
+                    return relative_path
+                if not relative_path:
+                    return root
+                return f"{root}/{relative_path}"
+
+            def ensure_directory_entry(path: str) -> None:
+                normalized = path.strip("/")
+                if not normalized:
+                    return
+                entry_name = f"{normalized}/"
+                if entry_name in written_entries:
+                    return
+                archive.writestr(entry_name, "")
+                written_entries.add(entry_name)
+
+            def ensure_directory_hierarchy(root: str, directory_path: str) -> None:
+                segments = [segment for segment in directory_path.split("/") if segment]
+                if not segments:
+                    ensure_directory_entry(root)
+                    return
+                accumulated: List[str] = []
+                for segment in segments:
+                    accumulated.append(segment)
+                    ensure_directory_entry(archive_path_for(root, "/".join(accumulated)))
+
+            def ensure_parent_directories(root: str, relative_file_path: str) -> None:
+                parents = relative_file_path.split("/")[:-1]
+                if not parents:
+                    return
+                ensure_directory_hierarchy(root, "/".join(parents))
+
+            for request in file_requests:
+                blob = bucket.get_blob(request["object_name"])
+                if blob is None:
+                    raise HTTPException(
+                        status_code=404, detail=f"File '{request['object_name']}' not found"
+                    )
+                archive_path = request["archive_path"]
+                if archive_path in written_entries:
+                    continue
+                ensure_parent_directories("", archive_path)
+                with blob.open("rb") as source, archive.open(archive_path, "w") as target:
+                    while True:
+                        chunk = source.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        target.write(chunk)
+                written_entries.add(archive_path)
+            for request in folder_requests:
+                prefix = request["prefix"]
+                archive_root = request["archive_root"]
+                ensure_directory_entry(archive_root)
+                added_content = False
+                blobs = bucket.list_blobs(prefix=prefix)
+                for blob in blobs:
+                    if blob.name == prefix:
+                        continue
+                    if blob.name.endswith(FOLDER_PLACEHOLDER_NAME):
+                        relative_directory = blob.name[len(prefix) : -len(FOLDER_PLACEHOLDER_NAME)]
+                        if not relative_directory:
+                            added_content = True
+                            continue
+                        sanitized_directory = sanitize_archive_item_path(
+                            relative_directory, relative_directory
+                        )
+                        ensure_directory_hierarchy(archive_root, sanitized_directory)
+                        added_content = True
+                        continue
+                    relative_path = blob.name[len(prefix) :]
+                    if not relative_path:
+                        continue
+                    sanitized_relative = sanitize_archive_item_path(relative_path, relative_path)
+                    archive_path = archive_path_for(archive_root, sanitized_relative)
+                    if archive_path in written_entries:
+                        continue
+                    ensure_parent_directories(archive_root, sanitized_relative)
+                    with blob.open("rb") as source, archive.open(archive_path, "w") as target:
+                        while True:
+                            chunk = source.read(1024 * 1024)
+                            if not chunk:
+                                break
+                            target.write(chunk)
+                    written_entries.add(archive_path)
+                    added_content = True
+                if not added_content:
+                    ensure_directory_entry(archive_root)
+    except HTTPException:
+        temp_file.close()
+        raise
+    except NotFound as error:
+        temp_file.close()
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except GoogleAPIError as error:
+        temp_file.close()
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except Exception:
+        temp_file.close()
+        raise
+    temp_file.seek(0, 2)
+    total_size = temp_file.tell()
+    temp_file.seek(0)
+
+    def iterator():
+        try:
+            while True:
+                chunk = temp_file.read(1024 * 1024)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            temp_file.close()
+
+    headers = {
+        "Content-Disposition": f'attachment; filename="{archive_name}"',
+    }
+    if total_size:
+        headers["Content-Length"] = str(total_size)
+    return StreamingResponse(iterator(), media_type="application/zip", headers=headers)

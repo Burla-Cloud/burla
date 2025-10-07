@@ -1,5 +1,5 @@
 import React from "react";
-import type { BeforeDownloadEventArgs } from "@syncfusion/ej2-filemanager";
+import type { BeforeDownloadEventArgs, FileLoadEventArgs } from "@syncfusion/ej2-filemanager";
 import type { FileInfo } from "@syncfusion/ej2-inputs";
 import {
     FileManagerComponent,
@@ -9,6 +9,7 @@ import {
     Toolbar,
     ContextMenu,
 } from "@syncfusion/ej2-react-filemanager";
+import { X } from "lucide-react";
 
 import "@syncfusion/ej2-base/styles/material.css";
 import "@syncfusion/ej2-buttons/styles/material.css";
@@ -46,6 +47,95 @@ function formatBytes(bytes: number) {
     return `${value.toFixed(precision)} ${units[exponent]}`;
 }
 
+function formatFileManagerSize(bytes: number): string {
+    if (!Number.isFinite(bytes) || bytes <= 0) {
+        return "0 B";
+    }
+    const units = ["B", "KB", "MB", "GB", "TB", "PB", "EB"];
+    let unitIndex = 0;
+    let value = bytes;
+    while (value >= 1024 && unitIndex < units.length - 1) {
+        value /= 1024;
+        unitIndex += 1;
+    }
+    while (value >= 1000 && unitIndex < units.length - 1) {
+        value /= 1024;
+        unitIndex += 1;
+    }
+    const decimalsForUnit = (index: number) => {
+        if (index <= 1) {
+            return 0;
+        }
+        if (units[index] === "MB") {
+            return 1;
+        }
+        return 2;
+    };
+    const roundedForUnit = (val: number, index: number) => {
+        const decimals = decimalsForUnit(index);
+        if (decimals === 0) {
+            return Math.round(val);
+        }
+        const factor = 10 ** decimals;
+        return Math.round(val * factor) / factor;
+    };
+    let rounded = roundedForUnit(value, unitIndex);
+    while (rounded >= 1000 && unitIndex < units.length - 1) {
+        value /= 1024;
+        unitIndex += 1;
+        rounded = roundedForUnit(value, unitIndex);
+    }
+    if (rounded === 0 && bytes > 0) {
+        const decimals = decimalsForUnit(unitIndex);
+        if (decimals === 0) {
+            rounded = 1;
+        } else {
+            rounded = 1 / 10 ** decimals;
+        }
+    }
+    const decimals = decimalsForUnit(unitIndex);
+    if (decimals === 0) {
+        return `${Math.round(rounded)} ${units[unitIndex]}`;
+    }
+    const formatted = rounded.toFixed(decimals).replace(/\.0+$|0+$/, "");
+    return `${formatted} ${units[unitIndex]}`;
+}
+
+function formatFileManagerDate(value: string | Date | null | undefined): string {
+    if (!value) {
+        return "—";
+    }
+    const date = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(date.getTime())) {
+        return "—";
+    }
+    const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    const monthNames = [
+        "Jan",
+        "Feb",
+        "Mar",
+        "Apr",
+        "May",
+        "Jun",
+        "Jul",
+        "Aug",
+        "Sep",
+        "Oct",
+        "Nov",
+        "Dec",
+    ];
+    const dayName = dayNames[date.getDay()];
+    const monthName = monthNames[date.getMonth()];
+    const dayOfMonth = date.getDate().toString().padStart(2, "0");
+    const year = date.getFullYear();
+    const hours = date.getHours();
+    const hourValue = hours % 12 || 12;
+    const minuteValue = date.getMinutes().toString().padStart(2, "0");
+    const period = hours >= 12 ? "PM" : "AM";
+    const displayHour = hourValue.toString().padStart(2, "0");
+    return `${dayName} ${monthName} ${dayOfMonth} ${year} ${displayHour}:${minuteValue} ${period}`;
+}
+
 function isFileEntry(entry: FileManagerEntry): boolean {
     if (typeof entry.isFile === "boolean") {
         return entry.isFile;
@@ -80,6 +170,30 @@ function storageObjectName(entry: FileManagerEntry, fallbackPath: string): strin
         throw new Error("Entry name is required");
     }
     return `${prefix}${entry.name}`;
+}
+
+function storageFolderPrefix(entry: FileManagerEntry, fallbackPath: string): string {
+    const directoryPath = normalizeServerPath(entry.path ?? fallbackPath);
+    const prefix = directoryPath === "/" ? "" : directoryPath.slice(1);
+    if (!entry.name) {
+        throw new Error("Entry name is required");
+    }
+    return `${prefix}${entry.name}/`;
+}
+
+function clearUploaderFiles(uploader: FileManagerComponent["uploadObj"] | null | undefined) {
+    if (!uploader) {
+        return;
+    }
+    const instance = uploader as unknown as {
+        clearData?: () => void;
+        clearAll?: () => void;
+    };
+    if (typeof instance.clearData === "function") {
+        instance.clearData();
+        return;
+    }
+    instance.clearAll?.();
 }
 
 function triggerDownload(url: string, fileName: string) {
@@ -133,11 +247,38 @@ function buildObjectName(basePath: string, relativePath: string): string {
     return prefix ? `${prefix}/${normalizedRelative}` : normalizedRelative;
 }
 
+function fileInfoSize(file: FileInfo): number {
+    if (typeof file.size === "number" && file.size > 0) {
+        return file.size;
+    }
+    const raw = file.rawFile as File | Blob | undefined;
+    return raw?.size ?? 0;
+}
+
+type FileWithPath = File & { webkitRelativePath?: string };
+
+function relativePathForFile(fileInfo: FileInfo): string {
+    const rawFile = fileInfo.rawFile as FileWithPath | undefined;
+    const rawPath = rawFile?.webkitRelativePath;
+    if (rawPath && rawPath.trim() !== "") {
+        return rawPath;
+    }
+    if (fileInfo.name && fileInfo.name.trim() !== "") {
+        return fileInfo.name;
+    }
+    if (rawFile) {
+        return rawFile.name;
+    }
+    throw new Error("Missing file path");
+}
+
 export default function Filesystem() {
     const fmRef = React.useRef<FileManagerComponent | null>(null);
     const maxUploadSizeBytes = 10 * 1024 ** 4;
     const [activeUpload, setActiveUpload] = React.useState<ActiveUploadState | null>(null);
+    const [isPreparingBatchDownload, setIsPreparingBatchDownload] = React.useState(false);
     const abortControllerRef = React.useRef<AbortController | null>(null);
+    const batchDownloadAbortControllerRef = React.useRef<AbortController | null>(null);
     const detailsViewColumns = React.useMemo(
         () => [
             {
@@ -180,9 +321,21 @@ export default function Filesystem() {
     const uploadQueueRef = React.useRef<FileInfo[]>([]);
     const uploadPathRef = React.useRef<string>("/");
     const isProcessingUploadRef = React.useRef(false);
+    const queueTotalBytesRef = React.useRef(0);
+    const completedBytesRef = React.useRef(0);
+    const totalFilesRef = React.useRef(0);
+    const processedFilesRef = React.useRef(0);
 
     const uploadFileToStorage = React.useCallback(
-        async (fileInfo: FileInfo, objectName: string, displayName: string) => {
+        async (
+            fileInfo: FileInfo,
+            objectName: string,
+            displayLabel: string,
+            baseUploadedBytes: number,
+            totalQueueBytes: number,
+            fileIndex: number,
+            totalFiles: number
+        ) => {
             const rawFile = fileInfo.rawFile as File | Blob | undefined;
             if (!rawFile) {
                 throw new Error("Missing file data");
@@ -192,11 +345,16 @@ export default function Filesystem() {
             const controller = new AbortController();
             abortControllerRef.current = controller;
 
-            const totalBytes = rawFile.size;
+            const queueBytes = totalQueueBytes > 0 ? totalQueueBytes : rawFile.size;
+            const initialUploadedBytes = Math.min(baseUploadedBytes, queueBytes);
+            const label =
+                totalFiles > 1 ? `${displayLabel} (${fileIndex}/${totalFiles})` : displayLabel;
+            let lastUploadedBytes = initialUploadedBytes;
+
             setActiveUpload({
-                name: displayName,
-                uploadedBytes: 0,
-                totalBytes,
+                name: label,
+                uploadedBytes: initialUploadedBytes,
+                totalBytes: queueBytes,
                 state: "uploading",
             });
 
@@ -227,14 +385,14 @@ export default function Filesystem() {
 
                 const chunkSize = 8 * 1024 * 1024;
                 let offset = 0;
-                while (offset < totalBytes) {
+                while (offset < rawFile.size) {
                     if (controller.signal.aborted) {
                         throw new DOMException("Upload aborted", "AbortError");
                     }
 
-                    const end = Math.min(offset + chunkSize, totalBytes);
+                    const end = Math.min(offset + chunkSize, rawFile.size);
                     const chunk = rawFile.slice(offset, end);
-                    const range = `bytes ${offset}-${end - 1}/${totalBytes}`;
+                    const range = `bytes ${offset}-${end - 1}/${rawFile.size}`;
 
                     const response = await fetch(sessionUrl, {
                         method: "PUT",
@@ -256,11 +414,12 @@ export default function Filesystem() {
                             offset = end;
                         }
 
+                        lastUploadedBytes = Math.min(queueBytes, baseUploadedBytes + offset);
                         setActiveUpload((current) =>
-                            current && current.name === displayName
+                            current && current.state === "uploading"
                                 ? {
                                       ...current,
-                                      uploadedBytes: offset,
+                                      uploadedBytes: lastUploadedBytes,
                                   }
                                 : current
                         );
@@ -268,44 +427,40 @@ export default function Filesystem() {
                     }
 
                     if (!response.ok) {
-                        setActiveUpload((current) =>
-                            current && current.name === displayName
-                                ? {
-                                      ...current,
-                                      state: "error",
-                                  }
-                                : current
-                        );
                         throw new Error(`Chunk failed: ${response.status}`);
                     }
 
                     offset = end;
 
+                    lastUploadedBytes = Math.min(queueBytes, baseUploadedBytes + end);
                     setActiveUpload((current) =>
-                        current && current.name === displayName
+                        current && current.state === "uploading"
                             ? {
                                   ...current,
-                                  uploadedBytes: end,
+                                  uploadedBytes: lastUploadedBytes,
                               }
                             : current
                     );
                 }
 
+                lastUploadedBytes = Math.min(queueBytes, baseUploadedBytes + rawFile.size);
                 setActiveUpload((current) =>
-                    current && current.name === displayName
+                    current && current.state === "uploading"
                         ? {
                               ...current,
-                              uploadedBytes: totalBytes,
-                              state: "done",
+                              uploadedBytes: lastUploadedBytes,
                           }
                         : current
                 );
             } catch (error) {
+                const uploadedBytes = lastUploadedBytes;
                 if (isAbortError(error)) {
                     setActiveUpload((current) =>
-                        current && current.name === displayName
+                        current
                             ? {
                                   ...current,
+                                  uploadedBytes,
+                                  totalBytes: queueBytes,
                                   state: "cancelled",
                               }
                             : current
@@ -313,9 +468,11 @@ export default function Filesystem() {
                 } else {
                     console.error("Resumable upload failed", error);
                     setActiveUpload((current) =>
-                        current && current.name === displayName
+                        current
                             ? {
                                   ...current,
+                                  uploadedBytes,
+                                  totalBytes: queueBytes,
                                   state: "error",
                               }
                             : current
@@ -331,6 +488,8 @@ export default function Filesystem() {
 
     const processUploadQueue = React.useCallback(async () => {
         let uploadedAny = false;
+        let encounteredError = false;
+        let wasCancelled = false;
 
         try {
             while (uploadQueueRef.current.length > 0) {
@@ -339,33 +498,60 @@ export default function Filesystem() {
                     continue;
                 }
 
-                const rawFile = next.rawFile as File | Blob | undefined;
-                const displayName = next.name || (rawFile instanceof File ? rawFile.name : "");
-                if (!displayName) {
+                if (!(next.rawFile instanceof Blob)) {
                     continue;
                 }
-                const totalBytes = typeof next.size === "number" ? next.size : rawFile?.size ?? 0;
+                let relativePath: string;
+                try {
+                    relativePath = relativePathForFile(next);
+                } catch (error) {
+                    console.error("Resumable upload failed", error);
+                    window.alert("Upload failed. Please try again.");
+                    encounteredError = true;
+                    break;
+                }
+                const fileSize = fileInfoSize(next);
 
                 let objectName: string;
                 try {
-                    objectName = buildObjectName(uploadPathRef.current, displayName);
+                    objectName = buildObjectName(uploadPathRef.current, relativePath);
                 } catch (error) {
                     console.error("Resumable upload failed", error);
                     setActiveUpload({
-                        name: displayName,
-                        uploadedBytes: 0,
-                        totalBytes,
+                        name: relativePath,
+                        uploadedBytes: completedBytesRef.current,
+                        totalBytes: queueTotalBytesRef.current || fileSize,
                         state: "error",
                     });
                     window.alert("Upload failed. Please try again.");
+                    encounteredError = true;
                     break;
                 }
 
                 try {
-                    await uploadFileToStorage(next, objectName, displayName);
+                    const baseUploaded = completedBytesRef.current;
+                    const totalQueueBytes = queueTotalBytesRef.current || fileSize;
+                    const fileIndex = processedFilesRef.current + 1;
+                    const totalFiles = totalFilesRef.current;
+
+                    await uploadFileToStorage(
+                        next,
+                        objectName,
+                        relativePath,
+                        baseUploaded,
+                        totalQueueBytes,
+                        fileIndex,
+                        totalFiles
+                    );
+
+                    completedBytesRef.current = baseUploaded + fileSize;
+                    processedFilesRef.current = fileIndex;
                     uploadedAny = true;
                 } catch (error) {
-                    if (!isAbortError(error)) {
+                    if (isAbortError(error)) {
+                        wasCancelled = true;
+                    } else {
+                        encounteredError = true;
                         window.alert("Upload failed. Please try again.");
                     }
                     break;
@@ -374,22 +560,64 @@ export default function Filesystem() {
         } finally {
             uploadQueueRef.current = [];
             abortControllerRef.current = null;
+
+            if (
+                uploadedAny &&
+                !encounteredError &&
+                !wasCancelled &&
+                totalFilesRef.current > 0 &&
+                processedFilesRef.current === totalFilesRef.current
+            ) {
+                const totalBytes =
+                    queueTotalBytesRef.current > 0
+                        ? queueTotalBytesRef.current
+                        : completedBytesRef.current;
+                setActiveUpload((current) =>
+                    current
+                        ? {
+                              ...current,
+                              name: totalFilesRef.current > 1 ? "Uploads complete" : current.name,
+                              uploadedBytes: totalBytes,
+                              totalBytes,
+                              state: "done",
+                          }
+                        : current
+                );
+            }
+
             if (uploadedAny) {
                 fmRef.current?.refreshFiles();
             }
-            fmRef.current?.uploadObj?.clearAll();
+            clearUploaderFiles(fmRef.current?.uploadObj ?? null);
             isProcessingUploadRef.current = false;
+            completedBytesRef.current = 0;
+            processedFilesRef.current = 0;
+            totalFilesRef.current = 0;
+            queueTotalBytesRef.current = 0;
         }
     }, [uploadFileToStorage]);
 
     const handleBeforeSend = React.useCallback(
         (args: any) => {
-            if (args.action === "Search") {
+            const normalizedAction =
+                typeof args.action === "string" ? args.action.toLowerCase() : "";
+
+            if (normalizedAction === "search") {
                 args.cancel = true;
                 return;
             }
 
-            if (args.action === "Upload") {
+            if (normalizedAction === "create") {
+                fmRef.current?.dialogObj?.hide();
+                return;
+            }
+
+            if (normalizedAction === "rename") {
+                fmRef.current?.dialogObj?.hide();
+                return;
+            }
+
+            if (normalizedAction === "upload") {
                 args.cancel = true;
 
                 const rawData = args.ajaxSettings?.data;
@@ -412,18 +640,45 @@ export default function Filesystem() {
                     typeof fmRef.current?.path === "string" ? fmRef.current?.path : "/";
                 uploadPathRef.current = normalizeServerPath(requestPath ?? fallbackPath);
 
-                if (isProcessingUploadRef.current) {
-                    return;
-                }
-
                 const filesData = fmRef.current?.uploadObj?.getFilesData() ?? [];
-                if (!filesData.length) {
+                const fileEntries = filesData.filter((item) => item?.rawFile instanceof Blob);
+                if (!fileEntries.length) {
                     return;
                 }
 
-                uploadQueueRef.current = filesData.slice();
+                const additionalTotalBytes = fileEntries.reduce(
+                    (total, file) => total + fileInfoSize(file),
+                    0
+                );
+
+                if (isProcessingUploadRef.current) {
+                    uploadQueueRef.current.push(...fileEntries);
+                    queueTotalBytesRef.current += additionalTotalBytes;
+                    totalFilesRef.current += fileEntries.length;
+                    fmRef.current?.uploadDialogObj?.hide();
+                    clearUploaderFiles(fmRef.current?.uploadObj ?? null);
+                    setActiveUpload((current) =>
+                        current && current.state === "uploading"
+                            ? {
+                                  ...current,
+                                  totalBytes:
+                                      queueTotalBytesRef.current > 0
+                                          ? queueTotalBytesRef.current
+                                          : current.totalBytes,
+                              }
+                            : current
+                    );
+                    return;
+                }
+
+                queueTotalBytesRef.current = additionalTotalBytes;
+                completedBytesRef.current = 0;
+                totalFilesRef.current = fileEntries.length;
+                processedFilesRef.current = 0;
+
+                uploadQueueRef.current = fileEntries.slice();
                 fmRef.current?.uploadDialogObj?.hide();
-                fmRef.current?.uploadObj?.clearAll();
+                clearUploaderFiles(fmRef.current?.uploadObj ?? null);
                 isProcessingUploadRef.current = true;
                 void processUploadQueue();
             }
@@ -437,19 +692,77 @@ export default function Filesystem() {
         abortControllerRef.current = null;
         isProcessingUploadRef.current = false;
         setActiveUpload((current) =>
-            current && current.state === "uploading"
+            current
                 ? {
                       ...current,
+                      uploadedBytes: Math.min(current.totalBytes, completedBytesRef.current),
+                      totalBytes:
+                          current.totalBytes ||
+                          (queueTotalBytesRef.current > 0
+                              ? queueTotalBytesRef.current
+                              : current.totalBytes),
                       state: "cancelled",
                   }
                 : current
         );
-        fmRef.current?.uploadObj?.clearAll();
+        totalFilesRef.current = 0;
+        processedFilesRef.current = 0;
+        completedBytesRef.current = 0;
+        queueTotalBytesRef.current = 0;
+        clearUploaderFiles(fmRef.current?.uploadObj ?? null);
     }, []);
 
     const handleSuccess = React.useCallback((args: any) => {
         if (!args || args.action !== "move") return;
         fmRef.current?.refreshFiles();
+    }, []);
+
+    const handleFileLoad = React.useCallback((args: FileLoadEventArgs) => {
+        const fileDetails = args.fileDetails as {
+            size?: number;
+            isFile?: boolean;
+            type?: string;
+            dateModified?: string;
+            _fm_modified?: string;
+        };
+        const isFile = fileDetails.isFile ?? fileDetails.type !== "folder";
+        const sizeElement = args.element?.querySelector<HTMLElement>(".e-fe-size, .e-size");
+        const modifiedElement = args.element?.querySelector<HTMLElement>(
+            ".e-fe-date-value, .e-fe-date"
+        );
+        if (!isFile) {
+            if (sizeElement) {
+                sizeElement.textContent = "—";
+                sizeElement.title = "—";
+            }
+            if (modifiedElement) {
+                modifiedElement.textContent = "—";
+                modifiedElement.title = "—";
+            }
+            return;
+        }
+        if (typeof fileDetails.size !== "number") {
+            if (modifiedElement) {
+                const formattedDate = formatFileManagerDate(
+                    fileDetails._fm_modified ?? fileDetails.dateModified
+                );
+                modifiedElement.textContent = formattedDate;
+                modifiedElement.title = formattedDate;
+            }
+            return;
+        }
+        const formattedSize = formatFileManagerSize(fileDetails.size);
+        if (sizeElement) {
+            sizeElement.textContent = formattedSize;
+            sizeElement.title = formattedSize;
+        }
+        if (modifiedElement) {
+            const formattedDate = formatFileManagerDate(
+                fileDetails._fm_modified ?? fileDetails.dateModified
+            );
+            modifiedElement.textContent = formattedDate;
+            modifiedElement.title = formattedDate;
+        }
     }, []);
 
     const handleBeforeDownload = React.useCallback(async (args: BeforeDownloadEventArgs) => {
@@ -464,7 +777,7 @@ export default function Filesystem() {
         const fallbackPath = normalizeServerPath(payload.path);
         const rawEntries = (payload.data ?? []).filter(Boolean) as FileManagerEntry[];
         const entries = rawEntries.length
-            ? rawEntries.filter((entry) => isFileEntry(entry))
+            ? rawEntries
             : (payload.names ?? []).map((name) => ({
                   name,
                   path: payload.path,
@@ -476,31 +789,124 @@ export default function Filesystem() {
             return;
         }
 
+        if (entries.length === 1) {
+            const entry = entries[0];
+            if (isFileEntry(entry)) {
+                if (!entry.name) {
+                    window.alert("Download failed. Please try again.");
+                    return;
+                }
+                const objectName = storageObjectName(entry, fallbackPath);
+                try {
+                    const response = await fetch(
+                        `/signed-download?object_name=${encodeURIComponent(
+                            objectName
+                        )}&download_name=${encodeURIComponent(entry.name)}`
+                    );
+                    if (!response.ok) {
+                        throw new Error(`Request failed with status ${response.status}`);
+                    }
+                    const data = (await response.json()) as { url?: string };
+                    if (!data.url) {
+                        throw new Error("Missing download URL");
+                    }
+                    triggerDownload(data.url, entry.name);
+                } catch (error) {
+                    console.error("Download failed", error);
+                    window.alert("Download failed. Please try again.");
+                }
+                return;
+            }
+        }
+
+        type BatchItem =
+            | {
+                  type: "file";
+                  objectName: string;
+                  archivePath: string;
+                  name: string;
+              }
+            | {
+                  type: "folder";
+                  prefix: string;
+                  archivePath: string;
+                  name: string;
+              };
+
+        const batchItems: BatchItem[] = [];
         for (const entry of entries) {
-            if (!isFileEntry(entry) || !entry.name) {
+            if (!entry || !entry.name) {
                 continue;
             }
-            const objectName = storageObjectName(entry, fallbackPath);
             try {
-                const response = await fetch(
-                    `/signed-download?object_name=${encodeURIComponent(
-                        objectName
-                    )}&download_name=${encodeURIComponent(entry.name)}`
-                );
-                if (!response.ok) {
-                    throw new Error(`Request failed with status ${response.status}`);
+                if (isFileEntry(entry)) {
+                    const objectName = storageObjectName(entry, fallbackPath);
+                    batchItems.push({
+                        type: "file",
+                        objectName,
+                        archivePath: entry.name,
+                        name: entry.name,
+                    });
+                } else {
+                    const prefix = storageFolderPrefix(entry, fallbackPath);
+                    batchItems.push({
+                        type: "folder",
+                        prefix,
+                        archivePath: entry.name,
+                        name: entry.name,
+                    });
                 }
-                const data = (await response.json()) as { url?: string };
-                if (!data.url) {
-                    throw new Error("Missing download URL");
-                }
-                triggerDownload(data.url, entry.name);
             } catch (error) {
                 console.error("Download failed", error);
                 window.alert("Download failed. Please try again.");
-                break;
+                return;
             }
         }
+
+        if (!batchItems.length) {
+            window.alert("Download failed. Please try again.");
+            return;
+        }
+
+        const singleEntry = entries.length === 1 ? entries[0] : null;
+        const archiveName =
+            singleEntry && singleEntry.name ? `${singleEntry.name}.zip` : "files.zip";
+
+        setIsPreparingBatchDownload(true);
+        const controller = new AbortController();
+        batchDownloadAbortControllerRef.current = controller;
+        try {
+            const response = await fetch("/batch-download", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ items: batchItems, archiveName }),
+                signal: controller.signal,
+            });
+            if (!response.ok) {
+                throw new Error(`Request failed with status ${response.status}`);
+            }
+            const blob = await response.blob();
+            const url = URL.createObjectURL(blob);
+            triggerDownload(url, archiveName);
+            window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+        } catch (error) {
+            if (isAbortError(error)) {
+                return;
+            }
+            console.error("Download failed", error);
+            window.alert("Download failed. Please try again.");
+        } finally {
+            batchDownloadAbortControllerRef.current = null;
+            setIsPreparingBatchDownload(false);
+        }
+    }, []);
+
+    const handleCancelBatchDownload = React.useCallback(() => {
+        if (batchDownloadAbortControllerRef.current) {
+            batchDownloadAbortControllerRef.current.abort();
+            batchDownloadAbortControllerRef.current = null;
+        }
+        setIsPreparingBatchDownload(false);
     }, []);
 
     return (
@@ -525,7 +931,7 @@ export default function Filesystem() {
                         navigationPaneSettings={{ visible: false }}
                         contextMenuSettings={{
                             file: ["Download", "Delete", "Rename"],
-                            folder: ["Open", "Delete", "Rename"],
+                            folder: ["Open", "Delete", "Rename", "Download"],
                             layout: ["NewFolder", "Upload", "Refresh"],
                         }}
                         success={handleSuccess}
@@ -543,40 +949,74 @@ export default function Filesystem() {
                         cssClass="filesystem-filemanager"
                         beforeDownload={handleBeforeDownload}
                         beforeSend={handleBeforeSend}
+                        fileLoad={handleFileLoad}
                         height="100%"
                         width="100%"
                     >
                         <Inject services={[NavigationPane, Toolbar, DetailsView, ContextMenu]} />
                     </FileManagerComponent>
+                    {isPreparingBatchDownload && (
+                        <div className="absolute inset-0 z-30 flex items-center justify-center bg-slate-900/45 backdrop-blur-sm">
+                            <div className="pointer-events-auto relative flex w-full max-w-xl flex-col items-center gap-6 rounded-3xl border border-slate-200 bg-white px-8 py-8 text-slate-800 shadow-xl shadow-slate-900/10">
+                                <button
+                                    type="button"
+                                    className="absolute right-5 top-5 rounded-full p-2 text-slate-500 transition hover:bg-slate-100 hover:text-slate-800"
+                                    aria-label="Cancel download"
+                                    onClick={handleCancelBatchDownload}
+                                >
+                                    <X className="h-6 w-6" aria-hidden="true" />
+                                </button>
+                                <span
+                                    className="inline-flex h-10 w-10 animate-spin rounded-full border-[3px]"
+                                    style={{
+                                        borderColor: "rgba(15, 23, 42, 0.12)",
+                                        borderTopColor: "hsl(var(--brand))",
+                                    }}
+                                    aria-hidden="true"
+                                />
+                                <span className="text-base font-semibold tracking-tight text-slate-700 text-center">
+                                    Compressing files for download …
+                                </span>
+                            </div>
+                        </div>
+                    )}
                     {activeUpload && (
                         <div className="absolute inset-0 z-20 flex items-center justify-center bg-slate-900/45 backdrop-blur-sm">
-                            <div className="pointer-events-auto relative w-80 max-w-full rounded-lg bg-white/95 p-5 shadow-2xl">
-                                {activeUpload.state === "uploading" && (
-                                    <button
-                                        type="button"
-                                        className="absolute right-4 top-4 inline-flex h-7 w-7 items-center justify-center rounded-full border border-gray-200 bg-white text-gray-500 transition hover:border-gray-300 hover:text-gray-800"
-                                        onClick={handleCancelUpload}
-                                    >
-                                        <span className="sr-only">Cancel upload</span>
-                                    </button>
-                                )}
-                                <p className="text-sm font-semibold text-gray-700 truncate">
-                                    {activeUpload.state === "uploading"
-                                        ? `Uploading: ${activeUpload.name}`
-                                        : activeUpload.name}
-                                </p>
-                                <div className="mt-4 h-3 w-full overflow-hidden rounded-full bg-gray-200">
+                            <div className="pointer-events-auto relative w-full max-w-2xl rounded-2xl bg-white/95 p-8 shadow-2xl">
+                                <div className="flex items-start justify-between gap-6">
+                                    <p className="flex-1 text-base font-semibold text-gray-700 truncate">
+                                        {activeUpload.state === "uploading"
+                                            ? `Uploading: ${activeUpload.name}`
+                                            : activeUpload.name}
+                                    </p>
+                                    {activeUpload.state === "uploading" && (
+                                        <button
+                                            type="button"
+                                            className="-mr-2 -mt-2 p-2 text-gray-500 transition hover:bg-gray-100 hover:text-gray-800 rounded-full"
+                                            aria-label="Cancel upload"
+                                            onClick={handleCancelUpload}
+                                        >
+                                            <X className="h-6 w-6" aria-hidden="true" />
+                                        </button>
+                                    )}
+                                </div>
+                                <div className="mt-5 h-4 w-full overflow-hidden rounded-full bg-gray-200">
                                     <div
                                         className="h-full rounded-full"
                                         style={{
-                                            width: `${Math.min(
-                                                100,
-                                                Math.floor(
-                                                    (activeUpload.uploadedBytes /
-                                                        activeUpload.totalBytes) *
-                                                        100
-                                                )
-                                            )}%`,
+                                            width: `${(() => {
+                                                if (activeUpload.totalBytes > 0) {
+                                                    return Math.min(
+                                                        100,
+                                                        Math.floor(
+                                                            (activeUpload.uploadedBytes /
+                                                                activeUpload.totalBytes) *
+                                                                100
+                                                        )
+                                                    );
+                                                }
+                                                return activeUpload.state === "done" ? 100 : 0;
+                                            })()}%`,
                                             backgroundColor:
                                                 activeUpload.state === "error"
                                                     ? "rgb(239 68 68)"
@@ -586,7 +1026,7 @@ export default function Filesystem() {
                                         }}
                                     />
                                 </div>
-                                <p className="mt-3 text-xs font-medium text-gray-500">
+                                <p className="mt-4 text-xs font-medium text-gray-500">
                                     {activeUpload.state === "uploading"
                                         ? `${formatBytes(
                                               activeUpload.uploadedBytes

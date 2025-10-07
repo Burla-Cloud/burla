@@ -243,6 +243,122 @@ function clearDropHighlight(manager: FileManagerComponent | null | undefined) {
     }
 }
 
+function ensureWebkitRelativePath(file: File, relativePath: string): FileWithPath {
+    const fileWithPath = file as FileWithPath;
+    if (fileWithPath.webkitRelativePath === relativePath) {
+        return fileWithPath;
+    }
+    try {
+        Object.defineProperty(fileWithPath, "webkitRelativePath", {
+            value: relativePath,
+            configurable: true,
+        });
+    } catch {
+        (fileWithPath as unknown as { [key: string]: unknown }).webkitRelativePath = relativePath;
+    }
+    return fileWithPath;
+}
+
+function createFileInfoFromSelection(selection: FileSelection): FileInfo {
+    const { file, relativePath } = selection;
+    const rawFile = ensureWebkitRelativePath(file, relativePath);
+    return {
+        name: file.name,
+        rawFile,
+        size: file.size,
+        status: "",
+        type: file.type,
+        validationMessages: { minSize: "", maxSize: "" },
+        statusCode: "1",
+    } as FileInfo;
+}
+
+async function readAllDirectoryEntries(
+    directoryEntry: FileSystemDirectoryEntryLike
+): Promise<FileSystemEntryLike[]> {
+    const reader = directoryEntry.createReader();
+    const collected: FileSystemEntryLike[] = [];
+    await new Promise<void>((resolve, reject) => {
+        const readBatch = () => {
+            reader.readEntries(
+                (entries) => {
+                    if (!entries.length) {
+                        resolve();
+                        return;
+                    }
+                    collected.push(...(entries as FileSystemEntryLike[]));
+                    readBatch();
+                },
+                (error) => {
+                    reject(error ?? new DOMException("Failed to read directory entries"));
+                }
+            );
+        };
+        readBatch();
+    });
+    return collected;
+}
+
+async function collectSelectionsFromEntry(
+    entry: FileSystemEntryLike,
+    parentPath: string
+): Promise<FileSelection[]> {
+    if (entry.isFile) {
+        const fileEntry = entry as FileSystemFileEntryLike;
+        const file = await new Promise<File>((resolve, reject) => {
+            fileEntry.file(resolve, (error) =>
+                reject(error ?? new DOMException("Failed to read file"))
+            );
+        });
+        const relativePath = parentPath ? `${parentPath}${file.name}` : file.name;
+        return [{ file, relativePath }];
+    }
+    if (entry.isDirectory) {
+        const directoryEntry = entry as FileSystemDirectoryEntryLike;
+        const nextPath = parentPath
+            ? `${parentPath}${directoryEntry.name}/`
+            : `${directoryEntry.name}/`;
+        const childEntries = await readAllDirectoryEntries(directoryEntry);
+        const selections: FileSelection[] = [];
+        for (const child of childEntries) {
+            selections.push(...(await collectSelectionsFromEntry(child, nextPath)));
+        }
+        return selections;
+    }
+    return [];
+}
+
+async function collectSelectionsFromItem(
+    item: DataTransferItemWithEntry
+): Promise<FileSelection[]> {
+    const entry = item.webkitGetAsEntry?.();
+    if (entry) {
+        return collectSelectionsFromEntry(entry, "");
+    }
+    const file = item.getAsFile();
+    if (file) {
+        return [{ file, relativePath: file.name }];
+    }
+    return [];
+}
+
+async function collectSelectionsFromDataTransfer(
+    dataTransfer: DataTransfer
+): Promise<FileSelection[]> {
+    const items = Array.from(dataTransfer.items ?? []);
+    if (items.length) {
+        const nestedResults = await Promise.all(
+            items.map((item) => collectSelectionsFromItem(item))
+        );
+        const flattened = nestedResults.flat();
+        if (flattened.length) {
+            return flattened;
+        }
+    }
+    const files = Array.from(dataTransfer.files ?? []);
+    return files.map((file) => ({ file, relativePath: file.name }));
+}
+
 function triggerDownload(url: string, fileName: string) {
     const anchor = document.createElement("a");
     anchor.href = url;
@@ -314,10 +430,37 @@ type QueuedUpload = {
 };
 
 type FileSystemEntryLike = {
+    isFile: boolean;
     isDirectory: boolean;
+    name: string;
 };
 type DataTransferItemWithEntry = DataTransferItem & {
     webkitGetAsEntry?: () => FileSystemEntryLike | null;
+};
+
+type FileSystemFileEntryLike = FileSystemEntryLike & {
+    isFile: true;
+    file: (
+        successCallback: (file: File) => void,
+        errorCallback?: (error: DOMException) => void
+    ) => void;
+};
+
+type FileSystemDirectoryReaderLike = {
+    readEntries: (
+        successCallback: (entries: FileSystemEntryLike[]) => void,
+        errorCallback?: (error: DOMException) => void
+    ) => void;
+};
+
+type FileSystemDirectoryEntryLike = FileSystemEntryLike & {
+    isDirectory: true;
+    createReader: () => FileSystemDirectoryReaderLike;
+};
+
+type FileSelection = {
+    file: File;
+    relativePath: string;
 };
 
 type PreparedUploads = {
@@ -690,23 +833,28 @@ export default function Filesystem() {
                 throw new Error("No files to upload");
             }
 
-            const directorySegments = new Set<string>();
+            const filteredEntries: Array<[string, { fileInfo: FileInfo; segments: string[] }]> = [];
+
             if (hasNestedContent) {
-                for (const entry of uniqueEntries.values()) {
+                const folderCandidates: Array<
+                    [string, { fileInfo: FileInfo; segments: string[] }]
+                > = [];
+                const fileCandidates: Array<[string, { fileInfo: FileInfo; segments: string[] }]> =
+                    [];
+
+                for (const [path, entry] of uniqueEntries.entries()) {
                     if (entry.segments.length > 1) {
-                        directorySegments.add(entry.segments[0]);
+                        folderCandidates.push([path, entry]);
+                    } else {
+                        fileCandidates.push([path, entry]);
                     }
                 }
-            }
 
-            const filteredEntries: Array<[string, { fileInfo: FileInfo; segments: string[] }]> = [];
-            for (const [path, entry] of uniqueEntries.entries()) {
-                if (!hasNestedContent) {
-                    filteredEntries.push([path, entry]);
-                    continue;
-                }
-                if (entry.segments.length > 1 && directorySegments.has(entry.segments[0])) {
-                    filteredEntries.push([path, entry]);
+                filteredEntries.push(...fileCandidates);
+                filteredEntries.push(...folderCandidates);
+            } else {
+                for (const entry of uniqueEntries.entries()) {
+                    filteredEntries.push(entry);
                 }
             }
 
@@ -958,45 +1106,29 @@ export default function Filesystem() {
                 return;
             }
 
-            const items = Array.from(dataTransfer.items ?? []);
-            const hasDirectory = items.some((item) => {
-                const entry = (item as DataTransferItemWithEntry).webkitGetAsEntry?.();
-                return entry?.isDirectory ?? false;
-            });
-            if (hasDirectory) {
-                return;
-            }
-
-            const files = Array.from(dataTransfer.files ?? []);
-            if (!files.length) {
-                return;
-            }
-
             event.preventDefault();
             event.stopPropagation();
 
-            const fileInfos = files.map((file) => ({
-                name: file.name,
-                rawFile: file,
-                size: file.size,
-                status: "",
-                type: file.type,
-                validationMessages: { minSize: "", maxSize: "" },
-                statusCode: "1",
-            })) as unknown as FileInfo[];
-
-            try {
-                const processed = processFilesSelection(fileInfos, manager);
-                clearDropHighlight(manager);
-                if (!processed) {
-                    manager.uploadDialogObj?.hide();
+            void (async () => {
+                try {
+                    const selections = await collectSelectionsFromDataTransfer(dataTransfer);
+                    if (!selections.length) {
+                        return;
+                    }
+                    const fileInfos = selections.map(createFileInfoFromSelection) as FileInfo[];
+                    const processed = processFilesSelection(fileInfos, manager);
+                    if (!processed) {
+                        manager.uploadDialogObj?.hide();
+                    }
+                } catch (error) {
+                    console.error("Resumable upload failed", error);
+                    window.alert("Upload failed. Please try again.");
+                    lastSelectionTokenRef.current = null;
+                } finally {
+                    clearDropHighlight(manager);
+                    dataTransfer.clearData();
                 }
-            } catch (error) {
-                console.error("Resumable upload failed", error);
-                window.alert("Upload failed. Please try again.");
-                lastSelectionTokenRef.current = null;
-            }
-            dataTransfer.clearData();
+            })();
         };
 
         const handleDragLeave = () => {

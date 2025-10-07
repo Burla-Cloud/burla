@@ -273,36 +273,11 @@ function createFileInfoFromSelection(selection: FileSelection): FileInfo {
     } as FileInfo;
 }
 
-async function readAllDirectoryEntries(
-    directoryEntry: FileSystemDirectoryEntryLike
-): Promise<FileSystemEntryLike[]> {
-    const reader = directoryEntry.createReader();
-    const collected: FileSystemEntryLike[] = [];
-    await new Promise<void>((resolve, reject) => {
-        const readBatch = () => {
-            reader.readEntries(
-                (entries) => {
-                    if (!entries.length) {
-                        resolve();
-                        return;
-                    }
-                    collected.push(...(entries as FileSystemEntryLike[]));
-                    readBatch();
-                },
-                (error) => {
-                    reject(error ?? new DOMException("Failed to read directory entries"));
-                }
-            );
-        };
-        readBatch();
-    });
-    return collected;
-}
-
 async function collectSelectionsFromEntry(
     entry: FileSystemEntryLike,
-    parentPath: string
-): Promise<FileSelection[]> {
+    parentPath: string,
+    accumulator: FileSelection[]
+): Promise<void> {
     if (entry.isFile) {
         const fileEntry = entry as FileSystemFileEntryLike;
         const file = await new Promise<File>((resolve, reject) => {
@@ -311,52 +286,99 @@ async function collectSelectionsFromEntry(
             );
         });
         const relativePath = parentPath ? `${parentPath}${file.name}` : file.name;
-        return [{ file, relativePath }];
+        accumulator.push({ file, relativePath });
+        if (accumulator.length >= MAX_SELECTION_FILES) {
+            throw new Error(MAX_SELECTION_ERROR_CODE);
+        }
+        return;
     }
     if (entry.isDirectory) {
         const directoryEntry = entry as FileSystemDirectoryEntryLike;
         const nextPath = parentPath
             ? `${parentPath}${directoryEntry.name}/`
             : `${directoryEntry.name}/`;
-        const childEntries = await readAllDirectoryEntries(directoryEntry);
-        const selections: FileSelection[] = [];
-        for (const child of childEntries) {
-            selections.push(...(await collectSelectionsFromEntry(child, nextPath)));
-        }
-        return selections;
+        const reader = directoryEntry.createReader();
+
+        const readBatch = async (): Promise<void> => {
+            const entries = await new Promise<FileSystemEntryLike[]>((resolve, reject) => {
+                reader.readEntries(
+                    (batch) => resolve(batch as FileSystemEntryLike[]),
+                    (error) => reject(error ?? new DOMException("Failed to read directory entries"))
+                );
+            });
+
+            if (!entries.length) {
+                return;
+            }
+
+            for (const child of entries) {
+                await collectSelectionsFromEntry(child, nextPath, accumulator);
+                if (accumulator.length >= MAX_SELECTION_FILES) {
+                    return;
+                }
+            }
+
+            if (accumulator.length >= MAX_SELECTION_FILES) {
+                return;
+            }
+
+            await readBatch();
+        };
+
+        await readBatch();
+        return;
     }
-    return [];
+    return;
 }
 
 async function collectSelectionsFromItem(
-    item: DataTransferItemWithEntry
-): Promise<FileSelection[]> {
+    item: DataTransferItemWithEntry,
+    accumulator: FileSelection[]
+): Promise<void> {
     const entry = item.webkitGetAsEntry?.();
     if (entry) {
-        return collectSelectionsFromEntry(entry, "");
+        await collectSelectionsFromEntry(entry, "", accumulator);
+        return;
     }
     const file = item.getAsFile();
     if (file) {
-        return [{ file, relativePath: file.name }];
+        accumulator.push({ file, relativePath: file.name });
+        if (accumulator.length >= MAX_SELECTION_FILES) {
+            throw new Error(MAX_SELECTION_ERROR_CODE);
+        }
+        return;
     }
-    return [];
+    return;
 }
 
 async function collectSelectionsFromDataTransfer(
     dataTransfer: DataTransfer
 ): Promise<FileSelection[]> {
+    const selections: FileSelection[] = [];
     const items = Array.from(dataTransfer.items ?? []);
     if (items.length) {
-        const nestedResults = await Promise.all(
-            items.map((item) => collectSelectionsFromItem(item))
-        );
-        const flattened = nestedResults.flat();
-        if (flattened.length) {
-            return flattened;
+        for (const item of items) {
+            await collectSelectionsFromItem(item as DataTransferItemWithEntry, selections);
+            if (selections.length >= MAX_SELECTION_FILES) {
+                break;
+            }
+        }
+        if (selections.length) {
+            return selections;
         }
     }
+
     const files = Array.from(dataTransfer.files ?? []);
-    return files.map((file) => ({ file, relativePath: file.name }));
+    for (const file of files) {
+        selections.push({ file, relativePath: file.name });
+        if (selections.length >= MAX_SELECTION_FILES) {
+            throw new Error(MAX_SELECTION_ERROR_CODE);
+        }
+    }
+    if (selections.length >= MAX_SELECTION_FILES) {
+        throw new Error(MAX_SELECTION_ERROR_CODE);
+    }
+    return selections;
 }
 
 function triggerDownload(url: string, fileName: string) {
@@ -462,6 +484,20 @@ type FileSelection = {
     file: File;
     relativePath: string;
 };
+
+const MAX_SELECTION_FILES = 1000;
+const MAX_SELECTION_ERROR_CODE = "MAX_SELECTION_EXCEEDED";
+
+function isMaxSelectionError(error: unknown): boolean {
+    return error instanceof Error && error.message === MAX_SELECTION_ERROR_CODE;
+}
+
+function notifyMaxSelectionLimit() {
+    window.alert(
+        "Burla is unable to upload more than 1000 files at once :(\n" +
+            "Please email jake@burla.dev if this is annoying!"
+    );
+}
 
 type PreparedUploads = {
     items: QueuedUpload[];
@@ -826,6 +862,9 @@ export default function Filesystem() {
                         fileInfo: fileEntry,
                         segments,
                     });
+                    if (uniqueEntries.size >= MAX_SELECTION_FILES) {
+                        throw new Error(MAX_SELECTION_ERROR_CODE);
+                    }
                 }
             }
 
@@ -860,6 +899,10 @@ export default function Filesystem() {
 
             if (!filteredEntries.length) {
                 throw new Error("No files to upload");
+            }
+
+            if (filteredEntries.length >= MAX_SELECTION_FILES) {
+                throw new Error(MAX_SELECTION_ERROR_CODE);
             }
 
             const items = filteredEntries.map(([path, entry]) => {
@@ -966,14 +1009,22 @@ export default function Filesystem() {
             }
 
             try {
+                if (filesData.length >= MAX_SELECTION_FILES) {
+                    throw new Error(MAX_SELECTION_ERROR_CODE);
+                }
                 const processed = processFilesSelection(filesData, manager);
                 clearDropHighlight(manager);
                 if (!processed) {
                     manager.uploadDialogObj?.hide();
                 }
             } catch (error) {
-                console.error("Resumable upload failed", error);
-                window.alert("Upload failed. Please try again.");
+                if (isMaxSelectionError(error)) {
+                    notifyMaxSelectionLimit();
+                } else {
+                    console.error("Resumable upload failed", error);
+                    window.alert("Upload failed. Please try again.");
+                }
+                clearDropHighlight(manager);
                 lastSelectionTokenRef.current = null;
             } finally {
                 clearUploaderFiles(manager.uploadObj ?? null);
@@ -1028,14 +1079,22 @@ export default function Filesystem() {
 
                 if (filesData.length) {
                     try {
+                        if (filesData.length >= MAX_SELECTION_FILES) {
+                            throw new Error(MAX_SELECTION_ERROR_CODE);
+                        }
                         const processed = processFilesSelection(filesData, manager ?? null);
                         clearDropHighlight(manager ?? null);
                         if (!processed) {
                             manager?.uploadDialogObj?.hide();
                         }
                     } catch (error) {
-                        console.error("Resumable upload failed", error);
-                        window.alert("Upload failed. Please try again.");
+                        if (isMaxSelectionError(error)) {
+                            notifyMaxSelectionLimit();
+                        } else {
+                            console.error("Resumable upload failed", error);
+                            window.alert("Upload failed. Please try again.");
+                        }
+                        clearDropHighlight(manager ?? null);
                         lastSelectionTokenRef.current = null;
                     } finally {
                         clearUploaderFiles(manager?.uploadObj ?? null);
@@ -1115,14 +1174,21 @@ export default function Filesystem() {
                     if (!selections.length) {
                         return;
                     }
+                    if (selections.length >= MAX_SELECTION_FILES) {
+                        throw new Error(MAX_SELECTION_ERROR_CODE);
+                    }
                     const fileInfos = selections.map(createFileInfoFromSelection) as FileInfo[];
                     const processed = processFilesSelection(fileInfos, manager);
                     if (!processed) {
                         manager.uploadDialogObj?.hide();
                     }
                 } catch (error) {
-                    console.error("Resumable upload failed", error);
-                    window.alert("Upload failed. Please try again.");
+                    if (isMaxSelectionError(error)) {
+                        notifyMaxSelectionLimit();
+                    } else {
+                        console.error("Resumable upload failed", error);
+                        window.alert("Upload failed. Please try again.");
+                    }
                     lastSelectionTokenRef.current = null;
                 } finally {
                     clearDropHighlight(manager);

@@ -240,13 +240,27 @@
   .filesystem-shell .e-grid .e-gridheader .e-headercell .e-headerchkcelldiv,
   .filesystem-shell .e-grid .e-gridheader .e-headercell .e-sortfilterdiv
   {
-    margin-left: -3px;
+    margin-left: -4px;
+  }
+
+  .filesystem-shell .e-grid .e-gridheader .e-sortfilter .e-headercelldiv
+  {
+    padding-left: 0.25rem !important;
+    margin-left: -4px;
   }
 
   .filesystem-shell .e-grid .e-gridheader .e-fe-checkbox,
   .filesystem-shell .e-grid .e-gridheader .e-fe-grid-icon
   {
-    padding-left: 6px !important;
+    padding-left: 8px !important;
+  }
+
+  .filesystem-shell .e-grid .e-gridheader .e-headercell.e-fe-checkbox .e-headercelldiv,
+  .filesystem-shell .e-grid .e-gridheader .e-headercell.e-fe-checkbox .e-headerchkcelldiv,
+  .filesystem-shell .e-grid .e-gridheader .e-headercell.e-fe-grid-icon .e-headercelldiv,
+  .filesystem-shell .e-grid .e-gridheader .e-headercell.e-fe-grid-icon .e-headerchkcelldiv
+  {
+    margin-left: 0;
   }
 
   .filesystem-shell .e-checkbox-wrapper .e-frame.e-check,

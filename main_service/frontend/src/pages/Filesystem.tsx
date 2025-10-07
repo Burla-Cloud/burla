@@ -1,5 +1,6 @@
 import React from "react";
 import type { BeforeDownloadEventArgs } from "@syncfusion/ej2-filemanager";
+import type { FileInfo } from "@syncfusion/ej2-inputs";
 import {
     FileManagerComponent,
     Inject,
@@ -92,6 +93,46 @@ function triggerDownload(url: string, fileName: string) {
     anchor.remove();
 }
 
+function isAbortError(error: unknown): boolean {
+    return (
+        (error instanceof DOMException && error.name === "AbortError") ||
+        (typeof error === "object" &&
+            error !== null &&
+            "name" in error &&
+            (error as { name?: string }).name === "AbortError")
+    );
+}
+
+function normalizeUploadRelativePath(path: string): string {
+    const forwardSlashes = path.replace(/\\/g, "/");
+    const withoutRelativePrefix = forwardSlashes.replace(/^(?:\.\/)+/, "");
+    const trimmed = withoutRelativePrefix.startsWith("/")
+        ? withoutRelativePrefix.slice(1)
+        : withoutRelativePrefix;
+    const segments = trimmed.split("/").filter(Boolean);
+    if (segments.length === 0) {
+        throw new Error("File path is required");
+    }
+    if (segments.some((segment) => segment === "..")) {
+        throw new Error("Invalid file path");
+    }
+    return segments.join("/");
+}
+
+function uploadPrefixFromPath(path: string): string {
+    const normalized = normalizeServerPath(path);
+    if (normalized === "/") {
+        return "";
+    }
+    return normalized.slice(1, -1);
+}
+
+function buildObjectName(basePath: string, relativePath: string): string {
+    const prefix = uploadPrefixFromPath(basePath);
+    const normalizedRelative = normalizeUploadRelativePath(relativePath);
+    return prefix ? `${prefix}/${normalizedRelative}` : normalizedRelative;
+}
+
 export default function Filesystem() {
     const fmRef = React.useRef<FileManagerComponent | null>(null);
     const maxUploadSizeBytes = 10 * 1024 ** 4;
@@ -136,72 +177,70 @@ export default function Filesystem() {
         return () => window.clearTimeout(timeout);
     }, [activeUpload]);
 
-    const handleBeforeSend = React.useCallback(async (args: any) => {
-        if (args.action === "Search") {
-            args.cancel = true;
-            return;
-        }
+    const uploadQueueRef = React.useRef<FileInfo[]>([]);
+    const uploadPathRef = React.useRef<string>("/");
+    const isProcessingUploadRef = React.useRef(false);
 
-        if (args.action === "Upload") {
-            args.cancel = true;
+    const uploadFileToStorage = React.useCallback(
+        async (fileInfo: FileInfo, objectName: string, displayName: string) => {
+            const rawFile = fileInfo.rawFile as File | Blob | undefined;
+            if (!rawFile) {
+                throw new Error("Missing file data");
+            }
 
-            const fileData = fmRef.current?.uploadObj?.getFilesData()?.[0];
-            const file = fileData?.rawFile as File | undefined;
+            abortControllerRef.current?.abort();
+            const controller = new AbortController();
+            abortControllerRef.current = controller;
 
-            if (!file) return;
-
-            fmRef.current?.uploadDialogObj?.hide();
-
-            let controller: AbortController | null = null;
+            const totalBytes = rawFile.size;
+            setActiveUpload({
+                name: displayName,
+                uploadedBytes: 0,
+                totalBytes,
+                state: "uploading",
+            });
 
             try {
-                abortControllerRef.current?.abort();
-                controller = new AbortController();
-                abortControllerRef.current = controller;
-
-                const resp = await fetch(
+                const signedResponse = await fetch(
                     `/signed-resumable?object_name=${encodeURIComponent(
-                        file.name
-                    )}&content_type=${encodeURIComponent(file.type)}`,
+                        objectName
+                    )}&content_type=${encodeURIComponent(
+                        rawFile.type || "application/octet-stream"
+                    )}`,
                     { signal: controller.signal }
                 );
-                const { url } = await resp.json();
+                const { url } = await signedResponse.json();
 
-                setActiveUpload({
-                    name: file.name,
-                    uploadedBytes: 0,
-                    totalBytes: file.size,
-                    state: "uploading",
-                });
-
-                const start = await fetch(url, {
+                const sessionResponse = await fetch(url, {
                     method: "POST",
                     headers: {
                         "Content-Length": "0",
                         "x-goog-resumable": "start",
-                        "Content-Type": file.type || "application/octet-stream",
+                        "Content-Type": rawFile.type || "application/octet-stream",
                     },
                     signal: controller.signal,
                 });
-                const sessionUrl = start.headers.get("Location");
-                if (!sessionUrl) throw new Error("Missing resumable session URL");
+                const sessionUrl = sessionResponse.headers.get("Location");
+                if (!sessionUrl) {
+                    throw new Error("Missing resumable session URL");
+                }
 
                 const chunkSize = 8 * 1024 * 1024;
                 let offset = 0;
-                while (offset < file.size) {
+                while (offset < totalBytes) {
                     if (controller.signal.aborted) {
                         throw new DOMException("Upload aborted", "AbortError");
                     }
 
-                    const end = Math.min(offset + chunkSize, file.size);
-                    const chunk = file.slice(offset, end);
-                    const range = `bytes ${offset}-${end - 1}/${file.size}`;
+                    const end = Math.min(offset + chunkSize, totalBytes);
+                    const chunk = rawFile.slice(offset, end);
+                    const range = `bytes ${offset}-${end - 1}/${totalBytes}`;
 
                     const response = await fetch(sessionUrl, {
                         method: "PUT",
                         headers: {
                             "Content-Range": range,
-                            "Content-Type": file.type || "application/octet-stream",
+                            "Content-Type": rawFile.type || "application/octet-stream",
                         },
                         body: chunk,
                         signal: controller.signal,
@@ -218,7 +257,7 @@ export default function Filesystem() {
                         }
 
                         setActiveUpload((current) =>
-                            current && current.name === file.name
+                            current && current.name === displayName
                                 ? {
                                       ...current,
                                       uploadedBytes: offset,
@@ -230,7 +269,7 @@ export default function Filesystem() {
 
                     if (!response.ok) {
                         setActiveUpload((current) =>
-                            current && current.name === file.name
+                            current && current.name === displayName
                                 ? {
                                       ...current,
                                       state: "error",
@@ -243,7 +282,7 @@ export default function Filesystem() {
                     offset = end;
 
                     setActiveUpload((current) =>
-                        current && current.name === file.name
+                        current && current.name === displayName
                             ? {
                                   ...current,
                                   uploadedBytes: end,
@@ -253,27 +292,18 @@ export default function Filesystem() {
                 }
 
                 setActiveUpload((current) =>
-                    current && current.name === file.name
+                    current && current.name === displayName
                         ? {
                               ...current,
-                              uploadedBytes: file.size,
+                              uploadedBytes: totalBytes,
                               state: "done",
                           }
                         : current
                 );
-
-                fmRef.current?.refreshFiles();
             } catch (error) {
-                const isAbort =
-                    (error instanceof DOMException && error.name === "AbortError") ||
-                    (typeof error === "object" &&
-                        error !== null &&
-                        "name" in error &&
-                        (error as { name?: string }).name === "AbortError");
-
-                if (isAbort) {
+                if (isAbortError(error)) {
                     setActiveUpload((current) =>
-                        current && current.name === file.name
+                        current && current.name === displayName
                             ? {
                                   ...current,
                                   state: "cancelled",
@@ -283,7 +313,7 @@ export default function Filesystem() {
                 } else {
                     console.error("Resumable upload failed", error);
                     setActiveUpload((current) =>
-                        current && current.name === file.name
+                        current && current.name === displayName
                             ? {
                                   ...current,
                                   state: "error",
@@ -291,16 +321,121 @@ export default function Filesystem() {
                             : current
                     );
                 }
+                throw error;
             } finally {
                 abortControllerRef.current = null;
-                fmRef.current?.uploadObj?.clearAll();
             }
+        },
+        []
+    );
+
+    const processUploadQueue = React.useCallback(async () => {
+        let uploadedAny = false;
+
+        try {
+            while (uploadQueueRef.current.length > 0) {
+                const next = uploadQueueRef.current.shift();
+                if (!next) {
+                    continue;
+                }
+
+                const rawFile = next.rawFile as File | Blob | undefined;
+                const displayName = next.name || (rawFile instanceof File ? rawFile.name : "");
+                if (!displayName) {
+                    continue;
+                }
+                const totalBytes = typeof next.size === "number" ? next.size : rawFile?.size ?? 0;
+
+                let objectName: string;
+                try {
+                    objectName = buildObjectName(uploadPathRef.current, displayName);
+                } catch (error) {
+                    console.error("Resumable upload failed", error);
+                    setActiveUpload({
+                        name: displayName,
+                        uploadedBytes: 0,
+                        totalBytes,
+                        state: "error",
+                    });
+                    window.alert("Upload failed. Please try again.");
+                    break;
+                }
+
+                try {
+                    await uploadFileToStorage(next, objectName, displayName);
+                    uploadedAny = true;
+                } catch (error) {
+                    if (!isAbortError(error)) {
+                        window.alert("Upload failed. Please try again.");
+                    }
+                    break;
+                }
+            }
+        } finally {
+            uploadQueueRef.current = [];
+            abortControllerRef.current = null;
+            if (uploadedAny) {
+                fmRef.current?.refreshFiles();
+            }
+            fmRef.current?.uploadObj?.clearAll();
+            isProcessingUploadRef.current = false;
         }
-    }, []);
+    }, [uploadFileToStorage]);
+
+    const handleBeforeSend = React.useCallback(
+        (args: any) => {
+            if (args.action === "Search") {
+                args.cancel = true;
+                return;
+            }
+
+            if (args.action === "Upload") {
+                args.cancel = true;
+
+                const rawData = args.ajaxSettings?.data;
+                let requestPath: string | undefined;
+                if (typeof rawData === "string") {
+                    try {
+                        const parsed = JSON.parse(rawData) as Array<Record<string, unknown>>;
+                        const pathEntry = parsed.find((entry) =>
+                            Object.prototype.hasOwnProperty.call(entry, "path")
+                        ) as { path?: string } | undefined;
+                        if (pathEntry?.path) {
+                            requestPath = pathEntry.path;
+                        }
+                    } catch {
+                        requestPath = undefined;
+                    }
+                }
+
+                const fallbackPath =
+                    typeof fmRef.current?.path === "string" ? fmRef.current?.path : "/";
+                uploadPathRef.current = normalizeServerPath(requestPath ?? fallbackPath);
+
+                if (isProcessingUploadRef.current) {
+                    return;
+                }
+
+                const filesData = fmRef.current?.uploadObj?.getFilesData() ?? [];
+                if (!filesData.length) {
+                    return;
+                }
+
+                uploadQueueRef.current = filesData.slice();
+                fmRef.current?.uploadDialogObj?.hide();
+                fmRef.current?.uploadObj?.clearAll();
+                isProcessingUploadRef.current = true;
+                void processUploadQueue();
+            }
+        },
+        [processUploadQueue]
+    );
 
     const handleCancelUpload = React.useCallback(() => {
+        uploadQueueRef.current = [];
         abortControllerRef.current?.abort();
         abortControllerRef.current = null;
+        isProcessingUploadRef.current = false;
         setActiveUpload((current) =>
             current && current.state === "uploading"
                 ? {
@@ -382,6 +517,7 @@ export default function Filesystem() {
                         }}
                         uploadSettings={{
                             maxFileSize: maxUploadSizeBytes,
+                            directoryUpload: true,
                         }}
                         detailsViewSettings={{
                             columns: detailsViewColumns,

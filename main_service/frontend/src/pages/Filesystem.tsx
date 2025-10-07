@@ -1,6 +1,6 @@
 import React from "react";
 import type { BeforeDownloadEventArgs, FileLoadEventArgs } from "@syncfusion/ej2-filemanager";
-import type { FileInfo } from "@syncfusion/ej2-inputs";
+import type { FileInfo, SelectedEventArgs } from "@syncfusion/ej2-inputs";
 import {
     FileManagerComponent,
     Inject,
@@ -257,6 +257,27 @@ function fileInfoSize(file: FileInfo): number {
 
 type FileWithPath = File & { webkitRelativePath?: string };
 
+type QueuedUpload = {
+    rawFile: File | Blob;
+    relativePath: string;
+    displayLabel: string;
+    size: number;
+    contentType: string;
+    directoryPath: string;
+};
+
+type FileSystemEntryLike = {
+    isDirectory: boolean;
+};
+type DataTransferItemWithEntry = DataTransferItem & {
+    webkitGetAsEntry?: () => FileSystemEntryLike | null;
+};
+
+type PreparedUploads = {
+    items: QueuedUpload[];
+    selectionToken: string;
+};
+
 function relativePathForFile(fileInfo: FileInfo): string {
     const rawFile = fileInfo.rawFile as FileWithPath | undefined;
     const rawPath = rawFile?.webkitRelativePath;
@@ -318,37 +339,36 @@ export default function Filesystem() {
         return () => window.clearTimeout(timeout);
     }, [activeUpload]);
 
-    const uploadQueueRef = React.useRef<FileInfo[]>([]);
-    const uploadPathRef = React.useRef<string>("/");
+    const uploadQueueRef = React.useRef<QueuedUpload[]>([]);
     const isProcessingUploadRef = React.useRef(false);
     const queueTotalBytesRef = React.useRef(0);
     const completedBytesRef = React.useRef(0);
     const totalFilesRef = React.useRef(0);
     const processedFilesRef = React.useRef(0);
+    const lastSelectionTokenRef = React.useRef<string | null>(null);
 
     const uploadFileToStorage = React.useCallback(
         async (
-            fileInfo: FileInfo,
+            queuedFile: QueuedUpload,
             objectName: string,
-            displayLabel: string,
             baseUploadedBytes: number,
             totalQueueBytes: number,
             fileIndex: number,
             totalFiles: number
         ) => {
-            const rawFile = fileInfo.rawFile as File | Blob | undefined;
-            if (!rawFile) {
-                throw new Error("Missing file data");
-            }
-
             abortControllerRef.current?.abort();
             const controller = new AbortController();
             abortControllerRef.current = controller;
 
+            const rawFile = queuedFile.rawFile;
+            const contentType = queuedFile.contentType || "application/octet-stream";
+
             const queueBytes = totalQueueBytes > 0 ? totalQueueBytes : rawFile.size;
             const initialUploadedBytes = Math.min(baseUploadedBytes, queueBytes);
             const label =
-                totalFiles > 1 ? `${displayLabel} (${fileIndex}/${totalFiles})` : displayLabel;
+                totalFiles > 1
+                    ? `${queuedFile.displayLabel} (${fileIndex}/${totalFiles})`
+                    : queuedFile.displayLabel;
             let lastUploadedBytes = initialUploadedBytes;
 
             setActiveUpload({
@@ -362,9 +382,7 @@ export default function Filesystem() {
                 const signedResponse = await fetch(
                     `/signed-resumable?object_name=${encodeURIComponent(
                         objectName
-                    )}&content_type=${encodeURIComponent(
-                        rawFile.type || "application/octet-stream"
-                    )}`,
+                    )}&content_type=${encodeURIComponent(contentType)}`,
                     { signal: controller.signal }
                 );
                 const { url } = await signedResponse.json();
@@ -374,7 +392,7 @@ export default function Filesystem() {
                     headers: {
                         "Content-Length": "0",
                         "x-goog-resumable": "start",
-                        "Content-Type": rawFile.type || "application/octet-stream",
+                        "Content-Type": contentType,
                     },
                     signal: controller.signal,
                 });
@@ -398,7 +416,7 @@ export default function Filesystem() {
                         method: "PUT",
                         headers: {
                             "Content-Range": range,
-                            "Content-Type": rawFile.type || "application/octet-stream",
+                            "Content-Type": contentType,
                         },
                         body: chunk,
                         signal: controller.signal,
@@ -497,28 +515,15 @@ export default function Filesystem() {
                 if (!next) {
                     continue;
                 }
-
-                if (!(next.rawFile instanceof Blob)) {
-                    continue;
-                }
-                let relativePath: string;
-                try {
-                    relativePath = relativePathForFile(next);
-                } catch (error) {
-                    console.error("Resumable upload failed", error);
-                    window.alert("Upload failed. Please try again.");
-                    encounteredError = true;
-                    break;
-                }
-                const fileSize = fileInfoSize(next);
+                const fileSize = next.size;
 
                 let objectName: string;
                 try {
-                    objectName = buildObjectName(uploadPathRef.current, relativePath);
+                    objectName = buildObjectName(next.directoryPath, next.relativePath);
                 } catch (error) {
                     console.error("Resumable upload failed", error);
                     setActiveUpload({
-                        name: relativePath,
+                        name: next.displayLabel,
                         uploadedBytes: completedBytesRef.current,
                         totalBytes: queueTotalBytesRef.current || fileSize,
                         state: "error",
@@ -537,7 +542,6 @@ export default function Filesystem() {
                     await uploadFileToStorage(
                         next,
                         objectName,
-                        relativePath,
                         baseUploaded,
                         totalQueueBytes,
                         fileIndex,
@@ -594,8 +598,193 @@ export default function Filesystem() {
             processedFilesRef.current = 0;
             totalFilesRef.current = 0;
             queueTotalBytesRef.current = 0;
+            lastSelectionTokenRef.current = null;
         }
     }, [uploadFileToStorage]);
+
+    const prepareQueuedUploads = React.useCallback(
+        (filesData: FileInfo[], directoryPath: string): PreparedUploads => {
+            const uniqueEntries = new Map<
+                string,
+                {
+                    fileInfo: FileInfo;
+                    segments: string[];
+                }
+            >();
+            let hasNestedContent = false;
+
+            for (const fileEntry of filesData) {
+                if (!fileEntry || !(fileEntry.rawFile instanceof Blob)) {
+                    continue;
+                }
+
+                let originalRelativePath: string;
+                try {
+                    originalRelativePath = relativePathForFile(fileEntry);
+                } catch (error) {
+                    throw error;
+                }
+
+                const normalizedRelativePath = normalizeUploadRelativePath(originalRelativePath);
+                const segments = normalizedRelativePath.split("/").filter(Boolean);
+                if (segments.length > 1) {
+                    hasNestedContent = true;
+                }
+
+                if (!uniqueEntries.has(normalizedRelativePath)) {
+                    uniqueEntries.set(normalizedRelativePath, {
+                        fileInfo: fileEntry,
+                        segments,
+                    });
+                }
+            }
+
+            if (!uniqueEntries.size) {
+                throw new Error("No files to upload");
+            }
+
+            const directorySegments = new Set<string>();
+            if (hasNestedContent) {
+                for (const entry of uniqueEntries.values()) {
+                    if (entry.segments.length > 1) {
+                        directorySegments.add(entry.segments[0]);
+                    }
+                }
+            }
+
+            const filteredEntries: Array<[string, { fileInfo: FileInfo; segments: string[] }]> = [];
+            for (const [path, entry] of uniqueEntries.entries()) {
+                if (!hasNestedContent) {
+                    filteredEntries.push([path, entry]);
+                    continue;
+                }
+                if (entry.segments.length > 1 && directorySegments.has(entry.segments[0])) {
+                    filteredEntries.push([path, entry]);
+                }
+            }
+
+            if (!filteredEntries.length) {
+                throw new Error("No files to upload");
+            }
+
+            const items = filteredEntries.map(([path, entry]) => {
+                const rawFile = entry.fileInfo.rawFile as File | Blob;
+                return {
+                    rawFile,
+                    relativePath: path,
+                    displayLabel: path,
+                    size: fileInfoSize(entry.fileInfo),
+                    contentType: rawFile.type || "application/octet-stream",
+                    directoryPath,
+                };
+            });
+
+            const selectionToken = filteredEntries
+                .map(([path]) => path)
+                .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
+                .join("|");
+
+            return {
+                items,
+                selectionToken,
+            };
+        },
+        []
+    );
+
+    const enqueueUploads = React.useCallback(
+        (queuedItems: QueuedUpload[]) => {
+            if (!queuedItems.length) {
+                return;
+            }
+
+            const additionalBytes = queuedItems.reduce((total, item) => total + item.size, 0);
+
+            if (isProcessingUploadRef.current) {
+                uploadQueueRef.current.push(...queuedItems);
+                queueTotalBytesRef.current += additionalBytes;
+                totalFilesRef.current += queuedItems.length;
+                setActiveUpload((current) =>
+                    current && current.state === "uploading"
+                        ? {
+                              ...current,
+                              totalBytes:
+                                  queueTotalBytesRef.current > 0
+                                      ? queueTotalBytesRef.current
+                                      : current.totalBytes,
+                          }
+                        : current
+                );
+                return;
+            }
+
+            queueTotalBytesRef.current = additionalBytes;
+            completedBytesRef.current = 0;
+            totalFilesRef.current = queuedItems.length;
+            processedFilesRef.current = 0;
+
+            uploadQueueRef.current = queuedItems.slice();
+            isProcessingUploadRef.current = true;
+            void processUploadQueue();
+        },
+        [processUploadQueue]
+    );
+
+    const processFilesSelection = React.useCallback(
+        (filesData: FileInfo[], manager: FileManagerComponent | null) => {
+            if (!manager || !filesData.length) {
+                return false;
+            }
+
+            const basePath = typeof manager.path === "string" ? manager.path : "/";
+            const directoryPath = normalizeServerPath(basePath);
+            const prepared = prepareQueuedUploads(filesData, directoryPath);
+
+            if (
+                prepared.selectionToken &&
+                lastSelectionTokenRef.current &&
+                prepared.selectionToken === lastSelectionTokenRef.current
+            ) {
+                return false;
+            }
+
+            lastSelectionTokenRef.current = prepared.selectionToken;
+            enqueueUploads(prepared.items);
+            manager.uploadDialogObj?.hide();
+            return true;
+        },
+        [enqueueUploads, prepareQueuedUploads]
+    );
+
+    const handleUploadSelected = React.useCallback(
+        (event: SelectedEventArgs) => {
+            event.cancel = true;
+            const manager = fmRef.current;
+            if (!manager) {
+                return;
+            }
+
+            const filesData = Array.isArray(event.filesData) ? (event.filesData as FileInfo[]) : [];
+            if (!filesData.length) {
+                clearUploaderFiles(manager.uploadObj ?? null);
+                return;
+            }
+
+            try {
+                const processed = processFilesSelection(filesData, manager);
+                if (!processed) {
+                    manager.uploadDialogObj?.hide();
+                }
+            } catch (error) {
+                console.error("Resumable upload failed", error);
+                window.alert("Upload failed. Please try again.");
+                lastSelectionTokenRef.current = null;
+            } finally {
+                clearUploaderFiles(manager.uploadObj ?? null);
+            }
+        },
+        [processFilesSelection]
+    );
 
     const handleBeforeSend = React.useCallback(
         (args: any) => {
@@ -620,71 +809,149 @@ export default function Filesystem() {
             if (normalizedAction === "upload") {
                 args.cancel = true;
 
-                const rawData = args.ajaxSettings?.data;
-                let requestPath: string | undefined;
-                if (typeof rawData === "string") {
+                const manager = fmRef.current;
+                const uploader = manager?.uploadObj as unknown as {
+                    getFilesData?: () => FileInfo[];
+                    selectedFiles?: FileInfo[];
+                } | null;
+
+                const uploadedFiles = uploader?.getFilesData?.() ?? [];
+                const selectedFiles = Array.isArray(uploader?.selectedFiles)
+                    ? uploader?.selectedFiles
+                    : [];
+                const argsWithFilesData = args as { filesData?: FileInfo[] };
+                const fallbackFiles = Array.isArray(argsWithFilesData.filesData)
+                    ? argsWithFilesData.filesData
+                    : [];
+
+                const filesData = uploadedFiles.length
+                    ? uploadedFiles
+                    : selectedFiles.length
+                    ? selectedFiles
+                    : fallbackFiles;
+
+                if (filesData.length) {
                     try {
-                        const parsed = JSON.parse(rawData) as Array<Record<string, unknown>>;
-                        const pathEntry = parsed.find((entry) =>
-                            Object.prototype.hasOwnProperty.call(entry, "path")
-                        ) as { path?: string } | undefined;
-                        if (pathEntry?.path) {
-                            requestPath = pathEntry.path;
+                        const processed = processFilesSelection(filesData, manager ?? null);
+                        if (!processed) {
+                            manager?.uploadDialogObj?.hide();
                         }
-                    } catch {
-                        requestPath = undefined;
+                    } catch (error) {
+                        console.error("Resumable upload failed", error);
+                        window.alert("Upload failed. Please try again.");
+                        lastSelectionTokenRef.current = null;
+                    } finally {
+                        clearUploaderFiles(manager?.uploadObj ?? null);
                     }
-                }
-
-                const fallbackPath =
-                    typeof fmRef.current?.path === "string" ? fmRef.current?.path : "/";
-                uploadPathRef.current = normalizeServerPath(requestPath ?? fallbackPath);
-
-                const filesData = fmRef.current?.uploadObj?.getFilesData() ?? [];
-                const fileEntries = filesData.filter((item) => item?.rawFile instanceof Blob);
-                if (!fileEntries.length) {
                     return;
                 }
 
-                const additionalTotalBytes = fileEntries.reduce(
-                    (total, file) => total + fileInfoSize(file),
-                    0
-                );
-
-                if (isProcessingUploadRef.current) {
-                    uploadQueueRef.current.push(...fileEntries);
-                    queueTotalBytesRef.current += additionalTotalBytes;
-                    totalFilesRef.current += fileEntries.length;
-                    fmRef.current?.uploadDialogObj?.hide();
-                    clearUploaderFiles(fmRef.current?.uploadObj ?? null);
-                    setActiveUpload((current) =>
-                        current && current.state === "uploading"
-                            ? {
-                                  ...current,
-                                  totalBytes:
-                                      queueTotalBytesRef.current > 0
-                                          ? queueTotalBytesRef.current
-                                          : current.totalBytes,
-                              }
-                            : current
-                    );
-                    return;
-                }
-
-                queueTotalBytesRef.current = additionalTotalBytes;
-                completedBytesRef.current = 0;
-                totalFilesRef.current = fileEntries.length;
-                processedFilesRef.current = 0;
-
-                uploadQueueRef.current = fileEntries.slice();
-                fmRef.current?.uploadDialogObj?.hide();
-                clearUploaderFiles(fmRef.current?.uploadObj ?? null);
-                isProcessingUploadRef.current = true;
-                void processUploadQueue();
+                manager?.uploadDialogObj?.hide();
+                clearUploaderFiles(manager?.uploadObj ?? null);
             }
         },
-        [processUploadQueue]
+        [processFilesSelection]
     );
+
+    React.useEffect(() => {
+        let isActive = true;
+        let retryId: number | null = null;
+        let cleanup: (() => void) | null = null;
+
+        const attachSelectedHandler = () => {
+            if (!isActive) {
+                return;
+            }
+
+            const manager = fmRef.current;
+            const uploader = manager?.uploadObj as unknown as {
+                on?: (event: string, handler: (event: unknown) => void) => void;
+                off?: (event: string, handler: (event: unknown) => void) => void;
+            } | null;
+
+            if (!manager || !uploader || typeof uploader.on !== "function") {
+                retryId = window.setTimeout(attachSelectedHandler, 50);
+                return;
+            }
+
+            cleanup?.();
+            uploader.on("selected", handleUploadSelected);
+            cleanup = () => {
+                uploader.off?.("selected", handleUploadSelected);
+            };
+            if (retryId !== null) {
+                window.clearTimeout(retryId);
+                retryId = null;
+            }
+        };
+
+        attachSelectedHandler();
+
+        return () => {
+            isActive = false;
+            if (retryId !== null) {
+                window.clearTimeout(retryId);
+            }
+            cleanup?.();
+        };
+    }, [handleUploadSelected]);
+
+    React.useEffect(() => {
+        const manager = fmRef.current;
+        const hostElement = manager?.element as HTMLElement | undefined;
+        if (!manager || !hostElement) {
+            return;
+        }
+
+        const handleDrop = (event: DragEvent) => {
+            const dataTransfer = event.dataTransfer;
+            if (!dataTransfer) {
+                return;
+            }
+
+            const items = Array.from(dataTransfer.items ?? []);
+            const hasDirectory = items.some((item) => {
+                const entry = (item as DataTransferItemWithEntry).webkitGetAsEntry?.();
+                return entry?.isDirectory ?? false;
+            });
+            if (hasDirectory) {
+                return;
+            }
+
+            const files = Array.from(dataTransfer.files ?? []);
+            if (!files.length) {
+                return;
+            }
+
+            event.preventDefault();
+            event.stopPropagation();
+
+            const fileInfos = files.map((file) => ({
+                name: file.name,
+                rawFile: file,
+                size: file.size,
+                status: "",
+                type: file.type,
+                validationMessages: { minSize: "", maxSize: "" },
+                statusCode: "1",
+            })) as unknown as FileInfo[];
+
+            try {
+                processFilesSelection(fileInfos, manager);
+            } catch (error) {
+                console.error("Resumable upload failed", error);
+                window.alert("Upload failed. Please try again.");
+                lastSelectionTokenRef.current = null;
+            }
+            dataTransfer.clearData();
+        };
+
+        hostElement.addEventListener("drop", handleDrop, true);
+
+        return () => {
+            hostElement.removeEventListener("drop", handleDrop, true);
+        };
+    }, [processFilesSelection]);
 
     const handleCancelUpload = React.useCallback(() => {
         uploadQueueRef.current = [];
@@ -710,6 +977,7 @@ export default function Filesystem() {
         completedBytesRef.current = 0;
         queueTotalBytesRef.current = 0;
         clearUploaderFiles(fmRef.current?.uploadObj ?? null);
+        lastSelectionTokenRef.current = null;
     }, []);
 
     const handleSuccess = React.useCallback((args: any) => {

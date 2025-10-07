@@ -196,6 +196,28 @@ function clearUploaderFiles(uploader: FileManagerComponent["uploadObj"] | null |
     instance.clearAll?.();
 }
 
+function clearDropHighlight(manager: FileManagerComponent | null | undefined) {
+    const elements: HTMLElement[] = [];
+    const dropArea = (manager?.dropArea as HTMLElement | undefined) ?? null;
+    if (dropArea) {
+        elements.push(dropArea);
+    }
+    const uploadWrapper = (manager?.uploadWrapper as HTMLElement | undefined) ?? null;
+    if (uploadWrapper) {
+        elements.push(uploadWrapper);
+    }
+    const host = (manager?.element as HTMLElement | undefined) ?? null;
+    if (host) {
+        elements.push(host);
+        const hovered = Array.from(host.querySelectorAll<HTMLElement>(".e-upload-drag-hover"));
+        elements.push(...hovered);
+    }
+    for (const element of elements) {
+        element.classList.remove("e-upload-drag-hover");
+        element.removeAttribute("aria-dropeffect");
+    }
+}
+
 function triggerDownload(url: string, fileName: string) {
     const anchor = document.createElement("a");
     anchor.href = url;
@@ -772,6 +794,7 @@ export default function Filesystem() {
 
             try {
                 const processed = processFilesSelection(filesData, manager);
+                clearDropHighlight(manager);
                 if (!processed) {
                     manager.uploadDialogObj?.hide();
                 }
@@ -833,6 +856,7 @@ export default function Filesystem() {
                 if (filesData.length) {
                     try {
                         const processed = processFilesSelection(filesData, manager ?? null);
+                        clearDropHighlight(manager ?? null);
                         if (!processed) {
                             manager?.uploadDialogObj?.hide();
                         }
@@ -937,7 +961,11 @@ export default function Filesystem() {
             })) as unknown as FileInfo[];
 
             try {
-                processFilesSelection(fileInfos, manager);
+                const processed = processFilesSelection(fileInfos, manager);
+                clearDropHighlight(manager);
+                if (!processed) {
+                    manager.uploadDialogObj?.hide();
+                }
             } catch (error) {
                 console.error("Resumable upload failed", error);
                 window.alert("Upload failed. Please try again.");
@@ -946,10 +974,32 @@ export default function Filesystem() {
             dataTransfer.clearData();
         };
 
+        const handleDragLeave = () => {
+            clearDropHighlight(manager);
+        };
+
+        const handleDragEnd = () => {
+            clearDropHighlight(manager);
+        };
+
         hostElement.addEventListener("drop", handleDrop, true);
+        hostElement.addEventListener("dragleave", handleDragLeave, true);
+        hostElement.addEventListener("dragend", handleDragEnd, true);
+        if (manager.dropArea instanceof HTMLElement && manager.dropArea !== hostElement) {
+            manager.dropArea.addEventListener("drop", handleDrop, true);
+            manager.dropArea.addEventListener("dragleave", handleDragLeave, true);
+            manager.dropArea.addEventListener("dragend", handleDragEnd, true);
+        }
 
         return () => {
             hostElement.removeEventListener("drop", handleDrop, true);
+            hostElement.removeEventListener("dragleave", handleDragLeave, true);
+            hostElement.removeEventListener("dragend", handleDragEnd, true);
+            if (manager.dropArea instanceof HTMLElement && manager.dropArea !== hostElement) {
+                manager.dropArea.removeEventListener("drop", handleDrop, true);
+                manager.dropArea.removeEventListener("dragleave", handleDragLeave, true);
+                manager.dropArea.removeEventListener("dragend", handleDragEnd, true);
+            }
         };
     }, [processFilesSelection]);
 

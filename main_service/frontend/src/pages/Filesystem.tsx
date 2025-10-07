@@ -188,22 +188,47 @@ function clearUploaderFiles(uploader: FileManagerComponent["uploadObj"] | null |
     const instance = uploader as unknown as {
         clearData?: () => void;
         clearAll?: () => void;
+        filesData?: unknown;
+        selectedFiles?: unknown;
     };
+    let didInvoke = false;
     if (typeof instance.clearData === "function") {
         instance.clearData();
-        return;
+        didInvoke = true;
     }
-    instance.clearAll?.();
+    if (typeof instance.clearAll === "function") {
+        instance.clearAll();
+        didInvoke = true;
+    }
+    if (Array.isArray(instance.filesData)) {
+        instance.filesData.length = 0;
+    }
+    if (Array.isArray(instance.selectedFiles)) {
+        instance.selectedFiles.length = 0;
+    }
+    if (!didInvoke && typeof uploader === "object" && uploader) {
+        try {
+            (uploader as unknown as { clearAll?: () => void }).clearAll?.();
+        } catch {
+            /* noop */
+        }
+    }
+}
+
+function getDropArea(manager: FileManagerComponent | null | undefined): HTMLElement | null {
+    const candidate = (manager as unknown as { dropArea?: HTMLElement | null })?.dropArea ?? null;
+    return candidate instanceof HTMLElement ? candidate : null;
 }
 
 function clearDropHighlight(manager: FileManagerComponent | null | undefined) {
     const elements: HTMLElement[] = [];
-    const dropArea = (manager?.dropArea as HTMLElement | undefined) ?? null;
+    const dropArea = getDropArea(manager);
     if (dropArea) {
         elements.push(dropArea);
     }
-    const uploadWrapper = (manager?.uploadWrapper as HTMLElement | undefined) ?? null;
-    if (uploadWrapper) {
+    const uploadWrapper =
+        (manager as unknown as { uploadWrapper?: HTMLElement | null })?.uploadWrapper ?? null;
+    if (uploadWrapper instanceof HTMLElement) {
         elements.push(uploadWrapper);
     }
     const host = (manager?.element as HTMLElement | undefined) ?? null;
@@ -985,20 +1010,22 @@ export default function Filesystem() {
         hostElement.addEventListener("drop", handleDrop, true);
         hostElement.addEventListener("dragleave", handleDragLeave, true);
         hostElement.addEventListener("dragend", handleDragEnd, true);
-        if (manager.dropArea instanceof HTMLElement && manager.dropArea !== hostElement) {
-            manager.dropArea.addEventListener("drop", handleDrop, true);
-            manager.dropArea.addEventListener("dragleave", handleDragLeave, true);
-            manager.dropArea.addEventListener("dragend", handleDragEnd, true);
+        const dropAreaElement = getDropArea(manager);
+        if (dropAreaElement && dropAreaElement !== hostElement) {
+            dropAreaElement.addEventListener("drop", handleDrop, true);
+            dropAreaElement.addEventListener("dragleave", handleDragLeave, true);
+            dropAreaElement.addEventListener("dragend", handleDragEnd, true);
         }
 
         return () => {
             hostElement.removeEventListener("drop", handleDrop, true);
             hostElement.removeEventListener("dragleave", handleDragLeave, true);
             hostElement.removeEventListener("dragend", handleDragEnd, true);
-            if (manager.dropArea instanceof HTMLElement && manager.dropArea !== hostElement) {
-                manager.dropArea.removeEventListener("drop", handleDrop, true);
-                manager.dropArea.removeEventListener("dragleave", handleDragLeave, true);
-                manager.dropArea.removeEventListener("dragend", handleDragEnd, true);
+            const dropAreaElementCleanup = getDropArea(manager);
+            if (dropAreaElementCleanup && dropAreaElementCleanup !== hostElement) {
+                dropAreaElementCleanup.removeEventListener("drop", handleDrop, true);
+                dropAreaElementCleanup.removeEventListener("dragleave", handleDragLeave, true);
+                dropAreaElementCleanup.removeEventListener("dragend", handleDragEnd, true);
             }
         };
     }, [processFilesSelection]);

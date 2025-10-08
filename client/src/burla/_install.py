@@ -97,11 +97,14 @@ def _install(spinner):
     run_command("gcloud services enable firestore.googleapis.com")
     run_command("gcloud services enable cloudresourcemanager.googleapis.com")
     run_command("gcloud services enable secretmanager.googleapis.com")
+    run_command("gcloud services enable storage.googleapis.com")
     run_command("gcloud services enable logging.googleapis.com")
     spinner.text = "Enabling required services... Done."
     spinner.ok("✓")
 
     _open_port_8080_to_VMs_with_tag_burla_cluster_node(spinner)
+
+    _create_gcs_bucket(spinner, PROJECT_ID)
 
     # create cluster id token secret (must exist for service accounts to be created)
     cmd = 'gcloud secrets create burla-cluster-id-token --replication-policy="automatic"'
@@ -257,6 +260,18 @@ def _open_port_8080_to_VMs_with_tag_burla_cluster_node(spinner):
     else:
         spinner.text = "Opening port 8080 to VM's with tag 'burla-cluster-node' ... Done."
         spinner.ok("✓")
+
+
+def _create_gcs_bucket(spinner, PROJECT_ID):
+    spinner.text = "Creating GCS bucket ... "
+    spinner.start()
+    cmd = f"gcloud storage buckets create {PROJECT_ID}-burla-shared-workspace"
+    result = run_command(cmd, raise_error=False)
+    if result.returncode != 0 and "already exists" in result.stderr.decode():
+        spinner.text = "Creating GCS bucket ... Bucket already exists."
+        spinner.ok("✓")
+    else:
+        spinner.fail("✗")
 
 
 def _register_cluster_and_save_cluster_id_token(spinner, PROJECT_ID, client_svc_account_key):

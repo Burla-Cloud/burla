@@ -7,7 +7,6 @@ PYTHON_MODULE_NAME = main_service
 
 ARTIFACT_REPO_NAME := $(WEBSERVICE_NAME)
 ARTIFACT_PKG_NAME := $(WEBSERVICE_NAME)
-PROD_IMAGE_BASE_NAME := us-docker.pkg.dev/burla-prod/$(ARTIFACT_REPO_NAME)/$(ARTIFACT_PKG_NAME)
 
 .PHONY: frontend
 build-frontend:
@@ -20,6 +19,36 @@ build-frontend:
 	cd ..; \
 	printf "$$(date +%s)" > .frontend_last_built_at.txt
 
+deploy-test:
+	set -e; \
+	PROJECT_ID=$$(gcloud config get-value project 2>/dev/null); \
+	TEST_IMAGE_BASE_NAME=$$( echo \
+		"us-docker.pkg.dev/$${PROJECT_ID}/$(ARTIFACT_REPO_NAME)/$(ARTIFACT_PKG_NAME)" \
+	); \
+	TEST_IMAGE_TAG=$$( \
+		gcloud artifacts tags list \
+			--package=$(ARTIFACT_PKG_NAME) \
+			--location=us \
+			--repository=$(ARTIFACT_REPO_NAME) \
+			--project $${PROJECT_ID} \
+			2>&1 | grep -Eo '^[0-9]+' | sort -n | tail -n 1 \
+	); \
+	TEST_IMAGE_NAME=$${TEST_IMAGE_BASE_NAME}:$${TEST_IMAGE_TAG}; \
+	gcloud run deploy $(WEBSERVICE_NAME) \
+		--image=$${TEST_IMAGE_NAME} \
+		--project $${PROJECT_ID} \
+		--region=us-central1 \
+		--min-instances 0 \
+		--max-instances 5 \
+		--memory 2Gi \
+		--cpu 1 \
+		--timeout 360 \
+		--concurrency 20 \
+		--allow-unauthenticated; \
+	gcloud run services update-traffic $(WEBSERVICE_NAME) \
+		--project $${PROJECT_ID} \
+		--region=us-central1 \
+		--to-latest
 
 publish:
 	set -e; \

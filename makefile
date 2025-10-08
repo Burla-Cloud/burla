@@ -94,6 +94,19 @@ local-dev:
 # Uses cluster config from firestore doc: `/databases/burla/cluster_config/cluster_config`
 remote-dev:
 	set -e; \
+	adc_file="$${HOME}/.config/gcloud/application_default_credentials.json"; \
+	if ! grep -q "projects/-/serviceAccounts/140225958505-compute@developer.gserviceaccount.com" "$${adc_file}" 2>/dev/null; then \
+		echo ""; \
+		echo "WARNING:"; \
+		echo "You are NOT impersonating the service account 140225958505-compute@developer.gserviceaccount.com"; \
+		echo "You will not be able to use the network filesystem (no permission to generate signed url's)"; \
+		echo "To fix this run:"; \
+		echo ""; \
+		echo "    gcloud auth application-default login --impersonate-service-account=140225958505-compute@developer.gserviceaccount.com"; \
+		echo ""; \
+		read -p "Continue anyway? (y/n): " answer; \
+		case "$${answer}" in y|Y) ;; *) echo "Aborted."; exit 1 ;; esac; \
+	fi; \
 	PROJECT_ID=$$(gcloud config get-value project 2>/dev/null); \
 	IMAGE_NAME=$$( echo \
 		"us-docker.pkg.dev/$${PROJECT_ID}/burla-main-service/burla-main-service:latest" \
@@ -121,6 +134,13 @@ __check-node-service-up-to-date:
 		exit 1; \
 	fi; \
 	echo "deployed node service up to date with local version.";
+
+deploy-test:
+	set -e; \
+	$(MAKE) __check-node-service-up-to-date && echo "" || exit 1; \
+	cd ./main_service; \
+	$(MAKE) image; \
+	$(MAKE) deploy-test; \
 
 deploy-prod:
 	set -e; \

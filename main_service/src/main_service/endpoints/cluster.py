@@ -46,25 +46,6 @@ def _restart_cluster(request: Request, logger: Logger):
         node = Node.from_snapshot(DB, logger, node_snapshot, auth_headers, instance_client)
         futures.append(executor.submit(node.delete))
 
-    # add nodes according to cluster_config doc
-    def _add_node_logged(
-        machine_type, gcp_region, containers, node_service_port, inactivity_time, disk_size
-    ):
-        node = Node.start(
-            db=DB,
-            logger=logger,
-            machine_type=machine_type,
-            gcp_region=gcp_region,
-            containers=containers,
-            auth_headers=auth_headers,
-            service_port=node_service_port,
-            sync_gcs_bucket_name="burla-test-shared-workspace",
-            as_local_container=IN_LOCAL_DEV_MODE,  # <- start in a container if IN_LOCAL_DEV_MODE
-            inactivity_shutdown_time_sec=inactivity_time,
-            disk_size=disk_size,
-        )
-        return node.instance_name
-
     # remove any existing `node_service` containers if in IN_LOCAL_DEV_MODE
     # this has to be done before starting new node_services so ports are available
     if IN_LOCAL_DEV_MODE:
@@ -91,19 +72,27 @@ def _restart_cluster(request: Request, logger: Logger):
     except Exception:
         pass
 
+    def _add_node_logged(**node_start_kwargs):
+        return Node.start(**node_start_kwargs).instance_name
+
     for node_spec in config["Nodes"]:
         for _ in range(node_spec["quantity"]):
             if IN_LOCAL_DEV_MODE:  # avoid trying to open same port on multiple local containers
                 node_service_port += 1
-            node_kwargs = dict(
+            node_start_kwargs = dict(
+                db=DB,
+                logger=logger,
                 machine_type=node_spec["machine_type"],
                 gcp_region=node_spec["gcp_region"],
                 containers=[Container.from_dict(c) for c in node_spec["containers"]],
-                node_service_port=node_service_port,
-                inactivity_time=node_spec.get("inactivity_shutdown_time_sec"),
+                auth_headers=auth_headers,
+                service_port=node_service_port,
+                sync_gcs_bucket_name=config["gcs_bucket_name"],
+                as_local_container=IN_LOCAL_DEV_MODE,  # start in a container if IN_LOCAL_DEV_MODE
+                inactivity_shutdown_time_sec=node_spec.get("inactivity_shutdown_time_sec"),
                 disk_size=node_spec.get("disk_size_gb"),
             )
-            future = executor.submit(_add_node_logged, **node_kwargs)
+            future = executor.submit(_add_node_logged, **node_start_kwargs)
             futures.append(future)
 
     # wait until all operations done

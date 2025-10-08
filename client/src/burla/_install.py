@@ -265,9 +265,9 @@ def _open_port_8080_to_VMs_with_tag_burla_cluster_node(spinner):
 def _create_gcs_bucket(spinner, PROJECT_ID):
     spinner.text = "Creating GCS bucket ... "
     spinner.start()
-    cmd = f"gcloud storage buckets create {PROJECT_ID}-burla-shared-workspace"
+    cmd = f"gcloud storage buckets create gs://{PROJECT_ID}-burla-shared-workspace"
     result = run_command(cmd, raise_error=False)
-    if result.returncode != 0 and "already exists" in result.stderr.decode():
+    if result.returncode != 0 and "HTTPError 409:" in result.stderr.decode():
         spinner.text = "Creating GCS bucket ... Bucket already exists."
         spinner.ok("✓")
     else:
@@ -403,6 +403,10 @@ def _create_service_accounts(spinner, PROJECT_ID):
     cmd += f" --member=serviceAccount:{main_svc_email} --role=roles/compute.instanceAdmin.v1"
     cmd += f" --condition=None"
     run_command(cmd)
+    cmd = f"gcloud projects add-iam-policy-binding {PROJECT_ID}"
+    cmd += f" --member=serviceAccount:{main_svc_email} --role=roles/storage.objectUser"
+    cmd += f" --condition=None"
+    run_command(cmd)
     cmd = f"gcloud secrets add-iam-policy-binding burla-cluster-id-token"
     cmd += f' --member="serviceAccount:{main_svc_email}"'
     cmd += f' --role="roles/secretmanager.secretAccessor"'
@@ -457,10 +461,13 @@ def _create_service_accounts(spinner, PROJECT_ID):
     return main_svc_email, client_svc_account_key
 
 
-def _create_firestore_database(spinner):
+def _create_firestore_database(spinner, PROJECT_ID):
     spinner.text = "Creating Firestore database ... "
     spinner.start()
     client = Client(database="burla")
+
+    # cannot do this at the top because PROJECT_ID is required
+    DEFAULT_CLUSTER_CONFIG["gcs_bucket_name"] = f"{PROJECT_ID}-burla-shared-workspace"
 
     cmd = "gcloud firestore databases create --database=burla"
     cmd += f" --location=us-central1 --type=firestore-native"

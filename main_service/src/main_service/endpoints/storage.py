@@ -9,6 +9,8 @@ from fastapi.responses import StreamingResponse
 from google.api_core.exceptions import GoogleAPIError, NotFound
 from google.cloud import storage
 
+from main_service import PROJECT_ID
+
 
 router = APIRouter()
 
@@ -430,6 +432,7 @@ def signed_resumable(
         version="v4",
         expiration=datetime.timedelta(days=7),
         method="POST",
+        service_account_email=f"burla-main-service@{PROJECT_ID}.iam.gserviceaccount.com",
         content_type=content_type,
         headers={"x-goog-resumable": "start"},
     )
@@ -508,8 +511,9 @@ def signed_download(object_name: str = Query(...), download_name: Optional[str] 
     disposition = f'attachment; filename="{safe_download_name}"'
     url = blob.generate_signed_url(
         version="v4",
-        expiration=datetime.timedelta(minutes=10),
+        expiration=datetime.timedelta(days=7),
         method="GET",
+        service_account_email=f"burla-main-service@{PROJECT_ID}.iam.gserviceaccount.com",
         response_disposition=disposition,
     )
     return {"url": url}

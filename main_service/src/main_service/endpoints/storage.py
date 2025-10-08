@@ -10,11 +10,10 @@ from google.cloud import storage
 from google.api_core.exceptions import GoogleAPIError, NotFound
 from google.auth import default, impersonated_credentials
 
-from main_service import PROJECT_ID
+from main_service import PROJECT_ID, DB
 
 
 router = APIRouter()
-
 
 FOLDER_PLACEHOLDER_NAME = ".burla-folder-placeholder"
 
@@ -26,7 +25,8 @@ signing_creds = impersonated_credentials.Credentials(
     target_scopes=["https://www.googleapis.com/auth/devstorage.read_write"],
 )
 gcs_client = storage.Client(project=project_id, credentials=signing_creds)
-GCS_BUCKET = gcs_client.bucket("burla-test-shared-workspace")
+cluster_config = DB.collection("cluster_config").document("cluster_config").get().to_dict()
+GCS_BUCKET = gcs_client.bucket(cluster_config["gcs_bucket_name"])
 
 
 def error_response(message: str, code: str = "400") -> Dict[str, Any]:

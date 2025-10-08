@@ -127,9 +127,10 @@ def _install(spinner):
     # Deploy dashboard as google cloud run service
     spinner.text = "Deploying burla-main-service to Google Cloud Run ... "
     spinner.start()
+    image_name = f"us-docker.pkg.dev/burla-prod/burla-main-service/burla-main-service:{__version__}"
     run_command(
         f"gcloud run deploy burla-main-service "
-        f"--image=burlacloud/main-service:{__version__} "
+        f"--image={image_name} "
         f"--project {PROJECT_ID} "
         f"--region=us-central1 "
         f"--service-account {main_svc_account_email} "

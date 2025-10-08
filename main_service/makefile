@@ -66,15 +66,11 @@ publish:
 			2>&1 | grep -Eo '^[0-9]+' | sort -n | tail -n 1 \
 	); \
 	TEST_IMAGE_NAME=$${TEST_IMAGE_BASE_NAME}:$${TEST_IMAGE_TAG}; \
-	DOCKERHUB_TOKEN=$$( \
-		gcloud secrets versions access latest \
-			--secret=jakes-docker-access-token \
-			--project=burla-prod \
+	PROD_IMAGE_BASE_NAME=$$( echo \
+		"us-docker.pkg.dev/burla-prod/$(ARTIFACT_REPO_NAME)/$(ARTIFACT_PKG_NAME)" \
 	); \
-	echo $${DOCKERHUB_TOKEN} | docker login -u jakezuliani --password-stdin; \
-	:; \
-	docker tag $${TEST_IMAGE_NAME} burlacloud/main-service:$(BURLA_VERSION); \
-	docker push burlacloud/main-service:$(BURLA_VERSION)
+	docker tag $${TEST_IMAGE_NAME} $${PROD_IMAGE_BASE_NAME}:$(BURLA_VERSION); \
+	docker push $${PROD_IMAGE_BASE_NAME}:$(BURLA_VERSION)
 
 image:
 	set -e; \

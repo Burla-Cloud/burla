@@ -99,6 +99,7 @@ def _install(spinner):
     run_command("gcloud services enable secretmanager.googleapis.com")
     run_command("gcloud services enable storage.googleapis.com")
     run_command("gcloud services enable logging.googleapis.com")
+    run_command("gcloud services enable iamcredentials.googleapis.com")
     spinner.text = "Enabling required services... Done."
     spinner.ok("✓")
 
@@ -405,6 +406,11 @@ def _create_service_accounts(spinner, PROJECT_ID):
     run_command(cmd)
     cmd = f"gcloud projects add-iam-policy-binding {PROJECT_ID}"
     cmd += f" --member=serviceAccount:{main_svc_email} --role=roles/storage.objectUser"
+    cmd += f" --condition=None"
+    run_command(cmd)
+    # allow main-service to create signed GCS url's for uploading/downloading from filemanager
+    cmd = f"gcloud iam service-accounts add-iam-policy-binding {main_svc_email}"
+    cmd += f" --member=serviceAccount:{main_svc_email} --role=roles/iam.serviceAccountTokenCreator"
     cmd += f" --condition=None"
     run_command(cmd)
     cmd = f"gcloud secrets add-iam-policy-binding burla-cluster-id-token"

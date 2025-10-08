@@ -6,16 +6,27 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
-from google.api_core.exceptions import GoogleAPIError, NotFound
 from google.cloud import storage
+from google.api_core.exceptions import GoogleAPIError, NotFound
+from google.auth import default, impersonated_credentials
 
 from main_service import PROJECT_ID
 
 
 router = APIRouter()
 
-BUCKET_NAME = "burla-test-shared-workspace"
+
 FOLDER_PLACEHOLDER_NAME = ".burla-folder-placeholder"
+
+# This makes it possible to create signed url's for any blobs created with this client.
+source_creds, project_id = default()
+signing_creds = impersonated_credentials.Credentials(
+    source_credentials=source_creds,
+    target_principal="burla-main-service@burla-test.iam.gserviceaccount.com",
+    target_scopes=["https://www.googleapis.com/auth/devstorage.read_write"],
+)
+gcs_client = storage.Client(project=project_id, credentials=signing_creds)
+GCS_BUCKET = gcs_client.bucket("burla-test-shared-workspace")
 
 
 def error_response(message: str, code: str = "400") -> Dict[str, Any]:
@@ -66,8 +77,8 @@ def isoformat_value(timestamp: Optional[datetime.datetime]) -> str:
     return timestamp.isoformat().replace("+00:00", "Z")
 
 
-def folder_has_children(bucket: storage.Bucket, prefix: str) -> bool:
-    iterator = bucket.list_blobs(prefix=prefix, max_results=2)
+def folder_has_children(prefix: str) -> bool:
+    iterator = GCS_BUCKET.list_blobs(prefix=prefix, max_results=2)
     for blob in iterator:
         if blob.name == prefix:
             continue
@@ -77,9 +88,7 @@ def folder_has_children(bucket: storage.Bucket, prefix: str) -> bool:
     return False
 
 
-def build_directory_metadata(
-    bucket: storage.Bucket, prefix: str, parent_prefix: str
-) -> Dict[str, Any]:
+def build_directory_metadata(prefix: str, parent_prefix: str) -> Dict[str, Any]:
     if prefix.endswith("/"):
         prefix = prefix
     else:
@@ -95,7 +104,7 @@ def build_directory_metadata(
         "dateModified": "",
         "type": "folder",
         "isFile": False,
-        "hasChild": folder_has_children(bucket, prefix),
+        "hasChild": folder_has_children(prefix),
         "path": directory_path,
         "filterPath": directory_path,
     }
@@ -143,11 +152,11 @@ def is_file_entry(entry: Dict[str, Any]) -> bool:
     return True
 
 
-def folder_exists(bucket: storage.Bucket, prefix: str) -> bool:
+def folder_exists(prefix: str) -> bool:
     placeholder_blob_name = f"{prefix}{FOLDER_PLACEHOLDER_NAME}"
-    if bucket.get_blob(placeholder_blob_name):
+    if GCS_BUCKET.get_blob(placeholder_blob_name):
         return True
-    iterator = bucket.list_blobs(prefix=prefix, max_results=1)
+    iterator = GCS_BUCKET.list_blobs(prefix=prefix, max_results=1)
     for blob in iterator:
         if blob.name == prefix:
             continue
@@ -155,27 +164,27 @@ def folder_exists(bucket: storage.Bucket, prefix: str) -> bool:
     return False
 
 
-def delete_prefix(bucket: storage.Bucket, prefix: str) -> None:
-    blobs = bucket.list_blobs(prefix=prefix)
+def delete_prefix(prefix: str) -> None:
+    blobs = GCS_BUCKET.list_blobs(prefix=prefix)
     for blob in blobs:
         blob.delete()
 
 
-def move_prefix(bucket: storage.Bucket, source_prefix: str, destination_prefix: str) -> None:
-    blobs = list(bucket.list_blobs(prefix=source_prefix))
+def move_prefix(source_prefix: str, destination_prefix: str) -> None:
+    blobs = list(GCS_BUCKET.list_blobs(prefix=source_prefix))
     for blob in blobs:
         destination_name = destination_prefix + blob.name[len(source_prefix) :]
-        bucket.rename_blob(blob, destination_name)
+        GCS_BUCKET.rename_blob(blob, destination_name)
 
 
-def read_action(bucket: storage.Bucket, payload: Dict[str, Any]) -> Dict[str, Any]:
+def read_action(payload: Dict[str, Any]) -> Dict[str, Any]:
     directory_prefix = normalize_directory_path(payload.get("path"))
-    iterator = bucket.list_blobs(prefix=directory_prefix, delimiter="/")
+    iterator = GCS_BUCKET.list_blobs(prefix=directory_prefix, delimiter="/")
     directories: List[Dict[str, Any]] = []
     files: List[Dict[str, Any]] = []
     for page in iterator.pages:
         for prefix in getattr(page, "prefixes", []):
-            directories.append(build_directory_metadata(bucket, prefix, directory_prefix))
+            directories.append(build_directory_metadata(prefix, directory_prefix))
         for blob in page:
             if blob.name == directory_prefix:
                 continue
@@ -192,8 +201,7 @@ def read_action(bucket: storage.Bucket, payload: Dict[str, Any]) -> Dict[str, An
     return response
 
 
-def create_action(bucket: storage.Bucket, payload: Dict[str, Any]) -> Dict[str, Any]:
-
+def create_action(payload: Dict[str, Any]) -> Dict[str, Any]:
     directory_prefix = normalize_directory_path(payload.get("path"))
     entries: List[Dict[str, Any]] = []
 
@@ -228,18 +236,18 @@ def create_action(bucket: storage.Bucket, payload: Dict[str, Any]) -> Dict[str, 
     for raw_name in unique_names:
         name = validate_entry_name(raw_name)
         folder_prefix = f"{directory_prefix}{name}/"
-        file_blob = bucket.get_blob(f"{directory_prefix}{name}")
+        file_blob = GCS_BUCKET.get_blob(f"{directory_prefix}{name}")
         if file_blob is not None:
             raise ValueError(f"A file named '{name}' already exists")
-        if folder_exists(bucket, folder_prefix):
-            metadata = build_directory_metadata(bucket, folder_prefix, directory_prefix)
+        if folder_exists(folder_prefix):
+            metadata = build_directory_metadata(folder_prefix, directory_prefix)
             entries.append(metadata)
             continue
         placeholder_blob_name = f"{folder_prefix}{FOLDER_PLACEHOLDER_NAME}"
-        if bucket.get_blob(placeholder_blob_name) is None:
-            placeholder_blob = bucket.blob(placeholder_blob_name)
+        if GCS_BUCKET.get_blob(placeholder_blob_name) is None:
+            placeholder_blob = GCS_BUCKET.blob(placeholder_blob_name)
             placeholder_blob.upload_from_string("", content_type="application/octet-stream")
-        metadata = build_directory_metadata(bucket, folder_prefix, directory_prefix)
+        metadata = build_directory_metadata(folder_prefix, directory_prefix)
         metadata["dateModified"] = isoformat_value(
             datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
         )
@@ -247,7 +255,7 @@ def create_action(bucket: storage.Bucket, payload: Dict[str, Any]) -> Dict[str, 
     return {"files": entries}
 
 
-def delete_action(bucket: storage.Bucket, payload: Dict[str, Any]) -> Dict[str, Any]:
+def delete_action(payload: Dict[str, Any]) -> Dict[str, Any]:
     directory_prefix = normalize_directory_path(payload.get("path"))
     data_items = payload.get("data") or []
     if not data_items:
@@ -259,18 +267,18 @@ def delete_action(bucket: storage.Bucket, payload: Dict[str, Any]) -> Dict[str, 
         name = validate_entry_name(item.get("name"))
         if is_file_entry(item):
             blob_name = f"{directory_prefix}{name}"
-            blob = bucket.blob(blob_name)
+            blob = GCS_BUCKET.blob(blob_name)
             try:
                 blob.delete()
             except NotFound:
                 continue
         else:
             folder_prefix = f"{directory_prefix}{name}/"
-            delete_prefix(bucket, folder_prefix)
+            delete_prefix(folder_prefix)
     return {"files": []}
 
 
-def move_action(bucket: storage.Bucket, payload: Dict[str, Any]) -> Dict[str, Any]:
+def move_action(payload: Dict[str, Any]) -> Dict[str, Any]:
     source_directory_prefix = normalize_directory_path(payload.get("path"))
     target_path = payload.get("targetPath")
     if target_path is None:
@@ -289,18 +297,18 @@ def move_action(bucket: storage.Bucket, payload: Dict[str, Any]) -> Dict[str, An
             source_key = f"{source_directory_prefix}{name}"
             destination_key = f"{target_directory_prefix}{name}"
             if source_key == destination_key:
-                existing_blob = bucket.get_blob(source_key)
+                existing_blob = GCS_BUCKET.get_blob(source_key)
                 if not existing_blob:
                     raise NotFound(f"File '{name}' not found")
                 entries.append(build_file_metadata(existing_blob, target_directory_prefix))
                 continue
-            if bucket.get_blob(destination_key):
+            if GCS_BUCKET.get_blob(destination_key):
                 raise ValueError(f"A file named '{name}' already exists at the destination")
-            blob = bucket.get_blob(source_key)
+            blob = GCS_BUCKET.get_blob(source_key)
             if not blob:
                 raise NotFound(f"File '{name}' not found")
-            bucket.rename_blob(blob, destination_key)
-            updated_blob = bucket.get_blob(destination_key)
+            GCS_BUCKET.rename_blob(blob, destination_key)
+            updated_blob = GCS_BUCKET.get_blob(destination_key)
             if not updated_blob:
                 raise NotFound(f"File '{name}' not found after move")
             entries.append(build_file_metadata(updated_blob, target_directory_prefix))
@@ -308,9 +316,7 @@ def move_action(bucket: storage.Bucket, payload: Dict[str, Any]) -> Dict[str, An
             source_prefix = f"{source_directory_prefix}{name}/"
             destination_prefix = f"{target_directory_prefix}{name}/"
             if source_prefix == destination_prefix:
-                metadata = build_directory_metadata(
-                    bucket, destination_prefix, target_directory_prefix
-                )
+                metadata = build_directory_metadata(destination_prefix, target_directory_prefix)
                 metadata["dateModified"] = isoformat_value(
                     datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
                 )
@@ -318,10 +324,10 @@ def move_action(bucket: storage.Bucket, payload: Dict[str, Any]) -> Dict[str, An
                 continue
             if destination_prefix.startswith(source_prefix):
                 raise ValueError("Cannot move a folder into itself or its subfolders")
-            if folder_exists(bucket, destination_prefix):
+            if folder_exists(destination_prefix):
                 raise ValueError(f"A folder named '{name}' already exists at the destination")
-            move_prefix(bucket, source_prefix, destination_prefix)
-            metadata = build_directory_metadata(bucket, destination_prefix, target_directory_prefix)
+            move_prefix(source_prefix, destination_prefix)
+            metadata = build_directory_metadata(destination_prefix, target_directory_prefix)
             metadata["dateModified"] = isoformat_value(
                 datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
             )
@@ -329,7 +335,7 @@ def move_action(bucket: storage.Bucket, payload: Dict[str, Any]) -> Dict[str, An
     return {"files": entries}
 
 
-def rename_action(bucket: storage.Bucket, payload: Dict[str, Any]) -> Dict[str, Any]:
+def rename_action(payload: Dict[str, Any]) -> Dict[str, Any]:
     directory_prefix = normalize_directory_path(payload.get("path"))
     data_items = payload.get("data") or []
     if not data_items:
@@ -342,28 +348,28 @@ def rename_action(bucket: storage.Bucket, payload: Dict[str, Any]) -> Dict[str, 
     if is_file_entry(item):
         source_key = f"{directory_prefix}{current_name}"
         destination_key = f"{directory_prefix}{new_name}"
-        blob = bucket.get_blob(source_key)
+        blob = GCS_BUCKET.get_blob(source_key)
         if not blob:
             raise NotFound(f"File '{current_name}' not found")
-        bucket.rename_blob(blob, destination_key)
-        updated_blob = bucket.get_blob(destination_key)
+        GCS_BUCKET.rename_blob(blob, destination_key)
+        updated_blob = GCS_BUCKET.get_blob(destination_key)
         if not updated_blob:
             raise NotFound(f"File '{new_name}' not found after rename")
         metadata = build_file_metadata(updated_blob, directory_prefix)
     else:
         source_prefix = f"{directory_prefix}{current_name}/"
         destination_prefix = f"{directory_prefix}{new_name}/"
-        if folder_exists(bucket, destination_prefix):
+        if folder_exists(destination_prefix):
             raise ValueError(f"Folder '{new_name}' already exists")
-        move_prefix(bucket, source_prefix, destination_prefix)
-        metadata = build_directory_metadata(bucket, destination_prefix, directory_prefix)
+        move_prefix(source_prefix, destination_prefix)
+        metadata = build_directory_metadata(destination_prefix, directory_prefix)
         metadata["dateModified"] = isoformat_value(
             datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
         )
     return {"files": [metadata]}
 
 
-def details_action(bucket: storage.Bucket, payload: Dict[str, Any]) -> Dict[str, Any]:
+def details_action(payload: Dict[str, Any]) -> Dict[str, Any]:
     directory_prefix = normalize_directory_path(payload.get("path"))
     names: List[str] = []
     data_items = payload.get("data") or []
@@ -381,13 +387,13 @@ def details_action(bucket: storage.Bucket, payload: Dict[str, Any]) -> Dict[str,
         return {"details": []}
     details: List[Dict[str, Any]] = []
     for name in names:
-        file_blob = bucket.get_blob(f"{directory_prefix}{name}")
+        file_blob = GCS_BUCKET.get_blob(f"{directory_prefix}{name}")
         if file_blob is not None:
             details.append(build_file_metadata(file_blob, directory_prefix))
             continue
         folder_prefix = f"{directory_prefix}{name}/"
-        if folder_exists(bucket, folder_prefix):
-            details.append(build_directory_metadata(bucket, folder_prefix, directory_prefix))
+        if folder_exists(folder_prefix):
+            details.append(build_directory_metadata(folder_prefix, directory_prefix))
     return {"details": details}
 
 
@@ -395,21 +401,19 @@ def details_action(bucket: storage.Bucket, payload: Dict[str, Any]) -> Dict[str,
 async def filemanager_endpoint(request: Request):
     request_json = await request.json()
     action = (request_json.get("action") or "").lower()
-    client = storage.Client()
-    bucket = client.bucket(BUCKET_NAME)
     try:
         if action == "read":
-            return read_action(bucket, request_json)
+            return read_action(request_json)
         if action == "create":
-            return create_action(bucket, request_json)
+            return create_action(request_json)
         if action == "delete":
-            return delete_action(bucket, request_json)
+            return delete_action(request_json)
         if action == "move":
-            return move_action(bucket, request_json)
+            return move_action(request_json)
         if action == "rename":
-            return rename_action(bucket, request_json)
+            return rename_action(request_json)
         if action == "details":
-            return details_action(bucket, request_json)
+            return details_action(request_json)
         return error_response("Unsupported action", "400")
     except NotFound as not_found_error:
         return error_response(str(not_found_error), "404")
@@ -426,8 +430,7 @@ async def upload_stub():
 def signed_resumable(
     object_name: str = Query(...), content_type: str = Query("application/octet-stream")
 ):
-    client = storage.Client()
-    blob = client.bucket(BUCKET_NAME).blob(object_name)
+    blob = GCS_BUCKET.blob(object_name)
     url = blob.generate_signed_url(
         version="v4",
         expiration=datetime.timedelta(days=7),
@@ -502,9 +505,8 @@ def sanitize_folder_prefix(raw_prefix: Optional[str]) -> str:
 @router.get("/signed-download")
 def signed_download(object_name: str = Query(...), download_name: Optional[str] = Query(None)):
     sanitized_object_name = sanitize_object_name(object_name)
-    client = storage.Client()
-    blob = client.bucket(BUCKET_NAME).blob(sanitized_object_name)
-    if not blob.exists(client=client):
+    blob = GCS_BUCKET.blob(sanitized_object_name)
+    if not blob.exists():
         raise HTTPException(status_code=404, detail=f"File '{sanitized_object_name}' not found")
     fallback_name = sanitized_object_name.split("/")[-1] or "download"
     safe_download_name = (download_name or fallback_name).replace('"', "").replace("'", "")
@@ -513,7 +515,6 @@ def signed_download(object_name: str = Query(...), download_name: Optional[str] 
         version="v4",
         expiration=datetime.timedelta(days=7),
         method="GET",
-        service_account_email=f"burla-main-service@{PROJECT_ID}.iam.gserviceaccount.com",
         response_disposition=disposition,
     )
     return {"url": url}
@@ -573,8 +574,6 @@ def batch_download(payload: Dict[str, Any]):
     if not file_requests and not folder_requests:
         raise HTTPException(status_code=400, detail="No files provided for download")
     archive_name = sanitize_archive_filename(payload.get("archiveName"))
-    client = storage.Client()
-    bucket = client.bucket(BUCKET_NAME)
     temp_file = tempfile.SpooledTemporaryFile(max_size=268_435_456)
     try:
         with zipfile.ZipFile(temp_file, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
@@ -614,7 +613,7 @@ def batch_download(payload: Dict[str, Any]):
                 ensure_directory_hierarchy(root, "/".join(parents))
 
             for request in file_requests:
-                blob = bucket.get_blob(request["object_name"])
+                blob = GCS_BUCKET.get_blob(request["object_name"])
                 if blob is None:
                     raise HTTPException(
                         status_code=404, detail=f"File '{request['object_name']}' not found"
@@ -635,7 +634,7 @@ def batch_download(payload: Dict[str, Any]):
                 archive_root = request["archive_root"]
                 ensure_directory_entry(archive_root)
                 added_content = False
-                blobs = bucket.list_blobs(prefix=prefix)
+                blobs = GCS_BUCKET.list_blobs(prefix=prefix)
                 for blob in blobs:
                     if blob.name == prefix:
                         continue
@@ -694,9 +693,7 @@ def batch_download(payload: Dict[str, Any]):
         finally:
             temp_file.close()
 
-    headers = {
-        "Content-Disposition": f'attachment; filename="{archive_name}"',
-    }
+    headers = {"Content-Disposition": f'attachment; filename="{archive_name}"'}
     if total_size:
         headers["Content-Length"] = str(total_size)
     return StreamingResponse(iterator(), media_type="application/zip", headers=headers)

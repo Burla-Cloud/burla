@@ -38,6 +38,7 @@ deploy-test:
 		--image=$${TEST_IMAGE_NAME} \
 		--project $${PROJECT_ID} \
 		--region=us-central1 \
+		--service-account burla-main-service@$${PROJECT_ID}.iam.gserviceaccount.com \
 		--min-instances 0 \
 		--max-instances 5 \
 		--memory 2Gi \

@@ -14,6 +14,7 @@ from google.cloud import firestore, logging, secretmanager
 from fastapi.responses import Response, FileResponse, RedirectResponse
 from fastapi import FastAPI, Request, BackgroundTasks, Depends, status
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.datastructures import UploadFile
 from jinja2 import Environment, FileSystemLoader
@@ -21,7 +22,7 @@ from jinja2 import Environment, FileSystemLoader
 os.environ["GRPC_VERBOSITY"] = "ERROR"
 os.environ["GLOG_minloglevel"] = "2"
 
-CURRENT_BURLA_VERSION = "1.2.15"
+CURRENT_BURLA_VERSION = "1.3.0"
 
 # In this mode EVERYTHING runs locally in docker containers.
 # possible modes: local-dev-mode (everything local), remote-dev-mode (only main-service local), prod
@@ -115,6 +116,7 @@ def get_add_background_task_function(
 from main_service.endpoints.cluster import router as cluster_router
 from main_service.endpoints.settings import router as settings_router
 from main_service.endpoints.jobs import router as jobs_router
+from main_service.endpoints.storage import router as storage_router
 
 
 @asynccontextmanager
@@ -145,6 +147,16 @@ app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None)
 app.include_router(cluster_router)
 app.include_router(settings_router)
 app.include_router(jobs_router)
+app.include_router(storage_router)
+
+# Allow cross-origin requests for local development and to satisfy Syncfusion preflights
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.get("/api/user")
@@ -169,6 +181,7 @@ async def logout(request: Request, response: Response):
 @app.get("/jobs")
 @app.get("/jobs/{job_id}")
 @app.get("/settings")
+@app.get("/filesystem")
 def dashboard():
     return FileResponse("src/main_service/static/index.html")
 
@@ -213,6 +226,11 @@ async def validate_requests(request: Request, call_next):
       - use client_id to get auth info, set auth cookie -> redirect here again but with auth cookie
       - here again with auth cookie -> access granted
     """
+    # Allow unauthenticated access for storage stub endpoints and resumable signing during development
+    # These are non-privileged helpers used by the storage UI.
+    if request.url.path.startswith("/api/sf/") or request.url.path == "/signed-resumable":
+        return await call_next(request)
+
     # Allow Server-Sent Events to pass through without auth to prevent proxy/login HTML from breaking the stream
     # These endpoints read from Firestore only and do not perform privileged actions.
     accept_header = request.headers.get("accept", "")

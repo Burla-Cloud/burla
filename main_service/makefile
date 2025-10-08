@@ -1,13 +1,12 @@
 .ONESHELL:
 .SILENT:
 
-BURLA_VERSION = 1.2.15
+BURLA_VERSION = 1.3.0
 WEBSERVICE_NAME = burla-main-service
 PYTHON_MODULE_NAME = main_service
 
 ARTIFACT_REPO_NAME := $(WEBSERVICE_NAME)
 ARTIFACT_PKG_NAME := $(WEBSERVICE_NAME)
-PROD_IMAGE_BASE_NAME := us-docker.pkg.dev/burla-prod/$(ARTIFACT_REPO_NAME)/$(ARTIFACT_PKG_NAME)
 
 .PHONY: frontend
 build-frontend:
@@ -20,6 +19,37 @@ build-frontend:
 	cd ..; \
 	printf "$$(date +%s)" > .frontend_last_built_at.txt
 
+deploy-test:
+	set -e; \
+	PROJECT_ID=$$(gcloud config get-value project 2>/dev/null); \
+	TEST_IMAGE_BASE_NAME=$$( echo \
+		"us-docker.pkg.dev/$${PROJECT_ID}/$(ARTIFACT_REPO_NAME)/$(ARTIFACT_PKG_NAME)" \
+	); \
+	TEST_IMAGE_TAG=$$( \
+		gcloud artifacts tags list \
+			--package=$(ARTIFACT_PKG_NAME) \
+			--location=us \
+			--repository=$(ARTIFACT_REPO_NAME) \
+			--project $${PROJECT_ID} \
+			2>&1 | grep -Eo '^[0-9]+' | sort -n | tail -n 1 \
+	); \
+	TEST_IMAGE_NAME=$${TEST_IMAGE_BASE_NAME}:$${TEST_IMAGE_TAG}; \
+	gcloud run deploy $(WEBSERVICE_NAME) \
+		--image=$${TEST_IMAGE_NAME} \
+		--project $${PROJECT_ID} \
+		--region=us-central1 \
+		--service-account burla-main-service@$${PROJECT_ID}.iam.gserviceaccount.com \
+		--min-instances 0 \
+		--max-instances 5 \
+		--memory 2Gi \
+		--cpu 1 \
+		--timeout 360 \
+		--concurrency 20 \
+		--allow-unauthenticated; \
+	gcloud run services update-traffic $(WEBSERVICE_NAME) \
+		--project $${PROJECT_ID} \
+		--region=us-central1 \
+		--to-latest
 
 publish:
 	set -e; \
@@ -36,15 +66,11 @@ publish:
 			2>&1 | grep -Eo '^[0-9]+' | sort -n | tail -n 1 \
 	); \
 	TEST_IMAGE_NAME=$${TEST_IMAGE_BASE_NAME}:$${TEST_IMAGE_TAG}; \
-	DOCKERHUB_TOKEN=$$( \
-		gcloud secrets versions access latest \
-			--secret=jakes-docker-access-token \
-			--project=burla-prod \
+	PROD_IMAGE_BASE_NAME=$$( echo \
+		"us-docker.pkg.dev/burla-prod/$(ARTIFACT_REPO_NAME)/$(ARTIFACT_PKG_NAME)" \
 	); \
-	echo $${DOCKERHUB_TOKEN} | docker login -u jakezuliani --password-stdin; \
-	:; \
-	docker tag $${TEST_IMAGE_NAME} burlacloud/main-service:$(BURLA_VERSION); \
-	docker push burlacloud/main-service:$(BURLA_VERSION)
+	docker tag $${TEST_IMAGE_NAME} $${PROD_IMAGE_BASE_NAME}:$(BURLA_VERSION); \
+	docker push $${PROD_IMAGE_BASE_NAME}:$(BURLA_VERSION)
 
 image:
 	set -e; \
@@ -62,10 +88,14 @@ image:
 	); \
 	NEW_TEST_IMAGE_TAG=$$(($${TEST_IMAGE_TAG} + 1)); \
 	TEST_IMAGE_NAME_SEQUENTIAL=$$( echo $${TEST_IMAGE_BASE_NAME}:$${NEW_TEST_IMAGE_TAG} ); \
+	TEST_IMAGE_NAME_LATEST=$$( echo $${TEST_IMAGE_BASE_NAME}:latest ); \
 	docker build --platform linux/amd64 -t $${TEST_IMAGE_NAME_SEQUENTIAL} .; \
+	docker tag $${TEST_IMAGE_NAME_SEQUENTIAL} $${TEST_IMAGE_NAME_LATEST}; \
 	docker push $${TEST_IMAGE_NAME_SEQUENTIAL}; \
+	docker push $${TEST_IMAGE_NAME_LATEST}; \
 	echo "Successfully built Docker Image:"; \
 	echo "$${TEST_IMAGE_NAME_SEQUENTIAL}"; \
+	echo "$${TEST_IMAGE_NAME_LATEST}"; \
 	echo "";
 
 container:

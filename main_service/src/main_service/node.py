@@ -116,6 +116,7 @@ class Node:
         spot: bool = False,
         service_port: int = 8080,  # <- this needs to be open in your cloud firewall!
         as_local_container: bool = False,
+        sync_gcs_bucket_name: Optional[str] = None,  # <- not a uri, just the name
         instance_client: Optional[InstancesClient] = None,
         inactivity_shutdown_time_sec: Optional[int] = None,
         disk_size: Optional[int] = None,
@@ -129,6 +130,7 @@ class Node:
         self.auth_headers = auth_headers
         self.spot = spot
         self.port = service_port
+        self.sync_gcs_bucket_name = sync_gcs_bucket_name
         self.inactivity_shutdown_time_sec = inactivity_shutdown_time_sec
         self.disk_size = disk_size if disk_size else 20  # minimum is 10 due to disk image
         self.instance_client = instance_client if instance_client else InstancesClient()
@@ -146,9 +148,9 @@ class Node:
             self.num_gpus = int(machine_type.split("-")[-1][:-1])
 
         if machine_type.startswith("n4"):
-            self.disk_image = "projects/burla-prod/global/images/burla-node-nogpu"
+            self.disk_image = "projects/burla-prod/global/images/burla-node-nogpu-2"
         elif machine_type.startswith("a2") or machine_type.startswith("a3"):
-            self.disk_image = "projects/burla-prod/global/images/burla-node-gpu"
+            self.disk_image = "projects/burla-prod/global/images/burla-node-gpu-2"
         else:
             raise ValueError(f"Invalid machine type: {machine_type}")
 
@@ -238,17 +240,15 @@ class Node:
 
     def __start_svc_in_local_container(self):
         image = f"us-docker.pkg.dev/{PROJECT_ID}/burla-node-service/burla-node-service:latest"
-        command = f"uvicorn node_service:app --host 0.0.0.0 --port {self.port} --workers 1 "
-        command += "--timeout-keep-alive 600 --reload"
-
         docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
         host_config = docker_client.create_host_config(
             port_bindings={self.port: self.port},
             network_mode="local-burla-cluster",
             binds={
                 f"{os.environ['HOST_HOME_DIR']}/.config/gcloud": "/root/.config/gcloud",
-                f"{os.environ['HOST_PWD']}/node_service": "/burla/node_service",
-                f"{os.environ['HOST_PWD']}/worker_service_python_env": "/worker_service_python_env",
+                f"{os.environ['HOST_PWD']}/node_service": "/opt/burla/node_service",
+                f"{os.environ['HOST_PWD']}/_shared_workspace": "/shared_workspace",
+                f"{os.environ['HOST_PWD']}/_worker_service_python_env": "/worker_service_python_env",
                 "/var/run/docker.sock": "/var/run/docker.sock",
             },
         )
@@ -263,10 +263,27 @@ class Node:
             else:
                 raise
 
+        cmd_script = f"""
+            # We can't run gcsfuse in dev mode (without some very complicated hacks)
+            # It's not compatible with macos and is very annoying to setup in docker with volumes.
+            # 
+            # mkdir -p /shared_workspace /var/cache/gcsfuse
+            # gcsfuse \
+            #     --client-protocol=http2 \
+            #     --only-dir=shared_workspace \
+            #     --metadata-cache-ttl-secs=1 \
+            #     --cache-dir=/var/cache/gcsfuse \
+            #     {self.sync_gcs_bucket_name} /shared_workspace
+            cd /opt/burla/node_service
+            uv run -m uvicorn node_service:app --host 0.0.0.0 --port {self.port} --workers 1 \
+                --timeout-keep-alive 600 --reload
+        """.strip()
+
         container_name = f"node_{self.instance_name[11:]}"
         container = docker_client.create_container(
             image=image,
-            command=["bash", "-c", f"python -m {command}"],
+            command=["-c", cmd_script],
+            entrypoint=["bash"],
             name=container_name,
             ports=[self.port],
             host_config=host_config,
@@ -409,13 +426,20 @@ class Node:
             -H "Content-Type: application/json" \
             -d "$payload"
 
-        git clone --depth 1 --branch {CURRENT_BURLA_VERSION} https://github.com/Burla-Cloud/burla.git  --no-checkout
+        # make uv work, this is an oopsie from when building the disk image:
+        export PATH="/root/.cargo/bin:$PATH"
+        export PATH="/root/.local/bin:$PATH"
+
+        cd /opt
+        # git clone --depth 1 --branch {CURRENT_BURLA_VERSION} https://github.com/Burla-Cloud/burla.git  --no-checkout
         cd burla
         git sparse-checkout init --cone
         git sparse-checkout set node_service
         git checkout {CURRENT_BURLA_VERSION}
+        git fetch
+        git pull
         cd node_service
-        python -m pip install --break-system-packages .
+        uv pip install .
 
         MSG="Successfully installed node service."
         payload=$(jq -n --arg msg "$MSG" --arg ts "$(date +%s)" '{{"fields":{{"msg":{{"stringValue":$msg}},"ts":{{"integerValue":$ts}}}}}}')
@@ -423,6 +447,27 @@ class Node:
             -H "Authorization: Bearer $ACCESS_TOKEN" \
             -H "Content-Type: application/json" \
             -d "$payload"
+
+        # start gcsfuse to sync working dirs with GCS bucket if specified
+        cd /
+        mkdir -p /shared_workspace
+        if [ "{self.sync_gcs_bucket_name}" != "None" ]; then
+            mkdir -p /var/cache/gcsfuse
+            gcsfuse \
+                --client-protocol=http2 \
+                --only-dir=shared_workspace \
+                --metadata-cache-ttl-secs=1 \
+                --cache-dir=/var/cache/gcsfuse \
+                {self.sync_gcs_bucket_name} /shared_workspace
+            cd /opt/burla/node_service
+
+            MSG="Started GCSFuse: syncing /shared_workspace with gs://{self.sync_gcs_bucket_name}"
+            payload=$(jq -n --arg msg "$MSG" --arg ts "$(date +%s)" '{{"fields":{{"msg":{{"stringValue":$msg}},"ts":{{"integerValue":$ts}}}}}}')
+            curl -sS -X POST "$DB_BASE_URL/nodes/{self.instance_name}/logs" \
+                -H "Authorization: Bearer $ACCESS_TOKEN" \
+                -H "Content-Type: application/json" \
+                -d "$payload"
+        fi
 
         # authenticate docker:
         echo "$ACCESS_TOKEN" | docker login -u oauth2accesstoken --password-stdin https://us-docker.pkg.dev
@@ -432,15 +477,7 @@ class Node:
         export PROJECT_ID="{PROJECT_ID}"
         export CONTAINERS='{json.dumps([c.to_dict() for c in self.containers])}'
         export INACTIVITY_SHUTDOWN_TIME_SEC="{self.inactivity_shutdown_time_sec}"
-
-        # silence grpc logs:
-        export GRPC_LOG_TO_STDERR=0
-        export GRPC_LOG_FILENAME=/dev/null
-        export GRPC_VERBOSITY=ERROR
-        export ABSL_LOGGING_MIN_LOG_LEVEL=3
-        export GLOG_minloglevel=2
-
-        python -m uvicorn node_service:app --host 0.0.0.0 --port {self.port} --workers 1 --timeout-keep-alive 600
+        uv run -m uvicorn node_service:app --host 0.0.0.0 --port {self.port} --workers 1 --timeout-keep-alive 600
         """
 
     def __get_shutdown_script(self):

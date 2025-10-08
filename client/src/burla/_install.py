@@ -97,11 +97,15 @@ def _install(spinner):
     run_command("gcloud services enable firestore.googleapis.com")
     run_command("gcloud services enable cloudresourcemanager.googleapis.com")
     run_command("gcloud services enable secretmanager.googleapis.com")
+    run_command("gcloud services enable storage.googleapis.com")
     run_command("gcloud services enable logging.googleapis.com")
+    run_command("gcloud services enable iamcredentials.googleapis.com")
     spinner.text = "Enabling required services... Done."
     spinner.ok("✓")
 
     _open_port_8080_to_VMs_with_tag_burla_cluster_node(spinner)
+
+    _create_gcs_bucket(spinner, PROJECT_ID)
 
     # create cluster id token secret (must exist for service accounts to be created)
     cmd = 'gcloud secrets create burla-cluster-id-token --replication-policy="automatic"'
@@ -114,7 +118,7 @@ def _install(spinner):
     # create service accounts: main-service, compute-engine-default, client-user
     main_svc_account_email, client_svc_account_key = _create_service_accounts(spinner, PROJECT_ID)
 
-    _create_firestore_database(spinner)
+    _create_firestore_database(spinner, PROJECT_ID)
 
     cluster_id_token = _register_cluster_and_save_cluster_id_token(
         spinner, PROJECT_ID, client_svc_account_key
@@ -123,9 +127,10 @@ def _install(spinner):
     # Deploy dashboard as google cloud run service
     spinner.text = "Deploying burla-main-service to Google Cloud Run ... "
     spinner.start()
+    image_name = f"us-docker.pkg.dev/burla-prod/burla-main-service/burla-main-service:{__version__}"
     run_command(
         f"gcloud run deploy burla-main-service "
-        f"--image=burlacloud/main-service:{__version__} "
+        f"--image={image_name} "
         f"--project {PROJECT_ID} "
         f"--region=us-central1 "
         f"--service-account {main_svc_account_email} "
@@ -259,6 +264,40 @@ def _open_port_8080_to_VMs_with_tag_burla_cluster_node(spinner):
         spinner.ok("✓")
 
 
+def _create_gcs_bucket(spinner, PROJECT_ID):
+    spinner.text = "Creating GCS bucket ... "
+    spinner.start()
+    cmd = f"gcloud storage buckets create gs://{PROJECT_ID}-burla-shared-workspace"
+    result = run_command(cmd, raise_error=False)
+    already_exists = False
+    if result.returncode != 0 and "HTTPError 409:" in result.stderr.decode():
+        already_exists = True
+    elif result.returncode != 0:
+        spinner.fail("✗")
+        raise VerboseCalledProcessError(cmd, result.stderr)
+
+    cors_config = [
+        {
+            "origin": ["*"],
+            "method": ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+            "responseHeader": ["Content-Type", "Content-Length", "Location", "x-goog-resumable"],
+            "maxAgeSeconds": 3600,
+        }
+    ]
+    with tempfile.NamedTemporaryFile("w") as cors_file:
+        json.dump(cors_config, cors_file)
+        cors_file.flush()
+        cmd = f"gcloud storage buckets update gs://{PROJECT_ID}-burla-shared-workspace "
+        cmd += f"--cors-file='{cors_file.name}'"
+        run_command(cmd)
+
+    if already_exists:
+        spinner.text = "Creating GCS bucket ... Bucket already exists."
+    else:
+        spinner.text = "Creating GCS bucket ... Done."
+    spinner.ok("✓")
+
+
 def _register_cluster_and_save_cluster_id_token(spinner, PROJECT_ID, client_svc_account_key):
     spinner.text = "Creating/Rotating secrets ... "
     spinner.start()
@@ -388,6 +427,15 @@ def _create_service_accounts(spinner, PROJECT_ID):
     cmd += f" --member=serviceAccount:{main_svc_email} --role=roles/compute.instanceAdmin.v1"
     cmd += f" --condition=None"
     run_command(cmd)
+    cmd = f"gcloud projects add-iam-policy-binding {PROJECT_ID}"
+    cmd += f" --member=serviceAccount:{main_svc_email} --role=roles/storage.objectUser"
+    cmd += f" --condition=None"
+    run_command(cmd)
+    # allow main-service to create signed GCS url's for uploading/downloading from filemanager
+    cmd = f"gcloud iam service-accounts add-iam-policy-binding {main_svc_email}"
+    cmd += f" --member=serviceAccount:{main_svc_email} --role=roles/iam.serviceAccountTokenCreator"
+    cmd += f" --condition=None"
+    run_command(cmd)
     cmd = f"gcloud secrets add-iam-policy-binding burla-cluster-id-token"
     cmd += f' --member="serviceAccount:{main_svc_email}"'
     cmd += f' --role="roles/secretmanager.secretAccessor"'
@@ -442,10 +490,13 @@ def _create_service_accounts(spinner, PROJECT_ID):
     return main_svc_email, client_svc_account_key
 
 
-def _create_firestore_database(spinner):
+def _create_firestore_database(spinner, PROJECT_ID):
     spinner.text = "Creating Firestore database ... "
     spinner.start()
     client = Client(database="burla")
+
+    # cannot do this at the top because PROJECT_ID is required
+    DEFAULT_CLUSTER_CONFIG["gcs_bucket_name"] = f"{PROJECT_ID}-burla-shared-workspace"
 
     cmd = "gcloud firestore databases create --database=burla"
     cmd += f" --location=us-central1 --type=firestore-native"

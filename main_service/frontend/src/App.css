@@ -46,3 +46,24 @@
 ::-webkit-scrollbar {
   display: none;
 }
+
+.filesystem-filemanager .e-toolbar,
+.filesystem-filemanager .e-toolbar .e-toolbar-items,
+.filesystem-filemanager .e-toolbar .e-toolbar-item {
+  min-height: 64px !important;
+  height: 64px !important;
+}
+
+.filesystem-filemanager .e-toolbar .e-toolbar-item .e-tbar-btn.e-btn {
+  min-height: 56px !important;
+  height: 56px !important;
+  padding: 0 24px !important;
+  font-size: 20px !important;
+}
+
+.filesystem-filemanager .e-toolbar .e-toolbar-item .e-tbar-btn-text,
+.filesystem-filemanager .e-toolbar .e-toolbar-item .e-tbar-btn .e-icons,
+.filesystem-filemanager .e-toolbar .e-toolbar-item .e-tbar-btn span {
+  line-height: 56px !important;
+  font-size: 22px !important;
+}

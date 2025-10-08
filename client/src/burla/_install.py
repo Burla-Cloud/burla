@@ -118,7 +118,7 @@ def _install(spinner):
     # create service accounts: main-service, compute-engine-default, client-user
     main_svc_account_email, client_svc_account_key = _create_service_accounts(spinner, PROJECT_ID)
 
-    _create_firestore_database(spinner)
+    _create_firestore_database(spinner, PROJECT_ID)
 
     cluster_id_token = _register_cluster_and_save_cluster_id_token(
         spinner, PROJECT_ID, client_svc_account_key
@@ -271,7 +271,7 @@ def _create_gcs_bucket(spinner, PROJECT_ID):
     already_exists = False
     if result.returncode != 0 and "HTTPError 409:" in result.stderr.decode():
         already_exists = True
-    else:
+    elif result.returncode != 0:
         spinner.fail("✗")
         raise VerboseCalledProcessError(cmd, result.stderr)
 

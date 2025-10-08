@@ -39,6 +39,19 @@ stop:
 # All components (main_svc, node_svc, worker_svc) will restart when changes to code are made.
 local-dev:
 	set -e; \
+	adc_file="$${HOME}/.config/gcloud/application_default_credentials.json"; \
+	if ! grep -q "projects/-/serviceAccounts/140225958505-compute@developer.gserviceaccount.com" "$${adc_file}" 2>/dev/null; then \
+		echo ""; \
+		echo "WARNING:"; \
+		echo "You are NOT impersonating the service account 140225958505-compute@developer.gserviceaccount.com"; \
+		echo "You will not be able to use the network filesystem (no permission to generate signed url's)"; \
+		echo "To fix this run:"; \
+		echo ""; \
+		echo "    gcloud auth application-default login --impersonate-service-account=140225958505-compute@developer.gserviceaccount.com"; \
+		echo ""; \
+		read -p "Continue anyway? (y/n): " answer; \
+		case "$${answer}" in y|Y) ;; *) echo "Aborted."; exit 1 ;; esac; \
+	fi; \
 	PROJECT_ID=$$(gcloud config get-value project 2>/dev/null); \
 	IMAGE_NAME=$$( echo \
 		"us-docker.pkg.dev/$${PROJECT_ID}/burla-main-service/burla-main-service:latest" \

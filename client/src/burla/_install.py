@@ -268,11 +268,33 @@ def _create_gcs_bucket(spinner, PROJECT_ID):
     spinner.start()
     cmd = f"gcloud storage buckets create gs://{PROJECT_ID}-burla-shared-workspace"
     result = run_command(cmd, raise_error=False)
+    already_exists = False
     if result.returncode != 0 and "HTTPError 409:" in result.stderr.decode():
-        spinner.text = "Creating GCS bucket ... Bucket already exists."
-        spinner.ok("✓")
+        already_exists = True
     else:
         spinner.fail("✗")
+        raise VerboseCalledProcessError(cmd, result.stderr)
+
+    cors_config = [
+        {
+            "origin": ["*"],
+            "method": ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+            "responseHeader": ["Content-Type", "Content-Length", "Location", "x-goog-resumable"],
+            "maxAgeSeconds": 3600,
+        }
+    ]
+    with tempfile.NamedTemporaryFile("w") as cors_file:
+        json.dump(cors_config, cors_file)
+        cors_file.flush()
+        cmd = f"gcloud storage buckets update gs://{PROJECT_ID}-burla-shared-workspace "
+        cmd += f"--cors-file='{cors_file.name}'"
+        run_command(cmd)
+
+    if already_exists:
+        spinner.text = "Creating GCS bucket ... Bucket already exists."
+    else:
+        spinner.text = "Creating GCS bucket ... Done."
+    spinner.ok("✓")
 
 
 def _register_cluster_and_save_cluster_id_token(spinner, PROJECT_ID, client_svc_account_key):

@@ -21,7 +21,7 @@ FOLDER_PLACEHOLDER_NAME = ".burla-folder-placeholder"
 source_creds, project_id = default()
 signing_creds = impersonated_credentials.Credentials(
     source_credentials=source_creds,
-    target_principal="burla-main-service@burla-test.iam.gserviceaccount.com",
+    target_principal=f"burla-main-service@{PROJECT_ID}.iam.gserviceaccount.com",
     target_scopes=["https://www.googleapis.com/auth/devstorage.read_write"],
 )
 gcs_client = storage.Client(project=project_id, credentials=signing_creds)

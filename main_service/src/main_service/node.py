@@ -435,8 +435,8 @@ class Node:
         cd burla
         git sparse-checkout init --cone
         git sparse-checkout set node_service
-        git checkout {CURRENT_BURLA_VERSION}
         git fetch
+        git checkout {CURRENT_BURLA_VERSION}
         git pull
         cd node_service
         uv pip install .

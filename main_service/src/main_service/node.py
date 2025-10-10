@@ -433,11 +433,8 @@ class Node:
         cd /opt
         # git clone --depth 1 --branch {CURRENT_BURLA_VERSION} https://github.com/Burla-Cloud/burla.git  --no-checkout
         cd burla
-        git sparse-checkout init --cone
-        git sparse-checkout set node_service
-        git fetch
-        git checkout {CURRENT_BURLA_VERSION}
-        git pull
+        git fetch --depth=1 origin "{CURRENT_BURLA_VERSION}" || git fetch --depth=1 origin "tag {CURRENT_BURLA_VERSION}"
+        git reset --hard FETCH_HEAD
         cd node_service
         uv pip install .
 

@@ -86,7 +86,7 @@ def _install(spinner):
     log_telemetry("Somebody is running `burla install`!")
 
     _check_gcloud_is_installed(spinner)
-    _check_gcloud_is_logged_in(spinner)
+    # _check_gcloud_is_logged_in(spinner)
     PROJECT_ID = _get_gcloud_GCP_project_id(spinner)
     log_telemetry("Installer has gcloud and is logged in.", project_id=PROJECT_ID)
 
@@ -127,7 +127,7 @@ def _install(spinner):
     # Deploy dashboard as google cloud run service
     spinner.text = "Deploying burla-main-service to Google Cloud Run ... "
     spinner.start()
-    image_name = f"us-docker.pkg.dev/burla-prod/burla-main-service/burla-main-service:{__version__}"
+    image_name = f"us-docker.pkg.dev/burla-prod/burla-main-service/burla-main-service:1.3.2"  # {__version__}"
     run_command(
         f"gcloud run deploy burla-main-service "
         f"--image={image_name} "
@@ -493,7 +493,7 @@ def _create_service_accounts(spinner, PROJECT_ID):
 def _create_firestore_database(spinner, PROJECT_ID):
     spinner.text = "Creating Firestore database ... "
     spinner.start()
-    client = Client(database="burla")
+    client = Client(database="burla", project=PROJECT_ID)
 
     # cannot do this at the top because PROJECT_ID is required
     DEFAULT_CLUSTER_CONFIG["gcs_bucket_name"] = f"{PROJECT_ID}-burla-shared-workspace"
@@ -501,16 +501,14 @@ def _create_firestore_database(spinner, PROJECT_ID):
     cmd = "gcloud firestore databases create --database=burla"
     cmd += f" --location=us-central1 --type=firestore-native"
     result = run_command(cmd, raise_error=False)
+    already_exists = False
     if result.returncode != 0 and "already exists" in result.stderr.decode():
-        if not client.collection("cluster_config").document("cluster_config").get().exists:
-            collection = client.collection("cluster_config")
-            collection.document("cluster_config").set(DEFAULT_CLUSTER_CONFIG)
-        spinner.text = "Creating Firestore database ... Database already exists."
-        spinner.ok("✓")
+        already_exists = True
     elif result.returncode != 0:
         spinner.fail("✗")
         raise VerboseCalledProcessError(cmd, result.stderr)
-    else:
+
+    if not client.collection("cluster_config").document("cluster_config").get().exists:
         # wait for db to exist
         start = time()
         while True:
@@ -522,18 +520,9 @@ def _create_firestore_database(spinner, PROJECT_ID):
                 sleep(1)
                 if time() - start >= 30:
                     raise e
+
+    if already_exists:
+        spinner.text = "Creating Firestore database ... Database already exists."
+    else:
         spinner.text = "Creating Firestore database ... Done."
-        spinner.ok("✓")
-
-        # attempt to prevent spinner freeze: idk if this works
-        try:
-            client._firestore_api.transport.close()
-            del client
-        except Exception:
-            pass
-
-        # This need's to be restarted here or it freezes because the firestore client steal's the
-        # GIL and dosen't let it go for a bit. Commenting out the doc.set also works, idk why.
-        # it still freezes actually ? but didn't after adding this earlier?? :(
-        spinner.stop()
-        spinner.start()
+    spinner.ok("✓")

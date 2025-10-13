@@ -4,6 +4,7 @@ from typing import Optional, Callable
 import concurrent.futures
 import traceback
 import threading
+import subprocess
 
 import aiohttp
 import docker
@@ -97,28 +98,56 @@ def _call_docker_threadsafe(method, *args, **kwargs):
 
 
 def _pull_image_if_missing(image: str, logger: Logger, docker_client: docker.APIClient):
-    try:
-        docker_client.inspect_image(image)
-    except docker.errors.ImageNotFound:
-        logger.log(f"Pulling image {image} ...")
-        try:
-            docker_client.pull(image)
-        except APIError as e:
-            if "Unauthenticated request" in str(e):
-                print("Image is not public, trying again with credentials ...")
-                CREDENTIALS.refresh(Request())
-                auth_config = {"username": "oauth2accesstoken", "password": CREDENTIALS.token}
-                docker_client.pull(image, auth_config=auth_config)
-            else:
-                raise
-        # ODDLY, if docker_client.pull fails to pull the image, it will NOT throw any error >:(
-        # check here that the image was actually pulled and exists on disk,
-        try:
-            docker_client.inspect_image(image)
-        except docker.errors.ImageNotFound:
-            msg = f"Image {image} not found after pulling!\nDid vm run out of disk space?"
+    # Use CLI instead of python api because that api just generally horrible and broken.
+    # I already tried using it correctly, it wasnt worth it.
+
+    def _run_command(command, raise_error=True):
+        result = subprocess.run(command, shell=True, capture_output=True)
+        if result.returncode != 0 and raise_error:
+            print("")
+            raise Exception(command, result.stderr)
+        else:
+            return result
+
+    logger.log(f"Pulling image {image} ...")
+    result = _run_command(f"docker pull {image}", raise_error=False)
+    docker_pull_failed = result.returncode != 0
+    docker_pull_stderr = result.stderr
+    not_hosted_in_google_artifact_registry = "docker.pkg.dev" not in image
+
+    if docker_pull_failed and not_hosted_in_google_artifact_registry:
+        raise Exception(f"CMD `docker pull {image}` failed with error:\n{result.stderr}\n")
+
+    # if failed and image is in GAR, try again using service account credentials
+    if docker_pull_failed:
+        svc_email = getattr(CREDENTIALS, "service_account_email", "<no svc account email found>")
+        msg = f"Failed to pull image: {image}\n"
+        msg += "Trying again using the service account credentials attached to this VM:\n"
+        logger.log(f"{msg}\n{svc_email}")
+
+        if image.startswith("https://"):
+            host = f'https://{image.split("/")[2]}'
+        else:
+            host = f'https://{image.split("/")[0]}'
+
+        CREDENTIALS.refresh(Request())
+        login_cmd = f"docker login {host} -u oauth2accesstoken --password {CREDENTIALS.token}"
+        result = _run_command(login_cmd, raise_error=False)
+        if result.returncode != 0:
+            msg = f"CMD `docker pull {image}` failed with error:\n{docker_pull_stderr}\n"
+            msg += f"Following attempt to login to {host} using service account: "
+            msg += f"`{svc_email}` also failed with error:\n{result.stderr}\n"
             raise Exception(msg)
-        logger.log(f"Image {image} pulled successfully.")
+
+        _run_command(f"docker pull {image}")
+
+    # sanity check, not positive this is necessary with cli, but was with python api.
+    result = _run_command(f"docker inspect {image}", raise_error=False)
+    if result.returncode != 0:
+        msg = f"CMD: `docker pull {image}` succeeded, but subsequent `docker inspect ...` failed!\n"
+        msg += f"`docker inspect` stderr:\n{result.stderr}\n"
+        raise Exception(msg)
+    logger.log(f"Image {image} pulled successfully.")
 
 
 # Removing large GPU containers can take several minutes. The node should not block on the full

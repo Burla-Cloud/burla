@@ -235,9 +235,31 @@ class Worker:
         if elected_installer:
             self._start_log_streaming()
 
-        # wait until READY
-        if self.status() != "READY":
-            raise Exception(f"Worker {self.container_name} failed to become READY.")
+        ready = False
+        start = time()
+        while not ready:
+
+            if not self.exists():
+                self.log_debug_info()
+                raise Exception(f"Container: {self.container_name} not running while booting?")
+
+            timed_out = time() - start > self.boot_timeout_sec
+            if timed_out:
+                self.log_debug_info()
+                msg = f"Worker {self.container_name} boot timed out after "
+                raise Exception(f"{msg} {self.boot_timeout_sec} seconds.")
+
+            try:
+                response = requests.get(f"{self.url}/")
+                response.raise_for_status()
+                status = response.json()["status"]  # can only be one of: READY, BUSY
+                if status != "READY":
+                    raise Exception(f"Worker {self.container_name} has status {status} after boot?")
+                ready = True
+            except requests.exceptions.ConnectionError:
+                sleep(1)
+
+        docker_client.close()
 
     def _start_log_streaming(self):
         def stream_logs():
@@ -277,18 +299,6 @@ class Worker:
             return logs
         raise Exception("This worker no longer exists.")
 
-    def remove(self):
-        pass
-        if self.exists():
-            try:
-                docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
-                docker_client.remove_container(self.container_id, force=True)
-            except docker.errors.APIError as e:
-                if not "409 Client Error" in str(e):
-                    raise e
-            finally:
-                docker_client.close()
-
     def log_debug_info(self):
         logs = self.logs() if self.exists() else "Unable to retrieve container logs."
         struct = {"severity": "ERROR", "LOGS_FROM_FAILED_CONTAINER": logs}
@@ -302,39 +312,3 @@ class Worker:
 
         if IN_LOCAL_DEV_MODE:
             print(logs, file=sys.stderr)  # <- make local debugging easier
-
-    def status(self, attempt: int = 0):
-        # Check if Docker container is running; fail if not
-        docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
-        try:
-            info = docker_client.inspect_container(self.container_id)
-            if not info.get("State", {}).get("Running"):
-                self.log_debug_info()
-                self.remove()
-                return "FAILED"
-        except docker.errors.NotFound:
-            self.log_debug_info()
-            self.remove()
-            return "FAILED"
-        finally:
-            docker_client.close()
-
-        # A worker can also be "IDLE" (waiting for inputs) but that is not returned by this endpoint
-        # "IDLE" is not a possible return value here because it is only returned/assigned to `self`
-        # when checking results (for efficiency reasons).
-        try:
-            response = requests.get(f"{self.url}/")
-            response.raise_for_status()
-            status = response.json()["status"]  # will be one of: READY, BUSY
-        except requests.exceptions.ConnectionError as e:
-            if attempt < self.boot_timeout_sec:
-                sleep(1)
-                return self.status(attempt + 1)
-            else:
-                status = "FAILED"
-
-        if status == "FAILED":
-            self.log_debug_info()
-            self.remove()
-
-        return status

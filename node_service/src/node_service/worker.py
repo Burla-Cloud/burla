@@ -249,6 +249,9 @@ class Worker:
                 msg = f"Worker {self.container_name} boot timed out after "
                 raise Exception(f"{msg} {self.boot_timeout_sec} seconds.")
 
+            if elected_installer:
+                print(f"STILL BOOTING AFTER {time() - start} seconds...")
+
             try:
                 response = requests.get(f"{self.url}/")
                 response.raise_for_status()

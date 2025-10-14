@@ -389,16 +389,17 @@ class Node:
         	| jq -r .access_token)
         
         	MSG="Startup script failed! See Google Cloud Logging. Deleting VM {self.instance_name} ... "
+            echo "$MSG"
         	DB_BASE_URL="https://firestore.googleapis.com/v1/projects/{PROJECT_ID}/databases/burla/documents"
         	payload=$(jq -n --arg msg "$MSG" --arg ts "$(date +%s)" '{{"fields":{{"msg":{{"stringValue":$msg}},"ts":{{"integerValue":$ts}},}}}}')
-        	curl -sS -X POST "$DB_BASE_URL/nodes/{self.instance_name}/logs" \
+        	curl -sS -o /dev/null -X POST "$DB_BASE_URL/nodes/{self.instance_name}/logs" \
                 -H "Authorization: Bearer $ACCESS_TOKEN" \
                 -H "Content-Type: application/json" \
                 -d "$payload" || true
 
             # set status as FAILED
             status_payload=$(jq -n '{{"fields":{{"status":{{"stringValue":"FAILED"}},"display_in_dashboard":{{"booleanValue":true}}}}}}')
-            curl -sS -X PATCH "$DB_BASE_URL/nodes/{self.instance_name}?updateMask.fieldPaths=status&updateMask.fieldPaths=display_in_dashboard" \
+            curl -sS -o /dev/null -X PATCH "$DB_BASE_URL/nodes/{self.instance_name}?updateMask.fieldPaths=status&updateMask.fieldPaths=display_in_dashboard" \
                 -H "Authorization: Bearer $ACCESS_TOKEN" \
                 -H "Content-Type: application/json" \
                 -d "$status_payload" || true
@@ -420,9 +421,10 @@ class Node:
         | jq -r .access_token)
 
         MSG="Installing Burla node service v{CURRENT_BURLA_VERSION} ..."
+        echo "$MSG"
         DB_BASE_URL="https://firestore.googleapis.com/v1/projects/{PROJECT_ID}/databases/burla/documents"
         payload=$(jq -n --arg msg "$MSG" --arg ts "$(date +%s)" '{{"fields":{{"msg":{{"stringValue":$msg}},"ts":{{"integerValue":$ts}}}}}}')
-        curl -sS -X POST "$DB_BASE_URL/nodes/{self.instance_name}/logs" \
+        curl -sS -o /dev/null -X POST "$DB_BASE_URL/nodes/{self.instance_name}/logs" \
             -H "Authorization: Bearer $ACCESS_TOKEN" \
             -H "Content-Type: application/json" \
             -d "$payload"
@@ -440,8 +442,9 @@ class Node:
         uv pip install .
 
         MSG="Successfully installed node service."
+        echo "$MSG"
         payload=$(jq -n --arg msg "$MSG" --arg ts "$(date +%s)" '{{"fields":{{"msg":{{"stringValue":$msg}},"ts":{{"integerValue":$ts}}}}}}')
-        curl -sS -X POST "$DB_BASE_URL/nodes/{self.instance_name}/logs" \
+        curl -sS -o /dev/null -X POST "$DB_BASE_URL/nodes/{self.instance_name}/logs" \
             -H "Authorization: Bearer $ACCESS_TOKEN" \
             -H "Content-Type: application/json" \
             -d "$payload"
@@ -460,8 +463,9 @@ class Node:
             cd /opt/burla/node_service
 
             MSG="Started GCSFuse: syncing /shared_workspace with gs://{self.sync_gcs_bucket_name}"
+            echo "$MSG"
             payload=$(jq -n --arg msg "$MSG" --arg ts "$(date +%s)" '{{"fields":{{"msg":{{"stringValue":$msg}},"ts":{{"integerValue":$ts}}}}}}')
-            curl -sS -X POST "$DB_BASE_URL/nodes/{self.instance_name}/logs" \
+            curl -sS -o /dev/null -X POST "$DB_BASE_URL/nodes/{self.instance_name}/logs" \
                 -H "Authorization: Bearer $ACCESS_TOKEN" \
                 -H "Content-Type: application/json" \
                 -d "$payload"

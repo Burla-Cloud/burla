@@ -331,14 +331,18 @@ def _register_cluster_and_save_cluster_id_token(spinner, PROJECT_ID, client_svc_
         spinner.fail("✗")
         raise Exception(f"Error registering cluster: {response.status_code} {response.text}")
 
-    # rotate cluster token / service account key
+    # # update cluster version
     headers = {"Authorization": f"Bearer {cluster_id_token}"}
+    url = f"{_BURLA_BACKEND_URL}/v1/clusters/{PROJECT_ID}/version"
+    response = requests.put(url, json={"version": __version__}, headers=headers)
+    response.raise_for_status()
+    # rotate cluster token / service account key
     url = f"{_BURLA_BACKEND_URL}/v1/clusters/{PROJECT_ID}/token"
     response = requests.get(url, headers=headers)
     response.raise_for_status()
     cluster_id_token = response.json()["token"]
     # rotate client key
-    headers = {"Authorization": f"Bearer {cluster_id_token}"}
+    headers = {"Authorization": f"Bearer {cluster_id_token}"}  # dont remove this, look closer first
     cluster_info = {"client_svc_account_key": client_svc_account_key}
     url = f"{_BURLA_BACKEND_URL}/v1/clusters/{PROJECT_ID}/client_key"
     response = requests.post(url, json=cluster_info, headers=headers)

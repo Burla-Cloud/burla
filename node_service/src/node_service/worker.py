@@ -38,6 +38,7 @@ class Worker:
         # WORKERS CLASS INSTANCES ARE PERSERVED ACROSS JOBS
         # THUS, THEY NEED TO BE RESET PER JOB
         #
+        boot_start_time = time()
         self.is_idle = False
         self.is_empty = False
         self.packages_to_install = None
@@ -106,22 +107,22 @@ class Worker:
                     uv pip install --python $python_cmd --target /worker_service_python_env .
                 else
                     # try with tarball first because faster
-                    # if curl -Ls -o burla.tar.gz https://github.com/Burla-Cloud/burla/archive/{__version__}.tar.gz; then
-                    #     echo "Installing from tarball ..."
-                    #     tar -xzf burla.tar.gz
-                    #     cd burla-{__version__}/worker_service
-                    # else
-                    echo "Tarball not found, falling back to git..."
-                    # Ensure git is installed
-                    if ! command -v git >/dev/null 2>&1; then
-                        echo "git not found, installing..."
-                        apt-get update && apt-get install -y git
+                    if curl -Ls -o burla.tar.gz https://github.com/Burla-Cloud/burla/archive/{__version__}.tar.gz; then
+                        echo "Installing from tarball ..."
+                        tar -xzf burla.tar.gz
+                        cd burla-{__version__}/worker_service
+                    else
+                        echo "Tarball not found, falling back to git..."
+                        # Ensure git is installed
+                        if ! command -v git >/dev/null 2>&1; then
+                            echo "git not found, installing..."
+                            apt-get update && apt-get install -y git
+                        fi
+                        git clone --depth 1 --filter=blob:none --sparse --branch {__version__} https://github.com/Burla-Cloud/burla.git
+                        cd burla
+                        git sparse-checkout set worker_service
+                        cd worker_service
                     fi
-                    git clone --depth 1 --filter=blob:none --sparse --branch {__version__} https://github.com/Burla-Cloud/burla.git
-                    cd burla
-                    git sparse-checkout set worker_service
-                    cd worker_service
-                    # fi
                     # can only do this with linux host, breaks in dev using macos host :(
                     export UV_CACHE_DIR=/worker_service_python_env/.uv-cache
                     mkdir -p "$UV_CACHE_DIR" /worker_service_python_env
@@ -259,6 +260,8 @@ class Worker:
             except requests.exceptions.ConnectionError:
                 sleep(1)
 
+        boot_duration = time() - boot_start_time
+        print(f"Worker {self.container_name} booted after: {boot_duration:.2f} seconds")
         docker_client.close()
 
     def _start_log_streaming(self):

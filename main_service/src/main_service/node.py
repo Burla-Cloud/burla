@@ -288,6 +288,7 @@ class Node:
             name=container_name,
             ports=[self.port],
             host_config=host_config,
+            user=f"{os.environ['HOST_UID']}:{os.environ['HOST_GID']}",
             environment={
                 "GOOGLE_CLOUD_PROJECT": PROJECT_ID,
                 "IN_LOCAL_DEV_MODE": IN_LOCAL_DEV_MODE,

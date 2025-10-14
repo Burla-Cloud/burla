@@ -261,7 +261,7 @@ class Worker:
                 sleep(1)
 
         boot_duration = time() - boot_start_time
-        print(f"Worker {self.container_name} booted after: {boot_duration:.2f} seconds")
+        # print(f"Worker {self.container_name} booted after: {boot_duration:.2f} seconds")
         docker_client.close()
 
     def _start_log_streaming(self):

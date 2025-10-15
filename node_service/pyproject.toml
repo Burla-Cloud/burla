@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "node-service"
-version = "1.3.5"
+version = "1.3.6"
 description = ""
 authors = ["Jacob Zuliani <jake@burla.dev>"]
 packages = [{include = "node_service", from = "src"}]

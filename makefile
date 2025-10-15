@@ -34,6 +34,7 @@ stop:
 		'        print(f"Deleted node doc: {document.id}")' \
 	| poetry -C ./client run python -
 
+
 # start ONLY the main service, in local dev mode
 # The cluster is run 100% locally using the config `LOCAL_DEV_CONFIG` in `main_service.__init__.py`
 # All components (main_svc, node_svc, worker_svc) will restart when changes to code are made.
@@ -60,16 +61,13 @@ local-dev:
 	docker run --rm -it \
 		--name main_service \
 		--network local-burla-cluster \
-		--user "$(id -u)":"$(id -g)" \
-		-v $(PWD)/main_service:/burla/main_service \
+		-v $$(PWD)/main_service:/burla/main_service \
 		-v ~/.config/gcloud:/root/.config/gcloud \
 		-v /var/run/docker.sock:/var/run/docker.sock \
-		-e HOST_UID="$(id -u)" \
-		-e HOST_GID="$(id -g)" \
 		-e GOOGLE_CLOUD_PROJECT=$${PROJECT_ID} \
 		-e IN_LOCAL_DEV_MODE=True \
 		-e REDIRECT_LOCALLY_ON_LOGIN=True \
-		-e HOST_PWD=$(PWD) \
+		-e HOST_PWD=$$(PWD) \
 		-e HOST_HOME_DIR=$${HOME} \
 		-p 5001:5001 \
 		--entrypoint python \

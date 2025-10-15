@@ -252,6 +252,7 @@ class Node:
                 "/var/run/docker.sock": "/var/run/docker.sock",
                 "/usr/local/bin/docker": "/usr/bin/docker",
             },
+            privileged=True,
         )
 
         try:
@@ -279,7 +280,6 @@ class Node:
             uv run -m uvicorn node_service:app --host 0.0.0.0 --port {self.port} --workers 1 \
                 --timeout-keep-alive 600 --reload
         """.strip()
-
         container_name = f"node_{self.instance_name[11:]}"
         container = docker_client.create_container(
             image=image,
@@ -288,7 +288,6 @@ class Node:
             name=container_name,
             ports=[self.port],
             host_config=host_config,
-            user=f"{os.environ['HOST_UID']}:{os.environ['HOST_GID']}",
             environment={
                 "GOOGLE_CLOUD_PROJECT": PROJECT_ID,
                 "IN_LOCAL_DEV_MODE": IN_LOCAL_DEV_MODE,

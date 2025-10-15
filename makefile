@@ -18,22 +18,23 @@ test-jupyter:
 stop:
 	set -e; \
 	PROJECT_ID=$$(gcloud config get-value project 2>/dev/null); \
-	export PROJECT_ID; \
-	poetry -C ./client run python - <<PY
-import os
-from google.cloud import firestore
-from google.cloud.firestore_v1 import FieldFilter
-
-db = firestore.Client(project=os.environ["PROJECT_ID"], database="burla")
-booting_filter = FieldFilter("status", "==", "BOOTING")
-booting_nodes = db.collection("nodes").where(filter=booting_filter).get()
-if not booting_nodes:
-    print("No booting nodes found")
-else:
-    for document in booting_nodes:
-        document.reference.delete()
-        print(f"Deleted node doc: {document.id}")
-PY
+	export PROJECT_ID=$${PROJECT_ID}; \
+	printf '%s\n' \
+		'import os' \
+		'import json' \
+		'from google.cloud import firestore' \
+		'from google.cloud.firestore_v1 import FieldFilter' \
+		'' \
+		'db = firestore.Client(project=os.environ["PROJECT_ID"], database="burla")' \
+		'booting_filter = FieldFilter("status", "==", "BOOTING")' \
+		'booting_nodes = db.collection("nodes").where(filter=booting_filter).get()' \
+		'if not booting_nodes:' \
+		'    print("No booting nodes found")' \
+		'else:' \
+		'    for document in booting_nodes:' \
+		'        document.reference.delete()' \
+		'        print(f"Deleted node doc: {document.id}")' \
+	| poetry -C ./client run python -
 
 
 # start ONLY the main service, in local dev mode

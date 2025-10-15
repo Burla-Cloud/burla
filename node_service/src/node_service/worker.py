@@ -61,17 +61,6 @@ class Worker:
             export PYTHONPATH=/worker_service_python_env
             DB_BASE_URL="https://firestore.googleapis.com/v1/projects/{PROJECT_ID}/databases/burla/documents"
 
-            # install curl if missing
-            if ! command -v curl >/dev/null 2>&1; then
-                echo "curl not found, installing..."
-                apt-get install -y curl
-            fi
-
-            # install uv:
-            curl -LsSf https://astral.sh/uv/install.sh | sh
-            export PATH="$HOME/.cargo/bin:$PATH"
-            export PATH="$HOME/.local/bin:$PATH"
-
             # Find python version:
             python_cmd=""
             for py in python{self.python_version} python3 python; do
@@ -92,6 +81,24 @@ class Worker:
 
             # Install worker_service if missing
             if [ "{elected_installer}" = "True" ] && ! $python_cmd -c "import worker_service" 2>/dev/null; then
+
+                # install curl if missing
+                if ! command -v curl >/dev/null 2>&1; then
+                    MSG="curl not found inside container image, installing ..."
+                    TS=$(date +%s)
+                    payload='{{"fields":{{"msg":{{"stringValue":"'"$MSG"'"}}, "ts":{{"integerValue":"'"$TS"'"}}}}}}'
+                    curl -sS -o /dev/null -X POST "$DB_BASE_URL/nodes/{INSTANCE_NAME}/logs" \\
+                        -H "Authorization: Bearer {CREDENTIALS.token}" \\
+                        -H "Content-Type: application/json" \\
+                        -d "$payload"
+                    echo "$MSG"
+                    apt-get update && apt-get install -y curl
+                fi
+
+                # install uv:
+                curl -LsSf https://astral.sh/uv/install.sh | sh
+                export PATH="$HOME/.cargo/bin:$PATH"
+                export PATH="$HOME/.local/bin:$PATH"
 
                 MSG="Installing Burla worker-service inside container image: {image} ..."
                 TS=$(date +%s)

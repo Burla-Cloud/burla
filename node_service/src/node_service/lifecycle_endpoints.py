@@ -147,7 +147,7 @@ def _pull_image_if_missing(image: str, logger: Logger, docker_client: docker.API
         msg = f"CMD: `docker pull {image}` succeeded, but subsequent `docker inspect ...` failed!\n"
         msg += f"`docker inspect` stderr:\n{result.stderr}\n"
         raise Exception(msg)
-    logger.log(f"Image {image} pulled successfully.")
+    logger.log(f"Image {image} pulled successfully.\nWaiting for containers to start ...")
 
 
 # Removing large GPU containers can take several minutes. The node should not block on the full

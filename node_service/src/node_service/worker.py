@@ -64,7 +64,7 @@ class Worker:
             # install curl if missing
             if ! command -v curl >/dev/null 2>&1; then
                 echo "curl not found, installing..."
-                apt-get update && apt-get install -y curl
+                apt-get install -y curl
             fi
 
             # install uv:

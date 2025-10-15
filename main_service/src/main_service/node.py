@@ -380,6 +380,17 @@ class Node:
         self.node_ref.collection("logs").document().set({"msg": msg, "ts": time()})
 
     def __get_startup_script(self):
+
+        print(f"HERE: self.sync_gcs_bucket_name = {self.sync_gcs_bucket_name}")
+        print(
+            f"GCS START CMD:\n```\ngcsfuse \
+                --client-protocol=http2 \
+                --only-dir=shared_workspace \
+                --metadata-cache-ttl-secs=1 \
+                --cache-dir=/var/cache/gcsfuse \
+                {self.sync_gcs_bucket_name} /shared_workspace\n```"
+        )
+
         return f"""
         #! /bin/bash        
         set -Eeuo pipefail
@@ -456,7 +467,6 @@ class Node:
             mkdir -p /var/cache/gcsfuse
             gcsfuse \
                 --client-protocol=http2 \
-                --only-dir=shared_workspace \
                 --metadata-cache-ttl-secs=1 \
                 --cache-dir=/var/cache/gcsfuse \
                 {self.sync_gcs_bucket_name} /shared_workspace

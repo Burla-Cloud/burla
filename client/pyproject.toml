@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "burla"
-version = "1.3.5"
+version = "1.3.6"
 description = "The simplest way to run Python on lot's of computers."
 authors = ["Jake Zuliani <jake@burla.dev>"]
 

@@ -377,6 +377,7 @@ class Node:
         self.zone = zone
         self.node_ref.update(dict(host=self.host, zone=self.zone))
         msg = f"Successfully provisioned {self.machine_type} in zone: {zone}"
+        msg += "\nWaiting for startup script ..."
         self.node_ref.collection("logs").document().set({"msg": msg, "ts": time()})
 
     def __get_startup_script(self):

@@ -468,6 +468,9 @@ class Node:
         cd node_service
         uv pip install .
 
+        # venv was installed to `/opt/burla`, not `/opt/burla/node_service`, navigate here to use it
+        cd /opt/burla
+
         MSG="Successfully installed node service."
         echo "$MSG"
         payload=$(jq -n --arg msg "$MSG" --arg ts "$(date +%s)" '{{"fields":{{"msg":{{"stringValue":$msg}},"ts":{{"integerValue":$ts}}}}}}')

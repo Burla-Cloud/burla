@@ -465,15 +465,9 @@ class Node:
         cd /opt/burla
         git fetch --depth=1 origin "{CURRENT_BURLA_VERSION}" || git fetch --depth=1 origin "tag {CURRENT_BURLA_VERSION}"
         git reset --hard FETCH_HEAD
-        cd node_service
 
-        # force uv to use the parent workspace venv consistently
-        export UV_PROJECT_ROOT=/opt/burla
-        export UV_PROJECT_ENVIRONMENT=/opt/burla/.venv
-        uv pip install .
-
-        # venv was installed to `/opt/burla`, not `/opt/burla/node_service`, navigate here to use it
-        cd /opt/burla
+        uv venv --python 3.13 --seed
+        uv pip install ./node_service
 
         MSG="Successfully installed node service."
         echo "$MSG"
@@ -483,7 +477,7 @@ class Node:
             -H "Content-Type: application/json" \
             -d "$payload"
         
-        uv run -m uvicorn node_service:app --host 0.0.0.0 --port {self.port} --workers 1 --timeout-keep-alive 600
+        /opt/burla/.venv/bin/python -m uvicorn node_service:app --host 0.0.0.0 --port {self.port} --workers 1 --timeout-keep-alive 600
         """
 
     def __get_shutdown_script(self):

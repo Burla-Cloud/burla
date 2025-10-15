@@ -420,27 +420,6 @@ class Node:
         "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token" \
         | jq -r .access_token)
 
-        MSG="Installing Burla node service v{CURRENT_BURLA_VERSION} ..."
-        echo "$MSG"
-        DB_BASE_URL="https://firestore.googleapis.com/v1/projects/{PROJECT_ID}/databases/burla/documents"
-        payload=$(jq -n --arg msg "$MSG" --arg ts "$(date +%s)" '{{"fields":{{"msg":{{"stringValue":$msg}},"ts":{{"integerValue":$ts}}}}}}')
-        curl -sS -o /dev/null -X POST "$DB_BASE_URL/nodes/{self.instance_name}/logs" \
-            -H "Authorization: Bearer $ACCESS_TOKEN" \
-            -H "Content-Type: application/json" \
-            -d "$payload"
-
-        # make uv work, this is an oopsie from when building the disk image:
-        export PATH="/root/.cargo/bin:$PATH"
-        export PATH="/root/.local/bin:$PATH"
-
-        MSG="Successfully installed node service."
-        echo "$MSG"
-        payload=$(jq -n --arg msg "$MSG" --arg ts "$(date +%s)" '{{"fields":{{"msg":{{"stringValue":$msg}},"ts":{{"integerValue":$ts}}}}}}')
-        curl -sS -o /dev/null -X POST "$DB_BASE_URL/nodes/{self.instance_name}/logs" \
-            -H "Authorization: Bearer $ACCESS_TOKEN" \
-            -H "Content-Type: application/json" \
-            -d "$payload"
-
         # start gcsfuse to sync working dirs with GCS bucket if specified
         cd /
         mkdir -p /shared_workspace
@@ -464,6 +443,19 @@ class Node:
         # authenticate docker:
         echo "$ACCESS_TOKEN" | docker login -u oauth2accesstoken --password-stdin https://us-docker.pkg.dev
 
+        # make uv work, this is an oopsie from when building the disk image:
+        export PATH="/root/.cargo/bin:$PATH"
+        export PATH="/root/.local/bin:$PATH"
+
+        MSG="Installing Burla node service v{CURRENT_BURLA_VERSION} ..."
+        echo "$MSG"
+        DB_BASE_URL="https://firestore.googleapis.com/v1/projects/{PROJECT_ID}/databases/burla/documents"
+        payload=$(jq -n --arg msg "$MSG" --arg ts "$(date +%s)" '{{"fields":{{"msg":{{"stringValue":$msg}},"ts":{{"integerValue":$ts}}}}}}')
+        curl -sS -o /dev/null -X POST "$DB_BASE_URL/nodes/{self.instance_name}/logs" \
+            -H "Authorization: Bearer $ACCESS_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "$payload"
+
         export NUM_GPUS="{self.num_gpus}"
         export INSTANCE_NAME="{self.instance_name}"
         export PROJECT_ID="{PROJECT_ID}"
@@ -475,6 +467,15 @@ class Node:
         git reset --hard FETCH_HEAD
         cd node_service
         uv pip install .
+
+        MSG="Successfully installed node service."
+        echo "$MSG"
+        payload=$(jq -n --arg msg "$MSG" --arg ts "$(date +%s)" '{{"fields":{{"msg":{{"stringValue":$msg}},"ts":{{"integerValue":$ts}}}}}}')
+        curl -sS -o /dev/null -X POST "$DB_BASE_URL/nodes/{self.instance_name}/logs" \
+            -H "Authorization: Bearer $ACCESS_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "$payload"
+        
         uv run -m uvicorn node_service:app --host 0.0.0.0 --port {self.port} --workers 1 --timeout-keep-alive 600
         """
 

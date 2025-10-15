@@ -61,6 +61,12 @@ class Worker:
             export PYTHONPATH=/worker_service_python_env
             DB_BASE_URL="https://firestore.googleapis.com/v1/projects/{PROJECT_ID}/databases/burla/documents"
 
+            # install curl if missing
+            if ! command -v curl >/dev/null 2>&1; then
+                echo "curl not found, installing..."
+                apt-get update && apt-get install -y curl
+            fi
+
             # install uv:
             curl -LsSf https://astral.sh/uv/install.sh | sh
             export PATH="$HOME/.cargo/bin:$PATH"

@@ -416,6 +416,7 @@ class Node:
         }}
         trap 'handle_error' ERR
 
+        DB_BASE_URL="https://firestore.googleapis.com/v1/projects/{PROJECT_ID}/databases/burla/documents"
         ACCESS_TOKEN=$(curl -s -H "Metadata-Flavor: Google" \
         "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token" \
         | jq -r .access_token)
@@ -449,7 +450,6 @@ class Node:
 
         MSG="Installing Burla node service v{CURRENT_BURLA_VERSION} ..."
         echo "$MSG"
-        DB_BASE_URL="https://firestore.googleapis.com/v1/projects/{PROJECT_ID}/databases/burla/documents"
         payload=$(jq -n --arg msg "$MSG" --arg ts "$(date +%s)" '{{"fields":{{"msg":{{"stringValue":$msg}},"ts":{{"integerValue":$ts}}}}}}')
         curl -sS -o /dev/null -X POST "$DB_BASE_URL/nodes/{self.instance_name}/logs" \
             -H "Authorization: Bearer $ACCESS_TOKEN" \

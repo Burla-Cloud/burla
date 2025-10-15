@@ -466,6 +466,10 @@ class Node:
         git fetch --depth=1 origin "{CURRENT_BURLA_VERSION}" || git fetch --depth=1 origin "tag {CURRENT_BURLA_VERSION}"
         git reset --hard FETCH_HEAD
         cd node_service
+
+        # force uv to use the parent workspace venv consistently
+        export UV_PROJECT_ROOT=/opt/burla
+        export UV_PROJECT_ENVIRONMENT=/opt/burla/.venv
         uv pip install .
 
         # venv was installed to `/opt/burla`, not `/opt/burla/node_service`, navigate here to use it

@@ -380,17 +380,6 @@ class Node:
         self.node_ref.collection("logs").document().set({"msg": msg, "ts": time()})
 
     def __get_startup_script(self):
-
-        print(f"HERE: self.sync_gcs_bucket_name = {self.sync_gcs_bucket_name}")
-        print(
-            f"GCS START CMD:\n```\ngcsfuse \
-                --client-protocol=http2 \
-                --only-dir=shared_workspace \
-                --metadata-cache-ttl-secs=1 \
-                --cache-dir=/var/cache/gcsfuse \
-                {self.sync_gcs_bucket_name} /shared_workspace\n```"
-        )
-
         return f"""
         #! /bin/bash        
         set -Eeuo pipefail
@@ -444,14 +433,6 @@ class Node:
         export PATH="/root/.cargo/bin:$PATH"
         export PATH="/root/.local/bin:$PATH"
 
-        cd /opt
-        # git clone --depth 1 --branch {CURRENT_BURLA_VERSION} https://github.com/Burla-Cloud/burla.git  --no-checkout
-        cd burla
-        git fetch --depth=1 origin "{CURRENT_BURLA_VERSION}" || git fetch --depth=1 origin "tag {CURRENT_BURLA_VERSION}"
-        git reset --hard FETCH_HEAD
-        cd node_service
-        uv pip install .
-
         MSG="Successfully installed node service."
         echo "$MSG"
         payload=$(jq -n --arg msg "$MSG" --arg ts "$(date +%s)" '{{"fields":{{"msg":{{"stringValue":$msg}},"ts":{{"integerValue":$ts}}}}}}')
@@ -470,7 +451,6 @@ class Node:
                 --metadata-cache-ttl-secs=1 \
                 --cache-dir=/var/cache/gcsfuse \
                 {self.sync_gcs_bucket_name} /shared_workspace
-            cd /opt/burla/node_service
 
             MSG="Started GCSFuse: syncing /shared_workspace with gs://{self.sync_gcs_bucket_name}"
             echo "$MSG"
@@ -489,6 +469,12 @@ class Node:
         export PROJECT_ID="{PROJECT_ID}"
         export CONTAINERS='{json.dumps([c.to_dict() for c in self.containers])}'
         export INACTIVITY_SHUTDOWN_TIME_SEC="{self.inactivity_shutdown_time_sec}"
+
+        cd /opt/burla
+        git fetch --depth=1 origin "{CURRENT_BURLA_VERSION}" || git fetch --depth=1 origin "tag {CURRENT_BURLA_VERSION}"
+        git reset --hard FETCH_HEAD
+        cd node_service
+        uv pip install .
         uv run -m uvicorn node_service:app --host 0.0.0.0 --port {self.port} --workers 1 --timeout-keep-alive 600
         """
 

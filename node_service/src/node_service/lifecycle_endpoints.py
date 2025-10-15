@@ -116,7 +116,7 @@ def _pull_image_if_missing(image: str, logger: Logger, docker_client: docker.API
     not_hosted_in_google_artifact_registry = "docker.pkg.dev" not in image
 
     if docker_pull_failed and not_hosted_in_google_artifact_registry:
-        raise Exception(f"CMD `docker pull {image}` failed with error:\n{result.stderr}\n")
+        raise Exception(f"CMD `docker pull {image}` failed with error:\n{docker_pull_stderr}\n")
 
     # if failed and image is in GAR, try again using service account credentials
     if docker_pull_failed:

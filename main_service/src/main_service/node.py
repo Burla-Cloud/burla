@@ -252,6 +252,7 @@ class Node:
                 "/var/run/docker.sock": "/var/run/docker.sock",
                 "/usr/local/bin/docker": "/usr/bin/docker",
             },
+            privileged=True,
         )
 
         try:
@@ -279,7 +280,6 @@ class Node:
             uv run -m uvicorn node_service:app --host 0.0.0.0 --port {self.port} --workers 1 \
                 --timeout-keep-alive 600 --reload
         """.strip()
-
         container_name = f"node_{self.instance_name[11:]}"
         container = docker_client.create_container(
             image=image,
@@ -389,16 +389,17 @@ class Node:
         	| jq -r .access_token)
         
         	MSG="Startup script failed! See Google Cloud Logging. Deleting VM {self.instance_name} ... "
+            echo "$MSG"
         	DB_BASE_URL="https://firestore.googleapis.com/v1/projects/{PROJECT_ID}/databases/burla/documents"
         	payload=$(jq -n --arg msg "$MSG" --arg ts "$(date +%s)" '{{"fields":{{"msg":{{"stringValue":$msg}},"ts":{{"integerValue":$ts}},}}}}')
-        	curl -sS -X POST "$DB_BASE_URL/nodes/{self.instance_name}/logs" \
+        	curl -sS -o /dev/null -X POST "$DB_BASE_URL/nodes/{self.instance_name}/logs" \
                 -H "Authorization: Bearer $ACCESS_TOKEN" \
                 -H "Content-Type: application/json" \
                 -d "$payload" || true
 
             # set status as FAILED
             status_payload=$(jq -n '{{"fields":{{"status":{{"stringValue":"FAILED"}},"display_in_dashboard":{{"booleanValue":true}}}}}}')
-            curl -sS -X PATCH "$DB_BASE_URL/nodes/{self.instance_name}?updateMask.fieldPaths=status&updateMask.fieldPaths=display_in_dashboard" \
+            curl -sS -o /dev/null -X PATCH "$DB_BASE_URL/nodes/{self.instance_name}?updateMask.fieldPaths=status&updateMask.fieldPaths=display_in_dashboard" \
                 -H "Authorization: Bearer $ACCESS_TOKEN" \
                 -H "Content-Type: application/json" \
                 -d "$status_payload" || true
@@ -415,36 +416,10 @@ class Node:
         }}
         trap 'handle_error' ERR
 
+        DB_BASE_URL="https://firestore.googleapis.com/v1/projects/{PROJECT_ID}/databases/burla/documents"
         ACCESS_TOKEN=$(curl -s -H "Metadata-Flavor: Google" \
         "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token" \
         | jq -r .access_token)
-
-        MSG="Installing Burla node service v{CURRENT_BURLA_VERSION} ..."
-        DB_BASE_URL="https://firestore.googleapis.com/v1/projects/{PROJECT_ID}/databases/burla/documents"
-        payload=$(jq -n --arg msg "$MSG" --arg ts "$(date +%s)" '{{"fields":{{"msg":{{"stringValue":$msg}},"ts":{{"integerValue":$ts}}}}}}')
-        curl -sS -X POST "$DB_BASE_URL/nodes/{self.instance_name}/logs" \
-            -H "Authorization: Bearer $ACCESS_TOKEN" \
-            -H "Content-Type: application/json" \
-            -d "$payload"
-
-        # make uv work, this is an oopsie from when building the disk image:
-        export PATH="/root/.cargo/bin:$PATH"
-        export PATH="/root/.local/bin:$PATH"
-
-        cd /opt
-        # git clone --depth 1 --branch {CURRENT_BURLA_VERSION} https://github.com/Burla-Cloud/burla.git  --no-checkout
-        cd burla
-        git fetch --depth=1 origin "{CURRENT_BURLA_VERSION}" || git fetch --depth=1 origin "tag {CURRENT_BURLA_VERSION}"
-        git reset --hard FETCH_HEAD
-        cd node_service
-        uv pip install .
-
-        MSG="Successfully installed node service."
-        payload=$(jq -n --arg msg "$MSG" --arg ts "$(date +%s)" '{{"fields":{{"msg":{{"stringValue":$msg}},"ts":{{"integerValue":$ts}}}}}}')
-        curl -sS -X POST "$DB_BASE_URL/nodes/{self.instance_name}/logs" \
-            -H "Authorization: Bearer $ACCESS_TOKEN" \
-            -H "Content-Type: application/json" \
-            -d "$payload"
 
         # start gcsfuse to sync working dirs with GCS bucket if specified
         cd /
@@ -453,15 +428,14 @@ class Node:
             mkdir -p /var/cache/gcsfuse
             gcsfuse \
                 --client-protocol=http2 \
-                --only-dir=shared_workspace \
                 --metadata-cache-ttl-secs=1 \
                 --cache-dir=/var/cache/gcsfuse \
                 {self.sync_gcs_bucket_name} /shared_workspace
-            cd /opt/burla/node_service
 
             MSG="Started GCSFuse: syncing /shared_workspace with gs://{self.sync_gcs_bucket_name}"
+            echo "$MSG"
             payload=$(jq -n --arg msg "$MSG" --arg ts "$(date +%s)" '{{"fields":{{"msg":{{"stringValue":$msg}},"ts":{{"integerValue":$ts}}}}}}')
-            curl -sS -X POST "$DB_BASE_URL/nodes/{self.instance_name}/logs" \
+            curl -sS -o /dev/null -X POST "$DB_BASE_URL/nodes/{self.instance_name}/logs" \
                 -H "Authorization: Bearer $ACCESS_TOKEN" \
                 -H "Content-Type: application/json" \
                 -d "$payload"
@@ -470,12 +444,40 @@ class Node:
         # authenticate docker:
         echo "$ACCESS_TOKEN" | docker login -u oauth2accesstoken --password-stdin https://us-docker.pkg.dev
 
+        # make uv work, this is an oopsie from when building the disk image:
+        export PATH="/root/.cargo/bin:$PATH"
+        export PATH="/root/.local/bin:$PATH"
+
+        MSG="Installing Burla node service v{CURRENT_BURLA_VERSION} ..."
+        echo "$MSG"
+        payload=$(jq -n --arg msg "$MSG" --arg ts "$(date +%s)" '{{"fields":{{"msg":{{"stringValue":$msg}},"ts":{{"integerValue":$ts}}}}}}')
+        curl -sS -o /dev/null -X POST "$DB_BASE_URL/nodes/{self.instance_name}/logs" \
+            -H "Authorization: Bearer $ACCESS_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "$payload"
+
         export NUM_GPUS="{self.num_gpus}"
         export INSTANCE_NAME="{self.instance_name}"
         export PROJECT_ID="{PROJECT_ID}"
         export CONTAINERS='{json.dumps([c.to_dict() for c in self.containers])}'
         export INACTIVITY_SHUTDOWN_TIME_SEC="{self.inactivity_shutdown_time_sec}"
-        uv run -m uvicorn node_service:app --host 0.0.0.0 --port {self.port} --workers 1 --timeout-keep-alive 600
+
+        cd /opt/burla
+        git fetch --depth=1 origin "{CURRENT_BURLA_VERSION}" || git fetch --depth=1 origin "tag {CURRENT_BURLA_VERSION}"
+        git reset --hard FETCH_HEAD
+
+        uv venv --python 3.13 --seed
+        uv pip install ./node_service
+
+        MSG="Successfully installed node service."
+        echo "$MSG"
+        payload=$(jq -n --arg msg "$MSG" --arg ts "$(date +%s)" '{{"fields":{{"msg":{{"stringValue":$msg}},"ts":{{"integerValue":$ts}}}}}}')
+        curl -sS -o /dev/null -X POST "$DB_BASE_URL/nodes/{self.instance_name}/logs" \
+            -H "Authorization: Bearer $ACCESS_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "$payload"
+        
+        /opt/burla/.venv/bin/python -m uvicorn node_service:app --host 0.0.0.0 --port {self.port} --workers 1 --timeout-keep-alive 600
         """
 
     def __get_shutdown_script(self):

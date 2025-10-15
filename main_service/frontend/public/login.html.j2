@@ -45,8 +45,7 @@
   <script>
     document.getElementById("login-btn").addEventListener("click", function (event) {
       event.preventDefault();
-      const clientId = crypto.randomUUID();
-      const baseUrl = `https://backend.burla.dev/v2/login/dashboard/${clientId}`;
+      const baseUrl = `https://backend.burla.dev/v3/login/dashboard`;
       const redirectLocally = {{ redirect_locally | tojson }};
       const projectId = {{ project_id | tojson }};
       const queryParams = `?redirect_locally=${redirectLocally}&project_id=${projectId}`;

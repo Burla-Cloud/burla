@@ -160,6 +160,7 @@ async def start_job(
         request_files["function_pkl"],
         request_json["packages"],
         request_json["start_time"],
+        request_json["is_background_job"],
     )
     thread = ThreadWithExc(target=install_pkgs_and_execute_job, args=args, daemon=True)
     thread.start()

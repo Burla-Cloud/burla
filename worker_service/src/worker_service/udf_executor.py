@@ -238,7 +238,7 @@ def _install_packages(packages: dict):
 
 
 def install_pkgs_and_execute_job(
-    job_id: str, function_pkl: bytes, packages: dict, start_time: float
+    job_id: str, function_pkl: bytes, packages: dict, start_time: float, is_background_job: bool
 ):
     SELF["logs"].append(f"Starting job {job_id} with func-size {len(function_pkl)} bytes.")
     all_packages_importable = _packages_are_importable(packages)
@@ -346,7 +346,7 @@ def install_pkgs_and_execute_job(
         #
         # by not adding it to results we gaurentee the client dosent get it, and can send it along
         # with the inputs sitting in the queue to another worker, becore this node shuts down.
-        if not SELF["STOP_PROCESSING_EVENT"].is_set():
+        if not (SELF["STOP_PROCESSING_EVENT"].is_set() or is_background_job):
 
             if SELF["inputs_queue"].empty():
                 # if you don't flush before adding the final result, the worker is restarted
@@ -365,8 +365,9 @@ def install_pkgs_and_execute_job(
                     sleep(0.1)
 
             SELF["results_queue"].put((input_index, is_error, result_pkl), len(result_pkl))
-            SELF["in_progress_input"] = None
             # SELF["logs"].append(f"Successfully enqueued result for input #{input_index}.")
+
+        SELF["in_progress_input"] = None
 
     SELF["logs"].append(f"STOP_PROCESSING_EVENT has been set!")
     firestore_stdout.stop()

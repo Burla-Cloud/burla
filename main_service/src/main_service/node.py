@@ -250,9 +250,7 @@ class Node:
                 f"{os.environ['HOST_PWD']}/_shared_workspace": "/shared_workspace",
                 f"{os.environ['HOST_PWD']}/_worker_service_python_env": "/worker_service_python_env",
                 "/var/run/docker.sock": "/var/run/docker.sock",
-                "/usr/local/bin/docker": "/usr/bin/docker",
             },
-            privileged=True,
         )
 
         try:

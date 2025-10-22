@@ -79,6 +79,9 @@ Burla works with any linux based Docker image.
 
 <figure><img src="https://raw.githubusercontent.com/Burla-Cloud/.github/refs/heads/main/media/settings_demo.gif" alt="" style="width:80%" /><figcaption></figcaption></figure>
 
+### Watch our Demo:
+https://www.youtube.com/watch?v=9d22y_kWjyE
+
 ### Try it now
 
 [Sign up here](https://burla.dev/signup) and we'll send you a free managed instance! Compute is on us.  

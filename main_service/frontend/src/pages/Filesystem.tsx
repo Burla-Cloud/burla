@@ -10,6 +10,7 @@ import {
     ContextMenu,
 } from "@syncfusion/ej2-react-filemanager";
 import { X } from "lucide-react";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 import "@syncfusion/ej2-base/styles/material.css";
 import "@syncfusion/ej2-buttons/styles/material.css";
@@ -1452,9 +1453,52 @@ export default function Filesystem() {
         setIsPreparingBatchDownload(false);
     }, []);
 
+    const [showWelcome, setShowWelcome] = React.useState(true);
+    React.useEffect(() => {
+        const hidden = localStorage.getItem("filesystemWelcomeHidden") === "true";
+        setShowWelcome(!hidden);
+    }, []);
+    const handleDismissWelcome = () => {
+        setShowWelcome(false);
+        localStorage.setItem("filesystemWelcomeHidden", "true");
+    };
+
     return (
         <div className="flex-1 flex flex-col justify-start px-12 pt-6 pb-12 min-h-0">
             <div className="max-w-7xl mx-auto w-full flex-1 flex flex-col min-h-0">
+                {showWelcome && (
+                    <div className="spotlight-surface rounded-xl my-8">
+                        <Card className="w-full relative rounded-xl shadow-lg shadow-black/5 bg-white/90 backdrop-blur">
+                            <button
+                                onClick={handleDismissWelcome}
+                                className="absolute top-2 right-2 p-1 hover:bg-gray-100 rounded-full"
+                                aria-label="Dismiss welcome message"
+                            >
+                                <X className="h-6 w-6" />
+                            </button>
+                            <CardHeader className="pb-4">
+                                <CardTitle className="text-[1.45rem] font-semibold text-primary">
+                                    📂 &nbsp;Welcome to Your Network Filesystem!
+                                </CardTitle>
+                            </CardHeader>
+                            <CardContent className="space-y-3">
+                                <p className="text-gray-700">
+                                    <ul className="list-disc pl-6 space-y-1 text-left">
+                                        <li>
+                                            Any files uploaded here will appear in your working
+                                            directory (<code>/shared_workspace</code>) in the
+                                            cluster.
+                                        </li>
+                                        <li>
+                                            Any files you write to your working directory will
+                                            appear here where you can download them!
+                                        </li>
+                                    </ul>
+                                </p>
+                            </CardContent>
+                        </Card>
+                    </div>
+                )}
                 <div className="relative flex-1 rounded-lg border border-gray-200 bg-white shadow-sm filesystem-shell">
                     <FileManagerComponent
                         view="Details"

@@ -1,4 +1,5 @@
 import os
+import random
 import sys
 import requests
 from uuid import uuid4
@@ -210,24 +211,38 @@ class Worker:
             )
 
         # start container
-        self.container = docker_client.create_container(
-            image=image,
-            command=cmd,
-            entrypoint=["bash"],
-            name=self.container_name,
-            ports=[WORKER_INTERNAL_PORT],
-            host_config=host_config,
-            environment={
-                "GOOGLE_CLOUD_PROJECT": PROJECT_ID,
-                "IN_LOCAL_DEV_MODE": IN_LOCAL_DEV_MODE,
-                "WORKER_NAME": self.container_name,
-                "ELECTED_INSTALLER": elected_installer,
-            },
-            detach=True,
-            runtime="nvidia" if NUM_GPUS != 0 else None,
-        )
-        self.container_id = self.container.get("Id")
-        docker_client.start(container=self.container_id)
+        attempt = 0
+        while True:
+            attempt += 1
+            # sometimes docker's backend just stops responding, retry in this case.
+            try:
+                self.container = docker_client.create_container(
+                    image=image,
+                    command=cmd,
+                    entrypoint=["bash"],
+                    name=self.container_name,
+                    ports=[WORKER_INTERNAL_PORT],
+                    host_config=host_config,
+                    environment={
+                        "GOOGLE_CLOUD_PROJECT": PROJECT_ID,
+                        "IN_LOCAL_DEV_MODE": IN_LOCAL_DEV_MODE,
+                        "WORKER_NAME": self.container_name,
+                        "ELECTED_INSTALLER": elected_installer,
+                    },
+                    detach=True,
+                    runtime="nvidia" if NUM_GPUS != 0 else None,
+                )
+                self.container_id = self.container.get("Id")
+                docker_client.start(container=self.container_id)
+            except requests.exceptions.ReadTimeout as e:
+                if attempt > 5:
+                    raise e
+                sleep(random.uniform(1, 5))  # <- avoid theoretical thundering herd
+                # idk if recreating client actually helps
+                docker_client.close()
+                docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
+            else:
+                break
 
         # wait for port to be assigned to the container
         def _get_host_port(attempt: int = 0):

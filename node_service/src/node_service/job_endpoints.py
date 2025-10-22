@@ -193,7 +193,6 @@ async def execute(
                 "start_time": request_json["start_time"],
                 "packages": request_json["packages"],
                 "io_queues_ram_limit_gb": worker_io_ram_limit_gb,
-                "is_background_job": is_background_job,
             }
         )
         data.add_field("function_pkl", request_files["function_pkl"])

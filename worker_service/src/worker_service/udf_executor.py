@@ -237,7 +237,7 @@ def _install_packages(packages: dict):
 
 
 def install_pkgs_and_execute_job(
-    job_id: str, function_pkl: bytes, packages: dict, start_time: float, is_background_job: bool
+    job_id: str, function_pkl: bytes, packages: dict, start_time: float
 ):
     SELF["logs"].append(f"Starting job {job_id} with func-size {len(function_pkl)} bytes.")
     all_packages_importable = _packages_are_importable(packages)

@@ -346,7 +346,7 @@ def install_pkgs_and_execute_job(
         #
         # by not adding it to results we gaurentee the client dosent get it, and can send it along
         # with the inputs sitting in the queue to another worker, becore this node shuts down.
-        if not (SELF["STOP_PROCESSING_EVENT"].is_set() or is_background_job):
+        if not SELF["STOP_PROCESSING_EVENT"].is_set():
 
             if SELF["inputs_queue"].empty():
                 # if you don't flush before adding the final result, the worker is restarted

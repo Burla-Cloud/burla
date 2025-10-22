@@ -199,7 +199,7 @@ async def _job_watcher(
         # job ended ?
         job_is_done = False
         node_is_done = SELF["all_inputs_uploaded"] and all_workers_idle_twice
-        node_is_done = node_is_done and SELF["results_queue"].empty()  # will be empty if background
+        node_is_done = node_is_done and SELF["results_queue"].empty() or is_background_job
         neighbor_is_done = (not neighboring_node) or (seconds_neighbor_had_no_inputs > 2)
 
         if node_is_done and neighbor_is_done:

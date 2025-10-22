@@ -1,10 +1,19 @@
+
 ### Run any Python function on 1000 computers in 1 second.
 
-The cloud should be fast, simple, and open-source.
+Burla is the simplest way to scale python, it's has one function: `remote_parallel_map`  
+It's open-source, works with GPU's, custom docker containers, and up to 10,000 CPU's at once.
 
-<figure><img src="https://github.com/Burla-Cloud/.github/blob/main/media/main_demo.gif" alt="" style="width:70%" /><figcaption></figcaption></figure>
+<figure><img src="https://raw.githubusercontent.com/Burla-Cloud/.github/refs/heads/main/media/main_demo.gif" alt="" style="width:70%" /><figcaption></figcaption></figure>
 
-#### How It Works:
+### A data-platform any team can learn in minutes:
+
+Scale machine learning systems, or other research efforts without weeks of onboarding or setup.  
+Burla's open-source web platform makes it simple to monitor long running pipelines or training runs.
+
+<figure><img src="https://raw.githubusercontent.com/Burla-Cloud/.github/refs/heads/main/media/platform_demo.gif" alt="" style="width:70%" /><figcaption></figcaption></figure>
+
+### **How it works:**
 
 Burla only has one function:
 
@@ -20,13 +29,14 @@ def my_function(my_input):
 return_values = remote_parallel_map(my_function, my_inputs)
 ```
 
-Running code in the cloud feels the same as running code locally:
+With Burla, running code in the cloud feels the same as coding locally:
 
 * Anything you print appears in your local terminal.
 * Exceptions thrown in your code are thrown on your local machine.
-* Responses are pretty quick, you can call a million simple functions in a couple seconds.
+* Your local python packages are automatically synchronized with the cluster.
+* Responses are pretty quick, you can call a million simple functions in a couple seconds!
 
-#### Attach Big Hardware to Functions That Need It:
+### Attach big hardware to functions that need it:
 
 Zero config files, just simple arguments like `func_cpu` & `func_ram`.
 
@@ -40,17 +50,10 @@ def train_model(hyper_parameters):
 remote_parallel_map(train_model, parameter_grid, func_cpu=64, func_ram=256)
 ```
 
-#### A Fast, Scalable Task Queue:
-
-Queue up 10 Million function calls, and run them with thousands of containers.\
-Our custom distributed task queue is incredibly fast, keeping hardware utilization high.
-
-<figure><img src="https://github.com/Burla-Cloud/.github/blob/main/media/queue_demo.gif" alt="" style="width:80%" /><figcaption><p>This demo is in realtime!</p></figcaption></figure>
-
-#### Simple, Flexible Pipelines:
+### Simple, flexible pipelines:
 
 Nest `remote_parallel_map` calls to build simple, massively parallel pipelines.\
-Use `background=True` to fire and forget code, then monitor progress from the dashboard.
+Use `background=True` to schedule function calls that keep running after you close your laptop.
 
 ```python
 from burla import remote_parallel_map
@@ -70,26 +73,22 @@ def process_files(files):
 remote_parallel_map(process_files, [files], background=True)
 ```
 
-#### Run Code in any Docker Image, on any Hardware:
+### Run code in any Docker image, using the latest GPU's:
 
-Public or private, just paste a link to your image and hit start.\
-Scale to 10,000 CPU's, terabytes of RAM, or 1,000 H100's, everything stays in your cloud.
+Public or private, just paste a URI to your image and hit start.\
+Burla works with any linux based Docker image.
 
-<figure><img src="https://github.com/Burla-Cloud/.github/blob/main/media/settings_demo.gif" alt="" style="width:80%" /><figcaption></figcaption></figure>
+<figure><img src="https://raw.githubusercontent.com/Burla-Cloud/.github/refs/heads/main/media/settings_demo.gif" alt="" style="width:80%" /><figcaption></figcaption></figure>
 
-#### Deploy With Just Two Commands:
+### Try it now
 
-(**Burla is currently Google Cloud only!**)
+[Sign up here](https://burla.dev/signup) and we'll send you a free managed instance! Compute is on us.  
+If you decide you like it, you can deploy self-hosted Burla (currently Google Cloud only) with just two commands:
 
-1. `pip install burla`
+1. `pip install burla`  
 2. `burla install`
 
-See the [Getting Started guide](https://docs.burla.dev/getting-started#quickstart) for more info.
-
-
-&nbsp;
-&nbsp;
-
+See the [Getting Started guide](https://docs.burla.dev/getting-started) for more info.
 
 ***
 

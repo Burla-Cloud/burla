@@ -1,4 +1,4 @@
-from time import time
+from time import time, sleep
 import requests
 from typing import Optional, Callable
 import concurrent.futures
@@ -140,10 +140,22 @@ def _pull_image_if_missing(image: str, logger: Logger):
         else:
             return result
 
-    logger.log(f"Pulling image {image} ...")
-    result = _run_command(f"docker pull {image}", raise_error=False)
+    attempt = 0
+    while True:
+        attempt += 1
+        logger.log(f"Pulling image {image} ...")
+        result = _run_command(f"docker pull {image}", raise_error=False)
+        text_output = result.stderr.decode() + result.stdout.decode()
+        no_transient_error = not (result.returncode != 0 and "unexpected EOF" in text_output)
+
+        if no_transient_error or attempt > 5:
+            break
+        else:
+            logger.log(f"`Unexpected EOF` error detected, retrying... (attempt {attempt})")
+            sleep(3)
+
     docker_pull_failed = result.returncode != 0
-    docker_pull_stderr = result.stderr
+    docker_pull_stderr = result.stderr.decode()
     not_hosted_in_google_artifact_registry = "docker.pkg.dev" not in image
 
     if docker_pull_failed and not_hosted_in_google_artifact_registry:

@@ -27,7 +27,8 @@ export const ClusterControls = ({
     const isStopping = status === "STOPPING";
     const isOn = status === "ON";
     const isOff = status === "OFF";
-    const isStartDisabled = isStarting || isStopping || isRebooting || disableStartButton;
+    const isStartDisabled =
+        isStarting || isStopping || isRebooting || disableStartButton || pendingAction !== null;
 
     useEffect(() => {
         if (status === "ON" || status === "OFF") {
@@ -53,6 +54,7 @@ export const ClusterControls = ({
     }
 
     const handleStartOrRestart = () => {
+        if (isStartDisabled || pendingAction !== null) return;
         setPendingAction(isOn ? "restart" : "start");
         onReboot();
     };

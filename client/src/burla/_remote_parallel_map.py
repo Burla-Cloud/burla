@@ -15,6 +15,7 @@ from typing import Callable, Optional, Union
 from contextlib import AsyncExitStack
 from threading import Thread, Event
 from pickle import UnpicklingError
+from aiohttp import ClientTimeout
 
 import aiohttp
 import cloudpickle
@@ -23,6 +24,7 @@ from google.cloud.firestore import ArrayUnion
 from google.cloud.firestore import FieldFilter
 from google.cloud.firestore_v1.async_client import AsyncClient
 from yaspin import yaspin, Spinner
+from aiohttp import ClientOSError, ClientError
 
 from burla import __version__, CONFIG_PATH
 from burla._auth import get_auth_headers
@@ -298,7 +300,7 @@ async def _execute_job(
         data.add_field("request_json", json.dumps(request_json))
         data.add_field("function_pkl", function_pkl)
         url = f"{node['host']}/jobs/{job_id}"
-        timeout = aiohttp.ClientTimeout(total=300)
+        timeout = ClientTimeout(total=300)
         request = session.post(url, data=data, headers=auth_headers, timeout=timeout)
         try:
             async with request as response:
@@ -333,7 +335,13 @@ async def _execute_job(
                 pass
 
     async with AsyncExitStack() as stack:
-        connector = aiohttp.TCPConnector(limit=500, limit_per_host=100)
+        connector = aiohttp.TCPConnector(
+            limit=500,
+            limit_per_host=100,
+            keepalive_timeout=60,
+            enable_cleanup_closed=True,
+            use_dns_cache=True,
+        )
         session = await stack.enter_async_context(aiohttp.ClientSession(connector=connector))
 
         function_size_str = f" ({function_size_gb:.3f}GB)" if function_size_gb > 0.001 else ""
@@ -392,13 +400,23 @@ async def _execute_job(
             await uploader_task
             return
 
+        async def _get_with_retries(url: str, headers: dict, max_retries=5):
+            try:
+                return await session.get(url, headers=headers, timeout=ClientTimeout(total=30))
+            except (ClientOSError, ClientError, OSError) as e:
+                if max_retries <= 1 or "Protocol wrong type for socket" not in str(e):
+                    raise
+                await asyncio.sleep(1)
+                return await _get_with_retries(url, headers, max_retries=max_retries - 1)
+
         async def _check_single_node(node: dict):
             url = f"{node['host']}/jobs/{job_id}/results"
-            async with session.get(url, headers=auth_headers) as response:
+
+            async with await _get_with_retries(url, auth_headers) as response:
                 if response.status == 404:
                     nodes.remove(node)  # <- means node is likely rebooting and failed or is done
                     return None
-                elif response.status != 200:
+                if response.status != 200:
                     raise Exception(f"Result-check failed for node: {node['instance_name']}")
 
                 try:
@@ -428,10 +446,10 @@ async def _execute_job(
                         msg = f"Job {job_id} failed due to user function error."
                         await log_telemetry_async(msg, session, project_id=project_id)
                         reraise(tp=exc_info["type"], value=exc_info["exception"], tb=traceback)
-                    elif is_error:
-                        msg = f"\nThis exception had to be sent to your machine as a string:\n\n"
-                        msg += f"{exc_info['traceback_str']}\n"
-                        raise UnPickleableUserFunctionException(msg)
+
+                    msg = f"\nThis exception had to be sent to your machine as a string:\n\n"
+                    msg += f"{exc_info['traceback_str']}\n"
+                    raise UnPickleableUserFunctionException(msg)
 
                 status = {
                     "udf_start_latency": node_status.get("udf_start_latency"),

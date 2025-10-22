@@ -196,19 +196,19 @@ async def _job_watcher(
                 neighbor_had_no_inputs_at = neighbor_had_no_inputs_at or time()
                 seconds_neighbor_had_no_inputs = time() - neighbor_had_no_inputs_at
 
-        #  job ended ?
+        # job ended ?
         job_is_done = False
         node_is_done = SELF["all_inputs_uploaded"] and all_workers_idle_twice
-        node_is_done = node_is_done and SELF["results_queue"].empty()
+        node_is_done = node_is_done and SELF["results_queue"].empty() or is_background_job
         neighbor_is_done = (not neighboring_node) or (seconds_neighbor_had_no_inputs > 2)
 
         if node_is_done and neighbor_is_done:
             query_result = await node_docs_collection.sum("current_num_results").get()
             total_results = query_result[0][0].value
             job_snapshot = await job_doc.get()
+            all_inputs_processed = total_results == n_inputs
             client_has_all_results = job_snapshot.to_dict()["client_has_all_results"]
-            client_has_all_results = client_has_all_results or is_background_job
-            job_is_done = total_results == n_inputs and client_has_all_results
+            job_is_done = all_inputs_processed and (client_has_all_results or is_background_job)
 
         if job_is_done or JOB_FAILED or JOB_CANCELED:
             logger.log("Job has failed!" if JOB_FAILED else "Job is done!")

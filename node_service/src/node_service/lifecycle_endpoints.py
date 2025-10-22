@@ -1,4 +1,4 @@
-from time import time
+from time import time, sleep
 import requests
 from typing import Optional, Callable
 import concurrent.futures
@@ -97,7 +97,38 @@ def _call_docker_threadsafe(method, *args, **kwargs):
         client.close()
 
 
-def _pull_image_if_missing(image: str, logger: Logger, docker_client: docker.APIClient):
+def _LOCAL_DEV_ONLY_pull_image_if_missing(
+    image: str, logger: Logger, docker_client: docker.APIClient
+):
+    """
+    Cannot pull using cli in local dev mode because this is already running in a docker container
+    and im too lazy to setup docker-in-docker that works with the CLI.
+    It dosent use this in prod because it's unreliable, `docker_client.pull` often fails silently.
+    """
+    try:
+        docker_client.inspect_image(image)
+    except docker.errors.ImageNotFound:
+        logger.log(f"Pulling image {image} ...")
+        try:
+            docker_client.pull(image)
+        except APIError as e:
+            if "Unauthenticated request" in str(e):
+                print("Image is not public, trying again with credentials ...")
+                CREDENTIALS.refresh(Request())
+                auth_config = {"username": "oauth2accesstoken", "password": CREDENTIALS.token}
+                docker_client.pull(image, auth_config=auth_config)
+            else:
+                raise
+        # ODDLY, if docker_client.pull fails to pull the image, it will NOT throw any error >:(
+        # check here that the image was actually pulled and exists on disk,
+        try:
+            docker_client.inspect_image(image)
+        except docker.errors.ImageNotFound:
+            msg = f"Image {image} not found after pulling!\nDid vm run out of disk space?"
+            raise Exception(msg)
+
+
+def _pull_image_if_missing(image: str, logger: Logger):
     # Use CLI instead of python api because that api just generally horrible and broken.
     # I already tried using it correctly, it wasnt worth it.
 
@@ -109,10 +140,22 @@ def _pull_image_if_missing(image: str, logger: Logger, docker_client: docker.API
         else:
             return result
 
-    logger.log(f"Pulling image {image} ...")
-    result = _run_command(f"docker pull {image}", raise_error=False)
+    attempt = 0
+    while True:
+        attempt += 1
+        logger.log(f"Pulling image {image} ...")
+        result = _run_command(f"docker pull {image}", raise_error=False)
+        text_output = result.stderr.decode() + result.stdout.decode()
+        no_transient_error = not (result.returncode != 0 and "unexpected EOF" in text_output)
+
+        if no_transient_error or attempt > 5:
+            break
+        else:
+            logger.log(f"`Unexpected EOF` error detected, retrying... (attempt {attempt})")
+            sleep(3)
+
     docker_pull_failed = result.returncode != 0
-    docker_pull_stderr = result.stderr
+    docker_pull_stderr = result.stderr.decode()
     not_hosted_in_google_artifact_registry = "docker.pkg.dev" not in image
 
     if docker_pull_failed and not_hosted_in_google_artifact_registry:
@@ -266,7 +309,10 @@ def reboot_containers(
         # start new workers.
         futures = []
         for spec in SELF["current_container_config"]:
-            _pull_image_if_missing(spec.image, logger, docker_client)
+            if IN_LOCAL_DEV_MODE:
+                _LOCAL_DEV_ONLY_pull_image_if_missing(spec.image, logger, docker_client)
+            else:
+                _pull_image_if_missing(spec.image, logger)
             num_workers = INSTANCE_N_CPUS if NUM_GPUS == 0 else NUM_GPUS
             for i in range(num_workers):
                 # have just one worker install the worker svc, then share through docker volume

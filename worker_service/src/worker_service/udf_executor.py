@@ -233,7 +233,6 @@ def _install_packages(packages: dict):
     else:
         msg = f"Successfully installed {len(packages)} packages:\n\t{result.stderr}"
         SELF["logs"].append(msg)
-        SELF["ALL_PACKAGES_INSTALLED"] = True
         SELF["CURRENTLY_INSTALLING_PACKAGE"] = None
 
 
@@ -247,6 +246,9 @@ def install_pkgs_and_execute_job(
     if not all_packages_importable and am_elected_installer_worker:
         _install_packages(packages)
         ENV_IS_READY_PATH.touch()
+        SELF["ALL_PACKAGES_INSTALLED"] = True
+    elif all_packages_importable and am_elected_installer_worker:
+        SELF["ALL_PACKAGES_INSTALLED"] = True
     elif not all_packages_importable:
         SELF["logs"].append("Waiting for packages ...")
         while not ENV_IS_READY_PATH.exists():
@@ -365,8 +367,9 @@ def install_pkgs_and_execute_job(
                     sleep(0.1)
 
             SELF["results_queue"].put((input_index, is_error, result_pkl), len(result_pkl))
-            SELF["in_progress_input"] = None
             # SELF["logs"].append(f"Successfully enqueued result for input #{input_index}.")
+
+        SELF["in_progress_input"] = None
 
     SELF["logs"].append(f"STOP_PROCESSING_EVENT has been set!")
     firestore_stdout.stop()

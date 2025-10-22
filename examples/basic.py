@@ -9,4 +9,4 @@ def my_function(x):
     print(f"I'm running on my own separate computer in the cloud! #{x}")
 
 
-remote_parallel_map(my_function, inputs=list(range(1000)))
+remote_parallel_map(my_function, inputs=list(range(10)))

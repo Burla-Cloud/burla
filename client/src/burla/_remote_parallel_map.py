@@ -517,7 +517,7 @@ async def _execute_job(
                 stderr = ping_process.stderr.read().decode("utf-8")
                 raise Exception(f"Ping process exited with code: {exit_code}\n{stderr}")
 
-            if spinner:
+            if spinner and all_packages_installed:
                 spinner.text = (
                     f"Running {len(inputs)} inputs through `{function_.__name__}` "
                     f"({n_results}/{len(inputs)} completed) "

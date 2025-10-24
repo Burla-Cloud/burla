@@ -414,6 +414,8 @@ class Node:
         }}
         trap 'handle_error' ERR
 
+        exit 1
+
         ACCESS_TOKEN=$(curl -s -H "Metadata-Flavor: Google" \
         "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token" \
         | jq -r .access_token)

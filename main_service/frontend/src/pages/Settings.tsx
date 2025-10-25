@@ -122,23 +122,34 @@ const SettingsPage = () => {
 
           {hasUnsavedChanges && (
             <div className="relative">
-              {/* Outer halo pulse */}
-              <div
-                className="absolute -inset-2 rounded-lg bg-gray-400/40 blur-md"
-                style={{ animation: "softPulse 1.8s ease-in-out infinite" }}
-              />
-              {/* Save button */}
               <Button
                 onClick={handleSave}
-                variant="outline"
+                variant="ghost"
                 disabled={saving || loading || !!error}
-                className="relative transition-all duration-500 shadow-md"
-                style={{
-                  animation:
-                    hasUnsavedChanges && !saving
-                      ? "pulseGrow 1.8s ease-in-out infinite"
-                      : undefined,
-                }}
+                className={[
+                  // match Card border + white surface
+                  "relative rounded-md bg-white text-gray-900",
+                  "border border-border",
+
+                  // depth + motion
+                  "shadow-[0_1px_3px_rgba(0,0,0,0.04)]",
+                  "transform-gpu transition-all duration-200 ease-in-out",
+                  "hover:-translate-y-0.5 hover:bg-gray-50",
+                  "hover:shadow-[0_6px_14px_rgba(0,0,0,0.08)]",
+
+                  // kill ring/outline on focus/active (shadcn adds these by default)
+                  "!focus:outline-none !focus-visible:outline-none",
+                  "!ring-0 !focus:ring-0 !focus-visible:ring-0",
+                  "!focus:ring-offset-0 !focus-visible:ring-offset-0",
+                  "!focus:shadow-none !focus-visible:shadow-none",
+                  "focus:border-border focus-visible:border-border active:border-border",
+
+                  // active returns to subtle shadow
+                  "active:translate-y-0 active:shadow-[0_1px_3px_rgba(0,0,0,0.04)]",
+
+                  // disabled stays flat
+                  "disabled:opacity-90 disabled:shadow-[0_1px_3px_rgba(0,0,0,0.04)] disabled:hover:bg-white"
+                ].join(" ")}
               >
                 <span className="flex items-center justify-center min-w-[48px]">
                   {saving ? (
@@ -148,34 +159,9 @@ const SettingsPage = () => {
                   )}
                 </span>
               </Button>
-              <style jsx>{`
-                @keyframes pulseGrow {
-                  0%,
-                  100% {
-                    transform: scale(1);
-                    box-shadow: 0 0 6px rgba(0, 0, 0, 0.1);
-                  }
-                  50% {
-                    transform: scale(1.05);
-                    box-shadow: 0 0 14px rgba(0, 0, 0, 0.18);
-                  }
-                }
-                @keyframes softPulse {
-                  0%,
-                  100% {
-                    opacity: 0.25;
-                    transform: scale(1);
-                  }
-                  50% {
-                    opacity: 0.6;
-                    transform: scale(1.06);
-                  }
-                }
-              `}</style>
             </div>
           )}
         </div>
-
         <div className="space-y-8 flex-1">
           {loading ? (
             <Card className="w-full animate-pulse">

@@ -202,18 +202,20 @@ def create_action(payload: Dict[str, Any]) -> Dict[str, Any]:
     candidate_names: List[str] = []
     if payload_name:
         candidate_names.append(payload_name)
+    else:
+        data_items = payload.get("data") or []
+        if not data_items:
+            raise ValueError("No items provided for create action")
+        for item in data_items:
+            raw_name = item.get("name")
+            if not raw_name:
+                continue
+            if "/" in raw_name or "\\" in raw_name:
+                continue
+            candidate_names.append(raw_name)
 
-    data_items = payload.get("data") or []
-    if not candidate_names and not data_items:
+    if not candidate_names:
         raise ValueError("No items provided for create action")
-
-    for item in data_items:
-        raw_name = item.get("name")
-        if not raw_name:
-            continue
-        if "/" in raw_name or "\\" in raw_name:
-            continue
-        candidate_names.append(raw_name)
 
     unique_names = []
     seen = set()

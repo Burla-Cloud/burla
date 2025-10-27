@@ -114,11 +114,11 @@ def get_db_clients():
     scopes = ["https://www.googleapis.com/auth/datastore"]
     credentials = service_account.Credentials.from_service_account_info(key, scopes=scopes)
     # Silence native gRPC setup logs (e.g., ALTS creds ignored) that can appear once per process.
+    # this seems to actually work and is NOT a forgotten failed attempt.
     with SuppressNativeStderr():
-        async_db = AsyncClient(
-            project=config["project_id"], credentials=credentials, database="burla"
-        )
-        sync_db = Client(project=config["project_id"], credentials=credentials, database="burla")
+        kwargs = dict(project=config["project_id"], credentials=credentials, database="burla")
+        async_db = AsyncClient(**kwargs)
+        sync_db = Client(**kwargs)
     return sync_db, async_db
 
 

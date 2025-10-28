@@ -8,6 +8,7 @@ from typing import Optional
 import asyncio
 import aiohttp
 from google.cloud import firestore
+from google.cloud.firestore_v1.async_client import AsyncClient
 from fastapi import APIRouter, Path, Depends, Response, Request
 
 from node_service import (
@@ -165,6 +166,10 @@ async def execute(
 
     if not workers_to_assign:
         SELF["RUNNING"] = False
+        async_db = AsyncClient(project=PROJECT_ID, database="burla")
+        node_doc = async_db.collection("nodes").document(INSTANCE_NAME)
+        await node_doc.update({"status": "READY"})
+        print("SET BACH TO  READY")
         msg = "No compatible containers.\n"
         msg += f"User is running python version {user_python_version}, "
         versions = list(set([e.python_version for e in SELF["workers"]]))

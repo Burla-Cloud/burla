@@ -1510,7 +1510,7 @@ export default function Filesystem() {
                         }}
                         uploadSettings={{
                             maxFileSize: maxUploadSizeBytes,
-                            directoryUpload: true,
+                            directoryUpload: false,
                         }}
                         detailsViewSettings={{
                             columns: detailsViewColumns,

@@ -15,8 +15,6 @@ from main_service import PROJECT_ID, DB
 
 router = APIRouter()
 
-FOLDER_PLACEHOLDER_NAME = ".burla-folder-placeholder"
-
 # This makes it possible to create signed url's for any blobs created with this client.
 source_creds, project_id = default()
 signing_creds = impersonated_credentials.Credentials(
@@ -81,8 +79,6 @@ def folder_has_children(prefix: str) -> bool:
     iterator = GCS_BUCKET.list_blobs(prefix=prefix, max_results=2)
     for blob in iterator:
         if blob.name == prefix:
-            continue
-        if blob.name.endswith(FOLDER_PLACEHOLDER_NAME):
             continue
         return True
     return False
@@ -153,8 +149,7 @@ def is_file_entry(entry: Dict[str, Any]) -> bool:
 
 
 def folder_exists(prefix: str) -> bool:
-    placeholder_blob_name = f"{prefix}{FOLDER_PLACEHOLDER_NAME}"
-    if GCS_BUCKET.get_blob(placeholder_blob_name):
+    if GCS_BUCKET.get_blob(prefix):
         return True
     iterator = GCS_BUCKET.list_blobs(prefix=prefix, max_results=1)
     for blob in iterator:
@@ -188,8 +183,6 @@ def read_action(payload: Dict[str, Any]) -> Dict[str, Any]:
         for blob in page:
             if blob.name == directory_prefix:
                 continue
-            if blob.name.endswith(FOLDER_PLACEHOLDER_NAME):
-                continue
             if blob.name.endswith("/"):
                 continue
             files.append(build_file_metadata(blob, directory_prefix))
@@ -209,18 +202,20 @@ def create_action(payload: Dict[str, Any]) -> Dict[str, Any]:
     candidate_names: List[str] = []
     if payload_name:
         candidate_names.append(payload_name)
+    else:
+        data_items = payload.get("data") or []
+        if not data_items:
+            raise ValueError("No items provided for create action")
+        for item in data_items:
+            raw_name = item.get("name")
+            if not raw_name:
+                continue
+            if "/" in raw_name or "\\" in raw_name:
+                continue
+            candidate_names.append(raw_name)
 
-    data_items = payload.get("data") or []
-    if not candidate_names and not data_items:
+    if not candidate_names:
         raise ValueError("No items provided for create action")
-
-    for item in data_items:
-        raw_name = item.get("name")
-        if not raw_name:
-            continue
-        if "/" in raw_name or "\\" in raw_name:
-            continue
-        candidate_names.append(raw_name)
 
     unique_names = []
     seen = set()
@@ -243,10 +238,9 @@ def create_action(payload: Dict[str, Any]) -> Dict[str, Any]:
             metadata = build_directory_metadata(folder_prefix, directory_prefix)
             entries.append(metadata)
             continue
-        placeholder_blob_name = f"{folder_prefix}{FOLDER_PLACEHOLDER_NAME}"
-        if GCS_BUCKET.get_blob(placeholder_blob_name) is None:
-            placeholder_blob = GCS_BUCKET.blob(placeholder_blob_name)
-            placeholder_blob.upload_from_string("", content_type="application/octet-stream")
+        if GCS_BUCKET.get_blob(folder_prefix) is None:
+            marker_blob = GCS_BUCKET.blob(folder_prefix)
+            marker_blob.upload_from_string(b"", content_type="application/x-directory")
         metadata = build_directory_metadata(folder_prefix, directory_prefix)
         metadata["dateModified"] = isoformat_value(
             datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
@@ -637,17 +631,6 @@ def batch_download(payload: Dict[str, Any]):
                 blobs = GCS_BUCKET.list_blobs(prefix=prefix)
                 for blob in blobs:
                     if blob.name == prefix:
-                        continue
-                    if blob.name.endswith(FOLDER_PLACEHOLDER_NAME):
-                        relative_directory = blob.name[len(prefix) : -len(FOLDER_PLACEHOLDER_NAME)]
-                        if not relative_directory:
-                            added_content = True
-                            continue
-                        sanitized_directory = sanitize_archive_item_path(
-                            relative_directory, relative_directory
-                        )
-                        ensure_directory_hierarchy(archive_root, sanitized_directory)
-                        added_content = True
                         continue
                     relative_path = blob.name[len(prefix) :]
                     if not relative_path:

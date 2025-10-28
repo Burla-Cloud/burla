@@ -39,6 +39,32 @@ class GoogleLoginError(Exception):
     pass
 
 
+class SuppressNativeStderr:
+    """Temporarily silence C/C++ library logs that write directly to stderr.
+
+    Used to suppress one-time gRPC/ALTS noise during Firestore channel setup.
+    """
+
+    def __enter__(self):
+        # Duplicate FD 2 (stderr) directly to tolerate environments without a true sys.stderr fd.
+        self._stderr_fd_copy = os.dup(2)
+        self._devnull = open(os.devnull, "w")
+        os.dup2(self._devnull.fileno(), 2)
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        os.dup2(self._stderr_fd_copy, 2)
+        os.close(self._stderr_fd_copy)
+        self._devnull.close()
+        return False
+
+    async def __aenter__(self):
+        return self.__enter__()
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        return self.__exit__(exc_type, exc_val, exc_tb)
+
+
 async def run_in_subprocess(func, *args):
     # I do it like this so it works in google colab, multiprocesing doesn't
     code = textwrap.dedent(
@@ -87,8 +113,12 @@ def get_db_clients():
     key = config["client_svc_account_key"]
     scopes = ["https://www.googleapis.com/auth/datastore"]
     credentials = service_account.Credentials.from_service_account_info(key, scopes=scopes)
-    async_db = AsyncClient(project=config["project_id"], credentials=credentials, database="burla")
-    sync_db = Client(project=config["project_id"], credentials=credentials, database="burla")
+    # Silence native gRPC setup logs (e.g., ALTS creds ignored) that can appear once per process.
+    # this seems to actually work and is NOT a forgotten failed attempt.
+    with SuppressNativeStderr():
+        kwargs = dict(project=config["project_id"], credentials=credentials, database="burla")
+        async_db = AsyncClient(**kwargs)
+        sync_db = Client(**kwargs)
     return sync_db, async_db
 
 

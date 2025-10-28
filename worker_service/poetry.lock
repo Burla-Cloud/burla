@@ -210,13 +210,13 @@ tests-mypy = ["mypy (>=1.11.1)", "pytest-mypy-plugins"]
 
 [[package]]
 name = "burla"
-version = "1.2.14"
-description = "The simplest way to run Python on lot's of computers."
+version = "1.3.9"
+description = "Easy to use cluster-compute software."
 optional = false
 python-versions = "<4.0,>=3.10"
 files = [
-    {file = "burla-1.2.14-py3-none-any.whl", hash = "sha256:8bcee71cbe884450dbd2c87b6cb1ca217c5a4d44255cf77b281a0b1816241dd8"},
-    {file = "burla-1.2.14.tar.gz", hash = "sha256:46ece6ec0067a7f1006e68ce35544ab815c8a5a303f5e1f8b020a3e40bb5c2dc"},
+    {file = "burla-1.3.9-py3-none-any.whl", hash = "sha256:f1bb8a8970e870949e50e23881811ffdf37673632c2231faf33f53a5b6f7bbfd"},
+    {file = "burla-1.3.9.tar.gz", hash = "sha256:8e7d0bbfb706a99827e154c08697859a262807747da9fb159a78ac70d3a5cc8e"},
 ]
 
 [package.dependencies]
@@ -915,6 +915,17 @@ files = [
 typing-extensions = {version = ">=4.1.0", markers = "python_version < \"3.11\""}
 
 [[package]]
+name = "packaging"
+version = "25.0"
+description = "Core utilities for Python packages"
+optional = false
+python-versions = ">=3.8"
+files = [
+    {file = "packaging-25.0-py3-none-any.whl", hash = "sha256:29572ef2b1f17581046b3a2227d5c611fb25ec70ca1ba8554b24b0e69331a484"},
+    {file = "packaging-25.0.tar.gz", hash = "sha256:d443872c98d677bf60f6a1f2f8c1cb748e8fe762d2bf9d3148b5599295b0fc4f"},
+]
+
+[[package]]
 name = "propcache"
 version = "0.3.2"
 description = "Accelerated property cache"
@@ -1519,4 +1530,4 @@ termcolor = ">=3.1,<4.0"
 [metadata]
 lock-version = "2.0"
 python-versions = ">=3.10,<4.0"
-content-hash = "83588755d483a4707828a78c6adc8a541c9744c33e354809c14fd2cc0419487f"
+content-hash = "967f99bb619f47f9b53b3855030e342755ea6dab13579a3ed7fc9dd925382a8f"

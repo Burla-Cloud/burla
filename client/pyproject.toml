@@ -16,6 +16,7 @@ tblib = ">=3.0"
 google-cloud-firestore = ">=2.20"
 aiohttp = ">=3.11.14"
 six = "^1.17.0"
+packaging = "^25.0"
 
 [tool.poetry.scripts]
 burla = "burla.__init__:init_cli"

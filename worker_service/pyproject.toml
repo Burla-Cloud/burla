@@ -15,6 +15,7 @@ tblib = ">=3.0"
 requests = "^2.32.4"
 python-multipart = "^0.0.20"
 burla = "^1.2.15"
+packaging = "^25.0"
 
 [build-system]
 requires = ["poetry-core"]

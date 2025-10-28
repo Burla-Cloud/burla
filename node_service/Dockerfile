@@ -77,11 +77,11 @@ RUN uv python install 3.13 && \
 
 # Install latest node_service and pip install packages now to make node starts faster
 WORKDIR /opt
-RUN git clone --depth 1 --branch 1.3.9 https://github.com/Burla-Cloud/burla.git --no-checkout
+RUN git clone --depth 1 --branch 1.3.10 https://github.com/Burla-Cloud/burla.git --no-checkout
 WORKDIR burla
 RUN git sparse-checkout init --cone && \
     git sparse-checkout set node_service && \
-    git checkout 1.3.9
+    git checkout 1.3.10
 WORKDIR node_service
 RUN uv venv /opt/burla/.venv
 RUN echo 'export UV_PROJECT_ENVIRONMENT=/opt/burla/.venv' >> /root/.bashrc

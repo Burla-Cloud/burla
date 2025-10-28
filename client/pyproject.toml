@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "burla"
-version = "1.3.9"
+version = "1.3.10"
 description = "Easy to use cluster-compute software."
 authors = ["Jake Zuliani <jake@burla.dev>"]
 

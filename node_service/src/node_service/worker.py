@@ -237,7 +237,7 @@ class Worker:
                 )
                 self.container_id = self.container.get("Id")
                 docker_client.start(container=self.container_id)
-            except requests.exceptions.ReadTimeout as e:
+            except (requests.exceptions.ReadTimeout, docker.errors.APIError) as e:
                 if attempt > 5:
                     raise e
                 sleep(random.uniform(1, 5))  # <- avoid theoretical thundering herd

@@ -1,4 +1,4 @@
-import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
+import { BrowserRouter as Router, Routes, Route, Outlet } from "react-router-dom";
 import Sidebar from "@/components/Sidebar";
 import Dashboard from "@/pages/Index";
 import Jobs from "@/pages/Jobs";
@@ -15,50 +15,51 @@ import { LogsProvider } from "@/contexts/LogsContext";
 import ErrorBoundary from "@/components/ErrorBoundary";
 import AppDataLoader from "@/components/AppDataLoader";
 import ProfilePicture from "@/components/ProfilePicture";
+import { useState } from "react";
 
-const ForceError = () => {
-    throw new Error("Intentional test error");
+const Layout = () => {
+  const [saving, setSaving] = useState(false);
+
+  return (
+    <div className="flex min-h-screen items-stretch bg-gray-50">
+      <ProfilePicture />
+      <Sidebar disabled={saving} />
+      <div className="flex-1 py-10 px-12 flex items-stretch">
+        <Outlet context={{ saving, setSaving }} />
+      </div>
+    </div>
+  );
 };
 
 const App = () => (
-    <ErrorBoundary>
-        <NodesProvider>
-            <ClusterProvider>
-                <TooltipProvider>
-                    <Toaster />
-                    <JobsProvider>
-                        <SettingsProvider>
-                            <LogsProvider>
-                                <AppDataLoader />
-                                <Router>
-                                    <div className="flex min-h-screen items-stretch bg-gray-50">
-                                        <ProfilePicture />
-                                        <Sidebar />
-                                        <div className="flex-1 py-10 px-12 flex items-stretch">
-                                            <Routes>
-                                                <Route path="/" element={<Dashboard />} />
-                                                <Route path="/jobs" element={<Jobs />} />
-                                                <Route
-                                                    path="/jobs/:jobId"
-                                                    element={<JobDetails />}
-                                                />
-                                                <Route path="/settings" element={<Settings />} />
-                                                <Route path="/storage" element={<Storage />} />
-                                                <Route
-                                                    path="/__error-test"
-                                                    element={<ForceError />}
-                                                />
-                                            </Routes>
-                                        </div>
-                                    </div>
-                                </Router>
-                            </LogsProvider>
-                        </SettingsProvider>
-                    </JobsProvider>
-                </TooltipProvider>
-            </ClusterProvider>
-        </NodesProvider>
-    </ErrorBoundary>
+  <ErrorBoundary>
+    <NodesProvider>
+      <ClusterProvider>
+        <TooltipProvider>
+          <Toaster />
+          <JobsProvider>
+            <SettingsProvider>
+              <LogsProvider>
+                <AppDataLoader />
+                <Router>
+                  <Routes>
+                    <Route element={<Layout />}>
+                      <Route path="/" element={<Dashboard />} />
+                      <Route path="/jobs" element={<Jobs />} />
+                      <Route path="/jobs/:jobId" element={<JobDetails />} />
+                      <Route path="/settings" element={<Settings />} />
+                      <Route path="/storage" element={<Storage />} />
+                    </Route>
+                  </Routes>
+                </Router>
+              </LogsProvider>
+            </SettingsProvider>
+          </JobsProvider>
+        </TooltipProvider>
+      </ClusterProvider>
+    </NodesProvider>
+  </ErrorBoundary>
 );
 
 export default App;
+

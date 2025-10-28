@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { useNavigate, useLocation } from "react-router-dom";
+import { useNavigate, useLocation, useOutletContext } from "react-router-dom";
 import { useSettings } from "@/contexts/SettingsContext";
 import { SettingsForm } from "@/components/SettingsForm";
 import { Button } from "@/components/ui/button";
@@ -9,6 +9,16 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { AlertTriangle, Loader2 } from "lucide-react";
+import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogHeader,
+  AlertDialogFooter,
+  AlertDialogTitle,
+  AlertDialogDescription,
+  AlertDialogAction,
+  AlertDialogCancel,
+} from "@/components/ui/alert-dialog";
 
 const SettingsPage = () => {
   const navigate = useNavigate();
@@ -16,10 +26,17 @@ const SettingsPage = () => {
   const { settings, setSettings } = useSettings();
   const { saveSettings } = useSaveSettings();
 
+  // get saving + setSaving from Layout context
+  const { saving, setSaving } = useOutletContext<{
+    saving: boolean;
+    setSaving: React.Dispatch<React.SetStateAction<boolean>>;
+  }>();
+
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+  const [showExitDialog, setShowExitDialog] = useState(false);
+  const pendingNavRef = useRef<string | null>(null);
   const settingsFormRef = useRef<{ isRegionValid: () => boolean } | null>(null);
 
   // Fetch settings
@@ -40,8 +57,6 @@ const SettingsPage = () => {
     fetchSettings();
   }, [setSettings]);
 
-  const confirmMsg = "You have unsaved changes. Leave this page?";
-
   // Warn on browser refresh/close
   useEffect(() => {
     const warn = (e: BeforeUnloadEvent) => {
@@ -54,7 +69,7 @@ const SettingsPage = () => {
     return () => window.removeEventListener("beforeunload", warn);
   }, [hasUnsavedChanges]);
 
-  // Intercept in-app anchor navigation to use native confirm
+  // Intercept in-app anchor navigation
   useEffect(() => {
     const handleBeforeNav = (e: MouseEvent) => {
       if (!hasUnsavedChanges) return;
@@ -66,7 +81,6 @@ const SettingsPage = () => {
       const href = el.getAttribute("href");
       if (!href) return;
 
-      // ignore external, same-path, and non-left-click or modifier clicks
       const isExternal =
         /^https?:\/\//i.test(href) || el.getAttribute("target") === "_blank";
       const samePath = href === location.pathname;
@@ -77,11 +91,10 @@ const SettingsPage = () => {
       if (isExternal || samePath || modified) return;
 
       if (href.startsWith("/")) {
-        const ok = window.confirm(confirmMsg);
-        if (!ok) {
-          e.preventDefault();
-          e.stopPropagation();
-        }
+        e.preventDefault();
+        e.stopPropagation();
+        pendingNavRef.current = href;
+        setShowExitDialog(true);
       }
     };
 
@@ -89,7 +102,6 @@ const SettingsPage = () => {
     return () => document.removeEventListener("click", handleBeforeNav, true);
   }, [hasUnsavedChanges, location.pathname]);
 
-  // Save handler
   const handleSave = async () => {
     if (
       settingsFormRef.current &&
@@ -103,13 +115,13 @@ const SettingsPage = () => {
       return false;
     }
 
-    setSaving(true);
+    setSaving(true); // disable sidebar while saving
     const ok = await saveSettings(settings);
     toast({
       title: ok ? "Settings saved successfully" : "Failed to save settings",
       variant: ok ? "default" : "destructive",
     });
-    setSaving(false);
+    setSaving(false); // re-enable sidebar
     if (ok) setHasUnsavedChanges(false);
     return ok;
   };
@@ -121,47 +133,31 @@ const SettingsPage = () => {
           <h1 className="text-3xl font-bold text-primary">Settings</h1>
 
           {hasUnsavedChanges && (
-            <div className="relative">
-              <Button
-                onClick={handleSave}
-                variant="ghost"
-                disabled={saving || loading || !!error}
-                className={[
-                  // match Card border + white surface
-                  "relative rounded-md bg-white text-gray-900",
-                  "border border-border",
-
-                  // depth + motion
-                  "shadow-[0_1px_3px_rgba(0,0,0,0.04)]",
-                  "transform-gpu transition-all duration-200 ease-in-out",
-                  "hover:-translate-y-0.5 hover:bg-gray-50",
-                  "hover:shadow-[0_6px_14px_rgba(0,0,0,0.08)]",
-
-                  // kill ring/outline on focus/active (shadcn adds these by default)
-                  "!focus:outline-none !focus-visible:outline-none",
-                  "!ring-0 !focus:ring-0 !focus-visible:ring-0",
-                  "!focus:ring-offset-0 !focus-visible:ring-offset-0",
-                  "!focus:shadow-none !focus-visible:shadow-none",
-                  "focus:border-border focus-visible:border-border active:border-border",
-
-                  // active returns to subtle shadow
-                  "active:translate-y-0 active:shadow-[0_1px_3px_rgba(0,0,0,0.04)]",
-
-                  // disabled stays flat
-                  "disabled:opacity-90 disabled:shadow-[0_1px_3px_rgba(0,0,0,0.04)] disabled:hover:bg-white"
-                ].join(" ")}
-              >
-                <span className="flex items-center justify-center min-w-[48px]">
-                  {saving ? (
-                    <Loader2 className="h-4 w-4 animate-spin text-gray-600" />
-                  ) : (
-                    "Save"
-                  )}
-                </span>
-              </Button>
-            </div>
+            <Button
+              onClick={handleSave}
+              variant="ghost"
+              disabled={saving || loading || !!error}
+              className={[
+                "relative rounded-md bg-white text-gray-900",
+                "border border-border shadow-[0_1px_3px_rgba(0,0,0,0.04)]",
+                "transform-gpu transition-all duration-200 ease-in-out",
+                "hover:-translate-y-0.5 hover:bg-gray-50",
+                "hover:shadow-[0_6px_14px_rgba(0,0,0,0.08)]",
+                "!focus:outline-none !ring-0 focus:border-border",
+                "active:translate-y-0 active:shadow-[0_1px_3px_rgba(0,0,0,0.04)]",
+              ].join(" ")}
+            >
+              <span className="flex items-center justify-center min-w-[48px]">
+                {saving ? (
+                  <Loader2 className="h-4 w-4 animate-spin text-gray-600" />
+                ) : (
+                  "Save"
+                )}
+              </span>
+            </Button>
           )}
         </div>
+
         <div className="space-y-8 flex-1">
           {loading ? (
             <Card className="w-full animate-pulse">
@@ -200,10 +196,48 @@ const SettingsPage = () => {
           </a>
         </div>
       </div>
+
+      {/* Exit confirmation dialog */}
+      <AlertDialog open={showExitDialog} onOpenChange={setShowExitDialog}>
+        <AlertDialogContent className="max-w-[360px] mx-auto py-7 px-6 rounded-lg shadow-[0_8px_24px_rgba(0,0,0,0.06)] bg-white">
+          <div className="text-center mb-2">
+            <AlertDialogTitle className="text-[15px] font-medium text-gray-900">
+              Unsaved changes
+            </AlertDialogTitle>
+          </div>
+
+          <div className="flex justify-center gap-3">
+            {/* Hidden cancel keeps Radix stable */}
+            <AlertDialogCancel className="hidden" />
+
+            {/* Keep your established primary color */}
+            <AlertDialogAction
+              onClick={async () => {
+                const ok = await handleSave();
+                if (ok && pendingNavRef.current)
+                  navigate(pendingNavRef.current);
+              }}
+              className="bg-gray-700 text-white hover:bg-gray-800 rounded-md px-5 py-2.5 font-medium min-w-[130px] transition-all focus:outline-none"
+            >
+              Save & Exit
+            </AlertDialogAction>
+
+            <AlertDialogAction
+              onClick={() => {
+                if (pendingNavRef.current) navigate(pendingNavRef.current);
+              }}
+              className="border border-gray-200 bg-gray-50 text-gray-800 hover:bg-gray-100 rounded-md px-5 py-2.5 font-medium min-w-[130px] transition-all focus:outline-none"
+            >
+              Exit Without Saving
+            </AlertDialogAction>
+          </div>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 };
 
 export default SettingsPage;
+
 
 

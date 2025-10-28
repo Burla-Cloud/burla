@@ -441,32 +441,23 @@ remote_parallel_map(my_function, list(range(1000)))`;
                                         <TableHead className="w-24 pl-6 pr-4 py-2">RAM</TableHead>
                                         <TableHead className="w-24 pl-6 pr-4 py-2">GPUs</TableHead>
                                         <TableHead className="w-8 pl-6 pr-2 py-2 text-right">
-                                            {hasClearables && (
-                                                <TooltipProvider>
-                                                <Tooltip>
-                                                    <TooltipTrigger asChild>
-                                                    <button
-                                                        type="button"
-                                                        onClick={clearFailedDeleted}
-                                                        disabled={bulkDeleting}
-                                                        aria-label="Remove failed or deleted nodes from this list"
-                                                        className={cn(
-                                                        "group inline-flex items-center gap-1.5 text-sm px-2 py-1 rounded transition-colors",
-                                                        bulkDeleting
-                                                            ? "text-muted-foreground/60 cursor-not-allowed"
-                                                            : "text-muted-foreground hover:text-red-600"
-                                                        )}
-                                                    >
-                                                        <Trash2 className="h-3.5 w-3.5" />
-                                                        <span>Clear all</span>
-                                                    </button>
-                                                    </TooltipTrigger>
-                                                    <TooltipContent side="bottom">
-                                                    Remove failed or deleted
-                                                    </TooltipContent>
-                                                </Tooltip>
-                                                </TooltipProvider>
-                                            )}
+                                        {hasClearables && (
+                                            <button
+                                                type="button"
+                                                onClick={clearFailedDeleted}
+                                                disabled={bulkDeleting}
+                                                aria-label="Remove failed or deleted nodes from this list"
+                                                className={cn(
+                                                "group inline-flex items-center gap-1.5 text-sm px-2 py-1 rounded transition-colors",
+                                                bulkDeleting
+                                                    ? "text-muted-foreground/60 cursor-not-allowed"
+                                                    : "text-muted-foreground hover:text-red-600"
+                                                )}
+                                            >
+                                                <Trash2 className="h-3.5 w-3.5" />
+                                                <span>Clear all</span>
+                                            </button>
+                                        )}
                                         </TableHead>
                                     </TableRow>
                                 </TableHeader>

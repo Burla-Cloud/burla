@@ -33,27 +33,30 @@ With Burla, running code in the cloud feels the same as coding locally:
 
 * Anything you print appears in your local terminal.
 * Exceptions thrown in your code are thrown on your local machine.
-* Your local python packages are automatically synchronized with the cluster.
 * Responses are pretty quick, you can call a million simple functions in a couple seconds!
 
-### Attach big hardware to functions that need it:
+### Features:
 
-Zero config files, just simple arguments like `func_cpu` & `func_ram`.
+#### 📦 Automatic Package Sync
 
-```python
-from xgboost import XGBClassifier
+Burla clusters automatically (and very quickly) install any missing python packages into all containers in the cluster.
 
-def train_model(hyper_parameters):
-    model = XGBClassifier(n_jobs=64, **hyper_parameters)
-    model.fit(training_inputs, training_targets)
-    
-remote_parallel_map(train_model, parameter_grid, func_cpu=64, func_ram=256)
-```
+#### 🐋 Custom Containers
 
-### Simple, flexible pipelines:
+Easily run code in any linux-based Docker container. Public or private, just paste an image URI in the settings, then hit start!
 
-Nest `remote_parallel_map` calls to build simple, massively parallel pipelines.\
-Use `background=True` to schedule function calls that keep running after you close your laptop.
+#### 📂 Network Filesystem
+
+Need to get big data into/out of the cluster? Burla automatically mounts a cloud storage bucket to your working directory.
+
+#### ⚙️ Variable Hardware Per-Function
+
+The `func_cpu` and `func_ram` args make it possible to assign more hardware to some functions, and less to others, unlocking new ways to simplify pipelines and architecture.
+
+### Easily create pipelines without special syntax.
+
+Nest `remote_parallel_map` calls to fan code in/out over thousands of machines.\
+Example: Process every record of many files in parallel, then combine results on one big machine.
 
 ```python
 from burla import remote_parallel_map
@@ -62,26 +65,20 @@ def process_record(record):
     # Pretend this does some math per-record!
     return result
 
-def process_file(file):
-    results = remote_parallel_map(process_record, split_into_records(file))
-    upload_results(results)
+def process_file(filepath):
+    # load records from disk (network storage)
+    results = remote_parallel_map(process_record, records)
+    # save results back to disk (network storage)
 
-def process_files(files):
-    remote_parallel_map(process_file, files, func_ram=16)
+def combine_results(result_filepaths):
+    # load results from disk (network storage), then combine!
     
-
-remote_parallel_map(process_files, [files], background=True)
+result_filepaths = remote_parallel_map(process_file, filepaths)
+remote_parallel_map(combine_results, [result_filepaths], func_ram=256)
 ```
 
-### Run code in any Docker image, using the latest GPU's:
-
-Public or private, just paste a URI to your image and hit start.\
-Burla works with any linux based Docker image.
-
-<figure><img src="https://raw.githubusercontent.com/Burla-Cloud/.github/refs/heads/main/media/settings_demo.gif" alt="" style="width:80%" /><figcaption></figcaption></figure>
-
 ### Watch our Demo:
-https://www.youtube.com/watch?v=9d22y_kWjyE
+[https://www.youtube.com/watch?v=9d22y_kWjyE](https://www.youtube.com/watch?v=9d22y_kWjyE)
 
 ### Try it now
 

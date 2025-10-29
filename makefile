@@ -68,7 +68,7 @@ stop:
 		'    for document in booting_nodes:' \
 		'        document.reference.delete()' \
 		'        print(f"Deleted node doc: {document.id}")' \
-	| poetry -C ./client run python -
+	| uv run --project ./client python -
 
 
 # start ONLY the main service, in local dev mode

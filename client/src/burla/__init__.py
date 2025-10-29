@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from fire import Fire
-from appdirs import user_config_dir
+from platformdirs import user_config_dir
 
 # needed so main_service can associate a client version with a request
 __version__ = "1.3.11"

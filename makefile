@@ -1,18 +1,52 @@
 .ONESHELL:
 .SILENT:
 
-demo:
-	poetry -C ./client run python examples/basic.py
+UV_PROJECT := ./client
+PROJECT_ABS := $(abspath $(UV_PROJECT))
 
-shell:
-	poetry -C ./client shell
+define UV_ZSH_ENV
+	set -e
+	uv python install $(1) >/dev/null 2>&1
+	uv python pin --project $(PROJECT_ABS) $(1) >/dev/null 2>&1
+	rm -rf $(PROJECT_ABS)/.venv
+	uv sync --project $(PROJECT_ABS) --group $(2) >/dev/null 2>&1
+	tmp_dir=$$(mktemp -d); \
+	printf 'PROMPT="($(1)-$(2)) %%c %%%% "\n' > $$tmp_dir/.zshrc; \
+	ZDOTDIR=$$tmp_dir exec uv run --project $(PROJECT_ABS) --group $(2) zsh -i
+endef
+
+define UV_JUPYTER_ENV
+	set -e
+	uv python install $(1) >/dev/null 2>&1
+	uv python pin --project $(PROJECT_ABS) $(1) >/dev/null 2>&1
+	rm -rf $(PROJECT_ABS)/.venv
+	uv sync --project $(PROJECT_ABS) --group dev >/dev/null 2>&1
+	cd .. && exec uv run --project $(PROJECT_ABS) --group dev jupyter-lab --NotebookApp.disable_checkpoints=True
+endef
+
+.PHONY: 3.11-dev 3.12-dev 3.13-dev 3.14-dev 3.11-jupyter 3.12-jupyter 3.13-jupyter 3.14-jupyter
+
+3.11-dev:
+	$(call UV_ZSH_ENV,3.11,dev)
+3.12-dev:
+	$(call UV_ZSH_ENV,3.12,dev)
+3.13-dev:
+	$(call UV_ZSH_ENV,3.13,dev)
+3.14-dev:
+	$(call UV_ZSH_ENV,3.14,dev)
+
+3.11-jupyter:
+	$(call UV_JUPYTER_ENV,3.11)
+3.12-jupyter:
+	$(call UV_JUPYTER_ENV,3.12)
+3.13-jupyter:
+	$(call UV_JUPYTER_ENV,3.13)
+3.14-jupyter:
+	$(call UV_JUPYTER_ENV,3.14)
+
 
 test:
-	poetry -C ./client run pytest client/tests/test.py -s -x --disable-warnings
-
-test-jupyter:
-	cd .. ; \
-	poetry -C ./burla/client run jupyter-lab
+	pytest client/tests/test.py -s -x --disable-warnings
 
 # remove all booting nodes from DB (only run in local-dev mode)
 stop:

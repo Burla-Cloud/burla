@@ -342,7 +342,8 @@ async def _execute_job(
             enable_cleanup_closed=True,
             use_dns_cache=True,
         )
-        session = await stack.enter_async_context(aiohttp.ClientSession(connector=connector))
+        client_session = aiohttp.ClientSession(connector=connector, trust_env=True)
+        session = await stack.enter_async_context(client_session)
 
         function_size_str = f" ({function_size_gb:.3f}GB)" if function_size_gb > 0.001 else ""
         msg = f"Calling function `{function_.__name__}`{function_size_str} on {len(inputs)} "

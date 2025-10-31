@@ -8,7 +8,7 @@ import requests
 import subprocess
 import textwrap
 import logging
-from typing import Union
+from typing import Any, Union
 from threading import Event
 
 import cloudpickle

@@ -223,14 +223,14 @@ async def lifespan(app: FastAPI):
 
 
 async def on_job_start(scope, first_event):
+    job_id = scope.get("path", "").split("/jobs/")[-1]
+    node_doc = ASYNC_DB.collection("nodes").document(INSTANCE_NAME)
+    await node_doc.update({"status": "RUNNING", "current_job": job_id})
+    # these must be set after ^
+    # used to confirm in execution endpoint that this ran BEFORE setting node back to ready
+    # in the case of a failure, it may not have because async.
     SELF["RUNNING"] = True
-    SELF["current_job"] = scope.get("path", "").split("/jobs/")[-1]
-
-    async def set_node_running(job_id: str):
-        node_doc = ASYNC_DB.collection("nodes").document(INSTANCE_NAME)
-        await node_doc.update({"status": "RUNNING", "current_job": job_id})
-
-    asyncio.create_task(set_node_running(SELF["current_job"]))
+    SELF["current_job"] = job_id
 
 
 class CallHookOnJobStartMiddleware:

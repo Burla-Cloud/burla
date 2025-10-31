@@ -179,16 +179,20 @@ class _FirestoreStdout:
             self._original_stdout_descriptor = None
             self._original_stderr_descriptor = None
 
+            terminal_master_descriptor = self._terminal_master_descriptor
             try:
-                if self._terminal_master_descriptor is not None:
-                    os.close(self._terminal_master_descriptor)
+                if terminal_master_descriptor is not None:
+                    os.close(terminal_master_descriptor)
             except Exception:
                 pass
-            self._terminal_master_descriptor = None
 
             if self._reader_thread is not None:
                 self._reader_thread.join(timeout=1)
-                self._reader_thread = None
+                if not self._reader_thread.is_alive():
+                    self._reader_thread = None
+
+            if self._reader_thread is None:
+                self._terminal_master_descriptor = None
 
             sys.stdout = self.original_stdout_object
             try:

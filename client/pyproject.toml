@@ -26,6 +26,9 @@ package = true
 requires = ["hatchling>=1.25"]
 build-backend = "hatchling.build"
 
+[tool.hatch.build.targets.wheel]
+packages = ["src/burla"]
+
 [dependency-groups]
 dev = [
     "google-cloud-firestore>=2.21.0",

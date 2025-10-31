@@ -32,10 +32,6 @@ aiohttp = "^3.11.18"
 jinja2 = "^3.1.6"
 packaging = "^25.0"
 
-[tool.poetry.group.dev.dependencies]
-black = "^23.1.0"
-pytest = "^7.4.3"
-
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"

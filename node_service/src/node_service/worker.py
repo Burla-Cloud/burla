@@ -80,18 +80,7 @@ class Worker:
                 exit 1
             fi
 
-            # install uv if missing
-            if [ "{elected_installer}" = "True" ] && ! command -v uv >/dev/null 2>&1; then
-                # needed even if we have worker service already to install packages
-                curl -LsSf https://astral.sh/uv/install.sh | sh
-                export PATH="$HOME/.cargo/bin:$PATH"
-                export PATH="$HOME/.local/bin:$PATH"
-            fi
-
-            # Install worker_service if missing
-            if [ "{elected_installer}" = "True" ] && ! $python_cmd -c "import worker_service" 2>/dev/null; then
-
-                # install curl if missing
+            # install curl if missing
                 if ! command -v curl >/dev/null 2>&1; then
                     MSG="curl not found inside container image, installing ..."
                     TS=$(date +%s)
@@ -103,6 +92,17 @@ class Worker:
                     echo "$MSG"
                     apt-get update && apt-get install -y curl
                 fi
+
+            # install uv if missing
+            if [ "{elected_installer}" = "True" ] && ! command -v uv >/dev/null 2>&1; then
+                # needed even if we have worker service already to install packages
+                curl -LsSf https://astral.sh/uv/install.sh | sh
+                export PATH="$HOME/.cargo/bin:$PATH"
+                export PATH="$HOME/.local/bin:$PATH"
+            fi
+
+            # Install worker_service if missing
+            if [ "{elected_installer}" = "True" ] && ! $python_cmd -c "import worker_service" 2>/dev/null; then
 
                 MSG="Installing Burla worker-service inside container image: {image} ..."
                 TS=$(date +%s)

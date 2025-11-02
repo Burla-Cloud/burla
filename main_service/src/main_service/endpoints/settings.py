@@ -32,7 +32,6 @@ def get_settings(request: Request):
     user_emails = [user["email"] for user in response.json()["authorized_users"]]
     return {
         "containerImage": container.get("image", ""),
-        "pythonVersion": container.get("python_version", ""),
         "machineType": node.get("machine_type", ""),
         "gcpRegion": node.get("gcp_region", ""),
         "machineQuantity": node.get("quantity", 1),
@@ -57,9 +56,10 @@ async def update_settings(request: Request):
     container.update(
         {
             "image": request_json.get("containerImage", container.get("image")),
-            "python_version": request_json.get("pythonVersion", container.get("python_version")),
         }
     )
+    container.pop("python_command", None)
+    container.pop("python_version", None)
     node.update(
         {
             "machine_type": request_json.get("machineType", node.get("machine_type")),

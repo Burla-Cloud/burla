@@ -3,7 +3,6 @@ import { useSettings } from "@/contexts/SettingsContext";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { PYTHON_VERSIONS } from "@/types/constants";
 import { InfoIcon } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
@@ -239,7 +238,7 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
                     <CardContent className="space-y-12 pt-6">
                         <div className="space-y-2">
                             <h2 className="text-xl font-semibold text-primary">Container Image</h2>
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div className="grid grid-cols-1 gap-4">
                                 <div>
                                     <div className="flex items-center gap-1">
                                         <label className={labelClass}>Image URI</label>
@@ -271,45 +270,6 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
                                             handleInputChange("containerImage", e.target.value)
                                         }
                                     />
-                                </div>
-
-                                <div>
-                                    <div className="flex items-center gap-1">
-                                        <label className={labelClass}>Python Version</label>
-                                        <TooltipProvider>
-                                            <Tooltip>
-                                                <TooltipTrigger asChild>
-                                                    <InfoIcon className="h-4 w-4 text-gray-400 hover:text-gray-600 cursor-help -mt-2" />
-                                                </TooltipTrigger>
-                                                <TooltipContent>
-                                                    <p>
-                                                        Python version inside the container image.
-                                                        <br />
-                                                        This should be the same as your local python
-                                                        version.
-                                                    </p>
-                                                </TooltipContent>
-                                            </Tooltip>
-                                        </TooltipProvider>
-                                    </div>
-                                    <Select
-                                        disabled={!isEditing}
-                                        value={settings.pythonVersion}
-                                        onValueChange={(val) =>
-                                            handleInputChange("pythonVersion", val)
-                                        }
-                                    >
-                                        <SelectTrigger className="w-full">
-                                            <SelectValue />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                            {PYTHON_VERSIONS.map((v) => (
-                                                <SelectItem key={v} value={v}>
-                                                    {v}
-                                                </SelectItem>
-                                            ))}
-                                        </SelectContent>
-                                    </Select>
                                 </div>
                             </div>
                         </div>

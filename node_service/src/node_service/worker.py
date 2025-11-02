@@ -6,6 +6,7 @@ from uuid import uuid4
 from time import sleep, time
 import traceback
 import threading
+from pathlib import Path
 
 import docker
 from docker.types import DeviceRequest
@@ -30,7 +31,6 @@ class Worker:
 
     def __init__(
         self,
-        python_version: str,
         image: str,
         elected_installer: bool = False,
         boot_timeout_sec: int = 120,
@@ -51,7 +51,8 @@ class Worker:
             self.container_name = f"worker_{uuid4().hex[:8]}"
         self.url = None
         self.host_port = None
-        self.python_version = python_version
+        self.python_version = None  # <- only assigned when container starts
+        self.python_command = "python"
         self.boot_timeout_sec = boot_timeout_sec
 
         # dont assign to self because must be closed after use or causes issues :(
@@ -62,24 +63,17 @@ class Worker:
             export PYTHONPATH=/worker_service_python_env
             DB_BASE_URL="https://firestore.googleapis.com/v1/projects/{PROJECT_ID}/databases/burla/documents"
 
-            # Find python version:
-            python_cmd=""
-            for py in python{self.python_version} python3 python; do
-                is_executable=$(command -v $py >/dev/null 2>&1 && echo true || echo false)
-                version_matches=$($py --version 2>&1 | grep -q "{self.python_version}" && echo true || echo false)
-                if [ "$is_executable" = true ] && [ "$version_matches" = true ]; then
-                    echo "Found correct python version: $py"
-                    python_cmd=$py
-                    break
-                fi
-            done
-
-            # If python version not found, exit
-            if [ -z "$python_cmd" ]; then
-                echo "Python {self.python_version} not found"
+            # Check that the python command is available and print its version
+            if ! command -v {self.python_command} >/dev/null 2>&1; then
+                echo "{self.python_command} is not a valid python executable"
                 exit 1
+            else
+                echo -n "Using python: "; {self.python_command} --version
             fi
-
+            
+            # save version to file to report it to node service
+            {self.python_command} -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' > "/python_version_marker/python_version"
+            
             # install curl if missing
                 if ! command -v curl >/dev/null 2>&1; then
                     MSG="curl not found inside container image, installing ..."
@@ -102,7 +96,7 @@ class Worker:
             fi
 
             # Install worker_service if missing
-            if [ "{elected_installer}" = "True" ] && ! $python_cmd -c "import worker_service" 2>/dev/null; then
+            if [ "{elected_installer}" = "True" ] && ! {self.python_command} -c "import worker_service" 2>/dev/null; then
 
                 MSG="Installing Burla worker-service inside container image: {image} ..."
                 TS=$(date +%s)
@@ -121,7 +115,7 @@ class Worker:
                     # del everything in /worker_service_python_env except `worker_service` (mounted)
                     find /worker_service_python_env -mindepth 1 -maxdepth 1 ! -name worker_service -exec rm -rf {{}} +
                     cd /burla/worker_service
-                    uv pip install --python $python_cmd --target /worker_service_python_env .
+                    uv pip install --python {self.python_command} --target /worker_service_python_env .
                 else
                     # try with tarball first because faster
                     if curl -Ls -o burla.tar.gz https://github.com/Burla-Cloud/burla/archive/{__version__}.tar.gz; then
@@ -143,7 +137,7 @@ class Worker:
                     # can only do this with linux host, breaks in dev using macos host :(
                     export UV_CACHE_DIR=/worker_service_python_env/.uv-cache
                     mkdir -p "$UV_CACHE_DIR" /worker_service_python_env
-                    uv pip install --python $python_cmd --target /worker_service_python_env .
+                    uv pip install --python {self.python_command} --target /worker_service_python_env .
                 fi
 
                 MSG="Successfully installed worker-service."
@@ -159,7 +153,7 @@ class Worker:
             # Wait for worker_service to become importable when not installing
             if [ "{elected_installer}" != "True" ]; then
                 start_time=$(date +%s)
-                until $python_cmd -c "import worker_service" 2>/dev/null; do
+                until {self.python_command} -c "import worker_service" 2>/dev/null; do
                     now=$(date +%s)
                     if [ $((now - start_time)) -ge {self.boot_timeout_sec} ]; then
                         echo "Timeout waiting for worker_service to become importable after {self.boot_timeout_sec} seconds"
@@ -181,7 +175,7 @@ class Worker:
                 # otherwise it hammers gcsfuse slows everything down causing timeouts!
                 # the worker service switches it's working dir to in the app after booting.
                 cd /
-                $python_cmd -m uvicorn worker_service:app --host 0.0.0.0 \
+                {self.python_command} -m uvicorn worker_service:app --host 0.0.0.0 \
                     --port {WORKER_INTERNAL_PORT} --workers 1 \
                     --timeout-keep-alive 30
             done
@@ -192,6 +186,7 @@ class Worker:
                 port_bindings={WORKER_INTERNAL_PORT: ("127.0.0.1", None)},
                 network_mode="local-burla-cluster",
                 binds={
+                    "/python_version_marker": "/python_version_marker",
                     f"{os.environ['HOST_HOME_DIR']}/.config/gcloud": "/root/.config/gcloud",
                     f"{os.environ['HOST_PWD']}/worker_service": "/burla/worker_service",
                     f"{os.environ['HOST_PWD']}/worker_service/src/worker_service": "/worker_service_python_env/worker_service",
@@ -208,6 +203,7 @@ class Worker:
                 ipc_mode="host",
                 device_requests=device_requests,
                 binds={
+                    "/python_version_marker": "/python_version_marker",
                     "/worker_service_python_env": "/worker_service_python_env",
                     "/shared_workspace": "/shared_workspace",
                 },
@@ -290,6 +286,8 @@ class Worker:
                 ready = True
             except requests.exceptions.ConnectionError:
                 sleep(1)
+
+        self.python_version = Path("/python_version_marker/python_version").read_text().strip()
 
         boot_duration = time() - boot_start_time
         # print(f"Worker {self.container_name} booted after: {boot_duration:.2f} seconds")

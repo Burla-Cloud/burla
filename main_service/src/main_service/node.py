@@ -37,14 +37,12 @@ from main_service.helpers import Logger, format_traceback
 
 @dataclass
 class Container:
-    image: int
-    python_version: str
+    image: str
 
     @classmethod
     def from_dict(cls, _dict: dict):
         return cls(
             image=_dict["image"],
-            python_version=_dict["python_version"],
         )
 
     def to_dict(self):

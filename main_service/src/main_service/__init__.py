@@ -54,7 +54,6 @@ DEFAULT_CONFIG = {  # <- config used only when config is missing from firestore
             "containers": [
                 {
                     "image": "python:3.12",
-                    "python_version": "3.12",
                 },
             ],
             "machine_type": "n4-standard-4",

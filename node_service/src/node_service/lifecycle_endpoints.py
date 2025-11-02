@@ -40,7 +40,9 @@ router = APIRouter()
 
 class Container(BaseModel):
     image: str
-    python_version: str
+
+    class Config:
+        extra = "ignore"
 
 
 @router.post("/shutdown")
@@ -318,8 +320,9 @@ def reboot_containers(
                 # have just one worker install the worker svc, then share through docker volume
                 # (too many will ddoss github / be slow)
                 install_worker = i == 0
-                args = (spec.python_version, spec.image)
-                futures.append(executor.submit(Worker, *args, elected_installer=install_worker))
+                futures.append(
+                    executor.submit(Worker, spec.image, elected_installer=install_worker)
+                )
 
         docker_client.close()
         executor.shutdown(wait=True)

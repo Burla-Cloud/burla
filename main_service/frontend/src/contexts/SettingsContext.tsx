@@ -9,7 +9,6 @@ interface SettingsContextType {
 
 const defaultSettings: SettingsData = {
     containerImage: "if you can see this",
-    pythonVersion: "",
     machineType: "then something is broken!",
     machineQuantity: 1,
     diskSize: 20,

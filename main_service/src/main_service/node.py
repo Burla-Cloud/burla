@@ -247,6 +247,7 @@ class Node:
                 f"{os.environ['HOST_PWD']}/node_service": "/opt/burla/node_service",
                 f"{os.environ['HOST_PWD']}/_shared_workspace": "/shared_workspace",
                 f"{os.environ['HOST_PWD']}/_worker_service_python_env": "/worker_service_python_env",
+                f"{os.environ['HOST_PWD']}/_python_version_marker": "/python_version_marker",
                 "/var/run/docker.sock": "/var/run/docker.sock",
             },
         )

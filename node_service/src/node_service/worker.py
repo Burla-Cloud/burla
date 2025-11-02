@@ -186,12 +186,12 @@ class Worker:
                 port_bindings={WORKER_INTERNAL_PORT: ("127.0.0.1", None)},
                 network_mode="local-burla-cluster",
                 binds={
-                    "/python_version_marker": "/python_version_marker",
                     f"{os.environ['HOST_HOME_DIR']}/.config/gcloud": "/root/.config/gcloud",
                     f"{os.environ['HOST_PWD']}/worker_service": "/burla/worker_service",
                     f"{os.environ['HOST_PWD']}/worker_service/src/worker_service": "/worker_service_python_env/worker_service",
                     f"{os.environ['HOST_PWD']}/_shared_workspace": "/shared_workspace",
                     f"{os.environ['HOST_PWD']}/_worker_service_python_env": "/worker_service_python_env",
+                    f"{os.environ['HOST_PWD']}/_python_version_marker": "/python_version_marker",
                     f"{os.environ['HOST_PWD']}/.temp_token.txt": "/burla/.temp_token.txt",
                 },
             )
@@ -234,9 +234,28 @@ class Worker:
                 self.container_id = self.container.get("Id")
                 docker_client.start(container=self.container_id)
             except (requests.exceptions.ReadTimeout, docker.errors.APIError) as e:
+
+                msg = f"\nError starting container {self.container_name}:\n"
+                msg += "```\n"
+                msg += traceback.format_exc()
+                msg += "\n```\n"
+                msg += f"Retrying in {random.uniform(1, 5)} seconds...\n\n\n"
+                print(msg)
+
+                struct = {"severity": "WARNING", "MESSAGE": msg}
+                logging.Client().logger("node_service").log_struct(struct)
+
+                firestore_client = firestore.Client(project=PROJECT_ID, database="burla")
+                node_ref = firestore_client.collection("nodes").document(INSTANCE_NAME)
+                node_ref.collection("logs").document().set({"msg": msg, "ts": time()})
+
                 if attempt > 5:
                     raise e
                 sleep(random.uniform(1, 5))  # <- avoid theoretical thundering herd
+                try:
+                    docker_client.remove_container(self.container_name, force=True)
+                except Exception:
+                    pass
                 # idk if recreating client actually helps
                 docker_client.close()
                 docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")

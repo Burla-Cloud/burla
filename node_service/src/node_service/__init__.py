@@ -188,36 +188,14 @@ async def lifespan(app: FastAPI):
     # (you tried skipping the worker restarts here when reloading,
     # this won't work because this whole file re-runs, and SELF is reset when reloading.)
 
-    try:
-        if INACTIVITY_SHUTDOWN_TIME_SEC:
-            asyncio.create_task(shutdown_if_idle_for_too_long(logger=logger))
-            logger.log(f"Set to shutdown if idle for {INACTIVITY_SHUTDOWN_TIME_SEC} sec.")
+    if INACTIVITY_SHUTDOWN_TIME_SEC:
+        asyncio.create_task(shutdown_if_idle_for_too_long(logger=logger))
+        logger.log(f"Set to shutdown if idle for {INACTIVITY_SHUTDOWN_TIME_SEC} sec.")
 
-        # boot containers before accepting any requests.
-        containers = [Container(**c) for c in json.loads(os.environ["CONTAINERS"])]
-        await run_in_threadpool(reboot_containers, new_container_config=containers, logger=logger)
-
-    except Exception as e:
-        SELF["FAILED"] = True
-        exc_type, exc_value, exc_traceback = sys.exc_info()
-        tb_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
-        traceback_str = format_traceback(tb_details)
-        logger.log(str(e), "ERROR", traceback=traceback_str)
-
-        client = firestore.Client(project=PROJECT_ID, database="burla")
-        node_doc = client.collection("nodes").document(INSTANCE_NAME)
-        node_doc.update({"status": "FAILED"})
-        msg = f"Error from Node-Service: {traceback.format_exc()}"
-        node_doc.collection("logs").document().set({"msg": msg, "ts": time()})
-
-        instance_client = InstancesClient()
-        silly = instance_client.aggregated_list(project=PROJECT_ID)
-        vms_per_zone = [getattr(vms_in_zone, "instances", []) for _, vms_in_zone in silly]
-        vms = [vm for vms_in_zone in vms_per_zone for vm in vms_in_zone]
-        vm = next((vm for vm in vms if vm.name == INSTANCE_NAME), None)
-        if vm:
-            zone = vm.zone.split("/")[-1]
-            instance_client.delete(project=PROJECT_ID, zone=zone, instance=INSTANCE_NAME)
+    # boot containers before accepting any requests.
+    # `reboot_containers` will delete VM's if it fails, no need to do that here.
+    containers = [Container(**c) for c in json.loads(os.environ["CONTAINERS"])]
+    await run_in_threadpool(reboot_containers, new_container_config=containers, logger=logger)
 
     yield
 

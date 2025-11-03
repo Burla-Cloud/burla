@@ -115,7 +115,11 @@ class Worker:
                     # del everything in /worker_service_python_env except `worker_service` (mounted)
                     find /worker_service_python_env -mindepth 1 -maxdepth 1 ! -name worker_service -exec rm -rf {{}} +
                     cd /burla/worker_service
-                    uv pip install --python {self.python_command} --target /worker_service_python_env .
+                    set -e
+                    uv pip install --python {self.python_command} --target /worker_service_python_env . || {{ 
+                        echo "ERROR: Failed to install local worker_service with uv. Exiting."; 
+                        exit 1; 
+                    }}
                 else
                     # try with tarball first because faster
                     if curl -Ls -o burla.tar.gz https://github.com/Burla-Cloud/burla/archive/{__version__}.tar.gz; then
@@ -137,7 +141,10 @@ class Worker:
                     # can only do this with linux host, breaks in dev using macos host :(
                     export UV_CACHE_DIR=/worker_service_python_env/.uv-cache
                     mkdir -p "$UV_CACHE_DIR" /worker_service_python_env
-                    uv pip install --python {self.python_command} --target /worker_service_python_env .
+                    uv pip install --python {self.python_command} --target /worker_service_python_env . || {{ 
+                        echo "ERROR: Failed to install local worker_service with uv. Exiting."; 
+                        exit 1; 
+                    }}
                 fi
 
                 MSG="Successfully installed worker-service."
@@ -170,7 +177,6 @@ class Worker:
             # Restart automatically if it dies (IMPORTANT!):
             # Because it kills itself intentionally when it needs to cancel a running job.
             while true; do
-
                 # very important to start process from dir that is not /shared_workspace
                 # otherwise it hammers gcsfuse slows everything down causing timeouts!
                 # the worker service switches it's working dir to in the app after booting.
@@ -257,6 +263,7 @@ class Worker:
                 except Exception:
                     pass
                 # idk if recreating client actually helps
+                # it might because random docker api errors can be due to client issues ??
                 docker_client.close()
                 docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
             else:
@@ -277,8 +284,6 @@ class Worker:
         if IN_LOCAL_DEV_MODE:
             self.url = f"http://{self.container_name}:{WORKER_INTERNAL_PORT}"
 
-        docker_client.close()
-
         if elected_installer:
             self._start_log_streaming()
 
@@ -286,7 +291,13 @@ class Worker:
         start = time()
         while not ready:
 
-            if not self.exists():
+            try:
+                info = docker_client.inspect_container(self.container_id)
+                container_is_running = info.get("State", {}).get("Running", False)
+            except docker.errors.NotFound:
+                container_is_running = False
+
+            if not container_is_running:
                 self.log_debug_info()
                 raise Exception(f"Container: {self.container_name} not running while booting?")
 

@@ -10,7 +10,7 @@ define UV_ZSH_ENV
 	uv python pin --project $(PROJECT_ABS) $(1) >/dev/null 2>&1
 	uv sync --project $(PROJECT_ABS) --group $(2) >/dev/null 2>&1
 	tmp_dir=$$(mktemp -d); \
-	printf 'PROMPT="($(1)-$(2)) %%c %% "\n' > $$tmp_dir/.zshrc; \
+	printf 'PROMPT="($(1)-$(2)) %%c %%%% "\n' > $$tmp_dir/.zshrc; \
 	trap 'rm -rf $$tmp_dir' EXIT; \
 	ZDOTDIR=$$tmp_dir uv run --project $(PROJECT_ABS) --group $(2) zsh -i
 endef

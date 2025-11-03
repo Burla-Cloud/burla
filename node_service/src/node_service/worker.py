@@ -52,41 +52,30 @@ class Worker:
         self.url = None
         self.host_port = None
         self.python_version = None  # <- only assigned when container starts
-        self.python_command = "python"
         self.boot_timeout_sec = boot_timeout_sec
 
         # dont assign to self because must be closed after use or causes issues :(
         docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
 
+        python_command = "python"
         latest_version = requests.get("https://pypi.org/pypi/burla/json").json()["info"]["version"]
         cmd_script = f"""
             # worker service is installed here and mounted to all other containers
             export PYTHONPATH=/worker_service_python_env
             DB_BASE_URL="https://firestore.googleapis.com/v1/projects/{PROJECT_ID}/databases/burla/documents"
 
-            # Check that the python command is available and print its version
-            if ! command -v {self.python_command} >/dev/null 2>&1; then
-                echo "{self.python_command} is not a valid python executable"
-                exit 1
-            else
-                echo -n "Using python: "; {self.python_command} --version
-            fi
-            
-            # save version to file to report it to node service
-            {self.python_command} -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' > "/python_version_marker/python_version"
-            
             # install curl if missing
-                if ! command -v curl >/dev/null 2>&1; then
-                    MSG="curl not found inside container image, installing ..."
-                    TS=$(date +%s)
-                    payload='{{"fields":{{"msg":{{"stringValue":"'"$MSG"'"}}, "ts":{{"integerValue":"'"$TS"'"}}}}}}'
-                    curl -sS -o /dev/null -X POST "$DB_BASE_URL/nodes/{INSTANCE_NAME}/logs" \\
-                        -H "Authorization: Bearer {CREDENTIALS.token}" \\
-                        -H "Content-Type: application/json" \\
-                        -d "$payload"
-                    echo "$MSG"
-                    apt-get update && apt-get install -y curl
-                fi
+            if ! command -v curl >/dev/null 2>&1; then
+                MSG="curl not found inside container image, installing ..."
+                TS=$(date +%s)
+                payload='{{"fields":{{"msg":{{"stringValue":"'"$MSG"'"}}, "ts":{{"integerValue":"'"$TS"'"}}}}}}'
+                curl -sS -o /dev/null -X POST "$DB_BASE_URL/nodes/{INSTANCE_NAME}/logs" \\
+                    -H "Authorization: Bearer {CREDENTIALS.token}" \\
+                    -H "Content-Type: application/json" \\
+                    -d "$payload"
+                echo "$MSG"
+                apt-get update && apt-get install -y curl
+            fi
 
             # install uv if missing
             if [ "{elected_installer}" = "True" ] && ! command -v uv >/dev/null 2>&1; then
@@ -97,9 +86,34 @@ class Worker:
             fi
 
             # Install worker_service if missing
-            if [ "{elected_installer}" = "True" ] && ! {self.python_command} -c "import worker_service" 2>/dev/null; then
+            if [ "{elected_installer}" = "True" ]; then
 
-                MSG="Installing Burla worker-service inside container image: {image} ..."
+                # Check that the python command is available and print its version
+                if ! command -v {python_command} >/dev/null 2>&1; then
+                    echo '-'
+                    echo 'ERROR:'
+                    echo 'The command `{python_command}` does not point to any valid python executable inside this Docker image!'
+                    echo 'Currently using image: `{image}`'
+                    echo 'Please ensure the command `{python_command}` points to a valid python executable inside this image.'
+                    echo 'Ask jake (jake@burla.dev) if you need help with this!'
+                    echo '-'
+                    exit 1;
+                fi
+                
+                # save version to file to report it to node service
+                {python_command} -c 'import sys; print(f"{{sys.version_info.major}}.{{sys.version_info.minor}}")' > "/python_version_marker/python_version"
+
+                MSG="Command $(echo '`{python_command}`') is pointing to python version $(cat '/python_version_marker/python_version'), using python$(cat '/python_version_marker/python_version')!";
+                MSG="$MSG\n(please ensure you're running this same version locally, or Burla can't work!)\n-"
+                TS=$(date +%s)
+                payload='{{"fields":{{"msg":{{"stringValue":"'"$MSG"'"}}, "ts":{{"integerValue":"'"$TS"'"}}}}}}'
+                curl -sS -o /dev/null -X POST "$DB_BASE_URL/nodes/{INSTANCE_NAME}/logs" \\
+                    -H "Authorization: Bearer {CREDENTIALS.token}" \\
+                    -H "Content-Type: application/json" \\
+                    -d "$payload"
+                echo "$MSG"
+
+                MSG="Installing Burla worker-service inside container image: $(echo '`{image}`') ..."
                 TS=$(date +%s)
                 payload='{{"fields":{{"msg":{{"stringValue":"'"$MSG"'"}}, "ts":{{"integerValue":"'"$TS"'"}}}}}}'
                 curl -sS -o /dev/null -X POST "$DB_BASE_URL/nodes/{INSTANCE_NAME}/logs" \\
@@ -117,7 +131,7 @@ class Worker:
                     find /worker_service_python_env -mindepth 1 -maxdepth 1 ! -name worker_service -exec rm -rf {{}} +
                     cd /burla/worker_service
                     set -e
-                    uv pip install --python {self.python_command} --target /worker_service_python_env . || {{ 
+                    uv pip install --python {python_command} --target /worker_service_python_env . || {{ 
                         echo "ERROR: Failed to install local worker_service with uv. Exiting."; 
                         exit 1; 
                     }}
@@ -142,7 +156,7 @@ class Worker:
                     # can only do this with linux host, breaks in dev using macos host :(
                     export UV_CACHE_DIR=/worker_service_python_env/.uv-cache
                     mkdir -p "$UV_CACHE_DIR" /worker_service_python_env
-                    uv pip install --python {self.python_command} --target /worker_service_python_env . || {{ 
+                    uv pip install --python {python_command} --target /worker_service_python_env . || {{ 
                         echo "ERROR: Failed to install local worker_service with uv. Exiting."; 
                         exit 1; 
                     }}
@@ -151,7 +165,7 @@ class Worker:
                 # Install burla so it is not automatically installed in the quickstart (where burla will be imported)
                 # this shaves a sec or two off quickstart runtime.
                 # don't simply add as a worker_svc dependency cause it's hard to make it always use latest pipy version.
-                uv pip install --python {self.python_command} --target /worker_service_python_env burla=={latest_version} || {{ 
+                uv pip install --python {python_command} --target /worker_service_python_env burla=={latest_version} || {{ 
                     echo "ERROR: Failed to install burla client into worker. Exiting."; 
                     exit 1; 
                 }}
@@ -169,7 +183,7 @@ class Worker:
             # Wait for worker_service to become importable when not installing
             if [ "{elected_installer}" != "True" ]; then
                 start_time=$(date +%s)
-                until {self.python_command} -c "import worker_service" 2>/dev/null; do
+                until {python_command} -c "import worker_service" 2>/dev/null; do
                     now=$(date +%s)
                     if [ $((now - start_time)) -ge {self.boot_timeout_sec} ]; then
                         echo "Timeout waiting for worker_service to become importable after {self.boot_timeout_sec} seconds"
@@ -177,6 +191,8 @@ class Worker:
                     fi
                     sleep 1
                 done
+                # wait for extra 1 sec after becoming importable because it being importable does not mean it's actually fully installed!
+                sleep 1
             fi
 
             # go to user-workspace-dir, otherwise installer / non-installer containers are in different dir's
@@ -190,7 +206,7 @@ class Worker:
                 # otherwise it hammers gcsfuse slows everything down causing timeouts!
                 # the worker service switches it's working dir to in the app after booting.
                 cd /
-                {self.python_command} -m uvicorn worker_service:app --host 0.0.0.0 \
+                {python_command} -m uvicorn worker_service:app --host 0.0.0.0 \
                     --port {WORKER_INTERNAL_PORT} --workers 1 \
                     --timeout-keep-alive 30
             done

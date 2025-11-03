@@ -28,6 +28,7 @@ from node_service import (
     CLUSTER_ID_TOKEN,
     NUM_GPUS,
     ENV_IS_READY_PATH,
+    GCL_CLIENT,
     get_logger,
     get_add_background_task_function,
     __version__,
@@ -340,8 +341,16 @@ def reboot_containers(
     except Exception as parent_exception:
         SELF["FAILED"] = True
         try:
+            # using `logger` here makes this appear in node logs in dashboard, this makes it too
+            # hard for users to find their container error (by putting a big traceback below),
+            # which is why we log directly to gcl instead of using the `logger` instance
+            # it's possible this hides important `reboot_containers` errors from users,
+            # im gonna wait until that's an issue ti fix
+            msg = f"Error from Node-Service:\n{traceback.format_exc()}"
+            GCL_CLIENT.log_struct(dict(message=msg), severity="ERROR")
+
             node_doc.update({"status": "FAILED"})
-            msg = f"Error from Node-Service: {traceback.format_exc()}"
+            msg = f"Error from Node-Service: {str(parent_exception)}"
             node_doc.collection("logs").document().set({"msg": msg, "ts": time()})
 
             if not IN_LOCAL_DEV_MODE:

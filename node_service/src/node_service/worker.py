@@ -58,6 +58,7 @@ class Worker:
         # dont assign to self because must be closed after use or causes issues :(
         docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
 
+        latest_version = requests.get("https://pypi.org/pypi/burla/json").json()["info"]["version"]
         cmd_script = f"""
             # worker service is installed here and mounted to all other containers
             export PYTHONPATH=/worker_service_python_env
@@ -146,6 +147,14 @@ class Worker:
                         exit 1; 
                     }}
                 fi
+
+                # Install burla so it is not automatically installed in the quickstart (where burla will be imported)
+                # this shaves a sec or two off quickstart runtime.
+                # don't simply add as a worker_svc dependency cause it's hard to make it always use latest pipy version.
+                uv pip install --python {self.python_command} --target /worker_service_python_env burla=={latest_version} || {{ 
+                    echo "ERROR: Failed to install burla client into worker. Exiting."; 
+                    exit 1; 
+                }}
 
                 MSG="Successfully installed worker-service."
                 TS=$(date +%s)

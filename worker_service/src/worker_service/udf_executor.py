@@ -252,8 +252,8 @@ def install_pkgs_and_execute_job(
         packages_str = ", ".join([f"    {pkg}=={version}\n" for pkg, version in packages.items()])
         msg = f"Installing packages:\n{packages_str}"
         url = f"{DB_BASE_URL}/nodes/{INSTANCE_NAME}/logs"
-        data = {"fields": {"msg": {"stringValue": msg}, "ts": {"integerValue": str(time())}}}
-        requests.post(url, headers=DB_HEADERS, json=data, timeout=5)
+        data = {"fields": {"msg": {"stringValue": msg}, "ts": {"integerValue": str(int(time()))}}}
+        response = requests.post(url, headers=DB_HEADERS, json=data, timeout=5)
 
         _install_packages(packages)
         ENV_IS_READY_PATH.touch()

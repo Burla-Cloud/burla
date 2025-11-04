@@ -113,7 +113,7 @@ class Worker:
                     -d "$payload"
                 echo "$MSG"
 
-                MSG="Installing Burla worker-service inside container image: $(echo '`{image}`') ..."
+                MSG="Installing Burla worker-service inside container ..."
                 TS=$(date +%s)
                 payload='{{"fields":{{"msg":{{"stringValue":"'"$MSG"'"}}, "ts":{{"integerValue":"'"$TS"'"}}}}}}'
                 curl -sS -o /dev/null -X POST "$DB_BASE_URL/nodes/{INSTANCE_NAME}/logs" \\

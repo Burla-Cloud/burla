@@ -57,11 +57,12 @@ class Worker:
         # dont assign to self because must be closed after use or causes issues :(
         docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
 
-        python_command = "python"
+        python_command = "python"  # <- is also hardcoded in `_install_packages` in udf_executor
         latest_version = requests.get("https://pypi.org/pypi/burla/json").json()["info"]["version"]
         cmd_script = f"""
             # worker service is installed here and mounted to all other containers
             export PYTHONPATH=/worker_service_python_env
+            export PATH="/worker_service_python_env/bin:$PATH"
             DB_BASE_URL="https://firestore.googleapis.com/v1/projects/{PROJECT_ID}/databases/burla/documents"
 
             # install curl if missing
@@ -85,7 +86,7 @@ class Worker:
                 export PATH="$HOME/.local/bin:$PATH"
             fi
 
-            # Install worker_service if missing
+            # Install worker_service
             if [ "{elected_installer}" = "True" ]; then
 
                 # Check that the python command is available and print its version
@@ -162,13 +163,16 @@ class Worker:
                     }}
                 fi
 
-                # Install burla so it is not automatically installed in the quickstart (where burla will be imported)
-                # this shaves a sec or two off quickstart runtime.
+                # Install burla so it is not automatically installed when users run the quickstart
+                # this saves a sec or two off quickstart runtime.
                 # don't simply add as a worker_svc dependency cause it's hard to make it always use latest pipy version.
                 uv pip install --python {python_command} --target /worker_service_python_env burla=={latest_version} || {{ 
                     echo "ERROR: Failed to install burla client into worker. Exiting."; 
                     exit 1; 
                 }}
+
+                # mark that worker_svc installed in shared dir so other containers can continue
+                touch /worker_service_python_env/.WORKER_SVC_INSTALLED
 
                 MSG="Successfully installed worker-service."
                 TS=$(date +%s)
@@ -180,19 +184,17 @@ class Worker:
                 echo "$MSG"
             fi
 
-            # Wait for worker_service to become importable when not installing
+            # Wait until installer container is done installing worker svc
             if [ "{elected_installer}" != "True" ]; then
                 start_time=$(date +%s)
-                until {python_command} -c "import worker_service" 2>/dev/null; do
+                until [ -f /worker_service_python_env/.WORKER_SVC_INSTALLED ]; do
                     now=$(date +%s)
                     if [ $((now - start_time)) -ge {self.boot_timeout_sec} ]; then
-                        echo "Timeout waiting for worker_service to become importable after {self.boot_timeout_sec} seconds"
+                        echo "Timeout waiting for worker_service install completion after {self.boot_timeout_sec} seconds"
                         exit 1
                     fi
                     sleep 1
                 done
-                # wait for extra 1 sec after becoming importable because it being importable does not mean it's actually fully installed!
-                sleep 1
             fi
 
             mkdir -p /workspace/shared
@@ -254,6 +256,7 @@ class Worker:
                         "IN_LOCAL_DEV_MODE": IN_LOCAL_DEV_MODE,
                         "WORKER_NAME": self.container_name,
                         "ELECTED_INSTALLER": elected_installer,
+                        "INSTANCE_NAME": INSTANCE_NAME,
                     },
                     detach=True,
                     runtime="nvidia" if NUM_GPUS != 0 else None,

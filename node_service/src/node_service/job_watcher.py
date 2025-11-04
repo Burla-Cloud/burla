@@ -38,7 +38,7 @@ async def get_inputs_from_neighbor(neighboring_node, session, logger, auth_heade
     neighboring_node_host = neighboring_node.get("host") if neighboring_node else None
 
     if (not neighboring_node) or SELF["SHUTTING_DOWN"]:
-        logger.log("No neighbors to ask for more inputs ... I am the only node.")
+        # logger.log("No neighbors to ask for more inputs ... I am the only node.")
         return
 
     try:
@@ -174,7 +174,7 @@ async def _job_watcher(
             all_workers_idle_twice and SELF["all_inputs_uploaded"] and no_pending_inputs
         )
         if finished_all_assigned_inputs:
-            logger.log("Finished all inputs.")
+            # logger.log("Finished all inputs.")
             neighboring_node = await get_neighboring_node(async_db)
             new_inputs = await get_inputs_from_neighbor(
                 neighboring_node, session, logger, auth_headers
@@ -211,7 +211,10 @@ async def _job_watcher(
             job_is_done = all_inputs_processed and (client_has_all_results or is_background_job)
 
         if job_is_done or JOB_FAILED or JOB_CANCELED:
-            logger.log("Job has failed!" if JOB_FAILED else "Job is done!")
+            if JOB_FAILED:
+                logger.log(f"Job has failed! (id={SELF['current_job']})")
+            else:
+                logger.log(f"Job is done! (id={SELF['current_job']})")
             # check again in case `job_is_done` then failed or canceled
             job_snapshot = await job_doc.get()
             JOB_FAILED = job_snapshot.to_dict()["status"] == "FAILED"

@@ -161,9 +161,6 @@ class Node:
         current_state = {k: v for k, v in current_state.items() if k not in attrs_to_not_save}
         self.node_ref.set(current_state)
 
-        log = {"msg": f"Adding node {self.instance_name} ({self.machine_type}) ...", "ts": time()}
-        self.node_ref.collection("logs").document().set(log)
-
         try:
             if as_local_container:
                 self.__start_svc_in_local_container()

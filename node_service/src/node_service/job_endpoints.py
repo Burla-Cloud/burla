@@ -144,6 +144,7 @@ async def execute(
     request_files: Optional[dict] = Depends(get_request_files),
     logger: Logger = Depends(get_logger),
 ):
+    logger.log(f"Executing job {job_id} ...")
     # The `on_job_start` function in __init__.py is run as soon as upload to this endpoint starts.
     # It exists to set `SELF["current_job"]` and set this node to RUNNING in the db as soon as
     # upload starts if the user's function is big.
@@ -237,8 +238,6 @@ async def execute(
 
     if len(successfully_assigned_workers) == 0:
         raise Exception("Failed to assign job to any workers")
-
-    logger.log(f"Successfully assigned to {len(successfully_assigned_workers)} workers.")
 
     SELF["workers"] = workers_to_assign
     SELF["idle_workers"] = workers_to_leave_idle

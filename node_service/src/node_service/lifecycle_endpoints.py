@@ -133,9 +133,9 @@ def _LOCAL_DEV_ONLY_pull_image_if_missing(
     except docker.errors.ImageNotFound:
 
         try:
-            logger.log(f"Pulling  image {image} ({image_size_GB(image)} GB) ...")
+            logger.log(f"Pulling image {image} ({image_size_GB(image)} GB) ...")
         except Exception:
-            logger.log(f"Pulling  image {image} ...")
+            logger.log(f"Pulling image {image} ...")
 
         try:
             docker_client.pull(image)
@@ -176,9 +176,9 @@ def _pull_image_if_missing(image: str, logger: Logger, docker_client: docker.API
         attempt += 1
 
         try:
-            logger.log(f"Pulling  image {image} ({image_size_GB(image)} GB) ...")
+            logger.log(f"Pulling image {image} ({image_size_GB(image)} GB) ...")
         except Exception:
-            logger.log(f"Pulling  image {image} ...")
+            logger.log(f"Pulling image {image} ...")
 
         result = _run_command(f"docker pull {image}", raise_error=False)
         text_output = result.stderr.decode() + result.stdout.decode()

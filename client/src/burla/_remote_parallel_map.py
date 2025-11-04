@@ -529,7 +529,8 @@ async def _execute_job(
                 raise Exception("Zero nodes working on job and we have not received all results!")
 
         total_runtime = time() - start_time
-        msg = f"Job {job_id} completed successfully, udf_start_latency={udf_start_latency:.2f}s"
+        udf_start_latency = round(udf_start_latency, 2) if udf_start_latency else None
+        msg = f"Job {job_id} completed successfully, udf_start_latency={udf_start_latency}s"
         msg += f", total_runtime={total_runtime:.2f}s."
         if packages_to_install:
             msg += f"\nInstalled packages: {packages_to_install}"

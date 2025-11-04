@@ -360,10 +360,11 @@ async def log_and_time_requests(request: Request, call_next):
 
     # Log response
     is_non_2xx_response = response.status_code < 200 or response.status_code >= 300
-    if is_non_2xx_response and hasattr(response, "body"):
+    is_not_401_response = response.status_code != 401  # <- these scare users too much
+    if is_non_2xx_response and hasattr(response, "body") and is_not_401_response:
         response_text = response.body.decode("utf-8", errors="ignore")
         logger.log(f"non-2xx status response: {response.status_code}: {response_text}", "WARNING")
-    elif is_non_2xx_response and hasattr(response, "body_iterator"):
+    elif is_non_2xx_response and hasattr(response, "body_iterator") and is_not_401_response:
         body = b"".join([chunk async for chunk in response.body_iterator])
         response_text = body.decode("utf-8", errors="ignore")
         logger.log(f"non-2xx status response: {response.status_code}: {response_text}", "WARNING")

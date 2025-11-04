@@ -104,7 +104,7 @@ class Worker:
                 {python_command} -c 'import sys; print(f"{{sys.version_info.major}}.{{sys.version_info.minor}}")' > "/python_version_marker/python_version"
 
                 MSG="Command $(echo '`{python_command}`') is pointing to python version $(cat '/python_version_marker/python_version'), using python$(cat '/python_version_marker/python_version')!";
-                MSG="$MSG\n(please ensure you're running this same version locally, or Burla can't work!)\n-"
+                MSG="$MSG\n(please ensure you're running this same version locally when you call $(echo '`remote_parallel_map`'))"
                 TS=$(date +%s)
                 payload='{{"fields":{{"msg":{{"stringValue":"'"$MSG"'"}}, "ts":{{"integerValue":"'"$TS"'"}}}}}}'
                 curl -sS -o /dev/null -X POST "$DB_BASE_URL/nodes/{INSTANCE_NAME}/logs" \\
@@ -195,17 +195,13 @@ class Worker:
                 sleep 1
             fi
 
-            # go to user-workspace-dir, otherwise installer / non-installer containers are in different dir's
-            mkdir -p /shared_workspace
+            mkdir -p /workspace/shared
             
             # Start the worker service,
             # Restart automatically if it dies (IMPORTANT!):
             # Because it kills itself intentionally when it needs to cancel a running job.
             while true; do
-                # very important to start process from dir that is not /shared_workspace
-                # otherwise it hammers gcsfuse slows everything down causing timeouts!
-                # the worker service switches it's working dir to in the app after booting.
-                cd /
+                cd /workspace
                 {python_command} -m uvicorn worker_service:app --host 0.0.0.0 \
                     --port {WORKER_INTERNAL_PORT} --workers 1 \
                     --timeout-keep-alive 30
@@ -220,7 +216,7 @@ class Worker:
                     f"{os.environ['HOST_HOME_DIR']}/.config/gcloud": "/root/.config/gcloud",
                     f"{os.environ['HOST_PWD']}/worker_service": "/burla/worker_service",
                     f"{os.environ['HOST_PWD']}/worker_service/src/worker_service": "/worker_service_python_env/worker_service",
-                    f"{os.environ['HOST_PWD']}/_shared_workspace": "/shared_workspace",
+                    f"{os.environ['HOST_PWD']}/_shared_workspace": "/workspace/shared",
                     f"{os.environ['HOST_PWD']}/_worker_service_python_env": "/worker_service_python_env",
                     f"{os.environ['HOST_PWD']}/_python_version_marker": "/python_version_marker",
                     f"{os.environ['HOST_PWD']}/.temp_token.txt": "/burla/.temp_token.txt",
@@ -236,7 +232,7 @@ class Worker:
                 binds={
                     "/python_version_marker": "/python_version_marker",
                     "/worker_service_python_env": "/worker_service_python_env",
-                    "/shared_workspace": "/shared_workspace",
+                    "/workspace/shared": "/workspace/shared",
                 },
             )
 

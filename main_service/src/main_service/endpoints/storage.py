@@ -15,6 +15,7 @@ from main_service import PROJECT_ID, DB
 
 router = APIRouter()
 
+
 # This makes it possible to create signed url's for any blobs created with this client.
 source_creds, project_id = default()
 signing_creds = impersonated_credentials.Credentials(
@@ -22,8 +23,11 @@ signing_creds = impersonated_credentials.Credentials(
     target_principal=f"burla-main-service@{PROJECT_ID}.iam.gserviceaccount.com",
     target_scopes=["https://www.googleapis.com/auth/devstorage.read_write"],
 )
-gcs_client = storage.Client(project=project_id, credentials=signing_creds)
 cluster_config = DB.collection("cluster_config").document("cluster_config").get().to_dict()
+gcs_client_impersonated = storage.Client(project=project_id, credentials=signing_creds)
+GCS_BUCKET_IMPERSONATED = gcs_client_impersonated.bucket(cluster_config["gcs_bucket_name"])
+
+gcs_client = storage.Client(project=project_id)
 GCS_BUCKET = gcs_client.bucket(cluster_config["gcs_bucket_name"])
 
 
@@ -92,7 +96,7 @@ def build_directory_metadata(prefix: str, parent_prefix: str) -> Dict[str, Any]:
     if parent_prefix:
         name = prefix[len(parent_prefix) : -1]
     else:
-        name = prefix[:-1] or "/shared_workspace"
+        name = prefix[:-1] or "/workspace/shared"
     directory_path = directory_path_for_response(parent_prefix)
     return {
         "name": name,
@@ -123,7 +127,7 @@ def build_file_metadata(blob: storage.Blob, directory_prefix: str) -> Dict[str, 
 
 def build_cwd_metadata(directory_prefix: str, has_children: bool) -> Dict[str, Any]:
     if not directory_prefix:
-        name = "/shared_workspace"
+        name = "/workspace/shared"
     else:
         stripped = directory_prefix.rstrip("/")
         name = stripped.split("/")[-1]
@@ -424,7 +428,7 @@ async def upload_stub():
 def signed_resumable(
     object_name: str = Query(...), content_type: str = Query("application/octet-stream")
 ):
-    blob = GCS_BUCKET.blob(object_name)
+    blob = GCS_BUCKET_IMPERSONATED.blob(object_name)
     url = blob.generate_signed_url(
         version="v4",
         expiration=datetime.timedelta(days=7),
@@ -499,7 +503,7 @@ def sanitize_folder_prefix(raw_prefix: Optional[str]) -> str:
 @router.get("/signed-download")
 def signed_download(object_name: str = Query(...), download_name: Optional[str] = Query(None)):
     sanitized_object_name = sanitize_object_name(object_name)
-    blob = GCS_BUCKET.blob(sanitized_object_name)
+    blob = GCS_BUCKET_IMPERSONATED.blob(sanitized_object_name)
     if not blob.exists():
         raise HTTPException(status_code=404, detail=f"File '{sanitized_object_name}' not found")
     fallback_name = sanitized_object_name.split("/")[-1] or "download"

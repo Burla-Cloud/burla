@@ -30,7 +30,7 @@ from starlette.requests import ClientDisconnect
 from starlette.datastructures import UploadFile
 
 
-__version__ = "1.3.10"
+__version__ = "1.3.11"
 CREDENTIALS, PROJECT_ID = google.auth.default()
 BURLA_BACKEND_URL = "https://backend.burla.dev"
 
@@ -188,49 +188,27 @@ async def lifespan(app: FastAPI):
     # (you tried skipping the worker restarts here when reloading,
     # this won't work because this whole file re-runs, and SELF is reset when reloading.)
 
-    try:
-        if INACTIVITY_SHUTDOWN_TIME_SEC:
-            asyncio.create_task(shutdown_if_idle_for_too_long(logger=logger))
-            logger.log(f"Set to shutdown if idle for {INACTIVITY_SHUTDOWN_TIME_SEC} sec.")
+    if INACTIVITY_SHUTDOWN_TIME_SEC:
+        asyncio.create_task(shutdown_if_idle_for_too_long(logger=logger))
+        logger.log(f"Set to shutdown if idle for {INACTIVITY_SHUTDOWN_TIME_SEC} sec.")
 
-        # boot containers before accepting any requests.
-        containers = [Container(**c) for c in json.loads(os.environ["CONTAINERS"])]
-        await run_in_threadpool(reboot_containers, new_container_config=containers, logger=logger)
-
-    except Exception as e:
-        SELF["FAILED"] = True
-        exc_type, exc_value, exc_traceback = sys.exc_info()
-        tb_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
-        traceback_str = format_traceback(tb_details)
-        logger.log(str(e), "ERROR", traceback=traceback_str)
-
-        client = firestore.Client(project=PROJECT_ID, database="burla")
-        node_doc = client.collection("nodes").document(INSTANCE_NAME)
-        node_doc.update({"status": "FAILED"})
-        msg = f"Error from Node-Service: {traceback.format_exc()}"
-        node_doc.collection("logs").document().set({"msg": msg, "ts": time()})
-
-        instance_client = InstancesClient()
-        silly = instance_client.aggregated_list(project=PROJECT_ID)
-        vms_per_zone = [getattr(vms_in_zone, "instances", []) for _, vms_in_zone in silly]
-        vms = [vm for vms_in_zone in vms_per_zone for vm in vms_in_zone]
-        vm = next((vm for vm in vms if vm.name == INSTANCE_NAME), None)
-        if vm:
-            zone = vm.zone.split("/")[-1]
-            instance_client.delete(project=PROJECT_ID, zone=zone, instance=INSTANCE_NAME)
+    # boot containers before accepting any requests.
+    # `reboot_containers` will delete VM's if it fails, no need to do that here.
+    containers = [Container(**c) for c in json.loads(os.environ["CONTAINERS"])]
+    await run_in_threadpool(reboot_containers, new_container_config=containers, logger=logger)
 
     yield
 
 
 async def on_job_start(scope, first_event):
+    job_id = scope.get("path", "").split("/jobs/")[-1]
+    node_doc = ASYNC_DB.collection("nodes").document(INSTANCE_NAME)
+    await node_doc.update({"status": "RUNNING", "current_job": job_id})
+    # these must be set after ^
+    # used to confirm in execution endpoint that this ran BEFORE setting node back to ready
+    # in the case of a failure, it may not have because async.
     SELF["RUNNING"] = True
-    SELF["current_job"] = scope.get("path", "").split("/jobs/")[-1]
-
-    async def set_node_running(job_id: str):
-        node_doc = ASYNC_DB.collection("nodes").document(INSTANCE_NAME)
-        await node_doc.update({"status": "RUNNING", "current_job": job_id})
-
-    asyncio.create_task(set_node_running(SELF["current_job"]))
+    SELF["current_job"] = job_id
 
 
 class CallHookOnJobStartMiddleware:
@@ -382,10 +360,11 @@ async def log_and_time_requests(request: Request, call_next):
 
     # Log response
     is_non_2xx_response = response.status_code < 200 or response.status_code >= 300
-    if is_non_2xx_response and hasattr(response, "body"):
+    is_not_401_response = response.status_code != 401  # <- these scare users too much
+    if is_non_2xx_response and hasattr(response, "body") and is_not_401_response:
         response_text = response.body.decode("utf-8", errors="ignore")
         logger.log(f"non-2xx status response: {response.status_code}: {response_text}", "WARNING")
-    elif is_non_2xx_response and hasattr(response, "body_iterator"):
+    elif is_non_2xx_response and hasattr(response, "body_iterator") and is_not_401_response:
         body = b"".join([chunk async for chunk in response.body_iterator])
         response_text = body.decode("utf-8", errors="ignore")
         logger.log(f"non-2xx status response: {response.status_code}: {response_text}", "WARNING")

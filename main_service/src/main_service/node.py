@@ -37,14 +37,12 @@ from main_service.helpers import Logger, format_traceback
 
 @dataclass
 class Container:
-    image: int
-    python_version: str
+    image: str
 
     @classmethod
     def from_dict(cls, _dict: dict):
         return cls(
             image=_dict["image"],
-            python_version=_dict["python_version"],
         )
 
     def to_dict(self):
@@ -247,8 +245,9 @@ class Node:
             binds={
                 f"{os.environ['HOST_HOME_DIR']}/.config/gcloud": "/root/.config/gcloud",
                 f"{os.environ['HOST_PWD']}/node_service": "/opt/burla/node_service",
-                f"{os.environ['HOST_PWD']}/_shared_workspace": "/shared_workspace",
+                f"{os.environ['HOST_PWD']}/_shared_workspace": "/workspace/shared",
                 f"{os.environ['HOST_PWD']}/_worker_service_python_env": "/worker_service_python_env",
+                f"{os.environ['HOST_PWD']}/_python_version_marker": "/python_version_marker",
                 "/var/run/docker.sock": "/var/run/docker.sock",
             },
         )
@@ -267,13 +266,13 @@ class Node:
             # We can't run gcsfuse in dev mode (without some very complicated hacks)
             # It's not compatible with macos and is very annoying to setup in docker with volumes.
             # 
-            # mkdir -p /shared_workspace /var/cache/gcsfuse
+            # mkdir -p /workspace/shared /var/cache/gcsfuse
             # gcsfuse \
             #     --client-protocol=http2 \
             #     --only-dir=shared_workspace \
             #     --metadata-cache-ttl-secs=1 \
             #     --cache-dir=/var/cache/gcsfuse \
-            #     {self.sync_gcs_bucket_name} /shared_workspace
+            #     {self.sync_gcs_bucket_name} /workspace/shared
             cd /opt/burla/node_service
             uv run -m uvicorn node_service:app --host 0.0.0.0 --port {self.port} --workers 1 \
                 --timeout-keep-alive 600 --reload
@@ -422,16 +421,16 @@ class Node:
 
         # start gcsfuse to sync working dirs with GCS bucket if specified
         cd /
-        mkdir -p /shared_workspace
+        mkdir -p /workspace/shared
         if [ "{self.sync_gcs_bucket_name}" != "None" ]; then
             mkdir -p /var/cache/gcsfuse
             gcsfuse \
                 --client-protocol=http2 \
                 --metadata-cache-ttl-secs=1 \
                 --cache-dir=/var/cache/gcsfuse \
-                {self.sync_gcs_bucket_name} /shared_workspace
+                {self.sync_gcs_bucket_name} /workspace/shared
 
-            MSG="Started GCSFuse: syncing /shared_workspace with gs://{self.sync_gcs_bucket_name}"
+            MSG="Started GCSFuse: syncing /workspace/shared with gs://{self.sync_gcs_bucket_name}"
             echo "$MSG"
             payload=$(jq -n --arg msg "$MSG" --arg ts "$(date +%s)" '{{"fields":{{"msg":{{"stringValue":$msg}},"ts":{{"integerValue":$ts}}}}}}')
             curl -sS -o /dev/null -X POST "$DB_BASE_URL/nodes/{self.instance_name}/logs" \

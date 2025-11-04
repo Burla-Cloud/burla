@@ -165,11 +165,23 @@ async def execute(
             workers_to_leave_idle.append(worker)
 
     if not workers_to_assign:
+        # possible the `on_job_start` in __init__ hasn't run yet because async.
+        # if it runs after this returns node will be stuck running.
+        # switch coroutines until this node is running, then reset back.
+        # using async in `on_job_start` because it's maybe slightly faster ?
+        n = 0
+        while not SELF["RUNNING"]:
+            n += 1
+            if n > 10:
+                raise Exception("this is theoretically impossible")
+            await asyncio.sleep(0)
+
         SELF["RUNNING"] = False
+        SELF["current_job"] = None
         async_db = AsyncClient(project=PROJECT_ID, database="burla")
         node_doc = async_db.collection("nodes").document(INSTANCE_NAME)
-        await node_doc.update({"status": "READY"})
-        print("SET BACH TO  READY")
+        await node_doc.update({"status": "READY", "current_job": None})
+
         msg = "No compatible containers.\n"
         msg += f"User is running python version {user_python_version}, "
         versions = list(set([e.python_version for e in SELF["workers"]]))

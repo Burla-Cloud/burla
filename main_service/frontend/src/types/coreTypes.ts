@@ -28,7 +28,6 @@ export interface BurlaJob {
 
 export interface Settings {
     containerImage: string;
-    pythonVersion: string;
     machineType: string;
     machineQuantity: number;
     diskSize: number; // in GB

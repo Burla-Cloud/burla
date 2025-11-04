@@ -28,6 +28,7 @@ from node_service import (
     CLUSTER_ID_TOKEN,
     NUM_GPUS,
     ENV_IS_READY_PATH,
+    GCL_CLIENT,
     get_logger,
     get_add_background_task_function,
     __version__,
@@ -40,7 +41,9 @@ router = APIRouter()
 
 class Container(BaseModel):
     image: str
-    python_version: str
+
+    class Config:
+        extra = "ignore"
 
 
 @router.post("/shutdown")
@@ -128,9 +131,12 @@ def _LOCAL_DEV_ONLY_pull_image_if_missing(
             raise Exception(msg)
 
 
-def _pull_image_if_missing(image: str, logger: Logger):
+def _pull_image_if_missing(image: str, logger: Logger, docker_client: docker.APIClient):
     # Use CLI instead of python api because that api just generally horrible and broken.
     # I already tried using it correctly, it wasnt worth it.
+
+    if IN_LOCAL_DEV_MODE:
+        return _LOCAL_DEV_ONLY_pull_image_if_missing(image, logger, docker_client)
 
     def _run_command(command, raise_error=True):
         result = subprocess.run(command, shell=True, capture_output=True)
@@ -235,22 +241,22 @@ def reboot_containers(
     # important to delete or workers wont install packages
     ENV_IS_READY_PATH.unlink(missing_ok=True)
 
-    db = firestore.Client(project=PROJECT_ID, database="burla")
-    node_doc = db.collection("nodes").document(INSTANCE_NAME)
-    node_doc.update(
-        {
-            "status": "BOOTING",
-            "current_job": None,
-            "parallelism": None,
-            "target_parallelism": None,
-            "started_booting_at": time(),
-            "all_inputs_received": False,
-        }
-    )
-    msg = f"Booting {INSTANCE_N_CPUS if NUM_GPUS == 0 else NUM_GPUS} workers ..."
-    node_doc.collection("logs").document().set({"msg": msg, "ts": time()})
-
     try:
+        db = firestore.Client(project=PROJECT_ID, database="burla")
+        node_doc = db.collection("nodes").document(INSTANCE_NAME)
+        node_doc.update(
+            {
+                "status": "BOOTING",
+                "current_job": None,
+                "parallelism": None,
+                "target_parallelism": None,
+                "started_booting_at": time(),
+                "all_inputs_received": False,
+            }
+        )
+        msg = f"Booting {INSTANCE_N_CPUS if NUM_GPUS == 0 else NUM_GPUS} workers ..."
+        node_doc.collection("logs").document().set({"msg": msg, "ts": time()})
+
         # reset state of the node service, except current_container_config, and the job_watcher.
         current_container_config = SELF["current_container_config"]
         REINIT_SELF(SELF)
@@ -309,29 +315,42 @@ def reboot_containers(
         # start new workers.
         futures = []
         for spec in SELF["current_container_config"]:
-            if IN_LOCAL_DEV_MODE:
-                _LOCAL_DEV_ONLY_pull_image_if_missing(spec.image, logger, docker_client)
-            else:
-                _pull_image_if_missing(spec.image, logger)
+            _pull_image_if_missing(spec.image, logger, docker_client)
+            docker_client.close()
             num_workers = INSTANCE_N_CPUS if NUM_GPUS == 0 else NUM_GPUS
             for i in range(num_workers):
                 # have just one worker install the worker svc, then share through docker volume
                 # (too many will ddoss github / be slow)
                 install_worker = i == 0
-                args = (spec.python_version, spec.image)
-                futures.append(executor.submit(Worker, *args, elected_installer=install_worker))
+                futures.append(
+                    executor.submit(Worker, spec.image, elected_installer=install_worker)
+                )
 
-        docker_client.close()
-        executor.shutdown(wait=True)
-        SELF["workers"] = [future.result() for future in futures]
+        try:
+            completed_future_generator = concurrent.futures.as_completed(futures)
+            workers = [f.result() for f in completed_future_generator]
+        except Exception as e:
+            executor.shutdown(wait=False, cancel_futures=True)
+            raise e
+        else:
+            executor.shutdown(wait=True)
+            SELF["workers"] = workers
         SELF["BOOTING"] = False
         node_doc.update({"status": "READY"})
 
     except Exception as parent_exception:
         SELF["FAILED"] = True
         try:
+            # using `logger` here makes this appear in node logs in dashboard, this makes it too
+            # hard for users to find their container error (by putting a big traceback below),
+            # which is why we log directly to gcl instead of using the `logger` instance
+            # it's possible this hides important `reboot_containers` errors from users,
+            # im gonna wait until that's an issue ti fix
+            msg = f"Error from Node-Service:\n{traceback.format_exc()}"
+            GCL_CLIENT.log_struct(dict(message=msg), severity="ERROR")
+
             node_doc.update({"status": "FAILED"})
-            msg = f"Error from Node-Service: {traceback.format_exc()}"
+            msg = f"Error from Node-Service: {str(parent_exception)}"
             node_doc.collection("logs").document().set({"msg": msg, "ts": time()})
 
             if not IN_LOCAL_DEV_MODE:

@@ -342,7 +342,8 @@ async def _execute_job(
             enable_cleanup_closed=True,
             use_dns_cache=True,
         )
-        session = await stack.enter_async_context(aiohttp.ClientSession(connector=connector))
+        client_session = aiohttp.ClientSession(connector=connector, trust_env=True)
+        session = await stack.enter_async_context(client_session)
 
         function_size_str = f" ({function_size_gb:.3f}GB)" if function_size_gb > 0.001 else ""
         msg = f"Calling function `{function_.__name__}`{function_size_str} on {len(inputs)} "
@@ -528,7 +529,8 @@ async def _execute_job(
                 raise Exception("Zero nodes working on job and we have not received all results!")
 
         total_runtime = time() - start_time
-        msg = f"Job {job_id} completed successfully, udf_start_latency={udf_start_latency:.2f}s"
+        udf_start_latency = round(udf_start_latency, 2) if udf_start_latency else None
+        msg = f"Job {job_id} completed successfully, udf_start_latency={udf_start_latency}s"
         msg += f", total_runtime={total_runtime:.2f}s."
         if packages_to_install:
             msg += f"\nInstalled packages: {packages_to_install}"

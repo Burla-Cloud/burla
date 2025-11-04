@@ -6,6 +6,7 @@ from uuid import uuid4
 from time import sleep, time
 import traceback
 import threading
+from pathlib import Path
 
 import docker
 from docker.types import DeviceRequest
@@ -30,7 +31,6 @@ class Worker:
 
     def __init__(
         self,
-        python_version: str,
         image: str,
         elected_installer: bool = False,
         boot_timeout_sec: int = 120,
@@ -51,33 +51,30 @@ class Worker:
             self.container_name = f"worker_{uuid4().hex[:8]}"
         self.url = None
         self.host_port = None
-        self.python_version = python_version
+        self.python_version = None  # <- only assigned when container starts
         self.boot_timeout_sec = boot_timeout_sec
 
         # dont assign to self because must be closed after use or causes issues :(
         docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
 
+        python_command = "python"
+        latest_version = requests.get("https://pypi.org/pypi/burla/json").json()["info"]["version"]
         cmd_script = f"""
             # worker service is installed here and mounted to all other containers
             export PYTHONPATH=/worker_service_python_env
             DB_BASE_URL="https://firestore.googleapis.com/v1/projects/{PROJECT_ID}/databases/burla/documents"
 
-            # Find python version:
-            python_cmd=""
-            for py in python{self.python_version} python3 python; do
-                is_executable=$(command -v $py >/dev/null 2>&1 && echo true || echo false)
-                version_matches=$($py --version 2>&1 | grep -q "{self.python_version}" && echo true || echo false)
-                if [ "$is_executable" = true ] && [ "$version_matches" = true ]; then
-                    echo "Found correct python version: $py"
-                    python_cmd=$py
-                    break
-                fi
-            done
-
-            # If python version not found, exit
-            if [ -z "$python_cmd" ]; then
-                echo "Python {self.python_version} not found"
-                exit 1
+            # install curl if missing
+            if ! command -v curl >/dev/null 2>&1; then
+                MSG="curl not found inside container image, installing ..."
+                TS=$(date +%s)
+                payload='{{"fields":{{"msg":{{"stringValue":"'"$MSG"'"}}, "ts":{{"integerValue":"'"$TS"'"}}}}}}'
+                curl -sS -o /dev/null -X POST "$DB_BASE_URL/nodes/{INSTANCE_NAME}/logs" \\
+                    -H "Authorization: Bearer {CREDENTIALS.token}" \\
+                    -H "Content-Type: application/json" \\
+                    -d "$payload"
+                echo "$MSG"
+                apt-get update && apt-get install -y curl
             fi
 
             # install uv if missing
@@ -89,22 +86,34 @@ class Worker:
             fi
 
             # Install worker_service if missing
-            if [ "{elected_installer}" = "True" ] && ! $python_cmd -c "import worker_service" 2>/dev/null; then
+            if [ "{elected_installer}" = "True" ]; then
 
-                # install curl if missing
-                if ! command -v curl >/dev/null 2>&1; then
-                    MSG="curl not found inside container image, installing ..."
-                    TS=$(date +%s)
-                    payload='{{"fields":{{"msg":{{"stringValue":"'"$MSG"'"}}, "ts":{{"integerValue":"'"$TS"'"}}}}}}'
-                    curl -sS -o /dev/null -X POST "$DB_BASE_URL/nodes/{INSTANCE_NAME}/logs" \\
-                        -H "Authorization: Bearer {CREDENTIALS.token}" \\
-                        -H "Content-Type: application/json" \\
-                        -d "$payload"
-                    echo "$MSG"
-                    apt-get update && apt-get install -y curl
+                # Check that the python command is available and print its version
+                if ! command -v {python_command} >/dev/null 2>&1; then
+                    echo '-'
+                    echo 'ERROR:'
+                    echo 'The command `{python_command}` does not point to any valid python executable inside this Docker image!'
+                    echo 'Currently using image: `{image}`'
+                    echo 'Please ensure the command `{python_command}` points to a valid python executable inside this image.'
+                    echo 'Ask jake (jake@burla.dev) if you need help with this!'
+                    echo '-'
+                    exit 1;
                 fi
+                
+                # save version to file to report it to node service
+                {python_command} -c 'import sys; print(f"{{sys.version_info.major}}.{{sys.version_info.minor}}")' > "/python_version_marker/python_version"
 
-                MSG="Installing Burla worker-service inside container image: {image} ..."
+                MSG="Command $(echo '`{python_command}`') is pointing to python version $(cat '/python_version_marker/python_version'), using python$(cat '/python_version_marker/python_version')!";
+                MSG="$MSG\n(please ensure you're running this same version locally when you call $(echo '`remote_parallel_map`'))"
+                TS=$(date +%s)
+                payload='{{"fields":{{"msg":{{"stringValue":"'"$MSG"'"}}, "ts":{{"integerValue":"'"$TS"'"}}}}}}'
+                curl -sS -o /dev/null -X POST "$DB_BASE_URL/nodes/{INSTANCE_NAME}/logs" \\
+                    -H "Authorization: Bearer {CREDENTIALS.token}" \\
+                    -H "Content-Type: application/json" \\
+                    -d "$payload"
+                echo "$MSG"
+
+                MSG="Installing Burla worker-service inside container image: $(echo '`{image}`') ..."
                 TS=$(date +%s)
                 payload='{{"fields":{{"msg":{{"stringValue":"'"$MSG"'"}}, "ts":{{"integerValue":"'"$TS"'"}}}}}}'
                 curl -sS -o /dev/null -X POST "$DB_BASE_URL/nodes/{INSTANCE_NAME}/logs" \\
@@ -121,7 +130,11 @@ class Worker:
                     # del everything in /worker_service_python_env except `worker_service` (mounted)
                     find /worker_service_python_env -mindepth 1 -maxdepth 1 ! -name worker_service -exec rm -rf {{}} +
                     cd /burla/worker_service
-                    uv pip install --python $python_cmd --target /worker_service_python_env .
+                    set -e
+                    uv pip install --python {python_command} --target /worker_service_python_env . || {{ 
+                        echo "ERROR: Failed to install local worker_service with uv. Exiting."; 
+                        exit 1; 
+                    }}
                 else
                     # try with tarball first because faster
                     if curl -Ls -o burla.tar.gz https://github.com/Burla-Cloud/burla/archive/{__version__}.tar.gz; then
@@ -143,8 +156,19 @@ class Worker:
                     # can only do this with linux host, breaks in dev using macos host :(
                     export UV_CACHE_DIR=/worker_service_python_env/.uv-cache
                     mkdir -p "$UV_CACHE_DIR" /worker_service_python_env
-                    uv pip install --python $python_cmd --target /worker_service_python_env .
+                    uv pip install --python {python_command} --target /worker_service_python_env . || {{ 
+                        echo "ERROR: Failed to install local worker_service with uv. Exiting."; 
+                        exit 1; 
+                    }}
                 fi
+
+                # Install burla so it is not automatically installed in the quickstart (where burla will be imported)
+                # this shaves a sec or two off quickstart runtime.
+                # don't simply add as a worker_svc dependency cause it's hard to make it always use latest pipy version.
+                uv pip install --python {python_command} --target /worker_service_python_env burla=={latest_version} || {{ 
+                    echo "ERROR: Failed to install burla client into worker. Exiting."; 
+                    exit 1; 
+                }}
 
                 MSG="Successfully installed worker-service."
                 TS=$(date +%s)
@@ -159,7 +183,7 @@ class Worker:
             # Wait for worker_service to become importable when not installing
             if [ "{elected_installer}" != "True" ]; then
                 start_time=$(date +%s)
-                until $python_cmd -c "import worker_service" 2>/dev/null; do
+                until {python_command} -c "import worker_service" 2>/dev/null; do
                     now=$(date +%s)
                     if [ $((now - start_time)) -ge {self.boot_timeout_sec} ]; then
                         echo "Timeout waiting for worker_service to become importable after {self.boot_timeout_sec} seconds"
@@ -167,21 +191,18 @@ class Worker:
                     fi
                     sleep 1
                 done
+                # wait for extra 1 sec after becoming importable because it being importable does not mean it's actually fully installed!
+                sleep 1
             fi
 
-            # go to user-workspace-dir, otherwise installer / non-installer containers are in different dir's
-            mkdir -p /shared_workspace
+            mkdir -p /workspace/shared
             
             # Start the worker service,
             # Restart automatically if it dies (IMPORTANT!):
             # Because it kills itself intentionally when it needs to cancel a running job.
             while true; do
-
-                # very important to start process from dir that is not /shared_workspace
-                # otherwise it hammers gcsfuse slows everything down causing timeouts!
-                # the worker service switches it's working dir to in the app after booting.
-                cd /
-                $python_cmd -m uvicorn worker_service:app --host 0.0.0.0 \
+                cd /workspace
+                {python_command} -m uvicorn worker_service:app --host 0.0.0.0 \
                     --port {WORKER_INTERNAL_PORT} --workers 1 \
                     --timeout-keep-alive 30
             done
@@ -195,8 +216,9 @@ class Worker:
                     f"{os.environ['HOST_HOME_DIR']}/.config/gcloud": "/root/.config/gcloud",
                     f"{os.environ['HOST_PWD']}/worker_service": "/burla/worker_service",
                     f"{os.environ['HOST_PWD']}/worker_service/src/worker_service": "/worker_service_python_env/worker_service",
-                    f"{os.environ['HOST_PWD']}/_shared_workspace": "/shared_workspace",
+                    f"{os.environ['HOST_PWD']}/_shared_workspace": "/workspace/shared",
                     f"{os.environ['HOST_PWD']}/_worker_service_python_env": "/worker_service_python_env",
+                    f"{os.environ['HOST_PWD']}/_python_version_marker": "/python_version_marker",
                     f"{os.environ['HOST_PWD']}/.temp_token.txt": "/burla/.temp_token.txt",
                 },
             )
@@ -208,8 +230,9 @@ class Worker:
                 ipc_mode="host",
                 device_requests=device_requests,
                 binds={
+                    "/python_version_marker": "/python_version_marker",
                     "/worker_service_python_env": "/worker_service_python_env",
-                    "/shared_workspace": "/shared_workspace",
+                    "/workspace/shared": "/workspace/shared",
                 },
             )
 
@@ -238,10 +261,30 @@ class Worker:
                 self.container_id = self.container.get("Id")
                 docker_client.start(container=self.container_id)
             except (requests.exceptions.ReadTimeout, docker.errors.APIError) as e:
+
+                msg = f"\nError starting container {self.container_name}:\n"
+                msg += "```\n"
+                msg += traceback.format_exc()
+                msg += "\n```\n"
+                msg += f"Retrying in {random.uniform(1, 5)} seconds...\n\n\n"
+                print(msg)
+
+                struct = {"severity": "WARNING", "MESSAGE": msg}
+                logging.Client().logger("node_service").log_struct(struct)
+
+                firestore_client = firestore.Client(project=PROJECT_ID, database="burla")
+                node_ref = firestore_client.collection("nodes").document(INSTANCE_NAME)
+                node_ref.collection("logs").document().set({"msg": msg, "ts": time()})
+
                 if attempt > 5:
                     raise e
                 sleep(random.uniform(1, 5))  # <- avoid theoretical thundering herd
+                try:
+                    docker_client.remove_container(self.container_name, force=True)
+                except Exception:
+                    pass
                 # idk if recreating client actually helps
+                # it might because random docker api errors can be due to client issues ??
                 docker_client.close()
                 docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
             else:
@@ -262,8 +305,6 @@ class Worker:
         if IN_LOCAL_DEV_MODE:
             self.url = f"http://{self.container_name}:{WORKER_INTERNAL_PORT}"
 
-        docker_client.close()
-
         if elected_installer:
             self._start_log_streaming()
 
@@ -271,7 +312,13 @@ class Worker:
         start = time()
         while not ready:
 
-            if not self.exists():
+            try:
+                info = docker_client.inspect_container(self.container_id)
+                container_is_running = info.get("State", {}).get("Running", False)
+            except docker.errors.NotFound:
+                container_is_running = False
+
+            if not container_is_running:
                 self.log_debug_info()
                 raise Exception(f"Container: {self.container_name} not running while booting?")
 
@@ -290,6 +337,8 @@ class Worker:
                 ready = True
             except requests.exceptions.ConnectionError:
                 sleep(1)
+
+        self.python_version = Path("/python_version_marker/python_version").read_text().strip()
 
         boot_duration = time() - boot_start_time
         # print(f"Worker {self.container_name} booted after: {boot_duration:.2f} seconds")

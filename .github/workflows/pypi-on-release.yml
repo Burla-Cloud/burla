@@ -3,17 +3,22 @@ name: Release
 on:
   release:
     types: [published]
+
 jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-python@v2
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
         with:
-          python-version: "3.10"
-          architecture: x64
-      - run: pip install poetry==1.5.1
-      - run: poetry build
-        working-directory: ./client
-      - run: poetry publish --username=__token__ --password=${{ secrets.PYPI_TOKEN }}
-        working-directory: ./client
+          python-version: "3.13"
+          architecture: "x64"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Build dist
+        run: uv build --directory ./client
+
+      - name: Publish to PyPI
+        run: uv publish --directory ./client --token "${{ secrets.PYPI_TOKEN }}"

@@ -22,7 +22,7 @@ from jinja2 import Environment, FileSystemLoader
 os.environ["GRPC_VERBOSITY"] = "ERROR"
 os.environ["GLOG_minloglevel"] = "2"
 
-CURRENT_BURLA_VERSION = "1.3.10"
+CURRENT_BURLA_VERSION = "1.3.11"
 
 # In this mode EVERYTHING runs locally in docker containers.
 # possible modes: local-dev-mode (everything local), remote-dev-mode (only main-service local), prod
@@ -54,7 +54,6 @@ DEFAULT_CONFIG = {  # <- config used only when config is missing from firestore
             "containers": [
                 {
                     "image": "python:3.12",
-                    "python_version": "3.12",
                 },
             ],
             "machine_type": "n4-standard-4",

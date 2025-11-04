@@ -208,6 +208,7 @@ class _FirestoreStdout:
 
 def _packages_are_importable(packages: dict):
     for package, expected_version in packages.items():
+        print(f"HERE3 {package} {expected_version}")
         try:
             installed_version = importlib_metadata.version(package)
         except importlib_metadata.PackageNotFoundError:
@@ -243,8 +244,10 @@ def _install_packages(packages: dict):
 def install_pkgs_and_execute_job(
     job_id: str, function_pkl: bytes, packages: dict, start_time: float
 ):
+    print("HERE1")
     SELF["logs"].append(f"Starting job {job_id} with func-size {len(function_pkl)} bytes.")
     all_packages_importable = _packages_are_importable(packages)
+    print("HERE2")
     ENV_IS_READY_PATH = Path("/worker_service_python_env/.ALL_PACKAGES_INSTALLED")
     am_elected_installer_worker = os.environ.get("ELECTED_INSTALLER") == "True"
     if not all_packages_importable and am_elected_installer_worker:

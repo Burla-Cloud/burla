@@ -207,6 +207,7 @@ class Worker:
                 {python_command} -m uvicorn worker_service:app --host 0.0.0.0 \
                     --port {WORKER_INTERNAL_PORT} --workers 1 \
                     --timeout-keep-alive 30
+                echo "RESTARTING WORKER SERVICE"
             done
         """.strip()
         cmd = ["-c", cmd_script]

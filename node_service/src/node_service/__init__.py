@@ -181,7 +181,7 @@ async def shutdown_if_idle_for_too_long(logger: Logger):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger = Logger()
-    logger.log(f"Done. Started node service v{__version__} ...")
+    logger.log(f"Started node service v{__version__}")
 
     # In dev all the workers restart everytime I hit save (server is in "reload" mode)
     # This is annoying but you must leave it like this, otherwise stuff won't restart correctly!
@@ -191,7 +191,7 @@ async def lifespan(app: FastAPI):
     if INACTIVITY_SHUTDOWN_TIME_SEC:
         asyncio.create_task(shutdown_if_idle_for_too_long(logger=logger))
         logger.log(
-            f"This node will shutdown if idle for {INACTIVITY_SHUTDOWN_TIME_SEC//60} minutes."
+            f"This node will shutdown if idle for {INACTIVITY_SHUTDOWN_TIME_SEC//60} minutes!"
         )
 
     # boot containers before accepting any requests.

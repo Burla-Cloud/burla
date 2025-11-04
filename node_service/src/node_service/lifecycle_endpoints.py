@@ -283,7 +283,6 @@ def reboot_containers(
                 "all_inputs_received": False,
             }
         )
-        node_doc.collection("logs").document().set({"msg": msg, "ts": time()})
 
         # reset state of the node service, except current_container_config, and the job_watcher.
         current_container_config = SELF["current_container_config"]

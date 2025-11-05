@@ -345,7 +345,11 @@ async def log_and_time_requests(request: Request, call_next):
     request.state.uuid = uuid4().hex
     not_requesting_udf_results = not str(request.url).endswith("/results")  # too many to log
     not_requesting_udf_results = True if IN_LOCAL_DEV_MODE else not_requesting_udf_results
-    logger = Logger(request, log_to_firestore=False)
+
+    logger = Logger(request)
+    # Don't use this ^ (except in `get_add_background_task_function`) because it logs to firestore
+    # and that can't be turned off without affecting other class instances currently because they
+    # all share a python logger.
 
     try:
         response = await call_next(request)
@@ -364,11 +368,13 @@ async def log_and_time_requests(request: Request, call_next):
     is_non_2xx_response = response.status_code < 200 or response.status_code >= 300
     if is_non_2xx_response and hasattr(response, "body"):
         response_text = response.body.decode("utf-8", errors="ignore")
-        logger.log(f"non-2xx status response: {response.status_code}: {response_text}", "WARNING")
+        msg = f"non-2xx status response: {response.status_code}: {response_text}"
+        GCL_CLIENT.log_text(msg, severity="WARNING")
     elif is_non_2xx_response and hasattr(response, "body_iterator"):
         body = b"".join([chunk async for chunk in response.body_iterator])
         response_text = body.decode("utf-8", errors="ignore")
-        logger.log(f"non-2xx status response: {response.status_code}: {response_text}", "WARNING")
+        msg = f"non-2xx status response: {response.status_code}: {response_text}"
+        GCL_CLIENT.log_text(msg, severity="WARNING")
 
         async def body_stream():  #  <- it has to be ugly like this :(
             yield body
@@ -377,6 +383,6 @@ async def log_and_time_requests(request: Request, call_next):
     elif response.status_code == 200 and not_requesting_udf_results and not IN_LOCAL_DEV_MODE:
         latency = time() - start
         msg = f"{request.method} to {request.url} returned 200 after {latency}s."
-        add_background_task(logger.log, msg, latency=latency)
+        add_background_task(GCL_CLIENT.log_text, msg)
 
     return response

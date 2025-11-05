@@ -61,7 +61,7 @@ class FirestoreLogHandler(python_logging.Handler):
 
 class Logger:
 
-    def __init__(self, request: Optional[Request] = None, log_to_firestore: bool = True):
+    def __init__(self, request: Optional[Request] = None):
         self.request = request
         self.loggable_request = None
 
@@ -70,8 +70,7 @@ class Logger:
         if not self.logger.handlers:
             self.logger.setLevel(python_logging.INFO)
             self.logger.addHandler(python_logging.StreamHandler(sys.stdout))
-            if log_to_firestore:
-                self.logger.addHandler(FirestoreLogHandler())
+            self.logger.addHandler(FirestoreLogHandler())
             self.logger.propagate = False
 
     def __make_serializeable(self, obj):

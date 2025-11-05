@@ -251,7 +251,6 @@ async def _job_watcher(
                     doc["packages_to_install"] = SELF["packages_to_install"]
                 if doc:
                     await job_doc.update(doc)
-            print(f"RESTARTING WORKERS")
             await restart_workers(session, logger, async_db)
             break
 

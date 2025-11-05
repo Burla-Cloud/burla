@@ -217,8 +217,6 @@ async def _job_watcher(
         not_waiting_for_client = results_queue_empty or is_background_job or client_disconnected
 
         if JOB_FAILED and not JOB_FAILED_TWO:
-
-            print("HERE")
             # give worker a sec to put error result in result queue
             # then loop again to clear worker results again
             sleep(1)

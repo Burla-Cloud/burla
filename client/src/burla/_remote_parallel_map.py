@@ -694,7 +694,11 @@ def remote_parallel_map(
             except Exception:
                 pass
 
-        if not user_function_error.is_set():
+        exec_types_to_ignore = [NoNodes, AllNodesBusy, NoCompatibleNodes, JobCanceled]
+        exec_types_to_ignore.extend([VersionMismatch, FunctionTooBig])
+        ignore_exception = any([isinstance(e, exec_type) for exec_type in exec_types_to_ignore])
+
+        if not user_function_error.is_set() and not ignore_exception:
             # Report errors back to Burla's cloud.
             try:
                 exc_type, exc_value, exc_traceback = sys.exc_info()

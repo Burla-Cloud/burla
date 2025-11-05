@@ -8,7 +8,7 @@ import requests
 import subprocess
 import textwrap
 import logging
-from typing import Any, Union
+from typing import Union
 from threading import Event
 
 import cloudpickle
@@ -150,24 +150,26 @@ def restore_signal_handlers(original_signal_handlers):
 
 
 def log_telemetry(message, severity="INFO", **kwargs):
-    try:
-        json_payload = {"message": message, **kwargs}
-        url = f"{_BURLA_BACKEND_URL}/v1/telemetry/log/{severity}"
-        response = requests.post(url, json=json_payload)
-        response.raise_for_status()
-    except Exception:
-        pass
+    if not os.environ.get("DISABLE_BURLA_TELEMETRY") == "True":
+        try:
+            json_payload = {"message": message, **kwargs}
+            url = f"{_BURLA_BACKEND_URL}/v1/telemetry/log/{severity}"
+            response = requests.post(url, json=json_payload)
+            response.raise_for_status()
+        except Exception:
+            pass
 
 
 async def log_telemetry_async(message, session, severity="INFO", **kwargs):
-    try:
-        json_payload = {"message": message, **kwargs}
-        url = f"{_BURLA_BACKEND_URL}/v1/telemetry/log/{severity}"
-        async with session.post(url, json=json_payload) as response:
-            await response.text()
-            response.raise_for_status()
-    except Exception:
-        pass
+    if not os.environ.get("DISABLE_BURLA_TELEMETRY") == "True":
+        try:
+            json_payload = {"message": message, **kwargs}
+            url = f"{_BURLA_BACKEND_URL}/v1/telemetry/log/{severity}"
+            async with session.post(url, json=json_payload) as response:
+                await response.text()
+                response.raise_for_status()
+        except Exception:
+            pass
 
 
 class VerboseCalledProcessError(Exception):

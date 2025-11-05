@@ -154,7 +154,6 @@ async def start_job(
     request_files: Optional[dict] = Depends(get_request_files),
     request_json: dict = Depends(get_request_json),
 ):
-    print("HERE0")
     SELF["logs"].append(f"Assigned to job {job_id}.")
     args = (
         job_id,
@@ -164,7 +163,6 @@ async def start_job(
     )
     thread = ThreadWithExc(target=install_pkgs_and_execute_job, args=args, daemon=True)
     thread.start()
-    print("HERE SOMETHING ELSE")
 
     SELF["current_job"] = job_id
     SELF["udf_executor_thread"] = thread

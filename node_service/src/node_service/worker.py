@@ -40,6 +40,7 @@ class Worker:
         # THUS, THEY NEED TO BE RESET PER JOB
         #
         boot_start_time = time()
+        self.elected_installer = elected_installer
         self.is_idle = False
         self.is_empty = False
         self.packages_to_install = None
@@ -60,6 +61,7 @@ class Worker:
         python_command = "python"  # <- is also hardcoded in `_install_packages` in udf_executor
         latest_version = requests.get("https://pypi.org/pypi/burla/json").json()["info"]["version"]
         cmd_script = f"""
+            set -e
             # worker service is installed here and mounted to all other containers
             export PYTHONPATH=/worker_service_python_env
             export PATH="/worker_service_python_env/bin:$PATH"
@@ -79,7 +81,7 @@ class Worker:
             fi
 
             # install uv if missing
-            if [ "{elected_installer}" = "True" ] && ! command -v uv >/dev/null 2>&1; then
+            if [ "{self.elected_installer}" = "True" ] && ! command -v uv >/dev/null 2>&1; then
                 # needed even if we have worker service already to install packages
                 curl -LsSf https://astral.sh/uv/install.sh | sh
                 export PATH="$HOME/.cargo/bin:$PATH"
@@ -87,7 +89,7 @@ class Worker:
             fi
 
             # Install worker_service
-            if [ "{elected_installer}" = "True" ]; then
+            if [ "{self.elected_installer}" = "True" ]; then
 
                 # Check that the python command is available and print its version
                 if ! command -v {python_command} >/dev/null 2>&1; then
@@ -131,7 +133,6 @@ class Worker:
                     # del everything in /worker_service_python_env except `worker_service` (mounted)
                     find /worker_service_python_env -mindepth 1 -maxdepth 1 ! -name worker_service -exec rm -rf {{}} +
                     cd /burla/worker_service
-                    set -e
                     uv pip install --python {python_command} --target /worker_service_python_env . || {{ 
                         echo "ERROR: Failed to install local worker_service with uv. Exiting."; 
                         exit 1; 
@@ -185,7 +186,7 @@ class Worker:
             fi
 
             # Wait until installer container is done installing worker svc
-            if [ "{elected_installer}" != "True" ]; then
+            if [ "{self.elected_installer}" != "True" ]; then
                 start_time=$(date +%s)
                 until [ -f /worker_service_python_env/.WORKER_SVC_INSTALLED ]; do
                     now=$(date +%s)
@@ -206,8 +207,8 @@ class Worker:
                 cd /workspace
                 {python_command} -m uvicorn worker_service:app --host 0.0.0.0 \
                     --port {WORKER_INTERNAL_PORT} --workers 1 \
-                    --timeout-keep-alive 30
-                echo "RESTARTING WORKER SERVICE"
+                    --timeout-keep-alive 30 \
+                    || true  # <- intentionally ignore errors so script dosen't exit.
             done
         """.strip()
         cmd = ["-c", cmd_script]
@@ -256,7 +257,7 @@ class Worker:
                         "GOOGLE_CLOUD_PROJECT": PROJECT_ID,
                         "IN_LOCAL_DEV_MODE": IN_LOCAL_DEV_MODE,
                         "WORKER_NAME": self.container_name,
-                        "ELECTED_INSTALLER": elected_installer,
+                        "ELECTED_INSTALLER": self.elected_installer,
                         "INSTANCE_NAME": INSTANCE_NAME,
                     },
                     detach=True,
@@ -309,7 +310,7 @@ class Worker:
         if IN_LOCAL_DEV_MODE:
             self.url = f"http://{self.container_name}:{WORKER_INTERNAL_PORT}"
 
-        if elected_installer:
+        if self.elected_installer:
             self._start_log_streaming()
 
         ready = False

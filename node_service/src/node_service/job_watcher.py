@@ -3,7 +3,7 @@ import pickle
 import traceback
 import asyncio
 import aiohttp
-from time import time
+from time import time, sleep
 
 from google.cloud import firestore
 from google.cloud.firestore import FieldFilter, And, ArrayUnion
@@ -102,6 +102,7 @@ async def _job_watcher(
     await node_doc.set({"current_num_results": 0})
 
     JOB_FAILED = False
+    JOB_FAILED_TWO = False
     JOB_CANCELED = False
     LAST_CLIENT_PING_TIMESTAMP = time()
     neighboring_node = None
@@ -210,7 +211,20 @@ async def _job_watcher(
             client_has_all_results = job_snapshot.to_dict()["client_has_all_results"]
             job_is_done = all_inputs_processed and (client_has_all_results or is_background_job)
 
-        if job_is_done or JOB_FAILED or JOB_CANCELED:
+        seconds_since_last_ping = time() - LAST_CLIENT_PING_TIMESTAMP
+        client_disconnected = seconds_since_last_ping > CLIENT_DC_TIMEOUT_SEC
+        results_queue_empty = SELF["results_queue"].empty()
+        not_waiting_for_client = results_queue_empty or is_background_job or client_disconnected
+
+        if JOB_FAILED and not JOB_FAILED_TWO:
+
+            print("HERE")
+            # give worker a sec to put error result in result queue
+            # then loop again to clear worker results again
+            sleep(1)
+            JOB_FAILED_TWO = True
+
+        elif (job_is_done or JOB_FAILED_TWO or JOB_CANCELED) and not_waiting_for_client:
             if JOB_FAILED:
                 logger.log(f"Job has failed! (id={SELF['current_job']})")
             else:
@@ -239,13 +253,12 @@ async def _job_watcher(
                     doc["packages_to_install"] = SELF["packages_to_install"]
                 if doc:
                     await job_doc.update(doc)
+            print(f"RESTARTING WORKERS")
             await restart_workers(session, logger, async_db)
             break
 
         # client still listening? (if this is NOT a background job)
-        seconds_since_last_ping = time() - LAST_CLIENT_PING_TIMESTAMP
-        client_disconnected = seconds_since_last_ping > CLIENT_DC_TIMEOUT_SEC
-        if not is_background_job and client_disconnected:
+        elif not is_background_job and client_disconnected:
             # check again (synchronously) because sometimes the ping watcher thread is starved.
             sync_job_doc = sync_db.collection("jobs").document(SELF["current_job"])
             last_ping_timestamp = sync_job_doc.get().to_dict()["last_ping_from_client"]

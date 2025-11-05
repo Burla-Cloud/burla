@@ -100,6 +100,7 @@ async def upload_inputs(
 @router.get("/jobs/{job_id}/results")
 async def get_results(job_id: str = Path(...)):
     if job_id != SELF["current_job"]:
+        print(f"job {job_id} not found, current job: {SELF['current_job']}")
         return Response("job not found", status_code=404)
 
     results = []
@@ -144,6 +145,7 @@ async def execute(
     request_files: Optional[dict] = Depends(get_request_files),
     logger: Logger = Depends(get_logger),
 ):
+    logger.log(f"Executing job {job_id} ...")
     # The `on_job_start` function in __init__.py is run as soon as upload to this endpoint starts.
     # It exists to set `SELF["current_job"]` and set this node to RUNNING in the db as soon as
     # upload starts if the user's function is big.
@@ -154,6 +156,13 @@ async def execute(
     future_parallelism = 0
     is_background_job = request_json["is_background_job"]
     user_python_version = request_json["user_python_version"]
+
+    # move the installer worker to the front of the list so it's DEFINITELY included in the
+    # set of selected workers if there are any (otherwise unable to install packages)
+    installer_worker = [w for w in SELF["workers"] if w.elected_installer][0]
+    SELF["workers"].remove(installer_worker)
+    SELF["workers"] = [installer_worker, *SELF["workers"]]
+
     for worker in SELF["workers"]:
         correct_python_version = worker.python_version == user_python_version
         need_more_parallelism = future_parallelism < request_json["parallelism"]
@@ -214,6 +223,7 @@ async def execute(
         )
         data.add_field("function_pkl", request_files["function_pkl"])
         data.add_field("request_json", packages_json, content_type="application/json")
+
         async with session.post(f"{worker.url}/jobs/{job_id}", data=data) as response:
             if response.status == 200:
                 return worker
@@ -237,8 +247,6 @@ async def execute(
 
     if len(successfully_assigned_workers) == 0:
         raise Exception("Failed to assign job to any workers")
-
-    logger.log(f"Successfully assigned to {len(successfully_assigned_workers)} workers.")
 
     SELF["workers"] = workers_to_assign
     SELF["idle_workers"] = workers_to_leave_idle

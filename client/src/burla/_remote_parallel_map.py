@@ -110,6 +110,8 @@ def _get_packages(function_):
 
     package_versions = {}
     for package in packages:
+        if package == "burla":  # <- already installed on workers by default
+            continue
         try:
             package_versions[package] = metadata.version(package)
         except metadata.PackageNotFoundError:

@@ -30,7 +30,7 @@ from starlette.requests import ClientDisconnect
 from starlette.datastructures import UploadFile
 
 
-__version__ = "1.3.11"
+__version__ = "1.3.12"
 CREDENTIALS, PROJECT_ID = google.auth.default()
 BURLA_BACKEND_URL = "https://backend.burla.dev"
 
@@ -181,7 +181,7 @@ async def shutdown_if_idle_for_too_long(logger: Logger):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger = Logger()
-    logger.log(f"Starting node service v{__version__} ...")
+    logger.log(f"Started node service v{__version__}")
 
     # In dev all the workers restart everytime I hit save (server is in "reload" mode)
     # This is annoying but you must leave it like this, otherwise stuff won't restart correctly!
@@ -190,7 +190,9 @@ async def lifespan(app: FastAPI):
 
     if INACTIVITY_SHUTDOWN_TIME_SEC:
         asyncio.create_task(shutdown_if_idle_for_too_long(logger=logger))
-        logger.log(f"Set to shutdown if idle for {INACTIVITY_SHUTDOWN_TIME_SEC} sec.")
+        logger.log(
+            f"This node will shutdown if idle for {INACTIVITY_SHUTDOWN_TIME_SEC//60} minutes!"
+        )
 
     # boot containers before accepting any requests.
     # `reboot_containers` will delete VM's if it fails, no need to do that here.
@@ -343,7 +345,7 @@ async def log_and_time_requests(request: Request, call_next):
     request.state.uuid = uuid4().hex
     not_requesting_udf_results = not str(request.url).endswith("/results")  # too many to log
     not_requesting_udf_results = True if IN_LOCAL_DEV_MODE else not_requesting_udf_results
-    logger = Logger(request)
+    logger = Logger(request, log_to_firestore=False)
 
     try:
         response = await call_next(request)
@@ -360,11 +362,10 @@ async def log_and_time_requests(request: Request, call_next):
 
     # Log response
     is_non_2xx_response = response.status_code < 200 or response.status_code >= 300
-    is_not_401_response = response.status_code != 401  # <- these scare users too much
-    if is_non_2xx_response and hasattr(response, "body") and is_not_401_response:
+    if is_non_2xx_response and hasattr(response, "body"):
         response_text = response.body.decode("utf-8", errors="ignore")
         logger.log(f"non-2xx status response: {response.status_code}: {response_text}", "WARNING")
-    elif is_non_2xx_response and hasattr(response, "body_iterator") and is_not_401_response:
+    elif is_non_2xx_response and hasattr(response, "body_iterator"):
         body = b"".join([chunk async for chunk in response.body_iterator])
         response_text = body.decode("utf-8", errors="ignore")
         logger.log(f"non-2xx status response: {response.status_code}: {response_text}", "WARNING")

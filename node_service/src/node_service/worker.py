@@ -40,6 +40,7 @@ class Worker:
         # THUS, THEY NEED TO BE RESET PER JOB
         #
         boot_start_time = time()
+        self.elected_installer = elected_installer
         self.is_idle = False
         self.is_empty = False
         self.packages_to_install = None
@@ -57,11 +58,13 @@ class Worker:
         # dont assign to self because must be closed after use or causes issues :(
         docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
 
-        python_command = "python"
+        python_command = "python"  # <- is also hardcoded in `_install_packages` in udf_executor
         latest_version = requests.get("https://pypi.org/pypi/burla/json").json()["info"]["version"]
         cmd_script = f"""
+            set -e
             # worker service is installed here and mounted to all other containers
             export PYTHONPATH=/worker_service_python_env
+            export PATH="/worker_service_python_env/bin:$PATH"
             DB_BASE_URL="https://firestore.googleapis.com/v1/projects/{PROJECT_ID}/databases/burla/documents"
 
             # install curl if missing
@@ -78,15 +81,15 @@ class Worker:
             fi
 
             # install uv if missing
-            if [ "{elected_installer}" = "True" ] && ! command -v uv >/dev/null 2>&1; then
+            if [ "{self.elected_installer}" = "True" ] && ! command -v uv >/dev/null 2>&1; then
                 # needed even if we have worker service already to install packages
                 curl -LsSf https://astral.sh/uv/install.sh | sh
                 export PATH="$HOME/.cargo/bin:$PATH"
                 export PATH="$HOME/.local/bin:$PATH"
             fi
 
-            # Install worker_service if missing
-            if [ "{elected_installer}" = "True" ]; then
+            # Install worker_service
+            if [ "{self.elected_installer}" = "True" ]; then
 
                 # Check that the python command is available and print its version
                 if ! command -v {python_command} >/dev/null 2>&1; then
@@ -113,7 +116,7 @@ class Worker:
                     -d "$payload"
                 echo "$MSG"
 
-                MSG="Installing Burla worker-service inside container image: $(echo '`{image}`') ..."
+                MSG="Installing Burla worker-service inside container ..."
                 TS=$(date +%s)
                 payload='{{"fields":{{"msg":{{"stringValue":"'"$MSG"'"}}, "ts":{{"integerValue":"'"$TS"'"}}}}}}'
                 curl -sS -o /dev/null -X POST "$DB_BASE_URL/nodes/{INSTANCE_NAME}/logs" \\
@@ -130,7 +133,6 @@ class Worker:
                     # del everything in /worker_service_python_env except `worker_service` (mounted)
                     find /worker_service_python_env -mindepth 1 -maxdepth 1 ! -name worker_service -exec rm -rf {{}} +
                     cd /burla/worker_service
-                    set -e
                     uv pip install --python {python_command} --target /worker_service_python_env . || {{ 
                         echo "ERROR: Failed to install local worker_service with uv. Exiting."; 
                         exit 1; 
@@ -162,13 +164,16 @@ class Worker:
                     }}
                 fi
 
-                # Install burla so it is not automatically installed in the quickstart (where burla will be imported)
-                # this shaves a sec or two off quickstart runtime.
+                # Install burla so it is not automatically installed when users run the quickstart
+                # this saves a sec or two off quickstart runtime.
                 # don't simply add as a worker_svc dependency cause it's hard to make it always use latest pipy version.
                 uv pip install --python {python_command} --target /worker_service_python_env burla=={latest_version} || {{ 
                     echo "ERROR: Failed to install burla client into worker. Exiting."; 
                     exit 1; 
                 }}
+
+                # mark that worker_svc installed in shared dir so other containers can continue
+                touch /worker_service_python_env/.WORKER_SVC_INSTALLED
 
                 MSG="Successfully installed worker-service."
                 TS=$(date +%s)
@@ -180,19 +185,17 @@ class Worker:
                 echo "$MSG"
             fi
 
-            # Wait for worker_service to become importable when not installing
-            if [ "{elected_installer}" != "True" ]; then
+            # Wait until installer container is done installing worker svc
+            if [ "{self.elected_installer}" != "True" ]; then
                 start_time=$(date +%s)
-                until {python_command} -c "import worker_service" 2>/dev/null; do
+                until [ -f /worker_service_python_env/.WORKER_SVC_INSTALLED ]; do
                     now=$(date +%s)
                     if [ $((now - start_time)) -ge {self.boot_timeout_sec} ]; then
-                        echo "Timeout waiting for worker_service to become importable after {self.boot_timeout_sec} seconds"
+                        echo "Timeout waiting for worker_service install completion after {self.boot_timeout_sec} seconds"
                         exit 1
                     fi
                     sleep 1
                 done
-                # wait for extra 1 sec after becoming importable because it being importable does not mean it's actually fully installed!
-                sleep 1
             fi
 
             mkdir -p /workspace/shared
@@ -204,7 +207,8 @@ class Worker:
                 cd /workspace
                 {python_command} -m uvicorn worker_service:app --host 0.0.0.0 \
                     --port {WORKER_INTERNAL_PORT} --workers 1 \
-                    --timeout-keep-alive 30
+                    --timeout-keep-alive 30 \
+                    || true  # <- intentionally ignore errors so script dosen't exit.
             done
         """.strip()
         cmd = ["-c", cmd_script]
@@ -253,7 +257,8 @@ class Worker:
                         "GOOGLE_CLOUD_PROJECT": PROJECT_ID,
                         "IN_LOCAL_DEV_MODE": IN_LOCAL_DEV_MODE,
                         "WORKER_NAME": self.container_name,
-                        "ELECTED_INSTALLER": elected_installer,
+                        "ELECTED_INSTALLER": self.elected_installer,
+                        "INSTANCE_NAME": INSTANCE_NAME,
                     },
                     detach=True,
                     runtime="nvidia" if NUM_GPUS != 0 else None,
@@ -305,7 +310,7 @@ class Worker:
         if IN_LOCAL_DEV_MODE:
             self.url = f"http://{self.container_name}:{WORKER_INTERNAL_PORT}"
 
-        if elected_installer:
+        if self.elected_installer:
             self._start_log_streaming()
 
         ready = False

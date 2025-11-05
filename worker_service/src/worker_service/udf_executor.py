@@ -14,7 +14,7 @@ import importlib.metadata as importlib_metadata
 
 import cloudpickle
 from tblib import Traceback
-from worker_service import SELF, PROJECT_ID, IN_LOCAL_DEV_MODE
+from worker_service import SELF, PROJECT_ID, IN_LOCAL_DEV_MODE, INSTANCE_NAME
 
 FIRESTORE_URL = "https://firestore.googleapis.com"
 DB_BASE_URL = f"{FIRESTORE_URL}/v1/projects/{PROJECT_ID}/databases/burla/documents"
@@ -226,7 +226,7 @@ def _packages_are_importable(packages: dict):
 
 def _install_packages(packages: dict):
     SELF["packages_to_install"] = packages
-    cmd = ["uv", "pip", "install", "--target", "/worker_service_python_env", "--system"]
+    cmd = ["uv", "pip", "install", "--python", "python", "--target", "/worker_service_python_env"]
     for package, version in packages.items():
         cmd.append(f"{package}=={version}")
     SELF["logs"].append(f"Installing {len(packages)} packages with CMD:\n\t{' '.join(cmd)}")
@@ -248,6 +248,13 @@ def install_pkgs_and_execute_job(
     ENV_IS_READY_PATH = Path("/worker_service_python_env/.ALL_PACKAGES_INSTALLED")
     am_elected_installer_worker = os.environ.get("ELECTED_INSTALLER") == "True"
     if not all_packages_importable and am_elected_installer_worker:
+
+        packages_str = "".join([f"    {pkg}=={version}\n" for pkg, version in packages.items()])
+        msg = f"Installing packages:\n{packages_str}"
+        url = f"{DB_BASE_URL}/nodes/{INSTANCE_NAME}/logs"
+        data = {"fields": {"msg": {"stringValue": msg}, "ts": {"integerValue": str(int(time()))}}}
+        response = requests.post(url, headers=DB_HEADERS, json=data, timeout=5)
+
         _install_packages(packages)
         ENV_IS_READY_PATH.touch()
         SELF["ALL_PACKAGES_INSTALLED"] = True

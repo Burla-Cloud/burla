@@ -161,9 +161,6 @@ class Node:
         current_state = {k: v for k, v in current_state.items() if k not in attrs_to_not_save}
         self.node_ref.set(current_state)
 
-        log = {"msg": f"Adding node {self.instance_name} ({self.machine_type}) ...", "ts": time()}
-        self.node_ref.collection("logs").document().set(log)
-
         try:
             if as_local_container:
                 self.__start_svc_in_local_container()
@@ -466,14 +463,6 @@ class Node:
 
         uv venv --python 3.13 --seed
         uv pip install ./node_service
-
-        MSG="Successfully installed node service."
-        echo "$MSG"
-        payload=$(jq -n --arg msg "$MSG" --arg ts "$(date +%s)" '{{"fields":{{"msg":{{"stringValue":$msg}},"ts":{{"integerValue":$ts}}}}}}')
-        curl -sS -o /dev/null -X POST "$DB_BASE_URL/nodes/{self.instance_name}/logs" \
-            -H "Authorization: Bearer $ACCESS_TOKEN" \
-            -H "Content-Type: application/json" \
-            -d "$payload"
         
         /opt/burla/.venv/bin/python -m uvicorn node_service:app --host 0.0.0.0 --port {self.port} --workers 1 --timeout-keep-alive 600
         """

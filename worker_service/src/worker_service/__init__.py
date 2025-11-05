@@ -19,8 +19,9 @@ python_logging.getLogger("fastapi").disabled = True
 python_logging.getLogger("starlette").disabled = True
 
 # Defined before importing helpers/endpoints to prevent cyclic imports
-IN_LOCAL_DEV_MODE = os.environ.get("IN_LOCAL_DEV_MODE") == "True"
-PROJECT_ID = os.environ.get("GOOGLE_CLOUD_PROJECT")
+IN_LOCAL_DEV_MODE = os.environ["IN_LOCAL_DEV_MODE"] == "True"
+PROJECT_ID = os.environ["GOOGLE_CLOUD_PROJECT"]
+INSTANCE_NAME = os.environ["INSTANCE_NAME"]
 BURLA_BACKEND_URL = "https://backend.burla.dev"
 
 # must be same path on node service!

@@ -100,6 +100,26 @@ def _call_docker_threadsafe(method, *args, **kwargs):
         client.close()
 
 
+def image_size_GB(image: str):
+    name, tag = image.rsplit(":", 1) if ":" in image else (image, "latest")
+    name = name if "/" in name else f"library/{name}"
+    params = {"service": "registry.docker.io", "scope": f"repository:{name}:pull"}
+    token = requests.get("https://auth.docker.io/token", params=params).json()["token"]
+    auth = {"Authorization": f"Bearer {token}"}
+    headers = {**auth, "Accept": "application/vnd.docker.distribution.manifest.list.v2+json"}
+    url = f"https://registry-1.docker.io/v2/{name}/manifests/{tag}"
+    manifest = requests.get(url, headers=headers).json()
+    if "manifests" in manifest:
+        is_linux = lambda m: m["platform"]["os"] == "linux"
+        is_amd64 = lambda m: m["platform"]["architecture"] == "amd64"
+        m = next(m for m in manifest["manifests"] if is_linux(m) and is_amd64(m))
+        headers = {**auth, "Accept": "application/vnd.docker.distribution.manifest.v2+json"}
+        url = f"https://registry-1.docker.io/v2/{name}/manifests/{m['digest']}"
+        manifest = requests.get(url, headers=headers).json()
+    size = sum(l["size"] for l in manifest["layers"])
+    return round(size / 1_000_000_000, 2)
+
+
 def _LOCAL_DEV_ONLY_pull_image_if_missing(
     image: str, logger: Logger, docker_client: docker.APIClient
 ):
@@ -111,7 +131,12 @@ def _LOCAL_DEV_ONLY_pull_image_if_missing(
     try:
         docker_client.inspect_image(image)
     except docker.errors.ImageNotFound:
-        logger.log(f"Pulling image {image} ...")
+
+        try:
+            logger.log(f"Pulling image {image} ({image_size_GB(image)} GB) ...")
+        except Exception:
+            logger.log(f"Pulling image {image} ...")
+
         try:
             docker_client.pull(image)
         except APIError as e:
@@ -149,7 +174,12 @@ def _pull_image_if_missing(image: str, logger: Logger, docker_client: docker.API
     attempt = 0
     while True:
         attempt += 1
-        logger.log(f"Pulling image {image} ...")
+
+        try:
+            logger.log(f"Pulling image {image} ({image_size_GB(image)} GB) ...")
+        except Exception:
+            logger.log(f"Pulling image {image} ...")
+
         result = _run_command(f"docker pull {image}", raise_error=False)
         text_output = result.stderr.decode() + result.stdout.decode()
         no_transient_error = not (result.returncode != 0 and "unexpected EOF" in text_output)
@@ -196,7 +226,6 @@ def _pull_image_if_missing(image: str, logger: Logger, docker_client: docker.API
         msg = f"CMD: `docker pull {image}` succeeded, but subsequent `docker inspect ...` failed!\n"
         msg += f"`docker inspect` stderr:\n{result.stderr}\n"
         raise Exception(msg)
-    logger.log(f"Image {image} pulled successfully.\nWaiting for containers to start ...")
 
 
 # Removing large GPU containers can take several minutes. The node should not block on the full
@@ -254,8 +283,6 @@ def reboot_containers(
                 "all_inputs_received": False,
             }
         )
-        msg = f"Booting {INSTANCE_N_CPUS if NUM_GPUS == 0 else NUM_GPUS} workers ..."
-        node_doc.collection("logs").document().set({"msg": msg, "ts": time()})
 
         # reset state of the node service, except current_container_config, and the job_watcher.
         current_container_config = SELF["current_container_config"]
@@ -318,6 +345,10 @@ def reboot_containers(
             _pull_image_if_missing(spec.image, logger, docker_client)
             docker_client.close()
             num_workers = INSTANCE_N_CPUS if NUM_GPUS == 0 else NUM_GPUS
+
+            msg = f"Image {spec.image} pulled successfully.\nWaiting for {num_workers} workers to start ..."
+            logger.log(msg)
+
             for i in range(num_workers):
                 # have just one worker install the worker svc, then share through docker volume
                 # (too many will ddoss github / be slow)

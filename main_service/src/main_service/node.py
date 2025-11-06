@@ -416,6 +416,12 @@ class Node:
         "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token" \
         | jq -r .access_token)
 
+        # make docker pull faster:
+        mkdir -p /etc/docker
+        jq '. + {{"max-concurrent-downloads": 32}}' /etc/docker/daemon.json 2>/dev/null || echo '{{}}' | jq '. + {{"max-concurrent-downloads": 32}}' > /etc/docker/daemon.json
+        killall -HUP dockerd || open -a Docker
+
+
         # start gcsfuse to sync working dirs with GCS bucket if specified
         cd /
         mkdir -p /workspace/shared

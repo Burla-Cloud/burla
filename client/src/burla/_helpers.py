@@ -157,7 +157,7 @@ class VerboseCalledProcessError(Exception):
         msg += f"Command Stderr--------------------------------------------------------\n"
         msg += f"{stderr}\n"
         msg += f"--------------------------------------------------------\n"
-        msg += f"If you're not sure what to do, please email jake@burla.dev, or call me at 508-320-8778!\n"
+        msg += f"If you're not sure what to do, please email jake@burla.dev!\n"
         msg += f"We take errors very seriously, and would really like to help you get Burla installed!\n"
         super().__init__(msg)
 

@@ -65,8 +65,8 @@ def install():
         else:
             # Raises error with a super clear message at the end of the traceback.
             # yes this is hacky but I need to make sure users of all skill levels see this message.
-            msg = f"If you're not sure what to do, please email jake@burla.dev, or call me at 508-320-8778!\n"
-            msg += f"We take errors very seriously, and would really like to help you get Burla installed!\n"
+            msg = f"\n\nIf you're not sure what to do, please email jake@burla.dev!\n"
+            msg += f"We take errors very seriously, and would really like to help you get Burla installed!\n-"
             try:
                 exc_cls = e.__class__
                 old_str = exc_cls.__str__
@@ -166,10 +166,16 @@ def _install(spinner):
     spinner.ok("✓")
 
     # update cluster version recorded in burla's cloud
-    headers = {"Authorization": f"Bearer {cluster_id_token}"}
-    url = f"{_BURLA_BACKEND_URL}/v1/clusters/{PROJECT_ID}/version"
-    response = requests.put(url, json={"version": __version__}, headers=headers)
-    response.raise_for_status()
+    cmd = "gcloud secrets versions access latest --secret=burla-cluster-id-token"
+    result = run_command(cmd, raise_error=False)
+    if result.returncode != 0:
+        spinner.fail("✗")
+        raise VerboseCalledProcessError(cmd, result.stderr)
+    else:
+        headers = {"Authorization": f"Bearer {result.stdout.decode().strip()}"}
+        url = f"{_BURLA_BACKEND_URL}/v1/clusters/{PROJECT_ID}/version"
+        response = requests.put(url, json={"version": __version__}, headers=headers)
+        response.raise_for_status()
 
     # print success message
     msg = f"\nSuccessfully installed Burla v{__version__}!\n"
@@ -178,7 +184,7 @@ def _install(spinner):
     msg += f'  2. Hit "⏻ Start" to boot some machines!\n'
     msg += f"  3. Run `burla login` to connect your laptop to the cluster.\n"
     msg += f"  4. Import and call `remote_parallel_map`!\n\n"
-    msg += f"Don't hesitate to E-Mail jake@burla.dev, or call me at 508-320-8778, thank you for using Burla!"
+    msg += f"Don't hesitate to E-Mail jake@burla.dev, thank you for using Burla!"
     spinner.write(msg)
 
     log_telemetry("Burla successfully installed!", project_id=PROJECT_ID)
@@ -328,7 +334,7 @@ def _register_cluster_and_save_cluster_id_token(spinner, PROJECT_ID, client_svc_
         spinner.fail("✗")
         msg = "Cluster ID secret is missing, but this deployment has already been registered.\n"
         msg += "Because this secret is missing, we cannot verify that you are the owner of this cluster.\n"
-        msg += "Please call Jake at 508-320-8778, email jake@burla.dev, "
+        msg += "Please email jake@burla.dev, "
         msg += "or DM @jake__z in our Discord to regain access!"
         raise AuthError(msg)
     elif response.status_code == 200:
@@ -338,6 +344,7 @@ def _register_cluster_and_save_cluster_id_token(spinner, PROJECT_ID, client_svc_
         raise Exception(f"Error registering cluster: {response.status_code} {response.text}")
 
     # rotate cluster token / service account key
+    headers = {"Authorization": f"Bearer {cluster_id_token}"}
     url = f"{_BURLA_BACKEND_URL}/v1/clusters/{PROJECT_ID}/token"
     response = requests.get(url, headers=headers)
     response.raise_for_status()
@@ -357,7 +364,6 @@ def _register_cluster_and_save_cluster_id_token(spinner, PROJECT_ID, client_svc_
     cmd = f'gcloud auth list --filter=status:ACTIVE --format="value(account)"'
     cluster_owner_email = run_command(cmd).stdout.decode().strip()
     users_url = f"{_BURLA_BACKEND_URL}/v1/clusters/{PROJECT_ID}/users"
-    headers = {"Authorization": f"Bearer {cluster_id_token}"}
     response = requests.post(users_url, json={"new_user": cluster_owner_email}, headers=headers)
     response.raise_for_status()
 

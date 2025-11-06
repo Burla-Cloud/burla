@@ -259,8 +259,12 @@ async def _job_watcher(
             await restart_workers(session, logger, async_db)
             break
 
+        can_fail_from_client_dc = (
+            is_background_job and not SELF["all_inputs_uploaded"]
+        ) or not is_background_job
+
         # client still listening? (if this is NOT a background job)
-        elif not is_background_job and client_disconnected:
+        if client_disconnected and can_fail_from_client_dc:
             # check again (synchronously) because sometimes the ping watcher thread is starved.
             sync_job_doc = sync_db.collection("jobs").document(SELF["current_job"])
             last_ping_timestamp = sync_job_doc.get().to_dict()["last_ping_from_client"]

@@ -245,6 +245,7 @@ async def _execute_job(
     background: bool,
     spinner: Union[bool, Spinner],
     job_canceled_event: Event,
+    inputs_done_event: Event,
     start_time: float,
     project_id: str,
     generator: bool,
@@ -254,7 +255,7 @@ async def _execute_job(
         msg = f"Running {len(inputs)} inputs through `{function_.__name__}` "
         msg += "with background mode enabled!\n"
         msg += "This job will continue running on the cluster if canceled locally, "
-        msg += "and inputs have finished uploading.\n"
+        msg += "and inputs have finished uploading.\n-"
         spinner.write(msg)
 
     auth_headers = get_auth_headers()
@@ -370,6 +371,7 @@ async def _execute_job(
         asyncio.create_task(log_telemetry_async(msg, session, project_id=project_id))
 
         JOB_CALCELED_MSG = ""
+        FIRST_LOG_MESSAGE_PRINTED = False
         # start sending "alive" pings to nodes
         ping_process = await run_in_subprocess(send_alive_pings, job_id)
         stack.callback(ping_process.kill)
@@ -377,6 +379,7 @@ async def _execute_job(
         # start stdout/stderr stream
         def _on_new_logs_doc(col_snapshot, changes, read_time):
             nonlocal JOB_CALCELED_MSG
+            nonlocal FIRST_LOG_MESSAGE_PRINTED
             for change in changes:
                 for log in change.document.to_dict()["logs"]:
                     # ignore tb's written as log messages because errors are reraised here
@@ -386,6 +389,7 @@ async def _execute_job(
                             JOB_CALCELED_MSG = log["message"]
                     else:
                         spinner_compatible_print(log["message"])
+                        FIRST_LOG_MESSAGE_PRINTED = True
 
         logs_collection = SYNC_DB.collection("jobs").document(job_id).collection("logs")
         log_stream = logs_collection.on_snapshot(_on_new_logs_doc)
@@ -478,6 +482,7 @@ async def _execute_job(
         udf_start_latency = None
         packages_to_install = None
         all_packages_installed = False
+        inputs_done_msg_printed = False
         while n_results < len(inputs):
 
             if job_canceled_event.is_set():
@@ -530,8 +535,19 @@ async def _execute_job(
                     return_queue.put_nowait(return_value)
                     n_results += 1
 
+            if uploader_task.done():
+                inputs_done_event.set()
+
             if uploader_task.done() and uploader_task.exception():
                 raise uploader_task.exception()
+            elif uploader_task.done() and spinner and background and not inputs_done_msg_printed:
+                msg = ""
+                if FIRST_LOG_MESSAGE_PRINTED:
+                    msg += "-\n"
+                msg += "Done uploading inputs! "
+                msg += "Job will now continue running if canceled locally.\n-"
+                spinner.write(msg)
+                inputs_done_msg_printed = True
 
             exit_code = ping_process.poll()
             if exit_code:
@@ -569,7 +585,7 @@ def remote_parallel_map(
     max_parallelism: Optional[int] = None,
 ):
     """
-    Run an arbitrary Python function on many remote computers in parallel.
+    Run a Python function on many remote computers in parallel.
 
     Run provided function_ on each item in inputs at the same time, each on a separate CPU.
     If more than inputs than there are cpu's are provided, inputs are queued and
@@ -632,8 +648,9 @@ def remote_parallel_map(
             spinner.start()
             spinner.text = f"Preparing to run {len(inputs)} inputs through `{function_.__name__}`"
         job_canceled_event = Event()
+        inputs_done_event = Event()
         original_signal_handlers = install_signal_handlers(
-            job_id, background, spinner, job_canceled_event
+            job_id, background, spinner, job_canceled_event, inputs_done_event
         )
 
         def execute_job():
@@ -650,6 +667,7 @@ def remote_parallel_map(
                         background=background,
                         spinner=spinner,
                         job_canceled_event=job_canceled_event,
+                        inputs_done_event=inputs_done_event,
                         start_time=start_time,
                         project_id=project_id,
                         generator=generator,
@@ -666,8 +684,10 @@ def remote_parallel_map(
         if hasattr(execute_job, "exc_info"):
             raise execute_job.exc_info[1].with_traceback(execute_job.exc_info[2])
 
-        if job_canceled_event.is_set():
-            raise Exception("Job canceled by user.")
+        if job_canceled_event.is_set() and background:
+            return
+        elif job_canceled_event.is_set():
+            raise JobCanceled("Job canceled by user.")
 
         def _output_generator():
             n_results = 0

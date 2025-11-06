@@ -190,28 +190,33 @@ def get_db_clients():
 def install_signal_handlers(
     job_id: str,
     background: bool,
-    spinner: Union[Spinner, bool] = False,
-    job_canceled_event: Event = None,
+    spinner: Union[Spinner, bool],
+    job_canceled_event: Event,
+    inputs_done_event: Event,
 ):
     def _signal_handler(signum, frame):
         if job_canceled_event.is_set():
             return
         job_canceled_event.set()
 
-        if spinner:
-            spinner.stop()
+        inputs_still_uploading = not inputs_done_event.is_set()
+        job_failed = (background and inputs_still_uploading) or not background
 
-        if not background:
+        if background and inputs_still_uploading:
+            fail_reason = "Client canceled background job before inputs were finished uploading."
+        elif not background:
+            fail_reason = "Cancel signal from client."
+
+        if job_failed:
             try:
                 sync_db, _ = get_db_clients()
                 job_doc = sync_db.collection("jobs").document(job_id)
                 if job_doc.get().to_dict()["status"] != "CANCELED":
-                    msg = "Cancel signal from client."
-                    job_doc.update({"status": "FAILED", "fail_reason": ArrayUnion([msg])})
+                    job_doc.update({"status": "FAILED", "fail_reason": ArrayUnion([fail_reason])})
             except Exception:
                 pass
 
-        if background:
+        if background and inputs_done_event.is_set():
             main_service_url = json.loads(CONFIG_PATH.read_text())["cluster_dashboard_url"]
             job_url = f"{main_service_url}/jobs/{job_id}"
             msg = "Background mode is enabled.\n"
@@ -220,8 +225,17 @@ def install_signal_handlers(
             spinner.write(msg)
             spinner.text = "Detached successfully."
             spinner.ok("✔")
+        elif background and not inputs_done_event.is_set():
+            main_service_url = json.loads(CONFIG_PATH.read_text())["cluster_dashboard_url"]
+            job_url = f"{main_service_url}/jobs/{job_id}"
+            msg = "-\n"
+            msg += "Background job canceled before all inputs finished uploading to the cluster!\n"
+            msg += 'Please wait until the message "Done uploading inputs" appears before canceling.'
+            spinner.write(msg)
+            spinner.text = "Job Failed."
+            spinner.fail("✘")
         else:
-            spinner.text = "Canceled."
+            spinner.text = "Job Canceled."
             spinner.fail("✘")
 
     original_signal_handlers = {s: signal.getsignal(s) for s in SIGNALS_TO_HANDLE}

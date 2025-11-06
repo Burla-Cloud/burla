@@ -6,7 +6,7 @@ from time import sleep
 from burla import remote_parallel_map
 
 
-N_INPUTS = 160
+N_INPUTS = 1600
 
 
 def test_base():

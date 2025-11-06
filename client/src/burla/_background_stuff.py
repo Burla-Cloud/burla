@@ -3,8 +3,10 @@ import aiohttp
 import pickle
 from time import time, sleep
 from threading import Event
+from typing import Union
 
 import cloudpickle
+from yaspin import Spinner
 
 from burla._helpers import get_db_clients
 

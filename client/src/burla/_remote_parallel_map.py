@@ -579,7 +579,7 @@ def remote_parallel_map(
     inputs: list,
     func_cpu: int = 1,
     func_ram: int = 4,
-    background: bool = False,
+    detach: bool = False,
     generator: bool = False,
     spinner: bool = True,
     max_parallelism: Optional[int] = None,
@@ -602,8 +602,8 @@ def remote_parallel_map(
             The number of CPUs allocated for each instance of `function_`. Defaults to 1.
         func_ram (int, optional):
             The amount of RAM (in GB) allocated for each instance of `function_`. Defaults to 4.
-        background (bool, optional):
-            If True, returns as soon as all inputs are uploaded and runs the job in the background.
+        detach (bool, optional):
+            If True, job will continue running on cluster, when canceled locally.
             Defaults to False.
         generator (bool, optional):
             If True, returns a generator that yields outputs as they are produced; otherwise,
@@ -629,6 +629,9 @@ def remote_parallel_map(
         return []
     elif not inputs and generator:
         return iter([])
+
+    # TODO: rename internally
+    background = detach
 
     max_parallelism = max_parallelism if max_parallelism else len(inputs)
     function_signature = inspect.signature(function_)

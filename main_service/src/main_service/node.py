@@ -418,8 +418,9 @@ class Node:
 
         # make docker pull faster:
         mkdir -p /etc/docker
-        jq '. + {{"max-concurrent-downloads": 32}}' /etc/docker/daemon.json > tmp.json && mv tmp.json /etc/docker/daemon.json || true
+        jq '. + {{"max-concurrent-downloads": 32}}' /etc/docker/daemon.json 2>/dev/null || echo '{{}}' | jq '. + {{"max-concurrent-downloads": 32}}' > /etc/docker/daemon.json
         killall -HUP dockerd || open -a Docker
+
 
         # start gcsfuse to sync working dirs with GCS bucket if specified
         cd /

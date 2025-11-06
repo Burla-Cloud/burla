@@ -8,13 +8,19 @@ import requests
 import subprocess
 import textwrap
 import logging
-from typing import Any, Union
+from typing import Union
 from threading import Event
+from time import sleep
 
 import cloudpickle
 from yaspin import Spinner
+from google.auth.credentials import Credentials
+from google.auth import crypt, jwt
+from google.cloud.firestore_v1 import AsyncClient
 
 from burla import _BURLA_BACKEND_URL, CONFIG_PATH
+
+TOKEN_URI = "https://oauth2.googleapis.com/token"
 
 N_FOUR_STANDARD_CPU_TO_RAM = {1: 4, 2: 8, 4: 16, 8: 32, 16: 64, 32: 128, 48: 192, 64: 256, 80: 320}
 POSIX_SIGNALS_TO_HANDLE = ["SIGINT", "SIGTERM", "SIGHUP", "SIGQUIT"]
@@ -27,6 +33,7 @@ logging.getLogger("google.api_core.bidi").setLevel(logging.ERROR)
 # prevent some annoying grpc logs / warnings
 os.environ["GRPC_VERBOSITY"] = "ERROR"  # only log ERROR/FATAL
 os.environ["GLOG_minloglevel"] = "2"  # 0-INFO, 1-WARNING, 2-ERROR, 3-FATAL
+os.environ["GRPC_ENABLE_FORK_SUPPORT"] = "1"  # avoid fork() handler warnings
 
 # needs to be imported after ^
 from google.cloud.firestore import Client
@@ -75,7 +82,8 @@ async def run_in_subprocess(func, *args):
         """
     )
     cmd = [sys.executable, "-u", "-c", code]
-    process = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
+    with SuppressNativeStderr():
+        process = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
     process.stdin.write(cloudpickle.dumps((func, args)))
     process.stdin.close()
     return process
@@ -108,66 +116,32 @@ def parallelism_capacity(machine_type: str, func_cpu: int, func_ram: int):
     raise ValueError(f"machine_type must be: n4-standard-X, a3-highgpu-Xg, or a3-ultragpu-8g")
 
 
-def get_db_clients():
-    config = json.loads(CONFIG_PATH.read_text())
-    key = config["client_svc_account_key"]
-    scopes = ["https://www.googleapis.com/auth/datastore"]
-    credentials = service_account.Credentials.from_service_account_info(key, scopes=scopes)
-    # Silence native gRPC setup logs (e.g., ALTS creds ignored) that can appear once per process.
-    # this seems to actually work and is NOT a forgotten failed attempt.
-    with SuppressNativeStderr():
-        kwargs = dict(project=config["project_id"], credentials=credentials, database="burla")
-        async_db = AsyncClient(**kwargs)
-        sync_db = Client(**kwargs)
-    return sync_db, async_db
-
-
-def install_signal_handlers(
-    job_id: str, spinner: Union[Spinner, bool] = False, job_canceled_event: Event = None
-):
-    def _signal_handler(signum, frame):
-        job_canceled_event.set()
-        if spinner:
-            spinner.stop()
-        try:
-            sync_db, _ = get_db_clients()
-            job_doc = sync_db.collection("jobs").document(job_id)
-            if job_doc.get().to_dict()["status"] != "CANCELED":
-                msg = "Cancel signal from client."
-                job_doc.update({"status": "FAILED", "fail_reason": ArrayUnion([msg])})
-        except Exception:
-            pass
-        sys.exit(0)
-
-    original_signal_handlers = {s: signal.getsignal(s) for s in SIGNALS_TO_HANDLE}
-    [signal.signal(sig, _signal_handler) for sig in SIGNALS_TO_HANDLE]
-    return original_signal_handlers
-
-
 def restore_signal_handlers(original_signal_handlers):
     for sig, original_handler in original_signal_handlers.items():
         signal.signal(sig, original_handler)
 
 
 def log_telemetry(message, severity="INFO", **kwargs):
-    try:
-        json_payload = {"message": message, **kwargs}
-        url = f"{_BURLA_BACKEND_URL}/v1/telemetry/log/{severity}"
-        response = requests.post(url, json=json_payload)
-        response.raise_for_status()
-    except Exception:
-        pass
+    if not os.environ.get("DISABLE_BURLA_TELEMETRY") == "True":
+        try:
+            json_payload = {"message": message, **kwargs}
+            url = f"{_BURLA_BACKEND_URL}/v1/telemetry/log/{severity}"
+            response = requests.post(url, json=json_payload)
+            response.raise_for_status()
+        except Exception:
+            pass
 
 
 async def log_telemetry_async(message, session, severity="INFO", **kwargs):
-    try:
-        json_payload = {"message": message, **kwargs}
-        url = f"{_BURLA_BACKEND_URL}/v1/telemetry/log/{severity}"
-        async with session.post(url, json=json_payload) as response:
-            await response.text()
-            response.raise_for_status()
-    except Exception:
-        pass
+    if not os.environ.get("DISABLE_BURLA_TELEMETRY") == "True":
+        try:
+            json_payload = {"message": message, **kwargs}
+            url = f"{_BURLA_BACKEND_URL}/v1/telemetry/log/{severity}"
+            async with session.post(url, json=json_payload) as response:
+                await response.text()
+                response.raise_for_status()
+        except Exception:
+            pass
 
 
 class VerboseCalledProcessError(Exception):
@@ -196,3 +170,65 @@ def run_command(command, raise_error=True):
         raise VerboseCalledProcessError(command, result.stderr)
     else:
         return result
+
+
+def get_db_clients():
+    config = json.loads(CONFIG_PATH.read_text())
+    key = config["client_svc_account_key"]
+    scopes = ["https://www.googleapis.com/auth/datastore"]
+    credentials = service_account.Credentials.from_service_account_info(key, scopes=scopes)
+
+    # Silence native gRPC setup logs (e.g., ALTS creds ignored) that can appear once per process.
+    # this seems to actually work and is NOT a forgotten failed attempt.
+    with SuppressNativeStderr():
+        kwargs = dict(project=config["project_id"], credentials=credentials, database="burla")
+        async_db = AsyncClient(**kwargs)
+        sync_db = Client(**kwargs)
+    return sync_db, async_db
+
+
+def install_signal_handlers(
+    job_id: str,
+    background: bool,
+    spinner: Union[Spinner, bool],
+    job_canceled_event: Event,
+    inputs_done_event: Event,
+):
+    def _signal_handler(signum, frame):
+        if job_canceled_event.is_set():
+            return
+        job_canceled_event.set()
+
+        inputs_still_uploading = not inputs_done_event.is_set()
+        job_failed = (background and inputs_still_uploading) or not background
+
+        if background and inputs_still_uploading:
+            fail_reason = "Client canceled background job before inputs were finished uploading."
+        elif not background:
+            fail_reason = "Cancel signal from client."
+
+        if job_failed:
+            try:
+                sync_db, _ = get_db_clients()
+                job_doc = sync_db.collection("jobs").document(job_id)
+                if job_doc.get().to_dict()["status"] != "CANCELED":
+                    job_doc.update({"status": "FAILED", "fail_reason": ArrayUnion([fail_reason])})
+            except Exception:
+                pass
+
+        if background and inputs_done_event.is_set():
+            main_service_url = json.loads(CONFIG_PATH.read_text())["cluster_dashboard_url"]
+            job_url = f"{main_service_url}/jobs/{job_id}"
+            msg = "Background mode is enabled.\n"
+            msg += f"This job will continue running on the cluster, to monitor progress go to:"
+            msg += f"\n\n    {job_url}\n"
+            spinner.write(msg)
+            spinner.text = "Detached successfully."
+            spinner.ok("✔")
+        else:
+            spinner.text = "Job Canceled."
+            spinner.fail("✘")
+
+    original_signal_handlers = {s: signal.getsignal(s) for s in SIGNALS_TO_HANDLE}
+    [signal.signal(sig, _signal_handler) for sig in SIGNALS_TO_HANDLE]
+    return original_signal_handlers

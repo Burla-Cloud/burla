@@ -165,6 +165,12 @@ def _install(spinner):
     spinner.text = "Deploying Burla-Main-Service to Google Cloud Run ... Done."
     spinner.ok("✓")
 
+    # update cluster version recorded in burla's cloud
+    headers = {"Authorization": f"Bearer {cluster_id_token}"}
+    url = f"{_BURLA_BACKEND_URL}/v1/clusters/{PROJECT_ID}/version"
+    response = requests.put(url, json={"version": __version__}, headers=headers)
+    response.raise_for_status()
+
     # print success message
     msg = f"\nSuccessfully installed Burla v{__version__}!\n"
     msg += f"Quickstart:\n"
@@ -331,11 +337,6 @@ def _register_cluster_and_save_cluster_id_token(spinner, PROJECT_ID, client_svc_
         spinner.fail("✗")
         raise Exception(f"Error registering cluster: {response.status_code} {response.text}")
 
-    # # update cluster version
-    headers = {"Authorization": f"Bearer {cluster_id_token}"}
-    url = f"{_BURLA_BACKEND_URL}/v1/clusters/{PROJECT_ID}/version"
-    response = requests.put(url, json={"version": __version__}, headers=headers)
-    response.raise_for_status()
     # rotate cluster token / service account key
     url = f"{_BURLA_BACKEND_URL}/v1/clusters/{PROJECT_ID}/token"
     response = requests.get(url, headers=headers)

@@ -12,9 +12,11 @@ N_INPUTS = 160
 def test_base():
 
     def test_function(test_input):
+        sleep(0.5)
+        print(f"Hi # {test_input}")
         return test_input
 
-    results = remote_parallel_map(test_function, list(range(N_INPUTS)))
+    results = remote_parallel_map(test_function, list(range(N_INPUTS)))  # , background=True)
 
 
 def _test_big_function():

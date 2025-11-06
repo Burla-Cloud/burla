@@ -200,7 +200,7 @@ async def _job_watcher(
         # job ended ?
         job_is_done = False
         node_is_done = SELF["all_inputs_uploaded"] and all_workers_idle_twice
-        node_is_done = node_is_done and SELF["results_queue"].empty() or is_background_job
+        node_is_done = node_is_done and (SELF["results_queue"].empty() or is_background_job)
         neighbor_is_done = (not neighboring_node) or (seconds_neighbor_had_no_inputs > 2)
 
         if node_is_done and neighbor_is_done:
@@ -209,12 +209,17 @@ async def _job_watcher(
             job_snapshot = await job_doc.get()
             all_inputs_processed = total_results == n_inputs
             client_has_all_results = job_snapshot.to_dict()["client_has_all_results"]
-            job_is_done = all_inputs_processed and (client_has_all_results or is_background_job)
+            # used to make sure we don't wait for disconnected client to grab results:
+            not_waiting_for_client = client_disconnected and is_background_job
+            job_is_done = all_inputs_processed and (
+                client_has_all_results or not_waiting_for_client
+            )
 
+        # `not_waiting_for_client` used to make sure client has time to grab errors when failed.
         seconds_since_last_ping = time() - LAST_CLIENT_PING_TIMESTAMP
         client_disconnected = seconds_since_last_ping > CLIENT_DC_TIMEOUT_SEC
         results_queue_empty = SELF["results_queue"].empty()
-        not_waiting_for_client = results_queue_empty or is_background_job or client_disconnected
+        not_waiting_for_client = results_queue_empty or client_disconnected
 
         if JOB_FAILED and not JOB_FAILED_TWO:
             # give worker a sec to put error result in result queue
@@ -275,8 +280,7 @@ async def _job_watcher(
                 await restart_workers(session, logger, async_db)
                 break
 
-    if not is_background_job:
-        job_watch.unsubscribe()
+    job_watch.unsubscribe()
 
 
 async def job_watcher_logged(n_inputs: int, is_background_job: bool, auth_headers: dict):

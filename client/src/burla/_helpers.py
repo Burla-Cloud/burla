@@ -1,4 +1,3 @@
-import datetime
 import json
 import os
 import sys
@@ -11,8 +10,7 @@ import textwrap
 import logging
 from typing import Union
 from threading import Event
-from datetime import datetime, timedelta, timezone
-import email.utils as email_utils
+from time import sleep
 
 import cloudpickle
 from yaspin import Spinner
@@ -35,6 +33,7 @@ logging.getLogger("google.api_core.bidi").setLevel(logging.ERROR)
 # prevent some annoying grpc logs / warnings
 os.environ["GRPC_VERBOSITY"] = "ERROR"  # only log ERROR/FATAL
 os.environ["GLOG_minloglevel"] = "2"  # 0-INFO, 1-WARNING, 2-ERROR, 3-FATAL
+os.environ["GRPC_ENABLE_FORK_SUPPORT"] = "1"  # avoid fork() handler warnings
 
 # needs to be imported after ^
 from google.cloud.firestore import Client
@@ -83,7 +82,8 @@ async def run_in_subprocess(func, *args):
         """
     )
     cmd = [sys.executable, "-u", "-c", code]
-    process = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
+    with SuppressNativeStderr():
+        process = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
     process.stdin.write(cloudpickle.dumps((func, args)))
     process.stdin.close()
     return process
@@ -188,21 +188,41 @@ def get_db_clients():
 
 
 def install_signal_handlers(
-    job_id: str, spinner: Union[Spinner, bool] = False, job_canceled_event: Event = None
+    job_id: str,
+    background: bool,
+    spinner: Union[Spinner, bool] = False,
+    job_canceled_event: Event = None,
 ):
     def _signal_handler(signum, frame):
+        if job_canceled_event.is_set():
+            return
         job_canceled_event.set()
+
         if spinner:
             spinner.stop()
-        try:
-            sync_db, _ = get_db_clients()
-            job_doc = sync_db.collection("jobs").document(job_id)
-            if job_doc.get().to_dict()["status"] != "CANCELED":
-                msg = "Cancel signal from client."
-                job_doc.update({"status": "FAILED", "fail_reason": ArrayUnion([msg])})
-        except Exception:
-            pass
-        sys.exit(0)
+
+        if not background:
+            try:
+                sync_db, _ = get_db_clients()
+                job_doc = sync_db.collection("jobs").document(job_id)
+                if job_doc.get().to_dict()["status"] != "CANCELED":
+                    msg = "Cancel signal from client."
+                    job_doc.update({"status": "FAILED", "fail_reason": ArrayUnion([msg])})
+            except Exception:
+                pass
+
+        if background:
+            main_service_url = json.loads(CONFIG_PATH.read_text())["cluster_dashboard_url"]
+            job_url = f"{main_service_url}/jobs/{job_id}"
+            msg = "Background mode is enabled.\n"
+            msg += f"This job will continue running on the cluster, to monitor progress go to:"
+            msg += f"\n\n    {job_url}\n"
+            spinner.write(msg)
+            spinner.text = "Detached successfully."
+            spinner.ok("✔")
+        else:
+            spinner.text = "Canceled."
+            spinner.fail("✘")
 
     original_signal_handlers = {s: signal.getsignal(s) for s in SIGNALS_TO_HANDLE}
     [signal.signal(sig, _signal_handler) for sig in SIGNALS_TO_HANDLE]

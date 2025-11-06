@@ -20,7 +20,7 @@ from aiohttp import ClientTimeout
 import aiohttp
 import cloudpickle
 from tblib import Traceback
-from google.cloud.firestore import ArrayUnion, Client
+from google.cloud.firestore import And, ArrayUnion, Client
 from google.cloud.firestore import FieldFilter
 from google.cloud.firestore_v1.async_client import AsyncClient
 from google.api_core.retry_async import AsyncRetry
@@ -180,7 +180,8 @@ async def _get_ready_nodes(db: AsyncClient):
     try:
         docs = await asyncio.wait_for(ready_nodes_coroutine, timeout=2)
     except asyncio.TimeoutError:
-        raise Exception("\nTimeout waiting for DB.\nPlease run `burla login` and try again.\n")
+        msg = "\nTimeout waiting for DB.\nPlease run `burla login` and try again.\n"
+        raise FirestoreTimeout(msg)
     return [d.to_dict() for d in docs]
 
 
@@ -249,6 +250,13 @@ async def _execute_job(
     generator: bool,
     user_function_error: Event,
 ):
+    if background and spinner:
+        msg = f"Running {len(inputs)} inputs through `{function_.__name__}` "
+        msg += "with background mode enabled!\n"
+        msg += "This job will continue running on the cluster if canceled locally, "
+        msg += "and inputs have finished uploading.\n"
+        spinner.write(msg)
+
     auth_headers = get_auth_headers()
     SYNC_DB, ASYNC_DB = get_db_clients()
 
@@ -362,27 +370,26 @@ async def _execute_job(
         asyncio.create_task(log_telemetry_async(msg, session, project_id=project_id))
 
         JOB_CALCELED_MSG = ""
-        if not background:
-            # start sending "alive" pings to nodes
-            ping_process = await run_in_subprocess(send_alive_pings, job_id)
-            stack.callback(ping_process.kill)
+        # start sending "alive" pings to nodes
+        ping_process = await run_in_subprocess(send_alive_pings, job_id)
+        stack.callback(ping_process.kill)
 
-            # start stdout/stderr stream
-            def _on_new_logs_doc(col_snapshot, changes, read_time):
-                nonlocal JOB_CALCELED_MSG
-                for change in changes:
-                    for log in change.document.to_dict()["logs"]:
-                        # ignore tb's written as log messages because errors are reraised here
-                        if log.get("is_error"):
-                            job = SYNC_DB.collection("jobs").document(job_id).get().to_dict()
-                            if job["status"] == "CANCELED":
-                                JOB_CALCELED_MSG = log["message"]
-                        else:
-                            spinner_compatible_print(log["message"])
+        # start stdout/stderr stream
+        def _on_new_logs_doc(col_snapshot, changes, read_time):
+            nonlocal JOB_CALCELED_MSG
+            for change in changes:
+                for log in change.document.to_dict()["logs"]:
+                    # ignore tb's written as log messages because errors are reraised here
+                    if log.get("is_error"):
+                        job = SYNC_DB.collection("jobs").document(job_id).get().to_dict()
+                        if job["status"] == "CANCELED":
+                            JOB_CALCELED_MSG = log["message"]
+                    else:
+                        spinner_compatible_print(log["message"])
 
-            logs_collection = SYNC_DB.collection("jobs").document(job_id).collection("logs")
-            log_stream = logs_collection.on_snapshot(_on_new_logs_doc)
-            stack.callback(log_stream.unsubscribe)
+        logs_collection = SYNC_DB.collection("jobs").document(job_id).collection("logs")
+        log_stream = logs_collection.on_snapshot(_on_new_logs_doc)
+        stack.callback(log_stream.unsubscribe)
 
         if spinner:
             function_size_mb = len(function_pkl) / 1024**2
@@ -402,12 +409,6 @@ async def _execute_job(
         # start uploading inputs
         upload_inputs_args = (job_id, nodes, inputs, session, auth_headers, job_canceled_event)
         uploader_task = create_task(upload_inputs(*upload_inputs_args))
-
-        if background:
-            if spinner:
-                spinner.text = f"Uploading {len(inputs)} inputs to {len(nodes)} nodes ..."
-            await uploader_task
-            return
 
         async def _get_with_retries(url: str, headers: dict, max_retries=5):
             try:
@@ -479,6 +480,10 @@ async def _execute_job(
         all_packages_installed = False
         while n_results < len(inputs):
 
+            if job_canceled_event.is_set():
+                # if this is set a nice user message was already printed.
+                return
+
             if all_nodes_empty:
                 elapsed_time = time() - result_loop_start
                 if elapsed_time > 3:
@@ -486,6 +491,9 @@ async def _execute_job(
                 else:
                     await asyncio.sleep(0)
 
+            if job_canceled_event.is_set():
+                # if this is set a nice user message was already printed.
+                return
             if JOB_CALCELED_MSG:
                 raise JobCanceled(f"\n\n{JOB_CALCELED_MSG}\n")
 
@@ -502,6 +510,10 @@ async def _execute_job(
             currently_installing_package = nodes_status[0]["currently_installing_package"]
             if spinner and currently_installing_package:
                 spinner.text = f"Installing package: {currently_installing_package} ..."
+
+            if job_canceled_event.is_set():
+                # if this is set a nice user message was already printed.
+                return
 
             for status in nodes_status:
 
@@ -609,15 +621,6 @@ def remote_parallel_map(
         msg += "Email jake@burla.dev if this is really annoying and we will fix it! :)"
         raise ValueError(msg)
 
-    try:
-        if background and has_explicit_return(function_):
-            print(
-                f"Warning: Function `{function_.__name__}` has an explicit return statement.\n"
-                "Because this job is set to run in the background, any returned objects will be lost!"
-            )
-    except:
-        pass
-
     job_id = str(uuid4())
     project_id = json.loads(CONFIG_PATH.read_text())["project_id"]
 
@@ -629,7 +632,9 @@ def remote_parallel_map(
             spinner.start()
             spinner.text = f"Preparing to run {len(inputs)} inputs through `{function_.__name__}`"
         job_canceled_event = Event()
-        original_signal_handlers = install_signal_handlers(job_id, spinner, job_canceled_event)
+        original_signal_handlers = install_signal_handlers(
+            job_id, background, spinner, job_canceled_event
+        )
 
         def execute_job():
             try:
@@ -651,7 +656,7 @@ def remote_parallel_map(
                         user_function_error=user_function_error,
                     )
                 )
-            except Exception as e:
+            except Exception:
                 execute_job.exc_info = sys.exc_info()
 
         t = Thread(target=execute_job, daemon=True)
@@ -661,14 +666,8 @@ def remote_parallel_map(
         if hasattr(execute_job, "exc_info"):
             raise execute_job.exc_info[1].with_traceback(execute_job.exc_info[2])
 
-        if background:
-            main_service_url = json.loads(CONFIG_PATH.read_text())["cluster_dashboard_url"]
-            job_url = f"{main_service_url}/jobs/{job_id}"
-            msg = f"Done uploading inputs.\n"
-            msg += f"Job will continue running in the background, monitor progress at: {job_url}"
-            spinner.text = msg
-            spinner.ok("✔")
-            return
+        if job_canceled_event.is_set():
+            raise Exception("Job canceled by user.")
 
         def _output_generator():
             n_results = 0
@@ -691,7 +690,7 @@ def remote_parallel_map(
         SYNC_DB, _ = get_db_clients()
 
         # After a `FirestoreTimeout` further attempts to use firestore will take forever then fail.
-        if not isinstance(e, FirestoreTimeout):
+        if not (isinstance(e, FirestoreTimeout) or background):
             try:
                 job_doc = SYNC_DB.collection("jobs").document(job_id)
                 if job_doc.get().to_dict()["status"] != "CANCELED":

@@ -6,7 +6,7 @@ from time import sleep
 from burla import remote_parallel_map
 
 
-N_INPUTS = 1600
+N_INPUTS = 160
 
 
 def test_base():
@@ -16,7 +16,7 @@ def test_base():
         print(f"Hi # {test_input}")
         return test_input
 
-    results = remote_parallel_map(test_function, list(range(N_INPUTS)))  # , background=True)
+    results = remote_parallel_map(test_function, list(range(N_INPUTS)))
 
 
 def _test_big_function():

@@ -684,8 +684,13 @@ def remote_parallel_map(
         if hasattr(execute_job, "exc_info"):
             raise execute_job.exc_info[1].with_traceback(execute_job.exc_info[2])
 
-        if job_canceled_event.is_set() and background:
+        if job_canceled_event.is_set() and background and inputs_done_event.is_set():
             return
+        elif job_canceled_event.is_set() and background and not inputs_done_event.is_set():
+            msg = "\n\nBackground job canceled before all inputs finished uploading to the cluster!"
+            msg += '\nPlease wait until the message "Done uploading inputs!" '
+            msg += "appears before canceling.\n\n-"
+            raise JobCanceled(msg)
         elif job_canceled_event.is_set():
             raise JobCanceled("Job canceled by user.")
 

@@ -225,15 +225,6 @@ def install_signal_handlers(
             spinner.write(msg)
             spinner.text = "Detached successfully."
             spinner.ok("✔")
-        elif background and not inputs_done_event.is_set():
-            main_service_url = json.loads(CONFIG_PATH.read_text())["cluster_dashboard_url"]
-            job_url = f"{main_service_url}/jobs/{job_id}"
-            msg = "-\n"
-            msg += "Background job canceled before all inputs finished uploading to the cluster!\n"
-            msg += 'Please wait until the message "Done uploading inputs" appears before canceling.'
-            spinner.write(msg)
-            spinner.text = "Job Failed."
-            spinner.fail("✘")
         else:
             spinner.text = "Job Canceled."
             spinner.fail("✘")

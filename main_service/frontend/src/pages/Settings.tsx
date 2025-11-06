@@ -116,12 +116,16 @@ const SettingsPage = () => {
                             <AlertTriangle className="h-4 w-4" />
                             <AlertTitle>Could not load settings</AlertTitle>
                             <AlertDescription>
-                                This is an error and we have been paged! If you don't hear from us
-                                in the next ~15 minutes please email jake@burla.dev or call +1 (508)
-                                320-8778!
+                                Error: Sorry about this! Please refresh and log out /in again.
                                 <br />
-                                Refreshing or reinstalling (if you're self-hosting) can't hurt.
-                                Either way we're looking into it.
+                                If the problem persists, please email me!
+                                <br />
+                                <a
+                                    href="mailto:jake@burla.dev"
+                                    className="text-blue-500 hover:underline"
+                                >
+                                    jake@burla.dev
+                                </a>
                             </AlertDescription>
                         </Alert>
                     ) : (

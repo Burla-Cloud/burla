@@ -1,3 +1,4 @@
+import datetime
 import json
 import os
 import sys
@@ -10,11 +11,18 @@ import textwrap
 import logging
 from typing import Union
 from threading import Event
+from datetime import datetime, timedelta, timezone
+import email.utils as email_utils
 
 import cloudpickle
 from yaspin import Spinner
+from google.auth.credentials import Credentials
+from google.auth import crypt, jwt
+from google.cloud.firestore_v1 import AsyncClient
 
 from burla import _BURLA_BACKEND_URL, CONFIG_PATH
+
+TOKEN_URI = "https://oauth2.googleapis.com/token"
 
 N_FOUR_STANDARD_CPU_TO_RAM = {1: 4, 2: 8, 4: 16, 8: 32, 16: 64, 32: 128, 48: 192, 64: 256, 80: 320}
 POSIX_SIGNALS_TO_HANDLE = ["SIGINT", "SIGTERM", "SIGHUP", "SIGQUIT"]
@@ -108,42 +116,6 @@ def parallelism_capacity(machine_type: str, func_cpu: int, func_ram: int):
     raise ValueError(f"machine_type must be: n4-standard-X, a3-highgpu-Xg, or a3-ultragpu-8g")
 
 
-def get_db_clients():
-    config = json.loads(CONFIG_PATH.read_text())
-    key = config["client_svc_account_key"]
-    scopes = ["https://www.googleapis.com/auth/datastore"]
-    credentials = service_account.Credentials.from_service_account_info(key, scopes=scopes)
-    # Silence native gRPC setup logs (e.g., ALTS creds ignored) that can appear once per process.
-    # this seems to actually work and is NOT a forgotten failed attempt.
-    with SuppressNativeStderr():
-        kwargs = dict(project=config["project_id"], credentials=credentials, database="burla")
-        async_db = AsyncClient(**kwargs)
-        sync_db = Client(**kwargs)
-    return sync_db, async_db
-
-
-def install_signal_handlers(
-    job_id: str, spinner: Union[Spinner, bool] = False, job_canceled_event: Event = None
-):
-    def _signal_handler(signum, frame):
-        job_canceled_event.set()
-        if spinner:
-            spinner.stop()
-        try:
-            sync_db, _ = get_db_clients()
-            job_doc = sync_db.collection("jobs").document(job_id)
-            if job_doc.get().to_dict()["status"] != "CANCELED":
-                msg = "Cancel signal from client."
-                job_doc.update({"status": "FAILED", "fail_reason": ArrayUnion([msg])})
-        except Exception:
-            pass
-        sys.exit(0)
-
-    original_signal_handlers = {s: signal.getsignal(s) for s in SIGNALS_TO_HANDLE}
-    [signal.signal(sig, _signal_handler) for sig in SIGNALS_TO_HANDLE]
-    return original_signal_handlers
-
-
 def restore_signal_handlers(original_signal_handlers):
     for sig, original_handler in original_signal_handlers.items():
         signal.signal(sig, original_handler)
@@ -198,3 +170,40 @@ def run_command(command, raise_error=True):
         raise VerboseCalledProcessError(command, result.stderr)
     else:
         return result
+
+
+def get_db_clients():
+    config = json.loads(CONFIG_PATH.read_text())
+    key = config["client_svc_account_key"]
+    scopes = ["https://www.googleapis.com/auth/datastore"]
+    credentials = service_account.Credentials.from_service_account_info(key, scopes=scopes)
+
+    # Silence native gRPC setup logs (e.g., ALTS creds ignored) that can appear once per process.
+    # this seems to actually work and is NOT a forgotten failed attempt.
+    with SuppressNativeStderr():
+        kwargs = dict(project=config["project_id"], credentials=credentials, database="burla")
+        async_db = AsyncClient(**kwargs)
+        sync_db = Client(**kwargs)
+    return sync_db, async_db
+
+
+def install_signal_handlers(
+    job_id: str, spinner: Union[Spinner, bool] = False, job_canceled_event: Event = None
+):
+    def _signal_handler(signum, frame):
+        job_canceled_event.set()
+        if spinner:
+            spinner.stop()
+        try:
+            sync_db, _ = get_db_clients()
+            job_doc = sync_db.collection("jobs").document(job_id)
+            if job_doc.get().to_dict()["status"] != "CANCELED":
+                msg = "Cancel signal from client."
+                job_doc.update({"status": "FAILED", "fail_reason": ArrayUnion([msg])})
+        except Exception:
+            pass
+        sys.exit(0)
+
+    original_signal_handlers = {s: signal.getsignal(s) for s in SIGNALS_TO_HANDLE}
+    [signal.signal(sig, _signal_handler) for sig in SIGNALS_TO_HANDLE]
+    return original_signal_handlers

@@ -20,9 +20,10 @@ from aiohttp import ClientTimeout
 import aiohttp
 import cloudpickle
 from tblib import Traceback
-from google.cloud.firestore import ArrayUnion
+from google.cloud.firestore import ArrayUnion, Client
 from google.cloud.firestore import FieldFilter
 from google.cloud.firestore_v1.async_client import AsyncClient
+from google.api_core.retry_async import AsyncRetry
 from yaspin import yaspin, Spinner
 from aiohttp import ClientOSError, ClientError
 
@@ -174,7 +175,12 @@ async def _wait_for_nodes_to_be_ready(db: AsyncClient, spinner: Union[bool, Spin
 
 
 async def _get_ready_nodes(db: AsyncClient):
-    docs = await db.collection("nodes").where(filter=FieldFilter("status", "==", "READY")).get()
+    status_filter = FieldFilter("status", "==", "READY")
+    ready_nodes_coroutine = db.collection("nodes").where(filter=status_filter).get()
+    try:
+        docs = await asyncio.wait_for(ready_nodes_coroutine, timeout=2)
+    except asyncio.TimeoutError:
+        raise Exception("\nTimeout waiting for DB.\nPlease run `burla login` and try again.\n")
     return [d.to_dict() for d in docs]
 
 
@@ -694,19 +700,24 @@ def remote_parallel_map(
             except Exception:
                 pass
 
-        exec_types_to_ignore = [NoNodes, AllNodesBusy, NoCompatibleNodes, JobCanceled]
-        exec_types_to_ignore.extend([VersionMismatch, FunctionTooBig])
-        ignore_exception = any([isinstance(e, exec_type) for exec_type in exec_types_to_ignore])
+        # Report errors back to Burla's cloud.
+        if not user_function_error.is_set():
+            exec_types_to_chill = [NoNodes, AllNodesBusy, NoCompatibleNodes, JobCanceled]
+            exec_types_to_chill.extend([VersionMismatch, FunctionTooBig])
+            chill_exception = any([isinstance(e, e_type) for e_type in exec_types_to_chill])
 
-        if not user_function_error.is_set() and not ignore_exception:
-            # Report errors back to Burla's cloud.
+            exc_type, exc_value, exc_traceback = sys.exc_info()
+            tb_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
+            traceback_str = "".join(tb_details)
+            kwargs = dict(traceback=traceback_str, project_id=project_id, job_id=job_id)
+
             try:
-                exc_type, exc_value, exc_traceback = sys.exc_info()
-                traceback_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
-                traceback_str = "".join(traceback_details)
-                kwargs = dict(traceback=traceback_str, project_id=project_id, job_id=job_id)
-                msg = f"Job {job_id} FAILED due to NON-UDF-ERROR:\n```{traceback_str}```"
-                log_telemetry(msg, severity="ERROR", **kwargs)
+                if chill_exception:
+                    msg = f"Job {job_id} failed with: {str(e)}"
+                    log_telemetry(msg, severity="INFO", **kwargs)
+                else:
+                    msg = f"Job {job_id} FAILED due to NON-UDF-ERROR:\n```{traceback_str}```"
+                    log_telemetry(msg, severity="ERROR", **kwargs)
             except:
                 pass
 

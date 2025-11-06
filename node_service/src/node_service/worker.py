@@ -61,7 +61,6 @@ class Worker:
         python_command = "python"  # <- is also hardcoded in `_install_packages` in udf_executor
         latest_version = requests.get("https://pypi.org/pypi/burla/json").json()["info"]["version"]
         cmd_script = f"""
-            set -e
             # worker service is installed here and mounted to all other containers
             export PYTHONPATH=/worker_service_python_env
             export PATH="/worker_service_python_env/bin:$PATH"
@@ -100,7 +99,9 @@ class Worker:
                     echo 'Please ensure the command `{python_command}` points to a valid python executable inside this image.'
                     echo 'Ask jake (jake@burla.dev) if you need help with this!'
                     echo '-'
+                    set -e
                     exit 1;
+                    set +e
                 fi
                 
                 # save version to file to report it to node service
@@ -133,10 +134,12 @@ class Worker:
                     # del everything in /worker_service_python_env except `worker_service` (mounted)
                     find /worker_service_python_env -mindepth 1 -maxdepth 1 ! -name worker_service -exec rm -rf {{}} +
                     cd /burla/worker_service
+                    set -e
                     uv pip install --python {python_command} --target /worker_service_python_env . || {{ 
                         echo "ERROR: Failed to install local worker_service with uv. Exiting."; 
-                        exit 1; 
+                        exit 1;
                     }}
+                    set +e
                 else
                     # try with tarball first because faster
                     if curl -Ls -o burla.tar.gz https://github.com/Burla-Cloud/burla/archive/{__version__}.tar.gz; then
@@ -158,20 +161,23 @@ class Worker:
                     # can only do this with linux host, breaks in dev using macos host :(
                     export UV_CACHE_DIR=/worker_service_python_env/.uv-cache
                     mkdir -p "$UV_CACHE_DIR" /worker_service_python_env
+                    set -e
                     uv pip install --python {python_command} --target /worker_service_python_env . || {{ 
                         echo "ERROR: Failed to install local worker_service with uv. Exiting."; 
                         exit 1; 
                     }}
+                    set +e
                 fi
 
                 # Install burla so it is not automatically installed when users run the quickstart
                 # this saves a sec or two off quickstart runtime.
                 # don't simply add as a worker_svc dependency cause it's hard to make it always use latest pipy version.
+                set -e
                 uv pip install --python {python_command} --target /worker_service_python_env burla=={latest_version} || {{ 
                     echo "ERROR: Failed to install burla client into worker. Exiting."; 
                     exit 1; 
                 }}
-
+                set +e
                 # mark that worker_svc installed in shared dir so other containers can continue
                 touch /worker_service_python_env/.WORKER_SVC_INSTALLED
 
@@ -192,7 +198,9 @@ class Worker:
                     now=$(date +%s)
                     if [ $((now - start_time)) -ge {self.boot_timeout_sec} ]; then
                         echo "Timeout waiting for worker_service install completion after {self.boot_timeout_sec} seconds"
+                        set -e
                         exit 1
+                        set +e
                     fi
                     sleep 1
                 done

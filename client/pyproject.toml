@@ -32,6 +32,7 @@ packages = ["src/burla"]
 [dependency-groups]
 dev = [
     "google-cloud-firestore>=2.21.0",
+    "google-cloud-storage>=3.5.0",
     "jupyterlab>=4.4.10",
     "pandas>=2.3.3",
     "pytest>=8.4.2",

@@ -35,7 +35,6 @@ from burla._helpers import (
     install_signal_handlers,
     restore_signal_handlers,
     parallelism_capacity,
-    has_explicit_return,
     log_telemetry,
     log_telemetry_async,
     run_in_subprocess,
@@ -303,6 +302,8 @@ async def _execute_job(
     # is imported in all notebooks by default but (almost certainly) not needed inside burla function
     if "ipython" in packages:
         del packages["ipython"]
+    if "google-colab" in packages:
+        del packages["google-colab"]
 
     async def assign_node(node: dict, session: aiohttp.ClientSession):
         request_json = {

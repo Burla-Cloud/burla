@@ -89,22 +89,6 @@ async def run_in_subprocess(func, *args):
     return process
 
 
-def has_explicit_return(fn):
-    src = inspect.getsource(fn)
-    tree = ast.parse(src)
-
-    class ReturnVisitor(ast.NodeVisitor):
-        def __init__(self):
-            self.found = False
-
-        def visit_Return(self, node):
-            self.found = True
-
-    visitor = ReturnVisitor()
-    visitor.visit(tree)
-    return visitor.found
-
-
 def parallelism_capacity(machine_type: str, func_cpu: int, func_ram: int):
     # Max number of workers this machine_type can run a job with the given resource requirements?
     if machine_type.startswith("n4-standard") and machine_type.split("-")[-1].isdigit():

@@ -9,7 +9,7 @@ import threading
 from pathlib import Path
 
 import docker
-from docker.types import DeviceRequest
+from docker.types import DeviceRequest, Ulimit
 from google.cloud import logging, firestore
 from google.auth.transport.requests import Request
 
@@ -233,19 +233,34 @@ class Worker:
                     f"{os.environ['HOST_PWD']}/_python_version_marker": "/python_version_marker",
                     f"{os.environ['HOST_PWD']}/.temp_token.txt": "/burla/.temp_token.txt",
                 },
+                ipc_mode="host",
+                oom_kill_disable=True,
+                memswap_limit=-1,
+                shm_size="16g",
+                ulimits=[
+                    Ulimit(name="memlock", soft=-1, hard=-1),
+                    Ulimit(name="nofile", soft=1048576, hard=1048576),
+                ],
             )
         else:
             gpu_device_requests = [DeviceRequest(count=-1, capabilities=[["gpu"]])]
             device_requests = gpu_device_requests if NUM_GPUS != 0 else []
             host_config = docker_client.create_host_config(
                 port_bindings={WORKER_INTERNAL_PORT: ("127.0.0.1", None)},
-                ipc_mode="host",
                 device_requests=device_requests,
                 binds={
                     "/python_version_marker": "/python_version_marker",
                     "/worker_service_python_env": "/worker_service_python_env",
                     "/workspace/shared": "/workspace/shared",
                 },
+                ipc_mode="host",
+                oom_kill_disable=True,
+                memswap_limit=-1,
+                shm_size="16g",
+                ulimits=[
+                    Ulimit(name="memlock", soft=-1, hard=-1),
+                    Ulimit(name="nofile", soft=1048576, hard=1048576),
+                ],
             )
 
         # start container

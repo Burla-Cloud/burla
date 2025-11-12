@@ -1485,12 +1485,13 @@ export default function Filesystem() {
                                 <p className="text-gray-700">
                                     <ul className="list-disc pl-6 space-y-1 text-left">
                                         <li>
-                                            Any files uploaded here will appear in (
-                                            <code>/workspace/shared</code>) in the cluster.
+                                            Any files uploaded here will appear in "
+                                            <code>/workspace/shared</code>" inside the cluster.
                                         </li>
                                         <li>
-                                            Any files you write to <code>/workspace/shared</code>
-                                            will appear here where you can download them!
+                                            Any files you write to "<code>/workspace/shared</code>"{" "}
+                                            inside the cluster, will appear here where you can
+                                            download them!
                                         </li>
                                     </ul>
                                 </p>

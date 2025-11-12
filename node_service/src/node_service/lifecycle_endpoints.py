@@ -339,6 +339,10 @@ def reboot_containers(
             if "already in progress" not in str(e):
                 raise e
 
+        # doing this inside the worker creates thundering herd.
+        url = "https://pypi.org/pypi/burla/json"
+        latest_burla_version = requests.get(url).json()["info"]["version"]
+
         # start new workers.
         futures = []
         for spec in SELF["current_container_config"]:
@@ -354,7 +358,9 @@ def reboot_containers(
                 # (too many will ddoss github / be slow)
                 install_worker = i == 0
                 futures.append(
-                    executor.submit(Worker, spec.image, elected_installer=install_worker)
+                    executor.submit(
+                        Worker, spec.image, latest_burla_version, elected_installer=install_worker
+                    )
                 )
 
         try:

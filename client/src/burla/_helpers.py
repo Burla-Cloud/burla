@@ -2,20 +2,15 @@ import json
 import os
 import sys
 import signal
-import ast
-import inspect
 import requests
 import subprocess
 import textwrap
 import logging
 from typing import Union
 from threading import Event
-from time import sleep
 
 import cloudpickle
 from yaspin import Spinner
-from google.auth.credentials import Credentials
-from google.auth import crypt, jwt
 from google.cloud.firestore_v1 import AsyncClient
 
 from burla import _BURLA_BACKEND_URL, CONFIG_PATH

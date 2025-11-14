@@ -2,7 +2,6 @@ import sys
 import pickle
 import json
 import types
-import inspect
 import asyncio
 import traceback
 from importlib import metadata
@@ -20,10 +19,9 @@ from aiohttp import ClientTimeout
 import aiohttp
 import cloudpickle
 from tblib import Traceback
-from google.cloud.firestore import And, ArrayUnion, Client
+from google.cloud.firestore import ArrayUnion
 from google.cloud.firestore import FieldFilter
 from google.cloud.firestore_v1.async_client import AsyncClient
-from google.api_core.retry_async import AsyncRetry
 from yaspin import yaspin, Spinner
 from aiohttp import ClientOSError, ClientError
 
@@ -35,7 +33,6 @@ from burla._helpers import (
     install_signal_handlers,
     restore_signal_handlers,
     parallelism_capacity,
-    has_explicit_return,
     log_telemetry,
     log_telemetry_async,
     run_in_subprocess,
@@ -239,6 +236,7 @@ async def _execute_job(
     return_queue: Queue,
     function_: Callable,
     inputs: list,
+    packages: list,
     func_cpu: int,
     func_ram: int,
     max_parallelism: int,
@@ -253,7 +251,7 @@ async def _execute_job(
 ):
     if background and spinner:
         msg = f"Running {len(inputs)} inputs through `{function_.__name__}` "
-        msg += "with background mode enabled!\n"
+        msg += "with detach mode enabled!\n"
         msg += "This job will continue running on the cluster if canceled locally, "
         msg += "and inputs have finished uploading.\n-"
         spinner.write(msg)
@@ -298,11 +296,6 @@ async def _execute_job(
             "fail_reason": [],
         }
     )
-
-    packages = _get_packages(function_)
-    # is imported in all notebooks by default but (almost certainly) not needed inside burla function
-    if "ipython" in packages:
-        del packages["ipython"]
 
     async def assign_node(node: dict, session: aiohttp.ClientSession):
         request_json = {
@@ -596,8 +589,10 @@ def remote_parallel_map(
         function_ (Callable):
             A Python function that accepts a single input argument. For example, calling
             `function_(inputs[0])` should not raise an exception.
-        inputs (Iterable[Any]):
-            An iterable of elements that will be passed to `function_`.
+        inputs (List[Any]):
+            An iterable of objects that will be passed to `function_`.
+            If the iterable contains tuples, they will be unpacked!
+            Example: `inputs=[(1, 2)]` -> `function_(1, 2)`
         func_cpu (int, optional):
             The number of CPUs allocated for each instance of `function_`. Defaults to 1.
         func_ram (int, optional):
@@ -633,13 +628,24 @@ def remote_parallel_map(
     # TODO: rename internally
     background = detach
 
-    max_parallelism = max_parallelism if max_parallelism else len(inputs)
-    function_signature = inspect.signature(function_)
-    if len(function_signature.parameters) != 1:
-        msg = "Function must accept exactly one argument! (even if it does nothing)\n"
-        msg += "Email jake@burla.dev if this is really annoying and we will fix it! :)"
-        raise ValueError(msg)
+    ### TODO: implement internally instead of wrapping:
+    def wrapped_function_(args_tuple):
+        return function_(*args_tuple)
 
+    wrapped_function_.__name__ = function_.__name__
+    inputs = [(i,) if not isinstance(i, tuple) else i for i in inputs]
+
+    # TODO: move back into `_execute_job` after ^ todo is done.
+    # (needs to operate on function_.__globals__ which cannot be reassigned to new func)
+    packages = _get_packages(function_)
+    if "ipython" in packages:
+        # imported in all notebooks by default but (probably) not needed inside burla function
+        del packages["ipython"]
+    if "google-colab" in packages:
+        del packages["google-colab"]
+    ###
+
+    max_parallelism = max_parallelism if max_parallelism else len(inputs)
     job_id = str(uuid4())
     project_id = json.loads(CONFIG_PATH.read_text())["project_id"]
 
@@ -662,8 +668,9 @@ def remote_parallel_map(
                     _execute_job(
                         job_id=job_id,
                         return_queue=return_queue,
-                        function_=function_,
+                        function_=wrapped_function_,
                         inputs=inputs,
+                        packages=packages,
                         func_cpu=func_cpu,
                         func_ram=func_ram,
                         max_parallelism=max_parallelism,

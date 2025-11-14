@@ -2,20 +2,15 @@ import json
 import os
 import sys
 import signal
-import ast
-import inspect
 import requests
 import subprocess
 import textwrap
 import logging
 from typing import Union
 from threading import Event
-from time import sleep
 
 import cloudpickle
 from yaspin import Spinner
-from google.auth.credentials import Credentials
-from google.auth import crypt, jwt
 from google.cloud.firestore_v1 import AsyncClient
 
 from burla import _BURLA_BACKEND_URL, CONFIG_PATH
@@ -87,22 +82,6 @@ async def run_in_subprocess(func, *args):
     process.stdin.write(cloudpickle.dumps((func, args)))
     process.stdin.close()
     return process
-
-
-def has_explicit_return(fn):
-    src = inspect.getsource(fn)
-    tree = ast.parse(src)
-
-    class ReturnVisitor(ast.NodeVisitor):
-        def __init__(self):
-            self.found = False
-
-        def visit_Return(self, node):
-            self.found = True
-
-    visitor = ReturnVisitor()
-    visitor.visit(tree)
-    return visitor.found
 
 
 def parallelism_capacity(machine_type: str, func_cpu: int, func_ram: int):

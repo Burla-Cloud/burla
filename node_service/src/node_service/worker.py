@@ -9,7 +9,7 @@ import threading
 from pathlib import Path
 
 import docker
-from docker.types import DeviceRequest
+from docker.types import DeviceRequest, Ulimit
 from google.cloud import logging, firestore
 from google.auth.transport.requests import Request
 
@@ -32,6 +32,7 @@ class Worker:
     def __init__(
         self,
         image: str,
+        latest_burla_version: str,
         elected_installer: bool = False,
         boot_timeout_sec: int = 120,
     ):
@@ -59,7 +60,6 @@ class Worker:
         docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
 
         python_command = "python"  # <- is also hardcoded in `_install_packages` in udf_executor
-        latest_version = requests.get("https://pypi.org/pypi/burla/json").json()["info"]["version"]
         cmd_script = f"""
             # worker service is installed here and mounted to all other containers
             export PYTHONPATH=/worker_service_python_env
@@ -173,7 +173,7 @@ class Worker:
                 # this saves a sec or two off quickstart runtime.
                 # don't simply add as a worker_svc dependency cause it's hard to make it always use latest pipy version.
                 set -e
-                uv pip install --python {python_command} --target /worker_service_python_env burla=={latest_version} || {{ 
+                uv pip install --python {python_command} --target /worker_service_python_env burla=={latest_burla_version} || {{ 
                     echo "ERROR: Failed to install burla client into worker. Exiting."; 
                     exit 1; 
                 }}
@@ -233,19 +233,34 @@ class Worker:
                     f"{os.environ['HOST_PWD']}/_python_version_marker": "/python_version_marker",
                     f"{os.environ['HOST_PWD']}/.temp_token.txt": "/burla/.temp_token.txt",
                 },
+                ipc_mode="host",
+                oom_kill_disable=True,
+                memswap_limit=-1,
+                shm_size="16g",
+                ulimits=[
+                    Ulimit(name="memlock", soft=-1, hard=-1),
+                    Ulimit(name="nofile", soft=1048576, hard=1048576),
+                ],
             )
         else:
             gpu_device_requests = [DeviceRequest(count=-1, capabilities=[["gpu"]])]
             device_requests = gpu_device_requests if NUM_GPUS != 0 else []
             host_config = docker_client.create_host_config(
                 port_bindings={WORKER_INTERNAL_PORT: ("127.0.0.1", None)},
-                ipc_mode="host",
                 device_requests=device_requests,
                 binds={
                     "/python_version_marker": "/python_version_marker",
                     "/worker_service_python_env": "/worker_service_python_env",
                     "/workspace/shared": "/workspace/shared",
                 },
+                ipc_mode="host",
+                oom_kill_disable=True,
+                memswap_limit=-1,
+                shm_size="16g",
+                ulimits=[
+                    Ulimit(name="memlock", soft=-1, hard=-1),
+                    Ulimit(name="nofile", soft=1048576, hard=1048576),
+                ],
             )
 
         # start container
@@ -274,23 +289,23 @@ class Worker:
                 self.container_id = self.container.get("Id")
                 docker_client.start(container=self.container_id)
             except (requests.exceptions.ReadTimeout, docker.errors.APIError) as e:
+                if attempt > 5:
+                    raise e
 
                 msg = f"\nError starting container {self.container_name}:\n"
                 msg += "```\n"
                 msg += traceback.format_exc()
                 msg += "\n```\n"
                 msg += f"Retrying in {random.uniform(1, 5)} seconds...\n\n\n"
-                print(msg)
+                # print(msg)
 
-                struct = {"severity": "WARNING", "MESSAGE": msg}
+                struct = {"severity": "ERROR", "MESSAGE": msg}
                 logging.Client().logger("node_service").log_struct(struct)
 
                 firestore_client = firestore.Client(project=PROJECT_ID, database="burla")
                 node_ref = firestore_client.collection("nodes").document(INSTANCE_NAME)
                 node_ref.collection("logs").document().set({"msg": msg, "ts": time()})
 
-                if attempt > 5:
-                    raise e
                 sleep(random.uniform(1, 5))  # <- avoid theoretical thundering herd
                 try:
                     docker_client.remove_container(self.container_name, force=True)

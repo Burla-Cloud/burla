@@ -31,6 +31,8 @@ packages = ["src/burla"]
 
 [dependency-groups]
 dev = [
+    "daft>=0.6.13",
+    "delta-spark>=4.0.0",
     "duckdb>=1.4.1",
     "fastparquet>=2024.11.0",
     "google-cloud-firestore>=2.21.0",
@@ -40,6 +42,7 @@ dev = [
     "matplotlib>=3.10.7",
     "pandas>=2.3.3",
     "pyarrow>=22.0.0",
+    "pyspark>=4.0.1",
     "pytest>=8.4.2",
     "scikit-learn>=1.7.2",
     "xgboost>=3.1.1",

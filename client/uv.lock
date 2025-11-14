@@ -333,6 +333,8 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "daft" },
+    { name = "delta-spark" },
     { name = "duckdb" },
     { name = "fastparquet" },
     { name = "google-cloud-firestore" },
@@ -342,6 +344,7 @@ dev = [
     { name = "matplotlib" },
     { name = "pandas" },
     { name = "pyarrow" },
+    { name = "pyspark" },
     { name = "pytest" },
     { name = "scikit-learn" },
     { name = "xgboost" },
@@ -363,6 +366,8 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "daft", specifier = ">=0.6.13" },
+    { name = "delta-spark", specifier = ">=4.0.0" },
     { name = "duckdb", specifier = ">=1.4.1" },
     { name = "fastparquet", specifier = ">=2024.11.0" },
     { name = "google-cloud-firestore", specifier = ">=2.21.0" },
@@ -372,6 +377,7 @@ dev = [
     { name = "matplotlib", specifier = ">=3.10.7" },
     { name = "pandas", specifier = ">=2.3.3" },
     { name = "pyarrow", specifier = ">=22.0.0" },
+    { name = "pyspark", specifier = ">=4.0.1" },
     { name = "pytest", specifier = ">=8.4.2" },
     { name = "scikit-learn", specifier = ">=1.7.2" },
     { name = "xgboost", specifier = ">=3.1.1" },
@@ -871,6 +877,26 @@ wheels = [
 ]
 
 [[package]]
+name = "daft"
+version = "0.6.13"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "fsspec" },
+    { name = "packaging" },
+    { name = "pyarrow" },
+    { name = "tqdm" },
+    { name = "typing-extensions", marker = "python_full_version < '3.11'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/5d/0c/29f32f3bddba2a1a7e89bc60eb112e87d64e077b38fc5fe0a756ba47020b/daft-0.6.13.tar.gz", hash = "sha256:b8b180bd33b0606dbcaea1480a328763ac572ae46725f43b03fba0047e131dcd", size = 10773919, upload-time = "2025-11-13T05:07:39.391Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/82/8b/bc493111b023fc10306a8de30cd75ac1577a4be34b392b75b0ab3280746c/daft-0.6.13-cp310-abi3-macosx_10_12_x86_64.whl", hash = "sha256:22a1d04a38bbcbeed541fbb44859d96f46c18894ac204c9ae536da66a853c990", size = 51814804, upload-time = "2025-11-13T05:07:06.995Z" },
+    { url = "https://files.pythonhosted.org/packages/89/a5/ab1fbac72080f8ca5e39ec06efd2bd3042205fa873aec207db6f00fb9d92/daft-0.6.13-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:b994a5bc598d89bac7ee71e1e2b463e7b92d27acdda60b039e3a5eea8199d423", size = 48160071, upload-time = "2025-11-13T05:07:11.49Z" },
+    { url = "https://files.pythonhosted.org/packages/a8/45/c97988ff34c578d9c729f75a6b77cea7dcfc293aabcadeea6f6904a9388b/daft-0.6.13-cp310-abi3-manylinux_2_24_aarch64.whl", hash = "sha256:5c0193f96ff4e7af9063e306f19d339c1eeacf4f15b4bb37830dc8e50befd3ef", size = 49536089, upload-time = "2025-11-13T05:07:15.659Z" },
+    { url = "https://files.pythonhosted.org/packages/cd/3f/cf8190447fa740e54cdf69b210ecb974ba5112e6218d28798636f060ad6d/daft-0.6.13-cp310-abi3-manylinux_2_24_x86_64.whl", hash = "sha256:891d13126e544ee908d53a3a3b60fb659f18db092fbb3361fb3f8e6262018e8b", size = 52131062, upload-time = "2025-11-13T05:07:19.288Z" },
+    { url = "https://files.pythonhosted.org/packages/df/c7/a0599b79a7ed38fc7ddfc6ee67876cbc74df4ec11427b1ae2ba37c0cfad0/daft-0.6.13-cp310-abi3-win_amd64.whl", hash = "sha256:ac1e68300e01ee647b95f61bfd84083340440f5f9ef788e4f1e3399a2156f221", size = 50523287, upload-time = "2025-11-13T05:07:23.238Z" },
+]
+
+[[package]]
 name = "debugpy"
 version = "1.8.17"
 source = { registry = "https://pypi.org/simple" }
@@ -915,6 +941,19 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/0f/d5/c66da9b79e5bdb124974bfe172b4daf3c984ebd9c2a06e2b8a4dc7331c72/defusedxml-0.7.1.tar.gz", hash = "sha256:1bb3032db185915b62d7c6209c5a8792be6a32ab2fedacc84e01b52c51aa3e69", size = 75520, upload-time = "2021-03-08T10:59:26.269Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/07/6c/aa3f2f849e01cb6a001cd8554a88d4c77c5c1a31c95bdf1cf9301e6d9ef4/defusedxml-0.7.1-py2.py3-none-any.whl", hash = "sha256:a352e7e428770286cc899e2542b6cdaedb2b4953ff269a210103ec58f6198a61", size = 25604, upload-time = "2021-03-08T10:59:24.45Z" },
+]
+
+[[package]]
+name = "delta-spark"
+version = "4.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "importlib-metadata" },
+    { name = "pyspark" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/22/fd/37a0c2ee6fbf4dcbf034178dcb978ba586d37dc9c95214b90416d1042735/delta-spark-4.0.0.tar.gz", hash = "sha256:39325d76d6e5d8b5fea9d47827c59f5e0674844cb95f97b2cc613bfc5209c7ec", size = 35026, upload-time = "2025-06-06T01:41:46.286Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/3b/d8/265a93d22ae79262cdff701496a6f5676926a342153f3855ae6060430660/delta_spark-4.0.0-py3-none-any.whl", hash = "sha256:4e4ded07bb9ee4f6a0df45606d84395239d4b82001e765a627fecc1e914f3029", size = 39756, upload-time = "2025-06-06T01:41:44.815Z" },
 ]
 
 [[package]]
@@ -1495,6 +1534,18 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/6f/6d/0703ccc57f3a7233505399edb88de3cbd678da106337b9fcde432b65ed60/idna-3.11.tar.gz", hash = "sha256:795dafcc9c04ed0c1fb032c2aa73654d8e8c5023a7df64a53f39190ada629902", size = 194582, upload-time = "2025-10-12T14:55:20.501Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/0e/61/66938bbb5fc52dbdf84594873d5b51fb1f7c7794e9c0f5bd885f30bc507b/idna-3.11-py3-none-any.whl", hash = "sha256:771a87f49d9defaf64091e6e6fe9c18d4833f140bd19464795bc32d966ca37ea", size = 71008, upload-time = "2025-10-12T14:55:18.883Z" },
+]
+
+[[package]]
+name = "importlib-metadata"
+version = "8.7.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "zipp" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/76/66/650a33bd90f786193e4de4b3ad86ea60b53c89b669a5c7be931fac31cdb0/importlib_metadata-8.7.0.tar.gz", hash = "sha256:d13b81ad223b890aa16c5471f2ac3056cf76c5f10f82d6f9292f0b415f389000", size = 56641, upload-time = "2025-04-27T15:29:01.736Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/20/b0/36bd937216ec521246249be3bf9855081de4c5e06a0c9b4219dbeda50373/importlib_metadata-8.7.0-py3-none-any.whl", hash = "sha256:e5dd1551894c77868a30651cef00984d50e1002d06942a7101d34870c5f02afd", size = 27656, upload-time = "2025-04-27T15:29:00.214Z" },
 ]
 
 [[package]]
@@ -2978,6 +3029,15 @@ wheels = [
 ]
 
 [[package]]
+name = "py4j"
+version = "0.10.9.9"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/38/31/0b210511177070c8d5d3059556194352e5753602fa64b85b7ab81ec1a009/py4j-0.10.9.9.tar.gz", hash = "sha256:f694cad19efa5bd1dee4f3e5270eb406613c974394035e5bfc4ec1aba870b879", size = 761089, upload-time = "2025-01-15T03:53:18.624Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/bd/db/ea0203e495be491c85af87b66e37acfd3bf756fd985f87e46fc5e3bf022c/py4j-0.10.9.9-py2.py3-none-any.whl", hash = "sha256:c7c26e4158defb37b0bb124933163641a2ff6e3a3913f7811b0ddbe07ed61533", size = 203008, upload-time = "2025-01-15T03:53:15.648Z" },
+]
+
+[[package]]
 name = "pyarrow"
 version = "22.0.0"
 source = { registry = "https://pypi.org/simple" }
@@ -3081,6 +3141,15 @@ sdist = { url = "https://files.pythonhosted.org/packages/f2/a5/181488fc2b9d093e3
 wheels = [
     { url = "https://files.pythonhosted.org/packages/10/5e/1aa9a93198c6b64513c9d7752de7422c06402de6600a8767da1524f9570b/pyparsing-3.2.5-py3-none-any.whl", hash = "sha256:e38a4f02064cf41fe6593d328d0512495ad1f3d8a91c4f73fc401b3079a59a5e", size = 113890, upload-time = "2025-09-21T04:11:04.117Z" },
 ]
+
+[[package]]
+name = "pyspark"
+version = "4.0.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "py4j" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ae/40/1414582f16c1d7b051c668c2e19c62d21a18bd181d944cb24f5ddbb2423f/pyspark-4.0.1.tar.gz", hash = "sha256:9d1f22d994f60369228397e3479003ffe2dd736ba79165003246ff7bd48e2c73", size = 434204896, upload-time = "2025-09-06T07:15:57.091Z" }
 
 [[package]]
 name = "pytest"
@@ -4089,4 +4158,13 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/f9/cd/3d2877a5558fdad6de4166fa0160dc49cb1382820cd955753c67b56facd2/yaspin-3.3.0.tar.gz", hash = "sha256:505c9a44c6e3723a1bee8f7a17a055b17475176b74dd93e468fa8db48c172a41", size = 42411, upload-time = "2025-10-11T08:52:15.416Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/2c/bd/980187b627f9c5126ecbe909cc23f7d2c23ea4b046b2d3511d80ea0a8b79/yaspin-3.3.0-py3-none-any.whl", hash = "sha256:ab5113be4b34ef33f7d4d97be9b6867101ad020c2fb02bc92e3137c75b06d712", size = 21800, upload-time = "2025-10-11T08:52:13.932Z" },
+]
+
+[[package]]
+name = "zipp"
+version = "3.23.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/e3/02/0f2892c661036d50ede074e376733dca2ae7c6eb617489437771209d4180/zipp-3.23.0.tar.gz", hash = "sha256:a07157588a12518c9d4034df3fbbee09c814741a33ff63c05fa29d26a2404166", size = 25547, upload-time = "2025-06-08T17:06:39.4Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/2e/54/647ade08bf0db230bfea292f893923872fd20be6ac6f53b2b936ba839d75/zipp-3.23.0-py3-none-any.whl", hash = "sha256:071652d6115ed432f5ce1d34c336c0adfd6a884660d1e9712a256d3d3bd4b14e", size = 10276, upload-time = "2025-06-08T17:06:38.034Z" },
 ]

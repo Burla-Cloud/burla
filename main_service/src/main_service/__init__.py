@@ -241,11 +241,10 @@ async def validate_requests(request: Request, call_next):
         return await call_next(request)
 
     client_id = request.query_params.get("client_id")
-    email = request.session.get("X-User-Email")
-    authorization = request.session.get("Authorization")
+    email = request.session.get("X-User-Email") or request.headers.get("X-User-Email")
+    authorization = request.session.get("Authorization") or request.headers.get("Authorization")
     auth_cookie_exists = email and authorization
     async with aiohttp.ClientSession() as session:
-
         first_name = None
         url = f"{BURLA_BACKEND_URL}/v1/clusters/{PROJECT_ID}/users:welcome_name"
         async with session.get(url) as response:

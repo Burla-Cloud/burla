@@ -1,0 +1,8 @@
+*.* linguist-detectable=true
+
+*.ts linguist-detectable=false
+*.tsx linguist-detectable=false
+*.js linguist-detectable=false
+*.jsx linguist-detectable=false
+dist/* linguist-vendored
+node_modules/* linguist-vendored

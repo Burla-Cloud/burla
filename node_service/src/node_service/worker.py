@@ -269,6 +269,12 @@ class Worker:
             attempt += 1
             # sometimes docker's backend just stops responding, retry in this case.
             try:
+
+                ## TODO:
+                # You can also enforce the platform when creating the container if your Docker
+                # daemon supports it: docker_client.create_container(..., platform="linux/amd64"),
+                # but rebuilding is usually cleaner.
+
                 self.container = docker_client.create_container(
                     image=image,
                     command=cmd,

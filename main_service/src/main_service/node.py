@@ -35,20 +35,6 @@ from main_service import PROJECT_ID, CREDENTIALS, IN_LOCAL_DEV_MODE, CURRENT_BUR
 from main_service.helpers import Logger, format_traceback
 
 
-@dataclass
-class Container:
-    image: str
-
-    @classmethod
-    def from_dict(cls, _dict: dict):
-        return cls(
-            image=_dict["image"],
-        )
-
-    def to_dict(self):
-        return asdict(self)
-
-
 # This is 100% guessed, is used for unimportant estimates / ranking
 TOTAL_BOOT_TIME = 60
 TOTAL_REBOOT_TIME = 30
@@ -91,7 +77,7 @@ class Node:
         self.logger = logger
         self.instance_name = node_doc["instance_name"]
         self.machine_type = node_doc["machine_type"]
-        self.containers = [Container.from_dict(c) for c in node_doc["containers"]]
+        self.containers = [c["image"] for c in node_doc["containers"]]
         self.started_booting_at = node_doc["started_booting_at"]
         self.inactivity_shutdown_time_sec = node_doc["inactivity_shutdown_time_sec"]
         self.host = node_doc["host"]
@@ -109,7 +95,7 @@ class Node:
         logger: Logger,
         machine_type: str,
         gcp_region: str,
-        containers: list[Container],
+        containers: list[str],
         auth_headers: dict,
         spot: bool = False,
         service_port: int = 8080,  # <- this needs to be open in your cloud firewall!

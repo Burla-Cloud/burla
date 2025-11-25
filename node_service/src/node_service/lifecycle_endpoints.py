@@ -9,8 +9,7 @@ import subprocess
 import aiohttp
 import docker
 from docker.errors import APIError
-from pydantic import BaseModel
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends
 from google.cloud import firestore
 from google.cloud.compute_v1 import InstancesClient
 from google.auth.transport.requests import Request
@@ -30,20 +29,12 @@ from node_service import (
     ENV_IS_READY_PATH,
     GCL_CLIENT,
     get_logger,
-    get_add_background_task_function,
     __version__,
 )
 from node_service.helpers import Logger
 from node_service.worker import Worker
 
 router = APIRouter()
-
-
-class Container(BaseModel):
-    image: str
-
-    class Config:
-        extra = "ignore"
 
 
 @router.post("/shutdown")
@@ -79,17 +70,6 @@ async def shutdown_node(logger: Logger = Depends(get_logger)):
             await doc_ref.update({"status": "DELETED", "display_in_dashboard": True})
         elif node_dict.get("status") != "FAILED":
             await doc_ref.update({"status": "DELETED", "display_in_dashboard": False})
-
-
-@router.post("/reboot")
-def reboot_containers_endpoint(
-    new_container_config: Optional[list[Container]] = None,
-    logger: Logger = Depends(get_logger),
-    add_background_task: Callable = Depends(get_add_background_task_function),
-):
-    if SELF["BOOTING"]:
-        return Response("Node already BOOTING, unable to satisfy request.", status_code=409)
-    return reboot_containers(new_container_config, logger, add_background_task)
 
 
 def _call_docker_threadsafe(method, *args, **kwargs):
@@ -255,7 +235,7 @@ def _schedule_container_removal(
 
 
 def reboot_containers(
-    new_container_config: Optional[list[Container]] = None,
+    new_container_config: Optional[list[str]] = None,
     logger: Logger = Depends(get_logger),
     add_background_task: Optional[Callable] = None,
 ):

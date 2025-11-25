@@ -143,7 +143,6 @@ from node_service.job_endpoints import router as job_endpoints_router
 from node_service.lifecycle_endpoints import (
     reboot_containers,
     router as lifecycle_endpoints_router,
-    Container,
 )
 
 
@@ -196,7 +195,7 @@ async def lifespan(app: FastAPI):
 
     # boot containers before accepting any requests.
     # `reboot_containers` will delete VM's if it fails, no need to do that here.
-    containers = [Container(**c) for c in json.loads(os.environ["CONTAINERS"])]
+    containers = [c["image"] for c in json.loads(os.environ["CONTAINERS"])]
     await run_in_threadpool(reboot_containers, new_container_config=containers, logger=logger)
 
     yield

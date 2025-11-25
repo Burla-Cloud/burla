@@ -23,10 +23,68 @@ from main_service import (
     get_logger,
     get_add_background_task_function,
 )
-from main_service.node import Container, Node
+from main_service.node import Node
 from main_service.helpers import Logger
 
 router = APIRouter()
+
+
+@router.post("/v1/cluster/nodes")
+def add_node(request: Request, logger: Logger = Depends(get_logger)):
+
+    # use separate cluster config if IN_LOCAL_DEV_MODE:
+    config_doc = DB.collection("cluster_config").document("cluster_config").get()
+    if not config_doc.exists:
+        config_doc.reference.set(DEFAULT_CONFIG)
+        config = DEFAULT_CONFIG
+    else:
+        config = LOCAL_DEV_CONFIG if IN_LOCAL_DEV_MODE else config_doc.to_dict()
+
+    request_json = request.json()
+    total_cpus = request_json["total_cpus"]
+    disk_size = request_json.get("disk_size", config["Nodes"][0]["disk_size_gb"])
+    image_uri = request_json.get("image_uri", config["Nodes"][0]["containers"][0]["image"])
+    gcp_region = request_json.get("gcp_region", config["Nodes"][0]["gcp_region"])
+    inactivity_shutdown_time_sec = 180
+
+    futures = []
+    executor = ThreadPoolExecutor(max_workers=32)
+    email = request.session.get("X-User-Email")
+    authorization = request.session.get("Authorization")
+    auth_headers = {"Authorization": authorization, "X-User-Email": email}
+
+    def _add_node_logged(**node_start_kwargs):
+        return Node.start(**node_start_kwargs).instance_name
+
+    node_service_port = 8080
+    for n_cpus in [80, 64, 48, 32, 16, 8, 4, 2, 1]:
+        quantity = total_cpus // n_cpus
+        machine_type = "n4-standard-2" if n_cpus == 1 else f"n4-standard-{n_cpus}"
+        for _ in range(quantity):
+            if IN_LOCAL_DEV_MODE:
+                node_service_port += 1
+            node_start_kwargs = dict(
+                db=DB,
+                logger=logger,
+                machine_type=machine_type,
+                gcp_region=gcp_region,
+                containers=[image_uri],
+                auth_headers=auth_headers,
+                service_port=node_service_port,
+                sync_gcs_bucket_name=config["gcs_bucket_name"],
+                as_local_container=IN_LOCAL_DEV_MODE,  # start in a container if IN_LOCAL_DEV_MODE
+                inactivity_shutdown_time_sec=inactivity_shutdown_time_sec,
+                disk_size=disk_size,
+            )
+            future = executor.submit(_add_node_logged, **node_start_kwargs)
+            futures.append(future)
+            total_cpus -= quantity * n_cpus
+
+    # wait until all operations done
+    exec_results = [future.result() for future in futures]
+    node_instance_names = [result for result in exec_results if result is not None]
+    executor.shutdown(wait=True)
+    return node_instance_names
 
 
 def _restart_cluster(request: Request, logger: Logger):
@@ -38,7 +96,7 @@ def _restart_cluster(request: Request, logger: Logger):
     auth_headers = {"Authorization": authorization, "X-User-Email": email}
 
     futures = []
-    executor = ThreadPoolExecutor(max_workers=32)
+    executor = ThreadPoolExecutor(max_workers=128)
 
     # delete all nodes
     node_filter = FieldFilter("status", "in", ["READY", "BOOTING", "RUNNING"])
@@ -84,7 +142,7 @@ def _restart_cluster(request: Request, logger: Logger):
                 logger=logger,
                 machine_type=node_spec["machine_type"],
                 gcp_region=node_spec["gcp_region"],
-                containers=[Container.from_dict(c) for c in node_spec["containers"]],
+                containers=[c["image"] for c in node_spec["containers"]],
                 auth_headers=auth_headers,
                 service_port=node_service_port,
                 sync_gcs_bucket_name=config["gcs_bucket_name"],

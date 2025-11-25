@@ -51,11 +51,7 @@ if IN_LOCAL_DEV_MODE:
 DEFAULT_CONFIG = {  # <- config used only when config is missing from firestore
     "Nodes": [
         {
-            "containers": [
-                {
-                    "image": "python:3.12",
-                },
-            ],
+            "image_uri": "python:3.12",
             "machine_type": "n4-standard-4",
             "gcp_region": "us-central1",
             "quantity": 1,

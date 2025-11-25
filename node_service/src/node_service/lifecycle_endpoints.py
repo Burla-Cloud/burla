@@ -235,7 +235,7 @@ def _schedule_container_removal(
 
 
 def reboot_containers(
-    new_container_config: Optional[list[str]] = None,
+    new_image_uri: Optional[str] = None,
     logger: Logger = Depends(get_logger),
     add_background_task: Optional[Callable] = None,
 ):
@@ -264,12 +264,12 @@ def reboot_containers(
             }
         )
 
-        # reset state of the node service, except current_container_config, and the job_watcher.
-        current_container_config = SELF["current_container_config"]
+        # reset state of the node service, except current_image_uri, and the job_watcher.
+        current_image_uri = SELF["current_image_uri"]
         REINIT_SELF(SELF)
-        SELF["current_container_config"] = current_container_config
-        if new_container_config:
-            SELF["current_container_config"] = new_container_config
+        SELF["current_image_uri"] = current_image_uri
+        if new_image_uri:
+            SELF["current_image_uri"] = new_image_uri
 
         # get list of authorized users/tokens from backend service
         headers = {"Authorization": f"Bearer {CLUSTER_ID_TOKEN}"}
@@ -325,23 +325,23 @@ def reboot_containers(
 
         # start new workers.
         futures = []
-        for spec in SELF["current_container_config"]:
-            _pull_image_if_missing(spec.image, logger, docker_client)
-            docker_client.close()
-            num_workers = INSTANCE_N_CPUS if NUM_GPUS == 0 else NUM_GPUS
+        image_uri = SELF["current_image_uri"]
+        _pull_image_if_missing(image_uri, logger, docker_client)
+        docker_client.close()
+        num_workers = INSTANCE_N_CPUS if NUM_GPUS == 0 else NUM_GPUS
 
-            msg = f"Image {spec.image} pulled successfully.\nWaiting for {num_workers} workers to start ..."
-            logger.log(msg)
+        msg = f"Image {image_uri} pulled successfully.\nWaiting for {num_workers} workers to start ..."
+        logger.log(msg)
 
-            for i in range(num_workers):
-                # have just one worker install the worker svc, then share through docker volume
-                # (too many will ddoss github / be slow)
-                install_worker = i == 0
-                futures.append(
-                    executor.submit(
-                        Worker, spec.image, latest_burla_version, elected_installer=install_worker
-                    )
+        for i in range(num_workers):
+            # have just one worker install the worker svc, then share through docker volume
+            # (too many will ddoss github / be slow)
+            install_worker = i == 0
+            futures.append(
+                executor.submit(
+                    Worker, image_uri, latest_burla_version, elected_installer=install_worker
                 )
+            )
 
         try:
             completed_future_generator = concurrent.futures.as_completed(futures)

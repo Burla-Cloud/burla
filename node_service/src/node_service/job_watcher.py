@@ -311,11 +311,11 @@ async def reinit_node(assigned_workers: list, async_db: AsyncClient):
         w.is_idle = False
         w.is_empty = False
 
-    current_container_config = SELF["current_container_config"]
+    current_image_uri = SELF["current_image_uri"]
     current_workers = assigned_workers + SELF["idle_workers"]
     authorized_users = SELF["authorized_users"]
     REINIT_SELF(SELF)
-    SELF["current_container_config"] = current_container_config
+    SELF["current_image_uri"] = current_image_uri
     SELF["workers"] = current_workers
     SELF["authorized_users"] = authorized_users
     node_doc = async_db.collection("nodes").document(INSTANCE_NAME)

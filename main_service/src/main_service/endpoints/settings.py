@@ -23,15 +23,13 @@ def get_settings(request: Request):
     if IN_LOCAL_DEV_MODE:
         config_dict = LOCAL_DEV_CONFIG
 
-    node = config_dict.get("Nodes", [{}])[0]
-    container = node.get("containers", [{}])[0]
-
     url = f"{BURLA_BACKEND_URL}/v1/clusters/{PROJECT_ID}/users"
     response = requests.get(url, headers={"Authorization": f"Bearer {CLUSTER_ID_TOKEN}"})
     response.raise_for_status()
     user_emails = [user["email"] for user in response.json()["authorized_users"]]
+    node = config_dict.get("Nodes", [{}])[0]
     return {
-        "containerImage": container.get("image", ""),
+        "containerImage": node.get("image_uri", ""),
         "machineType": node.get("machine_type", ""),
         "gcpRegion": node.get("gcp_region", ""),
         "machineQuantity": node.get("quantity", 1),
@@ -52,20 +50,13 @@ async def update_settings(request: Request):
     # updates Nodes object in cluster_config doc
     nodes = config_dict.get("Nodes", [{}])
     node = nodes[0]
-    container = node.get("containers", [{}])[0]
-    container.update(
-        {
-            "image": request_json.get("containerImage", container.get("image")),
-        }
-    )
-    container.pop("python_command", None)
-    container.pop("python_version", None)
     node.update(
         {
             "machine_type": request_json.get("machineType", node.get("machine_type")),
             "gcp_region": request_json.get("gcpRegion", node.get("gcp_region")),
             "quantity": request_json.get("machineQuantity", node.get("quantity")),
             "disk_size_gb": request_json.get("diskSize", node.get("disk_size_gb")),
+            "image_uri": request_json.get("containerImage", node.get("image_uri")),
             "inactivity_shutdown_time_sec": (
                 request_json.get("inactivityTimeout", node.get("inactivity_shutdown_time_sec")) * 60
                 if isinstance(request_json.get("inactivityTimeout"), int)
@@ -73,7 +64,6 @@ async def update_settings(request: Request):
             ),
         }
     )
-    nodes[0]["containers"] = [container]
     config_ref.update({"Nodes": nodes})
 
     if IN_LOCAL_DEV_MODE:

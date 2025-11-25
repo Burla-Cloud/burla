@@ -77,7 +77,7 @@ class Node:
         self.logger = logger
         self.instance_name = node_doc["instance_name"]
         self.machine_type = node_doc["machine_type"]
-        self.containers = [c["image"] for c in node_doc["containers"]]
+        self.image_uri = node_doc["image_uri"]
         self.started_booting_at = node_doc["started_booting_at"]
         self.inactivity_shutdown_time_sec = node_doc["inactivity_shutdown_time_sec"]
         self.host = node_doc["host"]
@@ -95,7 +95,7 @@ class Node:
         logger: Logger,
         machine_type: str,
         gcp_region: str,
-        containers: list[str],
+        image_uri: str,
         auth_headers: dict,
         spot: bool = False,
         service_port: int = 8080,  # <- this needs to be open in your cloud firewall!
@@ -110,7 +110,7 @@ class Node:
         self.logger = logger
         self.gcp_region = gcp_region
         self.machine_type = machine_type
-        self.containers = containers
+        self.image_uri = image_uri
         self.auth_headers = auth_headers
         self.spot = spot
         self.port = service_port
@@ -142,7 +142,7 @@ class Node:
         current_state["status"] = "BOOTING"
         current_state["main_svc_version"] = CURRENT_BURLA_VERSION
         current_state["display_in_dashboard"] = True
-        current_state["containers"] = [container.to_dict() for container in containers]
+        current_state["image_uri"] = image_uri
         attrs_to_not_save = ["db", "logger", "instance_client", "node_ref", "auth_headers"]
         current_state = {k: v for k, v in current_state.items() if k not in attrs_to_not_save}
         self.node_ref.set(current_state)
@@ -274,7 +274,7 @@ class Node:
                 "HOST_HOME_DIR": os.environ["HOST_HOME_DIR"],
                 "HOST_PWD": os.environ["HOST_PWD"],
                 "INSTANCE_NAME": self.instance_name,
-                "CONTAINERS": json.dumps([c.to_dict() for c in self.containers]),
+                "IMAGE_URI": self.image_uri,
                 "INACTIVITY_SHUTDOWN_TIME_SEC": self.inactivity_shutdown_time_sec,
                 "NUM_GPUS": 0,
             },
@@ -446,7 +446,7 @@ class Node:
         export NUM_GPUS="{self.num_gpus}"
         export INSTANCE_NAME="{self.instance_name}"
         export PROJECT_ID="{PROJECT_ID}"
-        export CONTAINERS='{json.dumps([c.to_dict() for c in self.containers])}'
+        export IMAGE_URI='{self.image_uri}'
         export INACTIVITY_SHUTDOWN_TIME_SEC="{self.inactivity_shutdown_time_sec}"
 
         cd /opt/burla

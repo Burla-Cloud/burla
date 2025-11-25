@@ -43,9 +43,9 @@ def add_node(request: Request, logger: Logger = Depends(get_logger)):
     request_json = request.json()
     total_cpus = request_json["total_cpus"]
     disk_size = request_json.get("disk_size", config["Nodes"][0]["disk_size_gb"])
-    image_uri = request_json.get("image_uri", config["Nodes"][0]["containers"][0]["image"])
+    image_uri = request_json.get("image_uri", config["Nodes"][0]["image_uri"])
     gcp_region = request_json.get("gcp_region", config["Nodes"][0]["gcp_region"])
-    inactivity_shutdown_time_sec = 180
+    inactivity_shutdown_time_sec = 30
 
     futures = []
     executor = ThreadPoolExecutor(max_workers=32)
@@ -68,7 +68,7 @@ def add_node(request: Request, logger: Logger = Depends(get_logger)):
                 logger=logger,
                 machine_type=machine_type,
                 gcp_region=gcp_region,
-                containers=[image_uri],
+                image_uri=image_uri,
                 auth_headers=auth_headers,
                 service_port=node_service_port,
                 sync_gcs_bucket_name=config["gcs_bucket_name"],
@@ -142,7 +142,7 @@ def _restart_cluster(request: Request, logger: Logger):
                 logger=logger,
                 machine_type=node_spec["machine_type"],
                 gcp_region=node_spec["gcp_region"],
-                containers=[c["image"] for c in node_spec["containers"]],
+                image_uri=node_spec["image_uri"],
                 auth_headers=auth_headers,
                 service_port=node_service_port,
                 sync_gcs_bucket_name=config["gcs_bucket_name"],

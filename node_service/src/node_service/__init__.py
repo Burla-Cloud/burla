@@ -68,7 +68,7 @@ def REINIT_SELF(SELF):
     SELF["FAILED"] = False
     SELF["SHUTTING_DOWN"] = False
     SELF["last_activity_timestamp"] = time()
-    SELF["current_container_config"] = []
+    SELF["current_image_uri"] = ""
     SELF["job_watcher_stop_event"].set()  # needs to be default set so it definitely dies on reboot
     SELF["all_inputs_uploaded"] = False
     SELF["current_input_batch_forwarded"] = True
@@ -187,16 +187,16 @@ async def lifespan(app: FastAPI):
     # (you tried skipping the worker restarts here when reloading,
     # this won't work because this whole file re-runs, and SELF is reset when reloading.)
 
+    # boot containers before accepting any requests.
+    # `reboot_containers` will delete VM's if it fails, no need to do that here.
+    image_uri = os.environ["IMAGE_URI"]
+    await run_in_threadpool(reboot_containers, new_image_uri=image_uri, logger=logger)
+
     if INACTIVITY_SHUTDOWN_TIME_SEC:
         asyncio.create_task(shutdown_if_idle_for_too_long(logger=logger))
         logger.log(
             f"This node will shutdown if idle for {INACTIVITY_SHUTDOWN_TIME_SEC//60} minutes!"
         )
-
-    # boot containers before accepting any requests.
-    # `reboot_containers` will delete VM's if it fails, no need to do that here.
-    containers = [c["image"] for c in json.loads(os.environ["CONTAINERS"])]
-    await run_in_threadpool(reboot_containers, new_container_config=containers, logger=logger)
 
     yield
 

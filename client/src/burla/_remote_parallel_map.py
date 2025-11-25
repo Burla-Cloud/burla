@@ -182,16 +182,22 @@ async def _get_ready_nodes(db: AsyncClient):
     return [d.to_dict() for d in docs]
 
 
-async def _select_nodes_to_assign_to_job(
+async def _get_nodes_to_assign_to_job(
     db: AsyncClient,
     max_parallelism: int,
     func_cpu: int,
     func_ram: int,
+    grow: bool,
     spinner: Union[bool, Spinner],
+    image_uri: Optional[str] = None,
 ):
     ready_nodes = await _get_ready_nodes(db)
     if not ready_nodes:
-        ready_nodes = await _wait_for_nodes_to_be_ready(db, spinner)
+        try:
+            ready_nodes = await _wait_for_nodes_to_be_ready(db, spinner)
+        except:
+            if not grow:
+                raise
 
     # it's really important to NOT ignore this check if you are in local dev
     # it should not be necessary to ignore this in local/remote dev and you shouldn't ignore it
@@ -217,10 +223,17 @@ async def _select_nodes_to_assign_to_job(
             planned_initial_job_parallelism += node_target_parallelism
             nodes_to_assign.append(node)
 
-    if len(nodes_to_assign) == 0:
+    if len(nodes_to_assign) == 0 and not grow:
         msg = "No compatible nodes available. Are the machines in your cluster large enough to "
         msg += "support your `func_cpu` and `func_ram` arguments?"
         raise NoCompatibleNodes(msg)
+
+    nodes_to_reboot = [n for n in nodes_to_assign if image_uri and (n["image_uri"] != image_uri)]
+    for node in nodes_to_reboot:
+        # call /reboot sending it new image_uri and job to auto-execute
+        pass
+
+    # call /v1/cluster/nodes and add (max_parallelism - planned_initial_job_parallelism) CPUs
 
     # When running locally the node service hostname is it's container name. This only works from
     # inside the docker network, not from the host machine (here). If detected, swap to localhost.
@@ -271,7 +284,13 @@ async def _execute_job(
         msg += "We apologize for this temporary limitation! If this is confusing or blocking you, please tell us! (jake@burla.dev)\n\n"
         raise FunctionTooBig(msg)
 
-    nodes_to_assign, total_target_parallelism = await _select_nodes_to_assign_to_job(
+    #
+    #
+    # TODO: centralize all node assigning to one place for new / current / rebooting
+    #
+    #
+
+    nodes_to_assign, total_target_parallelism = await _get_nodes_to_assign_to_job(
         ASYNC_DB, max_parallelism, func_cpu, func_ram, spinner
     )
 

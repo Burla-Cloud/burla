@@ -116,6 +116,7 @@ from main_service.endpoints.cluster import router as cluster_router
 from main_service.endpoints.settings import router as settings_router
 from main_service.endpoints.jobs import router as jobs_router
 from main_service.endpoints.storage import router as storage_router
+from main_service.endpoints.storage import router as storage_router
 
 
 @asynccontextmanager

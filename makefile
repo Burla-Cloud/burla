@@ -81,8 +81,21 @@ local-dev:
 	IMAGE_NAME=$$( echo \
 		"us-docker.pkg.dev/$${PROJECT_ID}/burla-main-service/burla-main-service:latest" \
 	); \
+	PROJECT_ID=$$(gcloud config get-value project 2>/dev/null); \
+	IMAGE_NAME=$$( echo \
+		"us-docker.pkg.dev/$${PROJECT_ID}/burla-main-service/burla-main-service:latest" \
+	); \
 	echo "Killing all node_* and worker_* containers"; \
 	ids=$$(docker ps -a --format '{{.Names}} {{.ID}}' | awk '$$1 ~ /^(node_|worker_)/ {print $$2}'); \
+	if [ -n "$$ids" ]; then docker rm -f $$ids; fi; \
+	echo "Removing _worker_service_python_env"; \
+	rm -rf ./_worker_service_python_env; \
+	mkdir -p ./_worker_service_python_env; \
+	chmod 777 ./_worker_service_python_env; \
+	echo "Removing _shared_workspace"; \
+	rm -rf ./_shared_workspace; \
+	mkdir -p ./_shared_workspace; \
+	chmod 777 ./_shared_workspace; \
 	if [ -n "$$ids" ]; then docker rm -f $$ids; fi; \
 	echo "Removing _worker_service_python_env"; \
 	rm -rf ./_worker_service_python_env; \
@@ -102,11 +115,19 @@ local-dev:
 		-v ~/.config/gcloud:/root/.config/gcloud \
 		-v /var/run/docker.sock:/var/run/docker.sock \
 		-e GOOGLE_CLOUD_PROJECT=$${PROJECT_ID} \
+		-e GOOGLE_CLOUD_PROJECT=$${PROJECT_ID} \
 		-e IN_LOCAL_DEV_MODE=True \
 		-e REDIRECT_LOCALLY_ON_LOGIN=True \
 		-e HOST_PWD=$$(PWD) \
 		-e HOST_HOME_DIR=$${HOME} \
 		-p 5001:5001 \
+		--entrypoint python \
+		$${IMAGE_NAME} -m uvicorn main_service:app \
+			--host 0.0.0.0 \
+			--port 5001 \
+			--reload --reload-exclude main_service/frontend/node_modules/ \
+			--timeout-keep-alive 600 \
+			--timeout-graceful-shutdown 0
 		--entrypoint python \
 		$${IMAGE_NAME} -m uvicorn main_service:app \
 			--host 0.0.0.0 \
@@ -123,6 +144,10 @@ remote-dev:
 	IMAGE_NAME=$$( echo \
 		"us-docker.pkg.dev/$${PROJECT_ID}/burla-main-service/burla-main-service:latest" \
 	); \
+	PROJECT_ID=$$(gcloud config get-value project 2>/dev/null); \
+	IMAGE_NAME=$$( echo \
+		"us-docker.pkg.dev/$${PROJECT_ID}/burla-main-service/burla-main-service:latest" \
+	); \
 	$(MAKE) __check-node-service-up-to-date && echo "" || exit 1; \
 	:; \
 	docker run --rm -it \
@@ -130,8 +155,12 @@ remote-dev:
 		-v $(PWD)/main_service:/burla/main_service \
 		-v ~/.config/gcloud:/root/.config/gcloud \
 		-e GOOGLE_CLOUD_PROJECT=$${PROJECT_ID} \
+		-e GOOGLE_CLOUD_PROJECT=$${PROJECT_ID} \
 		-e REDIRECT_LOCALLY_ON_LOGIN=True \
 		-p 5001:5001 \
+		--entrypoint python \
+		$${IMAGE_NAME} -m uvicorn main_service:app --host 0.0.0.0 --port 5001 --reload \
+			--reload-exclude main_service/frontend/node_modules/ --timeout-graceful-shutdown 0
 		--entrypoint python \
 		$${IMAGE_NAME} -m uvicorn main_service:app --host 0.0.0.0 --port 5001 --reload \
 			--reload-exclude main_service/frontend/node_modules/ --timeout-graceful-shutdown 0

@@ -115,6 +115,7 @@ class Node:
         service_port: int = 8080,  # <- this needs to be open in your cloud firewall!
         as_local_container: bool = False,
         sync_gcs_bucket_name: Optional[str] = None,  # <- not a uri, just the name
+        sync_gcs_bucket_name: Optional[str] = None,  # <- not a uri, just the name
         instance_client: Optional[InstancesClient] = None,
         inactivity_shutdown_time_sec: Optional[int] = None,
         disk_size: Optional[int] = None,
@@ -128,6 +129,7 @@ class Node:
         self.auth_headers = auth_headers
         self.spot = spot
         self.port = service_port
+        self.sync_gcs_bucket_name = sync_gcs_bucket_name
         self.sync_gcs_bucket_name = sync_gcs_bucket_name
         self.inactivity_shutdown_time_sec = inactivity_shutdown_time_sec
         self.disk_size = disk_size if disk_size else 20  # minimum is 10 due to disk image
@@ -147,7 +149,9 @@ class Node:
 
         if machine_type.startswith("n4"):
             self.disk_image = "projects/burla-prod/global/images/burla-node-nogpu-2"
+            self.disk_image = "projects/burla-prod/global/images/burla-node-nogpu-2"
         elif machine_type.startswith("a2") or machine_type.startswith("a3"):
+            self.disk_image = "projects/burla-prod/global/images/burla-node-gpu-2"
             self.disk_image = "projects/burla-prod/global/images/burla-node-gpu-2"
         else:
             raise ValueError(f"Invalid machine type: {machine_type}")
@@ -277,6 +281,8 @@ class Node:
         container_name = f"node_{self.instance_name[11:]}"
         container = docker_client.create_container(
             image=image,
+            command=["-c", cmd_script],
+            entrypoint=["bash"],
             command=["-c", cmd_script],
             entrypoint=["bash"],
             name=container_name,

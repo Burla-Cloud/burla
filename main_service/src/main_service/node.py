@@ -115,7 +115,6 @@ class Node:
         service_port: int = 8080,  # <- this needs to be open in your cloud firewall!
         as_local_container: bool = False,
         sync_gcs_bucket_name: Optional[str] = None,  # <- not a uri, just the name
-        sync_gcs_bucket_name: Optional[str] = None,  # <- not a uri, just the name
         instance_client: Optional[InstancesClient] = None,
         inactivity_shutdown_time_sec: Optional[int] = None,
         disk_size: Optional[int] = None,
@@ -281,8 +280,6 @@ class Node:
         container_name = f"node_{self.instance_name[11:]}"
         container = docker_client.create_container(
             image=image,
-            command=["-c", cmd_script],
-            entrypoint=["bash"],
             command=["-c", cmd_script],
             entrypoint=["bash"],
             name=container_name,

@@ -176,11 +176,48 @@ def move_prefix(source_prefix: str, destination_prefix: str) -> None:
         GCS_BUCKET.rename_blob(blob, destination_name)
 
 
+
+
+
+def extract_paging(payload: Dict[str, Any]) -> tuple[int, int]:
+    """Read skip / take from payload and payload['data'] safely."""
+    raw_skip = payload.get("skip")
+    raw_take = payload.get("take")
+
+    data = payload.get("data")
+    if isinstance(data, dict):
+        if raw_skip is None:
+            raw_skip = data.get("skip")
+        if raw_take is None:
+            raw_take = data.get("take")
+
+    def to_int(value: Any, default: int) -> int:
+        try:
+            if value is None:
+                return default
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
+    skip = max(to_int(raw_skip, 0), 0)
+    take = to_int(raw_take, 500)
+
+    if take <= 0:
+        take = 500
+    if take > 5000:
+        take = 5000
+
+    return skip, take
+
+
 def read_action(payload: Dict[str, Any]) -> Dict[str, Any]:
     directory_prefix = normalize_directory_path(payload.get("path"))
+    skip, take = extract_paging(payload)
+
     iterator = GCS_BUCKET.list_blobs(prefix=directory_prefix, delimiter="/")
     directories: List[Dict[str, Any]] = []
     files: List[Dict[str, Any]] = []
+
     for page in iterator.pages:
         for prefix in getattr(page, "prefixes", []):
             directories.append(build_directory_metadata(prefix, directory_prefix))
@@ -190,10 +227,24 @@ def read_action(payload: Dict[str, Any]) -> Dict[str, Any]:
             if blob.name.endswith("/"):
                 continue
             files.append(build_file_metadata(blob, directory_prefix))
+
     combined: List[Dict[str, Any]] = directories + files
+    total_count = len(combined)
+
+    if total_count == 0:
+        sliced: List[Dict[str, Any]] = []
+    else:
+        # clamp skip so we never slice past the end of the list
+        if skip >= total_count:
+            # start at the first item of the last valid page
+            skip = max(((total_count - 1) // take) * take, 0)
+        end_index = min(skip + take, total_count)
+        sliced = combined[skip:end_index]
+
     response = {
         "cwd": build_cwd_metadata(directory_prefix, bool(combined)),
-        "files": combined,
+        "files": sliced,
+        "count": total_count,
     }
     return response
 

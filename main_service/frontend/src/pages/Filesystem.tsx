@@ -104,16 +104,16 @@ function formatFileManagerSize(bytes: number): string {
 
 function formatFileManagerDate(value: string | Date | null | undefined): string {
     if (!value) {
-        return "—";
+        return "-";
     }
     const date = value instanceof Date ? value : new Date(value);
     if (Number.isNaN(date.getTime())) {
-        return "—";
+        return "-";
     }
     const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
     const monthNames = [
         "Jan",
-        "Feb",
+    "Feb",
         "Mar",
         "Apr",
         "May",
@@ -488,6 +488,7 @@ type FileSelection = {
 
 const MAX_SELECTION_FILES = 1000;
 const MAX_SELECTION_ERROR_CODE = "MAX_SELECTION_EXCEEDED";
+const PAGE_SIZE = 500;
 
 function isMaxSelectionError(error: unknown): boolean {
     return error instanceof Error && error.message === MAX_SELECTION_ERROR_CODE;
@@ -521,12 +522,22 @@ function relativePathForFile(fileInfo: FileInfo): string {
 }
 
 export default function Filesystem() {
-    const fmRef = React.useRef<FileManagerComponent | null>(null);
+     const fmRef = React.useRef<FileManagerComponent | null>(null);
+    const [pageIndex, setPageIndex] = React.useState(0);
+    const [totalCount, setTotalCount] = React.useState(0);
+
+    // NEW: track the current folder path for pagination reset
+    const currentPathRef = React.useRef<string | null>(null);
+
     const maxUploadSizeBytes = 10 * 1024 ** 4;
     const [activeUpload, setActiveUpload] = React.useState<ActiveUploadState | null>(null);
     const [isPreparingBatchDownload, setIsPreparingBatchDownload] = React.useState(false);
     const abortControllerRef = React.useRef<AbortController | null>(null);
     const batchDownloadAbortControllerRef = React.useRef<AbortController | null>(null);
+
+    // new flag to block clicks while FileManager is reading
+    const [isBusy, setIsBusy] = React.useState(false);
+
     const detailsViewColumns = React.useMemo(
         () => [
             {
@@ -1054,6 +1065,78 @@ export default function Filesystem() {
                 return;
             }
 
+            
+
+            if (normalizedAction === "read") {
+                // mark busy while directory contents load
+                setIsBusy(true);
+
+                const ajax = args.ajaxSettings || {};
+                const rawData = ajax.data;
+
+                let payload: any = {};
+                if (typeof rawData === "string" && rawData.trim().length > 0) {
+                    try {
+                        payload = JSON.parse(rawData);
+                    } catch {
+                        payload = {};
+                    }
+                } else if (rawData && typeof rawData === "object") {
+                    payload = { ...rawData };
+                }
+
+                // figure out which folder this read is targeting
+                const rawPath =
+                    (payload && typeof payload.path === "string" && payload.path) ||
+                    (payload.data &&
+                        typeof payload.data === "object" &&
+                        typeof payload.data.path === "string" &&
+                        payload.data.path) ||
+                    "/";
+
+                const normalizedPath = rawPath || "/";
+
+                // if we navigated to a different folder, reset pagination
+                let effectivePageIndex = pageIndex;
+                if (currentPathRef.current === null || currentPathRef.current !== normalizedPath) {
+                    currentPathRef.current = normalizedPath;
+                    effectivePageIndex = 0;
+                    if (pageIndex !== 0) {
+                        setPageIndex(0);
+                    }
+                }
+
+                const skip = effectivePageIndex * PAGE_SIZE;
+                const take = PAGE_SIZE;
+
+                const dataField =
+                    payload.data &&
+                    !Array.isArray(payload.data) &&
+                    typeof payload.data === "object"
+                        ? payload.data
+                        : {};
+
+                const nextPayload = {
+                    ...payload,
+                    skip,
+                    take,
+                    data: {
+                        ...dataField,
+                        skip,
+                        take,
+                    },
+                };
+
+                args.ajaxSettings = {
+                    ...ajax,
+                    data: JSON.stringify(nextPayload),
+                };
+
+                return;
+            }
+
+
+
             if (normalizedAction === "upload") {
                 args.cancel = true;
 
@@ -1107,7 +1190,7 @@ export default function Filesystem() {
                 clearUploaderFiles(manager?.uploadObj ?? null);
             }
         },
-        [processFilesSelection]
+        [processFilesSelection, pageIndex]
     );
 
     React.useEffect(() => {
@@ -1256,10 +1339,81 @@ export default function Filesystem() {
         lastSelectionTokenRef.current = null;
     }, []);
 
-    const handleSuccess = React.useCallback((args: any) => {
-        if (!args || args.action !== "move") return;
-        fmRef.current?.refreshFiles();
+    const scrollToTopOfGrid = React.useCallback(() => {
+        const manager = fmRef.current;
+        const host = (manager?.element as HTMLElement | undefined) ?? null;
+        if (!host) return;
+
+        const scrollEl =
+            host.querySelector<HTMLElement>(".e-content") ??
+            host.querySelector<HTMLElement>(".e-gridcontent");
+        if (scrollEl) {
+            scrollEl.scrollTop = 0;
+        }
     }, []);
+
+    const handleSuccess = React.useCallback((args: any) => {
+        if (!args) return;
+
+        if (args.action === "move") {
+            fmRef.current?.refreshFiles();
+        }
+
+        if (args.action === "read") {
+            const result = args.result as { count?: number } | undefined;
+            const count = result && typeof result.count === "number" ? result.count : 0;
+
+            setTotalCount(count);
+
+            if (count > 0) {
+                const maxPageIndex = Math.max(0, Math.ceil(count / PAGE_SIZE) - 1);
+                setPageIndex((current) => (current > maxPageIndex ? maxPageIndex : current));
+            } else {
+                setPageIndex(0);
+            }
+
+            // clear busy once the read finishes successfully
+            setIsBusy(false);
+        }
+    }, []);
+
+    const handleFailure = React.useCallback((args: any) => {
+        console.error("FileManager request failed", args);
+        if (args && args.action === "read") {
+            setIsBusy(false);
+        }
+    }, []);
+
+    const handlePageChange = React.useCallback(
+        (direction: "next" | "prev") => {
+            setPageIndex((current) => {
+                let nextIndex = current;
+
+                if (direction === "next") {
+                    const maxPageIndex = Math.max(
+                        0,
+                        Math.ceil(totalCount / PAGE_SIZE) - 1
+                    );
+                    nextIndex = Math.min(current + 1, maxPageIndex);
+                } else {
+                    nextIndex = Math.max(current - 1, 0);
+                }
+
+                if (nextIndex !== current) {
+                    setTimeout(() => {
+                        const manager = fmRef.current;
+                        if (manager) {
+                            manager.refreshFiles();
+                            scrollToTopOfGrid();
+                        }
+                    }, 0);
+                }
+
+                return nextIndex;
+            });
+        },
+        [totalCount, scrollToTopOfGrid]
+    );
 
     const handleFileLoad = React.useCallback((args: FileLoadEventArgs) => {
         const fileDetails = args.fileDetails as {
@@ -1276,12 +1430,12 @@ export default function Filesystem() {
         );
         if (!isFile) {
             if (sizeElement) {
-                sizeElement.textContent = "—";
-                sizeElement.title = "—";
+                sizeElement.textContent = "-";
+                sizeElement.title = "-";
             }
             if (modifiedElement) {
-                modifiedElement.textContent = "—";
-                modifiedElement.title = "—";
+                modifiedElement.textContent = "-";
+                modifiedElement.title = "-";
             }
             return;
         }
@@ -1464,8 +1618,8 @@ export default function Filesystem() {
     };
 
     return (
-        <div className="flex-1 flex flex-col justify-start px-12 pt-6 pb-12 min-h-0">
-            <div className="max-w-7xl mx-auto w-full flex-1 flex flex-col min-h-0">
+        <div className="flex-1 flex flex-col justify-start px-12 pt-6 pb-8">
+            <div className="mx-auto w-full flex flex-col">
                 {showWelcome && (
                     <div className="spotlight-surface rounded-xl my-8">
                         <Card className="w-full relative rounded-xl shadow-lg shadow-black/5 bg-white/90 backdrop-blur">
@@ -1489,7 +1643,7 @@ export default function Filesystem() {
                                             <code>/workspace/shared</code>" inside the cluster.
                                         </li>
                                         <li>
-                                            Any files you write to "<code>/workspace/shared</code>"{" "}
+                                            Any files you write to "<code>/workspace/shared</code>"
                                             inside the cluster, will appear here where you can
                                             download them!
                                         </li>
@@ -1499,7 +1653,8 @@ export default function Filesystem() {
                         </Card>
                     </div>
                 )}
-                <div className="relative flex-1 rounded-lg border border-gray-200 bg-white shadow-sm filesystem-shell">
+
+                <div className="relative rounded-lg border border-gray-200 bg-white shadow-sm filesystem-shell">
                     <FileManagerComponent
                         view="Details"
                         ref={fmRef}
@@ -1522,6 +1677,7 @@ export default function Filesystem() {
                             layout: ["NewFolder", "Upload", "Refresh"],
                         }}
                         success={handleSuccess}
+                        failure={handleFailure}
                         toolbarSettings={{
                             items: [
                                 "NewFolder",
@@ -1537,11 +1693,47 @@ export default function Filesystem() {
                         beforeDownload={handleBeforeDownload}
                         beforeSend={handleBeforeSend}
                         fileLoad={handleFileLoad}
-                        height="100%"
+                        height="82vh"
                         width="100%"
                     >
                         <Inject services={[NavigationPane, Toolbar, DetailsView, ContextMenu]} />
                     </FileManagerComponent>
+
+                    {/* click blocker while FileManager is reading directory contents */}
+                    {isBusy && (
+                         <div
+                            className="absolute inset-0 z-10 pointer-events-auto bg-white/25 backdrop-blur-[1.75px]"
+                            aria-hidden="true"
+                        />
+                    )}
+
+                    {totalCount > PAGE_SIZE && (
+                        <div className="flex items-center justify-between px-4 py-2 border-t border-gray-200 text-sm text-gray-600">
+                            <div>
+                                Page {pageIndex + 1} of{" "}
+                                {Math.max(1, Math.ceil(totalCount / PAGE_SIZE))}
+                            </div>
+                            <div className="space-x-2">
+                                <button
+                                    type="button"
+                                    className="px-2 py-1 border rounded disabled:opacity-50"
+                                    onClick={() => handlePageChange("prev")}
+                                    disabled={pageIndex === 0}
+                                >
+                                    Previous
+                                </button>
+                                <button
+                                    type="button"
+                                    className="px-2 py-1 border rounded disabled:opacity-50"
+                                    onClick={() => handlePageChange("next")}
+                                    disabled={(pageIndex + 1) * PAGE_SIZE >= totalCount}
+                                >
+                                    Next
+                                </button>
+                            </div>
+                        </div>
+                    )}
+
                     {isPreparingBatchDownload && (
                         <div className="absolute inset-0 z-30 flex items-center justify-center bg-slate-900/45 backdrop-blur-sm">
                             <div className="pointer-events-auto relative flex w-full max-w-xl flex-col items-center gap-6 rounded-3xl border border-slate-200 bg-white px-8 py-8 text-slate-800 shadow-xl shadow-slate-900/10">
@@ -1567,6 +1759,7 @@ export default function Filesystem() {
                             </div>
                         </div>
                     )}
+
                     {activeUpload && (
                         <div className="absolute inset-0 z-20 flex items-center justify-center bg-slate-900/45 backdrop-blur-sm">
                             <div className="pointer-events-auto relative w-full max-w-2xl rounded-2xl bg-white/95 p-8 shadow-2xl">
@@ -1583,7 +1776,7 @@ export default function Filesystem() {
                                             aria-label="Cancel upload"
                                             onClick={handleCancelUpload}
                                         >
-                                            <X className="h-6 w-6" aria-hidden="true" />
+                                            <X className="h-6 w-6" />
                                         </button>
                                     )}
                                 </div>

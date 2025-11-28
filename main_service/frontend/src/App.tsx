@@ -53,7 +53,6 @@ const App = () => (
                                                     path="/filesystem"
                                                     element={<Filesystem />}
                                                 />
-                      <Route path="/storage" element={<Storage />} />
                     </Route>
                   </Routes>
                 </Router>

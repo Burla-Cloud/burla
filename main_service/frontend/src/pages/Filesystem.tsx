@@ -488,7 +488,7 @@ type FileSelection = {
 
 const MAX_SELECTION_FILES = 1000;
 const MAX_SELECTION_ERROR_CODE = "MAX_SELECTION_EXCEEDED";
-const PAGE_SIZE = 500;
+const PAGE_SIZE = 1000;
 
 function isMaxSelectionError(error: unknown): boolean {
     return error instanceof Error && error.message === MAX_SELECTION_ERROR_CODE;

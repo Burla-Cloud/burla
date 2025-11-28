@@ -1,4 +1,5 @@
 import datetime
+import time
 import tempfile
 import zipfile
 from pathlib import Path
@@ -11,6 +12,8 @@ from google.api_core.exceptions import GoogleAPIError, NotFound
 from google.auth import default, impersonated_credentials
 
 from main_service import PROJECT_ID, DB
+
+DIRECTORY_CACHE: dict[str, List[Dict[str, Any]]] = {}
 
 
 router = APIRouter()
@@ -200,19 +203,20 @@ def extract_paging(payload: Dict[str, Any]) -> tuple[int, int]:
             return default
 
     skip = max(to_int(raw_skip, 0), 0)
-    take = to_int(raw_take, 500)
+    take = to_int(raw_take, 1000)
 
     if take <= 0:
-        take = 500
+        take = 1000
     if take > 5000:
         take = 5000
 
     return skip, take
 
 
-def read_action(payload: Dict[str, Any]) -> Dict[str, Any]:
-    directory_prefix = normalize_directory_path(payload.get("path"))
-    skip, take = extract_paging(payload)
+def get_directory_listing(directory_prefix: str) -> List[Dict[str, Any]]:
+    """Return cached listing for this directory, or build it if not present."""
+    if directory_prefix in DIRECTORY_CACHE:
+        return DIRECTORY_CACHE[directory_prefix]
 
     iterator = GCS_BUCKET.list_blobs(prefix=directory_prefix, delimiter="/")
     directories: List[Dict[str, Any]] = []
@@ -222,13 +226,27 @@ def read_action(payload: Dict[str, Any]) -> Dict[str, Any]:
         for prefix in getattr(page, "prefixes", []):
             directories.append(build_directory_metadata(prefix, directory_prefix))
         for blob in page:
-            if blob.name == directory_prefix:
-                continue
-            if blob.name.endswith("/"):
+            if blob.name == directory_prefix or blob.name.endswith("/"):
                 continue
             files.append(build_file_metadata(blob, directory_prefix))
 
-    combined: List[Dict[str, Any]] = directories + files
+    combined = directories + files
+    DIRECTORY_CACHE[directory_prefix] = combined
+    return combined
+
+def clear_directory_cache_except(path: str):
+    """Clear all cached directories except the one the user is currently in."""
+    keys = list(DIRECTORY_CACHE.keys())
+    for k in keys:
+        if k != path:
+            DIRECTORY_CACHE.pop(k, None)
+
+def read_action(payload: Dict[str, Any]) -> Dict[str, Any]:
+    directory_prefix = normalize_directory_path(payload.get("path"))
+    clear_directory_cache_except(directory_prefix)
+    skip, take = extract_paging(payload)
+
+    combined = get_directory_listing(directory_prefix)
     total_count = len(combined)
 
     if total_count == 0:
@@ -236,7 +254,6 @@ def read_action(payload: Dict[str, Any]) -> Dict[str, Any]:
     else:
         # clamp skip so we never slice past the end of the list
         if skip >= total_count:
-            # start at the first item of the last valid page
             skip = max(((total_count - 1) // take) * take, 0)
         end_index = min(skip + take, total_count)
         sliced = combined[skip:end_index]
@@ -247,6 +264,7 @@ def read_action(payload: Dict[str, Any]) -> Dict[str, Any]:
         "count": total_count,
     }
     return response
+
 
 
 def create_action(payload: Dict[str, Any]) -> Dict[str, Any]:

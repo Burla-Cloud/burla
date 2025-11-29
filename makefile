@@ -180,6 +180,7 @@ deploy-test:
 	set -e; \
 	$(MAKE) __check-node-service-up-to-date && echo "" || exit 1; \
 	cd ./main_service; \
+	$(MAKE) build-frontend; \
 	$(MAKE) image; \
 	$(MAKE) deploy-test; \
 
@@ -187,5 +188,6 @@ deploy-prod:
 	set -e; \
 	$(MAKE) __check-node-service-up-to-date && echo "" || exit 1; \
 	cd ./main_service; \
+	$(MAKE) build-frontend; \
 	$(MAKE) image; \
 	$(MAKE) publish;

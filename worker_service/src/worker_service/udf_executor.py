@@ -43,6 +43,24 @@ DB_HEADERS = {
 }
 
 
+def request_with_valid_dbheaders(method: str, *request_args, **request_kwargs):
+    """Refresh the token in the dbheaders and try again on 401"""
+    global DB_HEADERS
+    request_method = getattr(requests, method)
+    response = request_method(headers=DB_HEADERS, *request_args, **request_kwargs)
+    if response.status_code == 401:
+        DB_HEADERS = {
+            "Authorization": f"Bearer {_get_gcp_auth_token()}",
+            "Content-Type": "application/json",
+        }
+        response = request_method(headers=DB_HEADERS, *request_args, **request_kwargs)
+    if response.status_code == 401 and IN_LOCAL_DEV_MODE:
+        msg = "401 error writing logs, YOU DEV TOKEN IS PROBABLY EXPIRED!\n"
+        msg += "         Re-run `make local-dev` (and reboot!) to refresh the token.\n"
+        SELF["logs"].append(msg)
+    return response
+
+
 class _FirestoreStdout:
 
     def __init__(self, job_id: str):
@@ -101,21 +119,13 @@ class _FirestoreStdout:
             timestamp_field = {"timestampValue": timestamp_str}
             logs_field = {"arrayValue": {"values": [self._buffer]}}
             data = {"fields": {"logs": logs_field, "timestamp": timestamp_field}}
+            url = f"{DB_BASE_URL}/jobs/{self.job_id}/logs"
             try:
-                url = f"{DB_BASE_URL}/jobs/{self.job_id}/logs"
-                response = requests.post(url, headers=DB_HEADERS, json=data, timeout=5)
+                response = request_with_valid_dbheaders("post", url, json=data, timeout=5)
+                # response = requests.post(url, headers=DB_HEADERS, json=data, timeout=5)
                 response.raise_for_status()
             except Exception as e:
-                try:
-                    status = response.status_code
-                except Exception:
-                    status = None
-                if status == 401 and IN_LOCAL_DEV_MODE:
-                    msg = "401 error writing logs, YOU DEV TOKEN IS PROBABLY EXPIRED!\n"
-                    msg += "         Re-run `make local-dev` (and reboot!) to refresh the token.\n"
-                    SELF["logs"].append(msg)
-                else:
-                    SELF["logs"].append(f"Error writing log to firestore: {e}")
+                SELF["logs"].append(f"Error writing log to firestore: {e}")
             finally:
                 self._buffer.clear()
                 self._buffer_size = 0
@@ -253,7 +263,8 @@ def install_pkgs_and_execute_job(
         msg = f"Installing packages:\n{packages_str}"
         url = f"{DB_BASE_URL}/nodes/{INSTANCE_NAME}/logs"
         data = {"fields": {"msg": {"stringValue": msg}, "ts": {"integerValue": str(int(time()))}}}
-        response = requests.post(url, headers=DB_HEADERS, json=data, timeout=5)
+        response = request_with_valid_dbheaders("post", url, json=data, timeout=5)
+        # response = requests.post(url, headers=DB_HEADERS, json=data, timeout=5)
 
         _install_packages(packages)
         ENV_IS_READY_PATH.touch()
@@ -345,13 +356,15 @@ def install_pkgs_and_execute_job(
             logs_field = {"arrayValue": {"values": [firestore_formatted_log_msg]}}
             data = {"fields": {"logs": logs_field, "timestamp": {"timestampValue": timestamp_str}}}
             url = f"{DB_BASE_URL}/jobs/{job_id}/logs"
-            response = requests.post(url, headers=DB_HEADERS, json=data, timeout=5)
+            response = request_with_valid_dbheaders("post", url, json=data, timeout=5)
+            # response = requests.post(url, headers=DB_HEADERS, json=data, timeout=5)
             response.raise_for_status()
             # mark job failed
             mask = [("updateMask.fieldPaths", "status")]
             data = {"fields": {"status": {"stringValue": "FAILED"}}}
             url = f"{DB_BASE_URL}/jobs/{job_id}"
-            response = requests.patch(url, headers=DB_HEADERS, params=mask, json=data)
+            response = request_with_valid_dbheaders("patch", url, params=mask, json=data)
+            # response = requests.patch(url, headers=DB_HEADERS, params=mask, json=data)
             response.raise_for_status()
 
         # we REALLY want to be sure we dont add this result if the stop event got set during the udf

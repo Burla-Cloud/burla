@@ -15,6 +15,8 @@ from google.cloud import firestore
 from google.cloud.compute_v1 import InstancesClient
 from google.auth.transport.requests import Request
 from google.cloud.firestore import AsyncClient
+from google.cloud.firestore import FieldFilter, And
+from google.cloud.firestore_v1.field_path import FieldPath
 
 from node_service import (
     PROJECT_ID,
@@ -46,6 +48,27 @@ class Container(BaseModel):
         extra = "ignore"
 
 
+# async def get_neighboring_nodes(async_db):
+#     am_only_node_working_on_job = False
+#     status_filter = FieldFilter("status", "==", "RUNNING")
+#     job_filter = FieldFilter("current_job", "==", SELF["current_job"])
+#     base_query = async_db.collection("nodes").where(filter=And([status_filter, job_filter]))
+#     base_query = base_query.order_by(FieldPath.document_id())
+#     query = base_query.start_after({FieldPath.document_id(): INSTANCE_NAME})
+#     nodes = list(query.stream())
+#     neighboring_node = await anext(query.stream(), None)
+#     if not neighboring_node:
+#         # means this ^ was either the only or last node, in this case get 0th node.
+#         neighboring_node = await anext(base_query.limit(1).stream())
+#         am_only_node_working_on_job = neighboring_node.id == INSTANCE_NAME
+#     if not am_only_node_working_on_job:
+#         return neighboring_node
+
+
+# async def eject_inputs(async_db):
+#     node = get_neighboring_node(async_db)
+
+
 @router.post("/shutdown")
 async def shutdown_node(logger: Logger = Depends(get_logger)):
     """
@@ -54,6 +77,7 @@ async def shutdown_node(logger: Logger = Depends(get_logger)):
     """
     SELF["SHUTTING_DOWN"] = True
     SELF["job_watcher_stop_event"].set()
+    async_db = AsyncClient(project=PROJECT_ID, database="burla")
 
     try:
         url = "http://metadata.google.internal/computeMetadata/v1/instance/preempted"
@@ -70,7 +94,8 @@ async def shutdown_node(logger: Logger = Depends(get_logger)):
     else:
         logger.log(f"Received shutdown request for node {INSTANCE_NAME}.")
 
-    async_db = AsyncClient(project=PROJECT_ID, database="burla")
+    # await eject_inputs(async_db)
+
     doc_ref = async_db.collection("nodes").document(INSTANCE_NAME)
     snapshot = await doc_ref.get()
     if snapshot.exists:

@@ -13,11 +13,8 @@ from google.auth import default, impersonated_credentials
 
 from main_service import PROJECT_ID, DB
 
-DIRECTORY_CACHE: dict[str, List[Dict[str, Any]]] = {}
-
 
 router = APIRouter()
-
 
 # This makes it possible to create signed url's for any blobs created with this client.
 source_creds, project_id = default()
@@ -179,9 +176,6 @@ def move_prefix(source_prefix: str, destination_prefix: str) -> None:
         GCS_BUCKET.rename_blob(blob, destination_name)
 
 
-
-
-
 def extract_paging(payload: Dict[str, Any]) -> tuple[int, int]:
     """Read skip / take from payload and payload['data'] safely."""
     raw_skip = payload.get("skip")
@@ -213,58 +207,70 @@ def extract_paging(payload: Dict[str, Any]) -> tuple[int, int]:
     return skip, take
 
 
-def get_directory_listing(directory_prefix: str) -> List[Dict[str, Any]]:
-    """Return cached listing for this directory, or build it if not present."""
-    if directory_prefix in DIRECTORY_CACHE:
-        return DIRECTORY_CACHE[directory_prefix]
-
+def get_directory_page(
+    directory_prefix: str,
+    skip: int,
+    take: int,
+) -> tuple[List[Dict[str, Any]], int, bool]:
     iterator = GCS_BUCKET.list_blobs(prefix=directory_prefix, delimiter="/")
-    directories: List[Dict[str, Any]] = []
-    files: List[Dict[str, Any]] = []
+
+    entries: List[Dict[str, Any]] = []
+    seen = 0
+    remaining_needed = skip + take
+    has_more = False
 
     for page in iterator.pages:
+        # folders
         for prefix in getattr(page, "prefixes", []):
-            directories.append(build_directory_metadata(prefix, directory_prefix))
+            if seen >= remaining_needed:
+                has_more = True
+                break
+
+            if seen >= skip:
+                entries.append(build_directory_metadata(prefix, directory_prefix))
+
+            seen += 1
+
+        if has_more:
+            break
+
+        # files
         for blob in page:
             if blob.name == directory_prefix or blob.name.endswith("/"):
                 continue
-            files.append(build_file_metadata(blob, directory_prefix))
 
-    combined = directories + files
-    DIRECTORY_CACHE[directory_prefix] = combined
-    return combined
+            if seen >= remaining_needed:
+                has_more = True
+                break
 
-def clear_directory_cache_except(path: str):
-    """Clear all cached directories except the one the user is currently in."""
-    keys = list(DIRECTORY_CACHE.keys())
-    for k in keys:
-        if k != path:
-            DIRECTORY_CACHE.pop(k, None)
+            if seen >= skip:
+                entries.append(build_file_metadata(blob, directory_prefix))
+
+            seen += 1
+
+        if has_more:
+            break
+
+    if has_more:
+        fake_total = skip + len(entries) + 1
+    else:
+        fake_total = seen
+
+    return entries, fake_total, has_more
+
 
 def read_action(payload: Dict[str, Any]) -> Dict[str, Any]:
     directory_prefix = normalize_directory_path(payload.get("path"))
-    clear_directory_cache_except(directory_prefix)
     skip, take = extract_paging(payload)
 
-    combined = get_directory_listing(directory_prefix)
-    total_count = len(combined)
+    files, total_count, has_more = get_directory_page(directory_prefix, skip, take)
 
-    if total_count == 0:
-        sliced: List[Dict[str, Any]] = []
-    else:
-        # clamp skip so we never slice past the end of the list
-        if skip >= total_count:
-            skip = max(((total_count - 1) // take) * take, 0)
-        end_index = min(skip + take, total_count)
-        sliced = combined[skip:end_index]
-
-    response = {
-        "cwd": build_cwd_metadata(directory_prefix, bool(combined)),
-        "files": sliced,
+    return {
+        "cwd": build_cwd_metadata(directory_prefix, total_count > 0),
+        "files": files,
         "count": total_count,
+        "hasMore": has_more,
     }
-    return response
-
 
 
 def create_action(payload: Dict[str, Any]) -> Dict[str, Any]:

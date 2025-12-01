@@ -527,7 +527,6 @@ export default function Filesystem() {
     const [totalCount, setTotalCount] = React.useState(0);
     const [hasMore, setHasMore] = React.useState(false);
 
-    // track current folder for pagination reset
     const currentPathRef = React.useRef<string | null>(null);
 
     const maxUploadSizeBytes = 10 * 1024 ** 4;
@@ -536,7 +535,6 @@ export default function Filesystem() {
     const abortControllerRef = React.useRef<AbortController | null>(null);
     const batchDownloadAbortControllerRef = React.useRef<AbortController | null>(null);
 
-    // block clicks while FileManager is reading
     const [isBusy, setIsBusy] = React.useState(false);
 
     const detailsViewColumns = React.useMemo(
@@ -1383,8 +1381,34 @@ export default function Filesystem() {
         }
     }, []);
 
+    React.useEffect(() => {
+        const manager = fmRef.current;
+        const host = (manager?.element as HTMLElement | undefined) ?? undefined;
+        if (!host) return;
+
+        const gridContent =
+            host.querySelector<HTMLElement>(".e-gridcontent") ??
+            host.querySelector<HTMLElement>(".e-content");
+
+        if (!gridContent) return;
+
+        if (isBusy) {
+            gridContent.style.pointerEvents = "none";
+            gridContent.style.filter = "blur(2px)";
+            gridContent.style.opacity = "0.6";
+        } else {
+            gridContent.style.pointerEvents = "";
+            gridContent.style.filter = "";
+            gridContent.style.opacity = "";
+        }
+    }, [isBusy]);
+
     const handlePageChange = React.useCallback(
         (direction: "next" | "prev") => {
+            if (isBusy) {
+                return;
+            }
+
             setPageIndex((current) => {
                 let nextIndex = current;
 
@@ -1409,7 +1433,7 @@ export default function Filesystem() {
                 return nextIndex;
             });
         },
-        [totalCount, hasMore, scrollToTopOfGrid]
+        [totalCount, hasMore, scrollToTopOfGrid, isBusy]
     );
 
     const handleFileLoad = React.useCallback((args: FileLoadEventArgs) => {
@@ -1617,6 +1641,10 @@ export default function Filesystem() {
     const totalPages = totalCount > 0 ? Math.max(1, Math.ceil(totalCount / PAGE_SIZE)) : 1;
     const displayTotal = hasMore ? "many" : totalPages.toString();
 
+    const isPrevDisabled = isBusy || pageIndex === 0;
+    const isNextDisabled =
+        isBusy || (!hasMore && (pageIndex + 1) * PAGE_SIZE >= totalCount);
+
     return (
         <div className="flex-1 flex flex-col justify-start px-12 pt-6 pb-8">
             <div className="max-w-6xl mx-auto w-full flex-1 flex flex-col">
@@ -1704,13 +1732,6 @@ export default function Filesystem() {
                             />
                         </FileManagerComponent>
 
-                        {isBusy && (
-                            <div
-                                className="absolute inset-0 z-10 pointer-events-auto bg-white/25 backdrop-blur-[1.75px]"
-                                aria-hidden="true"
-                            />
-                        )}
-
                         {(totalCount > PAGE_SIZE || hasMore) && (
                             <div className="flex items-center justify-between px-4 py-2 border-t border-gray-200 text-sm text-gray-600">
                                 <div>
@@ -1719,20 +1740,31 @@ export default function Filesystem() {
                                 <div className="space-x-2">
                                     <button
                                         type="button"
-                                        className="px-2 py-1 border rounded disabled:opacity-50"
+                                        className={`px-2 py-1 border rounded transition-colors ${
+                                            isPrevDisabled
+                                                ? "bg-gray-100 text-gray-400 border-gray-300"
+                                                : "bg-white text-gray-800 border-gray-300 hover:bg-gray-50"
+                                        }`}
                                         onClick={() => handlePageChange("prev")}
-                                        disabled={pageIndex === 0}
+                                        disabled={isPrevDisabled}
+                                        style={{
+                                            cursor: isPrevDisabled ? "default" : "pointer",
+                                        }}
                                     >
                                         Previous
                                     </button>
                                     <button
                                         type="button"
-                                        className="px-2 py-1 border rounded disabled:opacity-50"
+                                        className={`px-2 py-1 border rounded transition-colors ${
+                                            isNextDisabled
+                                                ? "bg-gray-100 text-gray-400 border-gray-300"
+                                                : "bg-white text-gray-800 border-gray-300 hover:bg-gray-50"
+                                        }`}
                                         onClick={() => handlePageChange("next")}
-                                        disabled={
-                                            !hasMore &&
-                                            (pageIndex + 1) * PAGE_SIZE >= totalCount
-                                        }
+                                        disabled={isNextDisabled}
+                                        style={{
+                                            cursor: isNextDisabled ? "default" : "pointer",
+                                        }}
                                     >
                                         Next
                                     </button>

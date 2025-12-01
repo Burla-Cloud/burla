@@ -49,12 +49,10 @@ class Container(BaseModel):
 
 
 async def get_neighboring_nodes(async_db):
-    am_only_node_working_on_job = False
     status_filter = FieldFilter("status", "==", "RUNNING")
     job_filter = FieldFilter("current_job", "==", SELF["current_job"])
-    base_query = async_db.collection("nodes").where(filter=And([status_filter, job_filter]))
-    base_query = base_query.order_by(FieldPath.document_id())
-    query = base_query.start_after({FieldPath.document_id(): INSTANCE_NAME})
+    query = async_db.collection("nodes").where(filter=And([status_filter, job_filter]))
+    query = query.order_by(FieldPath.document_id())
 
 
 async def eject_inputs(async_db):

@@ -159,7 +159,7 @@ async def _job_watcher(
         )
         if finished_all_assigned_inputs:
             # logger.log("Finished all inputs.")
-            neighboring_node = await get_neighboring_node(async_db)
+            neighboring_node = await get_neighboring_nodes(async_db)[0]
             new_inputs = await get_inputs_from_neighbor(
                 neighboring_node, session, logger, auth_headers
             )

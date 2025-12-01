@@ -367,33 +367,29 @@ def install_pkgs_and_execute_job(
             # response = requests.patch(url, headers=DB_HEADERS, params=mask, json=data)
             response.raise_for_status()
 
+        if SELF["inputs_queue"].empty():
+            # if you don't flush before adding the final result, the worker is restarted
+            # before the flush in .stop() can happen.
+            firestore_stdout.actually_flush()
+
+        # wait until space available in result queue
+        results_queue_full = True
+        while results_queue_full:
+            result_size_gb = len(result_pkl) / (1024**3)
+            future_queue_size_gb = SELF["results_queue"].size_gb + result_size_gb
+            results_queue_full = future_queue_size_gb > SELF["io_queues_ram_limit_gb"] / 2
+            if results_queue_full:
+                msg = f"Cannot add result ({result_size_gb:.2f}GB), queue full ..."
+                SELF["logs"].append(msg)
+                sleep(0.1)
+
         # we REALLY want to be sure we dont add this result if the stop event got set during the udf
         # because that means the worker is shutting down and the client probably cant get it in time
-        #
         # by not adding it to results we gaurentee the client dosent get it, and can send it along
         # with the inputs sitting in the queue to another worker, becore this node shuts down.
         if not SELF["STOP_PROCESSING_EVENT"].is_set():
-
-            if SELF["inputs_queue"].empty():
-                # if you don't flush before adding the final result, the worker is restarted
-                # before the flush in .stop() can happen.
-                firestore_stdout.actually_flush()
-
-            # wait until space available in result queue
-            results_queue_full = True
-            while results_queue_full:
-                result_size_gb = len(result_pkl) / (1024**3)
-                future_queue_size_gb = SELF["results_queue"].size_gb + result_size_gb
-                results_queue_full = future_queue_size_gb > SELF["io_queues_ram_limit_gb"] / 2
-                if results_queue_full:
-                    msg = f"Cannot add result ({result_size_gb:.2f}GB), queue full ..."
-                    SELF["logs"].append(msg)
-                    sleep(0.1)
-
             SELF["results_queue"].put((input_index, is_error, result_pkl), len(result_pkl))
             # SELF["logs"].append(f"Successfully enqueued result for input #{input_index}.")
-
-        SELF["in_progress_input"] = None
 
     SELF["logs"].append(f"STOP_PROCESSING_EVENT has been set!")
     firestore_stdout.stop()

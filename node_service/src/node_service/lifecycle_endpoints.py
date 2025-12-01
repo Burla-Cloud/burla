@@ -64,9 +64,34 @@ async def get_neighboring_nodes(async_db):
         return nodes[current_node_index + 1 :] + nodes[:current_node_index]
 
 
-async def eject_inputs(async_db):
+async def eject(async_db):
+
+    # tell all workers to stop accepting more inputs, and stop processing existing inputs.
+
+    # gather and enqueue all remaining results! (ignoring the result queue limit)
+    # this should be done first so the client has more time to grab them before this node dies
+    # in the future, results should be sent to other non-preempted nodes, otherwise it's possible
+    # the client doesn't have time to grab these results before the node dies.
+
+    # gather and send all remaining inputs incl SELF["pending_inputs"]
+
+    # mark successfully ejected somewhere.
+
     neighboring_nodes = get_neighboring_nodes(async_db)
     for node in neighboring_nodes:
+        try:
+            # send SELF["pending_inputs"]
+            # call /jobs/{job_id}/transfer_inputs on every worker
+            # ^ send every neighbor instead of just one!
+            # make nodes only accept inputs from one other node at a time!
+            # to make it really reliable we need to transfer everything including results
+            # because it's hard to trust the client will download them in time.
+            # in the meantime leave as much time as possible for client to grab!!
+            # to avoid spamming neighbors with a ton of requests from workers gather inputs from
+            # workers here then send to neighbor in less larger requests!
+            pass
+        except:
+            pass
 
 
 @router.post("/shutdown")
@@ -86,15 +111,16 @@ async def shutdown_node(logger: Logger = Depends(get_logger)):
                 response.raise_for_status()
                 preempted = (await response.text()).strip() == "TRUE"
     except Exception as e:
-        logger.log(f"Error checking if node {INSTANCE_NAME} was preempted: {e}", severity="WARNING")
-        preempted = False
+        msg = f"ERROR checking if node {INSTANCE_NAME} was preempted! ASSUMING PREEMPTION ...\n {e}"
+        logger.log(msg, severity="ERROR")
+        preempted = True
 
     if preempted:
         logger.log(f"Node {INSTANCE_NAME} was preempted!")
     else:
         logger.log(f"Received shutdown request for node {INSTANCE_NAME}.")
 
-    # await eject_inputs(async_db)
+    # await eject(async_db)
 
     doc_ref = async_db.collection("nodes").document(INSTANCE_NAME)
     snapshot = await doc_ref.get()

@@ -18,14 +18,8 @@ CLIENT_DC_TIMEOUT_SEC = 5
 
 
 async def get_inputs_from_neighbor(neighboring_node, session, logger, auth_headers):
-    neighboring_node_host = neighboring_node.get("host") if neighboring_node else None
-
-    if (not neighboring_node) or SELF["SHUTTING_DOWN"]:
-        # logger.log("No neighbors to ask for more inputs ... I am the only node.")
-        return
-
     try:
-        url = f"{neighboring_node_host}/jobs/{SELF['current_job']}/inputs"
+        url = f"{neighboring_node['host']}/jobs/{SELF['current_job']}/inputs"
         # must be close to SHUTTING_DOWN check \/
         async with session.get(url, timeout=2, headers=auth_headers) as response:
             logger.log("Asked neighboring node for more inputs ...")  # must log after get ^
@@ -159,10 +153,11 @@ async def _job_watcher(
         )
         if finished_all_assigned_inputs:
             # logger.log("Finished all inputs.")
-            neighboring_node = await get_neighboring_nodes(async_db)[0]
-            new_inputs = await get_inputs_from_neighbor(
-                neighboring_node, session, logger, auth_headers
-            )
+            neighboring_nodes = await get_neighboring_nodes(async_db)
+            new_inputs = []
+            if neighboring_nodes and not SELF["SHUTTING_DOWN"]:
+                args = (neighboring_nodes[0].to_dict(), session, logger, auth_headers)
+                new_inputs = await get_inputs_from_neighbor(*args)
             if new_inputs:
                 logger.log(f"Got {len(new_inputs)} more inputs from {neighboring_node.id}")
                 neighbor_had_no_inputs_at = None

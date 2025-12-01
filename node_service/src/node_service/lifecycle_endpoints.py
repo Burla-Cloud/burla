@@ -53,10 +53,20 @@ async def get_neighboring_nodes(async_db):
     job_filter = FieldFilter("current_job", "==", SELF["current_job"])
     query = async_db.collection("nodes").where(filter=And([status_filter, job_filter]))
     query = query.order_by(FieldPath.document_id())
+    nodes = list(query.stream())
+    current_node_index = None
+    for index, node in enumerate(nodes):
+        if node.id == INSTANCE_NAME:
+            current_node_index = index
+    if current_node_index is None:
+        return []
+    else:
+        return nodes[current_node_index + 1 :] + nodes[:current_node_index]
 
 
 async def eject_inputs(async_db):
-    node = get_neighboring_nodes(async_db)
+    neighboring_nodes = get_neighboring_nodes(async_db)
+    for node in neighboring_nodes:
 
 
 @router.post("/shutdown")

@@ -48,25 +48,17 @@ class Container(BaseModel):
         extra = "ignore"
 
 
-# async def get_neighboring_nodes(async_db):
-#     am_only_node_working_on_job = False
-#     status_filter = FieldFilter("status", "==", "RUNNING")
-#     job_filter = FieldFilter("current_job", "==", SELF["current_job"])
-#     base_query = async_db.collection("nodes").where(filter=And([status_filter, job_filter]))
-#     base_query = base_query.order_by(FieldPath.document_id())
-#     query = base_query.start_after({FieldPath.document_id(): INSTANCE_NAME})
-#     nodes = list(query.stream())
-#     neighboring_node = await anext(query.stream(), None)
-#     if not neighboring_node:
-#         # means this ^ was either the only or last node, in this case get 0th node.
-#         neighboring_node = await anext(base_query.limit(1).stream())
-#         am_only_node_working_on_job = neighboring_node.id == INSTANCE_NAME
-#     if not am_only_node_working_on_job:
-#         return neighboring_node
+async def get_neighboring_nodes(async_db):
+    am_only_node_working_on_job = False
+    status_filter = FieldFilter("status", "==", "RUNNING")
+    job_filter = FieldFilter("current_job", "==", SELF["current_job"])
+    base_query = async_db.collection("nodes").where(filter=And([status_filter, job_filter]))
+    base_query = base_query.order_by(FieldPath.document_id())
+    query = base_query.start_after({FieldPath.document_id(): INSTANCE_NAME})
 
 
-# async def eject_inputs(async_db):
-#     node = get_neighboring_node(async_db)
+async def eject_inputs(async_db):
+    node = get_neighboring_nodes(async_db)
 
 
 @router.post("/shutdown")

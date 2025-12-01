@@ -6,32 +6,15 @@ import aiohttp
 from time import time, sleep
 
 from google.cloud import firestore
-from google.cloud.firestore import FieldFilter, And, ArrayUnion
-from google.cloud.firestore_v1.field_path import FieldPath
+from google.cloud.firestore import ArrayUnion
 from google.cloud.firestore_v1.async_client import AsyncClient
 
 from node_service import PROJECT_ID, SELF, INSTANCE_NAME, REINIT_SELF, ENV_IS_READY_PATH
 from node_service.helpers import Logger, format_traceback
-from node_service.lifecycle_endpoints import reboot_containers
+from node_service.lifecycle_endpoints import reboot_containers, get_neighboring_nodes
 
 
 CLIENT_DC_TIMEOUT_SEC = 5
-
-
-async def get_neighboring_node(async_db):
-    am_only_node_working_on_job = False
-    status_filter = FieldFilter("status", "==", "RUNNING")
-    job_filter = FieldFilter("current_job", "==", SELF["current_job"])
-    base_query = async_db.collection("nodes").where(filter=And([status_filter, job_filter]))
-    base_query = base_query.order_by(FieldPath.document_id())
-    query = base_query.start_after({FieldPath.document_id(): INSTANCE_NAME}).limit(1)
-    neighboring_node = await anext(query.stream(), None)
-    if not neighboring_node:
-        # means this ^ was either the only or last node, in this case get 0th node.
-        neighboring_node = await anext(base_query.limit(1).stream())
-        am_only_node_working_on_job = neighboring_node.id == INSTANCE_NAME
-    if not am_only_node_working_on_job:
-        return neighboring_node
 
 
 async def get_inputs_from_neighbor(neighboring_node, session, logger, auth_headers):

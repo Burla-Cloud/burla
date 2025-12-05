@@ -30,7 +30,6 @@ return_values = remote_parallel_map(my_function, my_inputs)
 ```
 
 With Burla, running code in the cloud feels the same as coding locally:
-With Burla, running code in the cloud feels the same as coding locally:
 
 * Anything you print appears in your local terminal.
 * Exceptions thrown in your code are thrown on your local machine.
@@ -86,7 +85,6 @@ remote_parallel_map(combine_results, [result_filepaths], func_ram=256)
 [Sign up here](https://burla.dev/signup) and we'll send you a free managed instance! Compute is on us.  
 If you decide you like it, you can deploy self-hosted Burla (currently Google Cloud only) with just two commands:
 
-1. `pip install burla`  
 1. `pip install burla`  
 2. `burla install`
 

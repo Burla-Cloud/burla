@@ -73,8 +73,6 @@ from worker_service.endpoints import router as endpoints_router
 
 app = FastAPI(docs_url=None, redoc_url=None)
 app.include_router(endpoints_router)
-# switch working dir to dir that is synced with gcsfuse, if started here it causes issues (slow):
-os.chdir("/shared_workspace")
 print(f"Worker {os.environ.get('WORKER_NAME', 'unknown_worker')} has booted.")
 
 

@@ -17,39 +17,38 @@ import { toast } from "@/components/ui/use-toast";
 // Add prop type for SettingsForm
 interface SettingsFormProps {
     isEditing: boolean;
-    onChange?: () => void;
 }
 
 export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, SettingsFormProps>(
-    ({ isEditing, onChange }, ref) => {
+    ({ isEditing }, ref) => {
         const { settings, setSettings } = useSettings();
-        const users = settings.users ?? [];
         const [newUser, setNewUser] = useState("");
 
         const cpuOptions = [
-            { label: "2vCPU / 8G RAM", value: "n4-standard-2" },
-            { label: "4vCPU / 16G RAM", value: "n4-standard-4" },
-            { label: "8vCPU / 32G RAM", value: "n4-standard-8" },
-            { label: "16vCPU / 64G RAM", value: "n4-standard-16" },
-            { label: "32vCPU / 128G RAM", value: "n4-standard-32" },
-            { label: "64vCPU / 256G RAM", value: "n4-standard-64" },
-            { label: "80vCPU / 320G RAM", value: "n4-standard-80" },
+            { label: "2CPU / 8G RAM", value: "n4-standard-2" },
+            { label: "4CPU / 16G RAM", value: "n4-standard-4" },
+            { label: "8CPU / 32G RAM", value: "n4-standard-8" },
+            { label: "16CPU / 64G RAM", value: "n4-standard-16" },
+            { label: "32CPU / 128G RAM", value: "n4-standard-32" },
+            { label: "64CPU / 256G RAM", value: "n4-standard-64" },
+            { label: "80CPU / 320G RAM", value: "n4-standard-80" },
         ];
 
         const gpuCpuMap = {
-            "1x A100 40G": { label: "12vCPU / 85G RAM", value: "a2-highgpu-1g" },
-            "2x A100 40G": { label: "24vCPU / 170G RAM", value: "a2-highgpu-2g" },
-            "4x A100 40G": { label: "48vCPU / 340G RAM", value: "a2-highgpu-4g" },
-            "8x A100 40G": { label: "96vCPU / 680G RAM", value: "a2-highgpu-8g" },
-            "1x A100 80G": { label: "12vCPU / 170G RAM", value: "a2-ultragpu-1g" },
-            "2x A100 80G": { label: "24vCPU / 340G RAM", value: "a2-ultragpu-2g" },
-            "4x A100 80G": { label: "48vCPU / 680G RAM", value: "a2-ultragpu-4g" },
-            "8x A100 80G": { label: "96vCPU / 1360G RAM", value: "a2-ultragpu-8g" },
-            "1x H100 80G": { label: "26vCPU / 234G RAM", value: "a3-highgpu-1g" },
-            "2x H100 80G": { label: "52vCPU / 468G RAM", value: "a3-highgpu-2g" },
-            "4x H100 80G": { label: "104vCPU / 936G RAM", value: "a3-highgpu-4g" },
-            "8x H100 80G": { label: "208vCPU / 1872G RAM", value: "a3-highgpu-8g" },
-            "8x H200 141G": { label: "224vCPU / 2952G RAM", value: "a3-ultragpu-8g" },
+            "1x A100 40G": { label: "12CPU / 85G RAM", value: "a2-highgpu-1g" },
+            "2x A100 40G": { label: "24CPU / 170G RAM", value: "a2-highgpu-2g" },
+            "4x A100 40G": { label: "48CPU / 340G RAM", value: "a2-highgpu-4g" },
+            "8x A100 40G": { label: "96CPU / 680G RAM", value: "a2-highgpu-8g" },
+            "16x A100 40G": { label: "96CPU / 1360G RAM", value: "a2-megagpu-16g" },
+            "1x A100 80G": { label: "12CPU / 170G RAM", value: "a2-ultragpu-1g" },
+            "2x A100 80G": { label: "24CPU / 340G RAM", value: "a2-ultragpu-2g" },
+            "4x A100 80G": { label: "48CPU / 680G RAM", value: "a2-ultragpu-4g" },
+            "8x A100 80G": { label: "96CPU / 1360G RAM", value: "a2-ultragpu-8g" },
+            "1x H100 80G": { label: "26CPU / 234G RAM", value: "a3-highgpu-1g" },
+            "2x H100 80G": { label: "52CPU / 468G RAM", value: "a3-highgpu-2g" },
+            "4x H100 80G": { label: "104CPU / 936G RAM", value: "a3-highgpu-4g" },
+            "8x H100 80G": { label: "208CPU / 1872G RAM", value: "a3-highgpu-8g" },
+            "8x H200 141G": { label: "224CPU / 2952G RAM", value: "a3-ultragpu-8g" },
         };
 
         // Build variant -> supported counts (e.g., "A100 40G" -> [1,2,4,8,16])
@@ -101,49 +100,32 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
         }, [settings.machineType]);
 
         React.useEffect(() => {
-            if (!gpuCpuMap) return;
-        
-            let newMachineType;
             if (gpuVariant === "None") {
-                newMachineType = cpuChoice;
+                handleInputChange("machineType", cpuChoice);
             } else {
-                const key = `${gpusPerVm}x ${gpuVariant}`;
-                newMachineType = gpuCpuMap[key]?.value || settings.machineType;
-            }
-        
-            if (settings.machineType !== newMachineType) {
-                setSettings((prev) => ({ ...prev, machineType: newMachineType }));
-                if (typeof onChange === "function") onChange(); // trigger dirty flag
+                const displayKey = `${gpusPerVm}x ${gpuVariant}`; // variant already includes memory G
+                const machineValue = gpuCpuMap[displayKey].value;
+                handleInputChange("machineType", machineValue);
             }
         }, [gpuVariant, gpusPerVm, cpuChoice]);
 
         const handleInputChange = (key, value) => {
-            setSettings((prev) => {
-                const changed = prev[key] !== value;
-                const next = changed ? { ...prev, [key]: value } : prev;
-                if (changed && typeof onChange === "function") onChange();
-                return next;
-            });
+            setSettings((prev) => ({ ...prev, [key]: value }));
         };
 
         const addUser = () => {
-            const email = newUser.trim();
-            if (!email) return;
-          
-            const exists = users.some(u => u.toLowerCase() === email.toLowerCase());
-            if (exists) { setNewUser(""); return; }
-          
-            const nextUsers = [...users, email];
-            setSettings(prev => ({ ...prev, users: nextUsers }));
-            setNewUser("");
-            if (typeof onChange === "function") onChange(); // mark dirty so Save shows
-          };
+            if (newUser && !settings.users.includes(newUser)) {
+                setSettings((prev) => ({ ...prev, users: [...prev.users, newUser] }));
+                setNewUser("");
+            }
+        };
 
-          const removeUser = (user: string) => {
-            const nextUsers = users.filter(u => u !== user);
-            setSettings(prev => ({ ...prev, users: nextUsers }));
-            if (typeof onChange === "function") onChange();
-          };
+        const removeUser = (user) => {
+            setSettings((prev) => ({
+                ...prev,
+                users: prev.users.filter((u) => u !== user),
+            }));
+        };
 
         const labelClass = "block text-sm font-medium text-gray-500 mb-1";
 
@@ -329,7 +311,7 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
 
                                 {/* CPU / RAM */}
                                 <div className="flex flex-col space-y-2">
-                                    <label className={labelClass}>vCPU / RAM</label>
+                                    <label className={labelClass}>CPU / RAM</label>
                                     <Select
                                         disabled={!isEditing || gpuVariant !== "None"}
                                         value={
@@ -337,11 +319,7 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
                                                 ? cpuChoice
                                                 : gpuCpuMap[`${gpusPerVm}x ${gpuVariant}`].value
                                         }
-                                        onValueChange={(val) => {
-                                            setCpuChoice(val);
-                                            setSettings((prev) => ({ ...prev, machineType: val }));
-                                            if (typeof onChange === "function") onChange();
-                                        }}
+                                        onValueChange={(val) => setCpuChoice(val)}
                                     >
                                         <SelectTrigger className="w-full h-9.5">
                                             <SelectValue />
@@ -356,7 +334,7 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
                                                 </SelectItem>
                                             ))}
                                         </SelectContent>
-                                    </Select>                           
+                                    </Select>
                                 </div>
 
                                 {/* GPU */}
@@ -545,13 +523,13 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
                                         value={newUser}
                                         onChange={(e) => setNewUser(e.target.value)}
                                     />
-                                    <Button type="button" onClick={() => isEditing && addUser()} disabled={!isEditing} variant="secondary">
+                                    <Button type="submit" disabled={!isEditing} variant="secondary">
                                         Add
                                     </Button>
                                 </form>
                             </div>
                             <div className="flex flex-wrap gap-2">
-                            {users.map((user) => (
+                                {settings.users.map((user) => (
                                     <span
                                         key={user}
                                         className="bg-gray-100 border border-gray-300 text-gray-800 px-2 py-1 rounded-md flex items-center gap-1"

@@ -43,6 +43,24 @@ DB_HEADERS = {
 }
 
 
+def request_with_valid_dbheaders(method: str, *request_args, **request_kwargs):
+    """Refresh the token in the dbheaders and try again on 401"""
+    global DB_HEADERS
+    request_method = getattr(requests, method)
+    response = request_method(headers=DB_HEADERS, *request_args, **request_kwargs)
+    if response.status_code == 401:
+        DB_HEADERS = {
+            "Authorization": f"Bearer {_get_gcp_auth_token()}",
+            "Content-Type": "application/json",
+        }
+        response = request_method(headers=DB_HEADERS, *request_args, **request_kwargs)
+    if response.status_code == 401 and IN_LOCAL_DEV_MODE:
+        msg = "401 error writing logs, YOU DEV TOKEN IS PROBABLY EXPIRED!\n"
+        msg += "         Re-run `make local-dev` (and reboot!) to refresh the token.\n"
+        SELF["logs"].append(msg)
+    return response
+
+
 class _FirestoreStdout:
 
     def __init__(self, job_id: str):
@@ -101,21 +119,13 @@ class _FirestoreStdout:
             timestamp_field = {"timestampValue": timestamp_str}
             logs_field = {"arrayValue": {"values": [self._buffer]}}
             data = {"fields": {"logs": logs_field, "timestamp": timestamp_field}}
+            url = f"{DB_BASE_URL}/jobs/{self.job_id}/logs"
             try:
-                url = f"{DB_BASE_URL}/jobs/{self.job_id}/logs"
-                response = requests.post(url, headers=DB_HEADERS, json=data, timeout=5)
+                response = request_with_valid_dbheaders("post", url, json=data, timeout=5)
+                # response = requests.post(url, headers=DB_HEADERS, json=data, timeout=5)
                 response.raise_for_status()
             except Exception as e:
-                try:
-                    status = response.status_code
-                except Exception:
-                    status = None
-                if status == 401 and IN_LOCAL_DEV_MODE:
-                    msg = "401 error writing logs, YOU DEV TOKEN IS PROBABLY EXPIRED!\n"
-                    msg += "         Re-run `make local-dev` (and reboot!) to refresh the token.\n"
-                    SELF["logs"].append(msg)
-                else:
-                    SELF["logs"].append(f"Error writing log to firestore: {e}")
+                SELF["logs"].append(f"Error writing log to firestore: {e}")
             finally:
                 self._buffer.clear()
                 self._buffer_size = 0
@@ -253,7 +263,8 @@ def install_pkgs_and_execute_job(
         msg = f"Installing packages:\n{packages_str}"
         url = f"{DB_BASE_URL}/nodes/{INSTANCE_NAME}/logs"
         data = {"fields": {"msg": {"stringValue": msg}, "ts": {"integerValue": str(int(time()))}}}
-        response = requests.post(url, headers=DB_HEADERS, json=data, timeout=5)
+        response = request_with_valid_dbheaders("post", url, json=data, timeout=5)
+        # response = requests.post(url, headers=DB_HEADERS, json=data, timeout=5)
 
         _install_packages(packages)
         ENV_IS_READY_PATH.touch()
@@ -345,42 +356,40 @@ def install_pkgs_and_execute_job(
             logs_field = {"arrayValue": {"values": [firestore_formatted_log_msg]}}
             data = {"fields": {"logs": logs_field, "timestamp": {"timestampValue": timestamp_str}}}
             url = f"{DB_BASE_URL}/jobs/{job_id}/logs"
-            response = requests.post(url, headers=DB_HEADERS, json=data, timeout=5)
+            response = request_with_valid_dbheaders("post", url, json=data, timeout=5)
+            # response = requests.post(url, headers=DB_HEADERS, json=data, timeout=5)
             response.raise_for_status()
             # mark job failed
             mask = [("updateMask.fieldPaths", "status")]
             data = {"fields": {"status": {"stringValue": "FAILED"}}}
             url = f"{DB_BASE_URL}/jobs/{job_id}"
-            response = requests.patch(url, headers=DB_HEADERS, params=mask, json=data)
+            response = request_with_valid_dbheaders("patch", url, params=mask, json=data)
+            # response = requests.patch(url, headers=DB_HEADERS, params=mask, json=data)
             response.raise_for_status()
+
+        if SELF["inputs_queue"].empty():
+            # if you don't flush before adding the final result, the worker is restarted
+            # before the flush in .stop() can happen.
+            firestore_stdout.actually_flush()
+
+        # wait until space available in result queue
+        results_queue_full = True
+        while results_queue_full:
+            result_size_gb = len(result_pkl) / (1024**3)
+            future_queue_size_gb = SELF["results_queue"].size_gb + result_size_gb
+            results_queue_full = future_queue_size_gb > SELF["io_queues_ram_limit_gb"] / 2
+            if results_queue_full:
+                msg = f"Cannot add result ({result_size_gb:.2f}GB), queue full ..."
+                SELF["logs"].append(msg)
+                sleep(0.1)
 
         # we REALLY want to be sure we dont add this result if the stop event got set during the udf
         # because that means the worker is shutting down and the client probably cant get it in time
-        #
         # by not adding it to results we gaurentee the client dosent get it, and can send it along
         # with the inputs sitting in the queue to another worker, becore this node shuts down.
         if not SELF["STOP_PROCESSING_EVENT"].is_set():
-
-            if SELF["inputs_queue"].empty():
-                # if you don't flush before adding the final result, the worker is restarted
-                # before the flush in .stop() can happen.
-                firestore_stdout.actually_flush()
-
-            # wait until space available in result queue
-            results_queue_full = True
-            while results_queue_full:
-                result_size_gb = len(result_pkl) / (1024**3)
-                future_queue_size_gb = SELF["results_queue"].size_gb + result_size_gb
-                results_queue_full = future_queue_size_gb > SELF["io_queues_ram_limit_gb"] / 2
-                if results_queue_full:
-                    msg = f"Cannot add result ({result_size_gb:.2f}GB), queue full ..."
-                    SELF["logs"].append(msg)
-                    sleep(0.1)
-
             SELF["results_queue"].put((input_index, is_error, result_pkl), len(result_pkl))
             # SELF["logs"].append(f"Successfully enqueued result for input #{input_index}.")
-
-        SELF["in_progress_input"] = None
 
     SELF["logs"].append(f"STOP_PROCESSING_EVENT has been set!")
     firestore_stdout.stop()

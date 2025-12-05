@@ -53,8 +53,9 @@ def _check_udf_executor_thread():
 
 
 @router.get("/jobs/{job_id}/results")
-async def get_results(job_id: str = Path(...)):
-    _check_udf_executor_thread()
+async def get_results(job_id: str = Path(...), ejecting: bool = Query(False)):
+    if not ejecting:
+        _check_udf_executor_thread()
     if SELF["current_job"] != job_id:
         return Response("job not found", status_code=404)
 
@@ -88,13 +89,22 @@ async def get_results(job_id: str = Path(...)):
 
 
 @router.get("/jobs/{job_id}/inputs")
-async def get_inputs(job_id: str = Path(...), min_reply_size: float = Query(...)):
-    _check_udf_executor_thread()
+async def get_inputs(
+    job_id: str = Path(...), min_reply_size: float = Query(...), ejecting: bool = Query(False)
+):
+    if not ejecting:
+        _check_udf_executor_thread()
     if SELF["current_job"] != job_id:
         return Response("job not found", status_code=404)
 
     inputs = []
     total_bytes = 0
+
+    if ejecting and SELF["in_progress_input"]:
+        inputs.append(SELF["in_progress_input"])
+        SELF["in_progress_input"] = None
+        total_bytes += len(input_pkl_with_idx[1])
+
     while not SELF["inputs_queue"].empty() and (total_bytes < min_reply_size):
         try:
             input_pkl_with_idx = SELF["inputs_queue"].get_nowait()
@@ -171,12 +181,9 @@ async def start_job(
     SELF["logs"].append(f"Successfully started job {job_id}.")
 
 
-@router.post("/jobs/{job_id}/transfer_inputs")
-async def transfer_inputs(
-    job_id: str = Path(...),
-    request_json: dict = Depends(get_request_json),
-):
-    """Stop processing the current job and transfer remaining inputs to another node"""
+@router.post("/jobs/{job_id}/stop")
+async def stop(job_id: str = Path(...)):
+    """Stop processing the current job, used when this node is preempted."""
     if SELF["current_job"] != job_id:
         return Response("job not found", status_code=404)
 
@@ -185,31 +192,28 @@ async def transfer_inputs(
         while SELF["INPUT_UPLOAD_IN_PROGRESS"]:
             await asyncio.sleep(1)
 
-    target_node_url = request_json["target_node_url"]
-    SELF["logs"].append(f"Received request to transfer inputs to {target_node_url}.")
+    SELF["logs"].append(f"Received request to stop working on job.")
 
-    async with aiohttp.ClientSession() as session:
+    # target_node_url = request_json["target_node_url"]
+    # SELF["logs"].append(f"Received request to transfer inputs to {target_node_url}.")
 
-        # TODO: it's possible to finish this input and return it after it's been sent to another
-        # node causing duplicate execution?
-        # instead check at the end if this input is done and send it last if not then immediately
-        # cancel so it can't finish
-        chunk = [SELF["in_progress_input"]]
+    # async with aiohttp.ClientSession() as session:
 
-        total_bytes = len(SELF["in_progress_input"][1])
-        total_inputs = 0
-        while not SELF["inputs_queue"].empty():
-            input_pkl_with_idx = SELF["inputs_queue"].get_nowait()
-            chunk.append(input_pkl_with_idx)
-            total_inputs += 1
-            total_bytes += len(input_pkl_with_idx[1])
+    #     chunk = [SELF["in_progress_input"]]
+    #     total_bytes = len(SELF["in_progress_input"][1])
+    #     total_inputs = 0
+    #     while not SELF["inputs_queue"].empty():
+    #         input_pkl_with_idx = SELF["inputs_queue"].get_nowait()
+    #         chunk.append(input_pkl_with_idx)
+    #         total_inputs += 1
+    #         total_bytes += len(input_pkl_with_idx[1])
 
-            if total_bytes > 1_000_000 * 0.2:
-                data = aiohttp.FormData()
-                data.add_field("inputs_pkl_with_idx", pickle.dumps(chunk))
-                url = f"{target_node_url}/jobs/{job_id}/inputs"
-                async with session.post(url, data=data) as response:
-                    response.raise_for_status()
-                    chunk = []
-                    total_bytes = 0
-    SELF["logs"].append(f"Transferred {total_inputs} remaining inputs to {target_node_url}.")
+    #         if (total_bytes > 1_000_000 * 0.1) or SELF["inputs_queue"].empty():
+    #             data = aiohttp.FormData()
+    #             data.add_field("inputs_pkl_with_idx", pickle.dumps(chunk))
+    #             url = f"{target_node_url}/jobs/{job_id}/inputs"
+    #             async with session.post(url, data=data) as response:
+    #                 response.raise_for_status()
+    #                 chunk = []
+    #                 total_bytes = 0
+    # SELF["logs"].append(f"Transferred {total_inputs} remaining inputs to {target_node_url}.")

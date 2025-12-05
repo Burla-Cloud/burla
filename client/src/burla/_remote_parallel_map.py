@@ -36,6 +36,9 @@ from burla._helpers import (
     log_telemetry,
     log_telemetry_async,
     run_in_subprocess,
+    get_all_packages,
+    get_packages_in_function_module,
+    get_custom_modules,
 )
 
 
@@ -89,32 +92,6 @@ class UnPickleableUserFunctionException(Exception):
 
 class InternalClusterError(Exception):
     pass
-
-
-def _get_packages(function_):
-    function_module_names = set()
-    for global_var in function_.__globals__.values():
-        if isinstance(global_var, types.ModuleType):
-            function_module_names.add(global_var.__name__)
-        elif getattr(global_var, "__module__", None):
-            function_module_names.add(global_var.__module__)
-
-    packages = set()
-    package_module_mapping = metadata.packages_distributions()
-    for module_name in function_module_names:
-        possible_packages_from_module = package_module_mapping.get(module_name.split(".")[0])
-        if possible_packages_from_module:
-            packages.update(possible_packages_from_module)
-
-    package_versions = {}
-    for package in packages:
-        if package == "burla":  # <- already installed on workers by default
-            continue
-        try:
-            package_versions[package] = metadata.version(package)
-        except metadata.PackageNotFoundError:
-            continue
-    return package_versions
 
 
 async def _num_booting_nodes(db: AsyncClient):
@@ -637,12 +614,15 @@ def remote_parallel_map(
 
     # TODO: move back into `_execute_job` after ^ todo is done.
     # (needs to operate on function_.__globals__ which cannot be reassigned to new func)
-    packages = _get_packages(function_)
-    if "ipython" in packages:
-        # imported in all notebooks by default but (probably) not needed inside burla function
-        del packages["ipython"]
-    if "google-colab" in packages:
-        del packages["google-colab"]
+    custom_modules = get_custom_modules()
+    if custom_modules:
+        # TODO: use better inspection to only install packages used by custom modules that are
+        # imported in the user functions namespace. Installing all is a stopgap.
+        packages = get_all_packages()
+        for custom_module in custom_modules:
+            cloudpickle.register_pickle_by_value(custom_module)
+    else:
+        packages = get_packages_in_function_module(function_)
     ###
 
     max_parallelism = max_parallelism if max_parallelism else len(inputs)

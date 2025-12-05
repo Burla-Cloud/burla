@@ -65,6 +65,11 @@ async def get_inputs(job_id: str = Path(...), logger: Logger = Depends(get_logge
 
 @router.post("/jobs/{job_id}/inputs/done")
 async def input_upload_done(job_id: str = Path(...)):
+    """
+    This simply allows the node to conclude that is is done (in job_watcher).
+    Unless it explicitly hears that no more inputs are coming after getting some, it won't
+    consider itself done.
+    """
     if job_id != SELF["current_job"]:
         return Response("job not found", status_code=404)
     SELF["all_inputs_uploaded"] = True

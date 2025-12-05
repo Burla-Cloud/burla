@@ -28,7 +28,8 @@ async def get_inputs_from_neighbor(neighboring_node, session, logger, auth_heade
         async with session.get(url, timeout=2, headers=auth_headers) as response:
             logger.log("Asked neighboring node for more inputs ...")  # must log after get ^
             if response.status in [204, 404]:
-                logger.log(f"{neighboring_node.id} doesn't have any extra inputs to give.")
+                instance_name = neighboring_node["instance_name"]
+                logger.log(f"{instance_name} doesn't have any extra inputs to give.")
                 return
             elif response.status == 200:
                 return pickle.loads(await response.read())

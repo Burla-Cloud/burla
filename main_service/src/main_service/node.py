@@ -129,6 +129,7 @@ class Node:
         self.spot = spot
         self.port = service_port
         self.sync_gcs_bucket_name = sync_gcs_bucket_name
+        self.sync_gcs_bucket_name = sync_gcs_bucket_name
         self.inactivity_shutdown_time_sec = inactivity_shutdown_time_sec
         self.disk_size = disk_size if disk_size else 20  # minimum is 10 due to disk image
         self.instance_client = instance_client if instance_client else InstancesClient()
@@ -147,7 +148,9 @@ class Node:
 
         if machine_type.startswith("n4"):
             self.disk_image = "projects/burla-prod/global/images/burla-node-nogpu-2"
+            self.disk_image = "projects/burla-prod/global/images/burla-node-nogpu-2"
         elif machine_type.startswith("a2") or machine_type.startswith("a3"):
+            self.disk_image = "projects/burla-prod/global/images/burla-node-gpu-2"
             self.disk_image = "projects/burla-prod/global/images/burla-node-gpu-2"
         else:
             raise ValueError(f"Invalid machine type: {machine_type}")

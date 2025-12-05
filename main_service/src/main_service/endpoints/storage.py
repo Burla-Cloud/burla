@@ -1,4 +1,5 @@
 import datetime
+import time
 import tempfile
 import zipfile
 from pathlib import Path
@@ -14,7 +15,6 @@ from main_service import PROJECT_ID, DB
 
 
 router = APIRouter()
-
 
 # This makes it possible to create signed url's for any blobs created with this client.
 source_creds, project_id = default()
@@ -176,26 +176,101 @@ def move_prefix(source_prefix: str, destination_prefix: str) -> None:
         GCS_BUCKET.rename_blob(blob, destination_name)
 
 
+def extract_paging(payload: Dict[str, Any]) -> tuple[int, int]:
+    """Read skip / take from payload and payload['data'] safely."""
+    raw_skip = payload.get("skip")
+    raw_take = payload.get("take")
+
+    data = payload.get("data")
+    if isinstance(data, dict):
+        if raw_skip is None:
+            raw_skip = data.get("skip")
+        if raw_take is None:
+            raw_take = data.get("take")
+
+    def to_int(value: Any, default: int) -> int:
+        try:
+            if value is None:
+                return default
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
+    skip = max(to_int(raw_skip, 0), 0)
+    take = to_int(raw_take, 1000)
+
+    if take <= 0:
+        take = 1000
+    if take > 5000:
+        take = 5000
+
+    return skip, take
+
+
+def get_directory_page(
+    directory_prefix: str,
+    skip: int,
+    take: int,
+) -> tuple[List[Dict[str, Any]], int, bool]:
+    iterator = GCS_BUCKET.list_blobs(prefix=directory_prefix, delimiter="/")
+
+    entries: List[Dict[str, Any]] = []
+    seen = 0
+    remaining_needed = skip + take
+    has_more = False
+
+    for page in iterator.pages:
+        # folders
+        for prefix in getattr(page, "prefixes", []):
+            if seen >= remaining_needed:
+                has_more = True
+                break
+
+            if seen >= skip:
+                entries.append(build_directory_metadata(prefix, directory_prefix))
+
+            seen += 1
+
+        if has_more:
+            break
+
+        # files
+        for blob in page:
+            if blob.name == directory_prefix or blob.name.endswith("/"):
+                continue
+
+            if seen >= remaining_needed:
+                has_more = True
+                break
+
+            if seen >= skip:
+                entries.append(build_file_metadata(blob, directory_prefix))
+
+            seen += 1
+
+        if has_more:
+            break
+
+    if has_more:
+        fake_total = skip + len(entries) + 1
+    else:
+        fake_total = seen
+
+    return entries, fake_total, has_more
+
+
 def read_action(payload: Dict[str, Any]) -> Dict[str, Any]:
     directory_prefix = normalize_directory_path(payload.get("path"))
-    iterator = GCS_BUCKET.list_blobs(prefix=directory_prefix, delimiter="/")
-    directories: List[Dict[str, Any]] = []
-    files: List[Dict[str, Any]] = []
-    for page in iterator.pages:
-        for prefix in getattr(page, "prefixes", []):
-            directories.append(build_directory_metadata(prefix, directory_prefix))
-        for blob in page:
-            if blob.name == directory_prefix:
-                continue
-            if blob.name.endswith("/"):
-                continue
-            files.append(build_file_metadata(blob, directory_prefix))
-    combined: List[Dict[str, Any]] = directories + files
-    response = {
-        "cwd": build_cwd_metadata(directory_prefix, bool(combined)),
-        "files": combined,
+    skip, take = extract_paging(payload)
+
+    files, total_count, has_more = get_directory_page(directory_prefix, skip, take)
+
+    return {
+        "cwd": build_cwd_metadata(directory_prefix, total_count > 0),
+        "files": files,
+        "count": total_count,
+        "hasMore": has_more,
     }
-    return response
 
 
 def create_action(payload: Dict[str, Any]) -> Dict[str, Any]:

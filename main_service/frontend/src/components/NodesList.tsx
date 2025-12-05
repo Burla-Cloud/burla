@@ -1,5 +1,4 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Link } from "react-router-dom";
 import {
     Table,
     TableBody,
@@ -10,10 +9,11 @@ import {
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Cpu, X, ChevronRight, Copy } from "lucide-react";
+import { Cpu, X, ChevronRight, Copy, Trash2 } from "lucide-react";
 import { NodeStatus, BurlaNode } from "@/types/coreTypes";
-import React, { useEffect, useState, useRef } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNodes } from "@/contexts/NodesContext";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
 interface NodesListProps {
     nodes: BurlaNode[];
@@ -23,6 +23,7 @@ export const NodesList = ({ nodes }: NodesListProps) => {
     const { setNodes } = useNodes();
     const [showWelcome, setShowWelcome] = useState(true);
     const [copied, setCopied] = useState(false);
+
     const pythonExampleCode = `from burla import remote_parallel_map
 
 def my_function(x):
@@ -48,7 +49,7 @@ remote_parallel_map(my_function, list(range(1000)))`;
             BOOTING: "bg-yellow-500 animate-pulse",
             STOPPING: "bg-gray-300 animate-pulse",
             FAILED: "bg-red-500",
-            DELETED: "bg-red-500", // use same as FAILED
+            DELETED: "bg-red-500",
         };
         return cn(
             "w-2 h-2 rounded-full",
@@ -62,11 +63,9 @@ remote_parallel_map(my_function, list(range(1000)))`;
         const customMatch = type.match(/^custom-(\d+)-/);
         if (customMatch) return parseInt(customMatch[1], 10);
 
-        // n4-standard-16 -> captures 16
         const standardMatch = type.match(/-(\d+)$/);
         if (standardMatch) return parseInt(standardMatch[1], 10);
 
-        // GPU machine types like a2-highgpu-4g
         const gpuMatch = type.match(/^(a\d-(highgpu|ultragpu|megagpu|edgegpu))-([\d]+)g$/);
         if (gpuMatch) {
             const family = gpuMatch[1];
@@ -109,7 +108,7 @@ remote_parallel_map(my_function, list(range(1000)))`;
             }
         }
 
-        return "-"; // CPU-only machine
+        return "-";
     };
 
     const parseRamDisplay = (type: string): string => {
@@ -139,7 +138,7 @@ remote_parallel_map(my_function, list(range(1000)))`;
         return "-";
     };
 
-    // track which node row is currently expanded to show the error message
+    // --- Logs (expand + SSE) ---
     const [expandedNodeId, setExpandedNodeId] = useState<string | null>(null);
     const [nodeLogs, setNodeLogs] = useState<Record<string, string[]>>({});
     const [logsLoading, setLogsLoading] = useState<Record<string, boolean>>({});
@@ -196,7 +195,7 @@ remote_parallel_map(my_function, list(range(1000)))`;
             };
 
             source.onerror = (error) => {
-                if (closingForRotate) return; // intentional rotation
+                if (closingForRotate) return;
                 if (rotateTimeoutId) window.clearTimeout(rotateTimeoutId);
                 console.error("Node logs stream error; retry in 5s:", error);
                 setLogsLoading((prev) => ({ ...prev, [expandedNodeId]: false }));
@@ -217,7 +216,6 @@ remote_parallel_map(my_function, list(range(1000)))`;
     };
 
     const deleteNode = async (nodeId: string) => {
-        // Immediately remove node from UI
         setNodes((prev) => prev.filter((node) => node.id !== nodeId));
         try {
             await fetch(`/v1/cluster/${nodeId}`, { method: "DELETE" });
@@ -226,8 +224,66 @@ remote_parallel_map(my_function, list(range(1000)))`;
         }
     };
 
+    // --- Fixed ordering (no user sorting) ---
+    // Desired order: DELETED, FAILED, STOPPING, BOOTING, READY, RUNNING
+    const STATUS_RANK: Record<string, number> = {
+        DELETED: 0,
+        FAILED: 1,
+        STOPPING: 2,
+        BOOTING: 3,
+        RUNNING: 4,
+        READY: 5,
+    };
+
+    const sortedNodes = useMemo(() => {
+        const arr = [...nodes];
+        arr.sort((a, b) => {
+            const ar = STATUS_RANK[String(a.status)] ?? 999;
+            const br = STATUS_RANK[String(b.status)] ?? 999;
+            if (ar !== br) return ar - br;
+            // stable secondary: name
+            return String(a.name).localeCompare(String(b.name));
+        });
+        return arr;
+    }, [nodes]);
+
+    const didMountRef = useRef(false);
+    useEffect(() => {
+        didMountRef.current = true;
+    }, []);
+
+    // --- Bulk clear (header button) ---
+    const [bulkDeleting, setBulkDeleting] = useState(false);
+    const hasClearables = useMemo(
+        () =>
+            nodes.some((n) =>
+                ["FAILED", "DELETED"].includes(String(n.status).toUpperCase().trim())
+            ),
+        [nodes]
+    );
+
+    const clearFailedDeleted = async () => {
+        const toClear = nodes.filter((n) =>
+            ["FAILED", "DELETED"].includes(String(n.status).toUpperCase().trim())
+        );
+        if (toClear.length === 0) return;
+        setBulkDeleting(true);
+        setNodes((prev) =>
+            prev.filter(
+                (n) => !["FAILED", "DELETED"].includes(String(n.status).toUpperCase().trim())
+            )
+        );
+        try {
+            await Promise.allSettled(
+                toClear.map((n) => fetch(`/v1/cluster/${n.id}`, { method: "DELETE" }))
+            );
+        } finally {
+            setBulkDeleting(false);
+        }
+    };
+
     return (
-        <div className="space-y-6">
+        <div className="space-y-6 [scrollbar-gutter:stable_both-edges]">
             {showWelcome && (
                 <div className="spotlight-surface rounded-xl my-8">
                     <Card className="w-full relative rounded-xl shadow-lg shadow-black/5 bg-white/90 backdrop-blur">
@@ -348,6 +404,7 @@ remote_parallel_map(my_function, list(range(1000)))`;
                 <CardHeader className="flex flex-row items-center justify-between">
                     <CardTitle className="text-xl font-semibold text-primary">Nodes</CardTitle>
                 </CardHeader>
+
                 <CardContent>
                     {nodes.length === 0 ? (
                         <div className="border-2 border-dashed rounded-lg p-8 text-center text-muted-foreground">
@@ -371,139 +428,169 @@ remote_parallel_map(my_function, list(range(1000)))`;
                             </div>
                         </div>
                     ) : (
-                        <Table className="table-auto w-full">
-                            <TableHeader>
-                                <TableRow>
-                                    <TableHead className="w-8 pl-6 pr-4 py-2" />
-                                    <TableHead className="w-24 pl-6 pr-4 py-2">Status</TableHead>
-                                    <TableHead className="w-48 pl-6 pr-4 py-2">Name</TableHead>
-                                    <TableHead className="w-24 pl-6 pr-4 py-2">CPUs</TableHead>
-                                    <TableHead className="w-24 pl-6 pr-4 py-2">RAM</TableHead>
-                                    <TableHead className="w-24 pl-6 pr-4 py-2">GPUs</TableHead>
-                                    <TableHead className="w-8 pl-6 pr-2 py-2" />
-                                </TableRow>
-                            </TableHeader>
-                            <TableBody>
-                                {nodes.map((node, idx) => (
-                                    <React.Fragment key={node.id}>
-                                        <TableRow
-                                            onClick={() => toggleExpanded(node.id)}
-                                            className={cn("cursor-pointer animate-row-in")}
-                                            style={{ animationDelay: `${idx * 50}ms` }}
-                                        >
-                                            <TableCell className="w-8 pl-6 pr-4 py-2">
-                                                <ChevronRight
-                                                    className={cn(
-                                                        "h-4 w-4 transition-transform duration-200",
-                                                        { "rotate-90": expandedNodeId === node.id }
-                                                    )}
-                                                />
-                                            </TableCell>
-                                            <TableCell className="w-24 pl-6 pr-4 py-2">
-                                                <div className="flex items-center space-x-2">
-                                                    <div className={getStatusClass(node.status)} />
-                                                    <span
-                                                        className={cn(
-                                                            "text-sm capitalize",
-                                                            node.status
-                                                        )}
-                                                    >
-                                                        {node.status}
-                                                    </span>
-                                                </div>
-                                            </TableCell>
-                                            <TableCell className="w-48 pl-6 pr-4 py-2 whitespace-nowrap">
-                                                {node.name}
-                                            </TableCell>
-                                            <TableCell className="w-24 pl-6 pr-4 py-2">
-                                                <div className="inline-flex items-center space-x-1 justify-center">
-                                                    <Cpu className="h-4 w-4" />
-                                                    <span>
-                                                        {node.cpus ??
-                                                            extractCpuCount(node.type) ??
-                                                            "?"}
-                                                    </span>
-                                                </div>
-                                            </TableCell>
-                                            <TableCell className="w-24 pl-6 pr-4 py-2">
-                                                {parseRamDisplay(node.type)}
-                                            </TableCell>
-                                            <TableCell className="w-24 pl-6 pr-4 py-2">
-                                                {parseGpuDisplay(node.type)}
-                                            </TableCell>
-                                            <TableCell className="w-8 pl-6 pr-2 py-2 text-center">
-                                                {(String(node.status) === "FAILED" ||
-                                                    String(node.status) === "DELETED") && (
-                                                    <button
-                                                        onClick={(e) => {
-                                                            e.stopPropagation();
-                                                            deleteNode(node.id);
-                                                        }}
-                                                        className="text-gray-400 hover:text-red-600"
-                                                        aria-label="Dismiss node"
-                                                    >
-                                                        <X className="h-4 w-4" />
-                                                    </button>
+                        <>
+                            <Table className="table-auto w-full">
+                                <TableHeader>
+                                    <TableRow>
+                                        <TableHead className="w-8 pl-6 pr-4 py-2" />
+                                        <TableHead className="w-24 pl-6 pr-4 py-2">
+                                            Status
+                                        </TableHead>
+                                        <TableHead className="w-48 pl-6 pr-4 py-2">Name</TableHead>
+                                        <TableHead className="w-24 pl-6 pr-4 py-2">vCPUs</TableHead>
+                                        <TableHead className="w-24 pl-6 pr-4 py-2">RAM</TableHead>
+                                        <TableHead className="w-24 pl-6 pr-4 py-2">GPUs</TableHead>
+                                        <TableHead className="w-8 pl-6 pr-2 py-2 text-right">
+                                        {hasClearables && (
+                                            <button
+                                                type="button"
+                                                onClick={clearFailedDeleted}
+                                                disabled={bulkDeleting}
+                                                aria-label="Remove failed or deleted nodes from this list"
+                                                className={cn(
+                                                "group inline-flex items-center gap-1.5 text-sm px-2 py-1 rounded transition-colors",
+                                                bulkDeleting
+                                                    ? "text-muted-foreground/60 cursor-not-allowed"
+                                                    : "text-muted-foreground hover:text-red-600"
                                                 )}
-                                            </TableCell>
-                                        </TableRow>
-
-                                        {expandedNodeId === node.id && (
-                                            <TableRow
-                                                key={`${node.id}-error`}
-                                                className={cn("transition-all duration-300", {
-                                                    "bg-gray-50": expandedNodeId === node.id,
-                                                })}
                                             >
-                                                <TableCell colSpan={7} className="p-0">
-                                                    <div
+                                                <Trash2 className="h-3.5 w-3.5" />
+                                                <span>Clear all</span>
+                                            </button>
+                                        )}
+                                        </TableHead>
+                                    </TableRow>
+                                </TableHeader>
+                                <TableBody>
+                                    {sortedNodes.map((node, idx) => (
+                                        <React.Fragment key={node.id}>
+                                            <TableRow
+                                                onClick={() => toggleExpanded(node.id)}
+                                                className={cn(
+                                                    "cursor-pointer",
+                                                    didMountRef.current ? "" : "animate-row-in"
+                                                )}
+                                                style={{ animationDelay: `${idx * 50}ms` }}
+                                            >
+                                                <TableCell className="w-8 pl-6 pr-4 py-2">
+                                                    <ChevronRight
                                                         className={cn(
-                                                            "overflow-y-auto transition-all duration-300",
+                                                            "h-4 w-4 transition-transform duration-200",
                                                             {
-                                                                "max-h-0":
-                                                                    expandedNodeId !== node.id,
-                                                                "h-[400px] resize-y py-2 px-4":
+                                                                "rotate-90":
                                                                     expandedNodeId === node.id,
                                                             }
                                                         )}
-                                                    >
-                                                        {logsLoading[node.id] ? (
-                                                            <div className="flex flex-col items-center justify-center h-40 w-full text-gray-500">
-                                                                <svg
-                                                                    className="animate-spin h-8 w-8 text-primary mb-2"
-                                                                    viewBox="0 0 24 24"
-                                                                    fill="none"
-                                                                    xmlns="http://www.w3.org/2000/svg"
-                                                                >
-                                                                    <circle
-                                                                        cx="12"
-                                                                        cy="12"
-                                                                        r="10"
-                                                                        stroke="currentColor"
-                                                                        strokeWidth="4"
-                                                                        opacity="0.2"
-                                                                    />
-                                                                    <path
-                                                                        d="M22 12a10 10 0 0 1-10 10"
-                                                                        stroke="currentColor"
-                                                                        strokeWidth="4"
-                                                                        strokeLinecap="round"
-                                                                    />
-                                                                </svg>
-                                                            </div>
-                                                        ) : (
-                                                            <pre className="whitespace-pre-wrap text-gray-600 text-sm">
-                                                                {nodeLogs[node.id]?.join("\n")}
-                                                            </pre>
-                                                        )}
+                                                    />
+                                                </TableCell>
+                                                <TableCell className="w-24 pl-6 pr-4 py-2">
+                                                    <div className="flex items-center space-x-2">
+                                                        <div
+                                                            className={getStatusClass(node.status)}
+                                                        />
+                                                        <span
+                                                            className={cn(
+                                                                "text-sm capitalize",
+                                                                node.status
+                                                            )}
+                                                        >
+                                                            {node.status}
+                                                        </span>
                                                     </div>
                                                 </TableCell>
+                                                <TableCell className="w-48 pl-6 pr-4 py-2 whitespace-nowrap">
+                                                    {node.name}
+                                                </TableCell>
+                                                <TableCell className="w-24 pl-6 pr-4 py-2">
+                                                    <div className="inline-flex items-center space-x-1 justify-center">
+                                                        <Cpu className="h-4 w-4" />
+                                                        <span>
+                                                            {node.cpus ??
+                                                                extractCpuCount(node.type) ??
+                                                                "?"}
+                                                        </span>
+                                                    </div>
+                                                </TableCell>
+                                                <TableCell className="w-24 pl-6 pr-4 py-2">
+                                                    {parseRamDisplay(node.type)}
+                                                </TableCell>
+                                                <TableCell className="w-24 pl-6 pr-4 py-2">
+                                                    {parseGpuDisplay(node.type)}
+                                                </TableCell>
+                                                <TableCell className="w-8 pl-6 pr-2 py-2 text-center">
+                                                    {(String(node.status) === "FAILED" ||
+                                                        String(node.status) === "DELETED") && (
+                                                        <button
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                deleteNode(node.id);
+                                                            }}
+                                                            className="text-gray-400 hover:text-red-600"
+                                                            aria-label="Dismiss node"
+                                                        >
+                                                            <X className="h-4 w-4" />
+                                                        </button>
+                                                    )}
+                                                </TableCell>
                                             </TableRow>
-                                        )}
-                                    </React.Fragment>
-                                ))}
-                            </TableBody>
-                        </Table>
+
+                                            {expandedNodeId === node.id && (
+                                                <TableRow
+                                                    key={`${node.id}-logs`}
+                                                    className={cn("transition-all duration-300", {
+                                                        "bg-gray-50": expandedNodeId === node.id,
+                                                    })}
+                                                >
+                                                    <TableCell colSpan={7} className="p-0">
+                                                        <div
+                                                            className={cn(
+                                                                "overflow-y-auto transition-all duration-300",
+                                                                {
+                                                                    "max-h-0":
+                                                                        expandedNodeId !== node.id,
+                                                                    "h-[400px] resize-y py-2 px-4":
+                                                                        expandedNodeId === node.id,
+                                                                }
+                                                            )}
+                                                        >
+                                                            {logsLoading[node.id] ? (
+                                                                <div className="flex flex-col items-center justify-center h-40 w-full text-gray-500">
+                                                                    <svg
+                                                                        className="animate-spin h-8 w-8 text-primary mb-2"
+                                                                        viewBox="0 0 24 24"
+                                                                        fill="none"
+                                                                        xmlns="http://www.w3.org/2000/svg"
+                                                                    >
+                                                                        <circle
+                                                                            cx="12"
+                                                                            cy="12"
+                                                                            r="10"
+                                                                            stroke="currentColor"
+                                                                            strokeWidth="4"
+                                                                            opacity="0.2"
+                                                                        />
+                                                                        <path
+                                                                            d="M22 12a10 10 0 0 1-10 10"
+                                                                            stroke="currentColor"
+                                                                            strokeWidth="4"
+                                                                            strokeLinecap="round"
+                                                                        />
+                                                                    </svg>
+                                                                </div>
+                                                            ) : (
+                                                                <pre className="whitespace-pre-wrap text-gray-600 text-sm">
+                                                                    {nodeLogs[node.id]?.join("\n")}
+                                                                </pre>
+                                                            )}
+                                                        </div>
+                                                    </TableCell>
+                                                </TableRow>
+                                            )}
+                                        </React.Fragment>
+                                    ))}
+                                </TableBody>
+                            </Table>
+                        </>
                     )}
                 </CardContent>
             </Card>

@@ -15,7 +15,7 @@ build-frontend:
 	cd ./frontend; \
 	npm i; \
 	npm run build; \
-	rsync -a --delete --exclude='.*' dist/ ../src/main_service/static/; \
+	rsync -a --delete --exclude='.*' --exclude='login.html.j2' dist/ ../src/main_service/static/; \
 	cd ..; \
 	printf "$$(date +%s)" > .frontend_last_built_at.txt
 
@@ -89,12 +89,16 @@ image:
 	NEW_TEST_IMAGE_TAG=$$(($${TEST_IMAGE_TAG} + 1)); \
 	TEST_IMAGE_NAME_SEQUENTIAL=$$( echo $${TEST_IMAGE_BASE_NAME}:$${NEW_TEST_IMAGE_TAG} ); \
 	TEST_IMAGE_NAME_LATEST=$$( echo $${TEST_IMAGE_BASE_NAME}:latest ); \
+	TEST_IMAGE_NAME_LATEST=$$( echo $${TEST_IMAGE_BASE_NAME}:latest ); \
 	docker build --platform linux/amd64 -t $${TEST_IMAGE_NAME_SEQUENTIAL} .; \
+	docker tag $${TEST_IMAGE_NAME_SEQUENTIAL} $${TEST_IMAGE_NAME_LATEST}; \
 	docker tag $${TEST_IMAGE_NAME_SEQUENTIAL} $${TEST_IMAGE_NAME_LATEST}; \
 	docker push $${TEST_IMAGE_NAME_SEQUENTIAL}; \
 	docker push $${TEST_IMAGE_NAME_LATEST}; \
+	docker push $${TEST_IMAGE_NAME_LATEST}; \
 	echo "Successfully built Docker Image:"; \
 	echo "$${TEST_IMAGE_NAME_SEQUENTIAL}"; \
+	echo "$${TEST_IMAGE_NAME_LATEST}"; \
 	echo "$${TEST_IMAGE_NAME_LATEST}"; \
 	echo "";
 

@@ -11,7 +11,11 @@ from google.cloud.firestore_v1.async_client import AsyncClient
 
 from node_service import PROJECT_ID, SELF, INSTANCE_NAME, REINIT_SELF, ENV_IS_READY_PATH
 from node_service.helpers import Logger, format_traceback
-from node_service.lifecycle_endpoints import reboot_containers, get_neighboring_nodes
+from node_service.lifecycle_endpoints import (
+    reboot_containers,
+    get_neighboring_nodes,
+    load_results_from_worker,
+)
 
 
 CLIENT_DC_TIMEOUT_SEC = 5
@@ -33,34 +37,6 @@ async def get_inputs_from_neighbor(neighboring_node, session, logger, auth_heade
                 logger.log(msg, "ERROR")
     except asyncio.TimeoutError:
         pass
-
-
-async def result_check_all_workers(session: aiohttp.ClientSession, logger: Logger):
-    async def _result_check_single_worker(worker):
-        url = f"{worker.url}/jobs/{SELF['current_job']}/results"
-        async with session.get(url) as http_response:
-            if http_response.status != 200:
-                return worker, http_response.status
-
-            response_content = await http_response.content.read()
-            response = pickle.loads(response_content)
-            for result in response["results"]:
-                SELF["results_queue"].put(result, len(result[2]))
-                SELF["num_results_received"] += 1
-
-            if response.get("udf_start_latency"):
-                SELF["udf_start_latency"] = response["udf_start_latency"]
-            if response.get("packages_to_install"):
-                SELF["packages_to_install"] = response["packages_to_install"]
-            if response.get("all_packages_installed"):
-                SELF["all_packages_installed"] = response["all_packages_installed"]
-
-            worker.is_idle = response["is_idle"]
-            worker.is_empty = response["is_empty"]
-            worker.currently_installing_package = response["currently_installing_package"]
-            return worker, http_response.status
-
-    return await asyncio.gather(*[_result_check_single_worker(w) for w in SELF["workers"]])
 
 
 async def _job_watcher(
@@ -117,25 +93,18 @@ async def _job_watcher(
         result_queue_not_too_big = SELF["results_queue"].size_gb < threshold
 
         if result_queue_not_too_big:
-            workers_info = await result_check_all_workers(session, logger)
+            try:
+                tasks = [load_results_from_worker(w, session) for w in SELF["workers"]]
+                await asyncio.gather(*tasks)
+            except Exception:
+                logger.log(f"Some workers failed. Rebooting containers...", severity="ERROR")
+                reboot_containers(logger=logger)
+                break
+
             SELF["current_parallelism"] = sum(not w.is_idle for w in SELF["workers"])
             SELF["currently_installing_package"] = SELF["workers"][0].currently_installing_package
             all_workers_empty = all(w.is_empty for w in SELF["workers"])
-            failed = [f"{w.container_name}:{status}" for w, status in workers_info if status != 200]
 
-            for worker, status in workers_info:
-                if status == 500:
-                    logs = worker.logs() if worker.exists() else "Unable to retrieve container logs"
-                    error_title = f"Worker {worker.container_name} returned status 500!"
-                    msg = f"{error_title} Logs from container:\n{logs.strip()}"
-                    firestore_client = firestore.Client(project=PROJECT_ID, database="burla")
-                    node_ref = firestore_client.collection("nodes").document(INSTANCE_NAME)
-                    node_ref.collection("logs").document().set({"msg": msg, "ts": time()})
-
-            if failed:
-                logger.log(f"workers failed: {', '.join(failed)}", severity="ERROR")
-                reboot_containers(logger=logger)
-                break
         else:
             msg = f"Result queue is too big ({SELF['results_queue'].size_gb:.2f}GB)"
             logger.log(f"{msg}, skipping result check...")

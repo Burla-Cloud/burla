@@ -1,10 +1,12 @@
 from time import time, sleep
 import requests
+import asyncio
 from typing import Optional, Callable
 import concurrent.futures
 import traceback
 import threading
 import subprocess
+import pickle
 
 import aiohttp
 import docker
@@ -53,7 +55,7 @@ async def get_neighboring_nodes(async_db):
     job_filter = FieldFilter("current_job", "==", SELF["current_job"])
     query = async_db.collection("nodes").where(filter=And([status_filter, job_filter]))
     query = query.order_by(FieldPath.document_id())
-    nodes = list(query.stream())
+    nodes = [node async for node in query.stream()]
     current_node_index = None
     for index, node in enumerate(nodes):
         if node.id == INSTANCE_NAME:
@@ -64,33 +66,83 @@ async def get_neighboring_nodes(async_db):
         return nodes[current_node_index + 1 :] + nodes[:current_node_index]
 
 
+async def load_results_from_worker(
+    worker: Worker, session: aiohttp.ClientSession, ejecting: bool = False
+):
+    url = f"{worker.url}/jobs/{SELF['current_job']}/results?ejecting={ejecting}"
+    async with session.get(url) as http_response:
+        if http_response.status == 500:
+            logs = worker.logs() if worker.exists() else "Unable to retrieve container logs"
+            error_title = f"Worker {worker.container_name} returned status 500!"
+            msg = f"{error_title} Logs from container:\n{logs.strip()}"
+            firestore_client = firestore.AsyncClient(project=PROJECT_ID, database="burla")
+            node_ref = firestore_client.collection("nodes").document(INSTANCE_NAME)
+            node_ref.collection("logs").document().set({"msg": msg, "ts": time()})
+        http_response.raise_for_status()
+
+        response_content = await http_response.content.read()
+        response = pickle.loads(response_content)
+        for result in response["results"]:
+            SELF["results_queue"].put(result, len(result[2]))
+            SELF["num_results_received"] += 1
+
+        if response.get("udf_start_latency"):
+            SELF["udf_start_latency"] = response["udf_start_latency"]
+        if response.get("packages_to_install"):
+            SELF["packages_to_install"] = response["packages_to_install"]
+        if response.get("all_packages_installed"):
+            SELF["all_packages_installed"] = response["all_packages_installed"]
+
+        worker.is_idle = response["is_idle"]
+        worker.is_empty = response["is_empty"]
+        worker.currently_installing_package = response["currently_installing_package"]
+
+
+async def get_inputs_from_worker(session, worker, min_reply_size):
+    job_id = SELF["current_job"]
+    url = f"{worker.url}/jobs/{job_id}/inputs?min_reply_size={min_reply_size}"
+    async with session.get(url, timeout=1) as response:
+        response.raise_for_status()
+        if response.status == 200:
+            return pickle.loads(await response.read())
+        elif response.status == 204:
+            return []
+
+
+async def _post_stop(url, session):
+    async with session.post(f"{url}/jobs/{SELF['current_job']}/stop") as response:
+        response.raise_for_status()
+
+
 async def eject(async_db):
+    async with aiohttp.ClientSession() as session:
 
-    # tell all workers to stop accepting more inputs, and stop processing existing inputs.
+        # tell all workers to stop processing
+        await asyncio.gather(*[_post_stop(w.url) for w in SELF["workers"]], return_exceptions=True)
 
-    # gather and enqueue all remaining results! (ignoring the result queue limit)
-    # this should be done first so the client has more time to grab them before this node dies
-    # in the future, results should be sent to other non-preempted nodes, otherwise it's possible
-    # the client doesn't have time to grab these results before the node dies.
+        # load all results from workers into local result queue
+        tasks = [load_results_from_worker(w, session, ejecting=True) for w in SELF["workers"]]
+        await asyncio.gather(*tasks)
 
-    # gather and send all remaining inputs incl SELF["pending_inputs"]
+        # send all inputs to other nodes
+        neighboring_nodes = get_neighboring_nodes(async_db)
+        for node in neighboring_nodes:
 
-    # mark successfully ejected somewhere.
-
-    neighboring_nodes = get_neighboring_nodes(async_db)
-    for node in neighboring_nodes:
-        try:
-            # send SELF["pending_inputs"]
-            # call /jobs/{job_id}/transfer_inputs on every worker
-            # ^ send every neighbor instead of just one!
-            # make nodes only accept inputs from one other node at a time!
-            # to make it really reliable we need to transfer everything including results
-            # because it's hard to trust the client will download them in time.
-            # in the meantime leave as much time as possible for client to grab!!
-            # to avoid spamming neighbors with a ton of requests from workers gather inputs from
-            # workers here then send to neighbor in less larger requests!
+            all_workers_empty = False
+            while not all_workers_empty:
+                # get some inputs
+                # TODO: make update all_workers_empty
+                size = (1_000_000 * 0.5) / len(SELF["workers"])
+                tasks = [get_inputs_from_worker(session, w, size) for w in SELF["workers"]]
+                inputs = [input for inputs in await asyncio.gather(*tasks) for input in inputs]
+                # TODO: send to current neighbor
+                pass
             pass
-        except:
+
+        # send remaining results to other nodes:
+        for node in neighboring_nodes:
+            # try sending all to this node and break
+            # if node is full or busy go to next node
             pass
 
 
@@ -100,10 +152,24 @@ async def shutdown_node(logger: Logger = Depends(get_logger)):
     We dont need to delete the node here because the only way to call this is to run the shutdown
     script (by deleting the node)
     """
+    start = time()
     SELF["SHUTTING_DOWN"] = True
     SELF["job_watcher_stop_event"].set()
-    async_db = AsyncClient(project=PROJECT_ID, database="burla")
+    SELF["current_parallelism"] = 0
+    logger.log(f"Received shutdown request for node {INSTANCE_NAME}.")
 
+    # mark failed
+    async_db = AsyncClient(project=PROJECT_ID, database="burla")
+    doc_ref = async_db.collection("nodes").document(INSTANCE_NAME)
+    snapshot = await doc_ref.get()
+    if snapshot.exists:
+        node_dict = snapshot.to_dict()
+        if node_dict.get("status") != "FAILED" and node_dict.get("idle_for_too_long"):
+            await doc_ref.update({"status": "DELETED", "display_in_dashboard": True})
+        elif node_dict.get("status") != "FAILED":
+            await doc_ref.update({"status": "DELETED", "display_in_dashboard": False})
+
+    # send inputs/results to other nodes if preempted
     try:
         url = "http://metadata.google.internal/computeMetadata/v1/instance/preempted"
         async with aiohttp.ClientSession(headers={"Metadata-Flavor": "Google"}) as session:
@@ -117,19 +183,12 @@ async def shutdown_node(logger: Logger = Depends(get_logger)):
 
     if preempted:
         logger.log(f"Node {INSTANCE_NAME} was preempted!")
-    else:
-        logger.log(f"Received shutdown request for node {INSTANCE_NAME}.")
-
-    # await eject(async_db)
-
-    doc_ref = async_db.collection("nodes").document(INSTANCE_NAME)
-    snapshot = await doc_ref.get()
-    if snapshot.exists:
-        node_dict = snapshot.to_dict()
-        if node_dict.get("status") != "FAILED" and node_dict.get("idle_for_too_long"):
-            await doc_ref.update({"status": "DELETED", "display_in_dashboard": True})
-        elif node_dict.get("status") != "FAILED":
-            await doc_ref.update({"status": "DELETED", "display_in_dashboard": False})
+        seconds_available_for_ejection = 27 - (time() - start)
+        try:
+            await asyncio.wait_for(eject(async_db), timeout=seconds_available_for_ejection)
+        except asyncio.TimeoutError:
+            logger.log("JOB WILL FAIL!! Shutdown eject operation took too long!", severity="ERROR")
+            # TODO: fail job such that it actually stops and tells the user what happened
 
 
 @router.post("/reboot")

@@ -53,8 +53,9 @@ def _check_udf_executor_thread():
 
 
 @router.get("/jobs/{job_id}/results")
-async def get_results(job_id: str = Path(...)):
-    _check_udf_executor_thread()
+async def get_results(job_id: str = Path(...), ejecting: bool = Query(False)):
+    if not ejecting:
+        _check_udf_executor_thread()
     if SELF["current_job"] != job_id:
         return Response("job not found", status_code=404)
 
@@ -88,13 +89,22 @@ async def get_results(job_id: str = Path(...)):
 
 
 @router.get("/jobs/{job_id}/inputs")
-async def get_inputs(job_id: str = Path(...), min_reply_size: float = Query(...)):
-    _check_udf_executor_thread()
+async def get_inputs(
+    job_id: str = Path(...), min_reply_size: float = Query(...), ejecting: bool = Query(False)
+):
+    if not ejecting:
+        _check_udf_executor_thread()
     if SELF["current_job"] != job_id:
         return Response("job not found", status_code=404)
 
     inputs = []
     total_bytes = 0
+
+    if ejecting and SELF["in_progress_input"]:
+        inputs.append(SELF["in_progress_input"])
+        SELF["in_progress_input"] = None
+        total_bytes += len(input_pkl_with_idx[1])
+
     while not SELF["inputs_queue"].empty() and (total_bytes < min_reply_size):
         try:
             input_pkl_with_idx = SELF["inputs_queue"].get_nowait()

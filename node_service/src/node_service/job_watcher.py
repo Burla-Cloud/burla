@@ -6,48 +6,30 @@ import aiohttp
 from time import time, sleep
 
 from google.cloud import firestore
-from google.cloud.firestore import FieldFilter, And, ArrayUnion
-from google.cloud.firestore_v1.field_path import FieldPath
+from google.cloud.firestore import ArrayUnion
 from google.cloud.firestore_v1.async_client import AsyncClient
 
 from node_service import PROJECT_ID, SELF, INSTANCE_NAME, REINIT_SELF, ENV_IS_READY_PATH
 from node_service.helpers import Logger, format_traceback
-from node_service.lifecycle_endpoints import reboot_containers
+from node_service.lifecycle_endpoints import (
+    reboot_containers,
+    get_neighboring_nodes,
+    load_results_from_worker,
+)
 
 
 CLIENT_DC_TIMEOUT_SEC = 5
 
 
-async def get_neighboring_node(async_db):
-    am_only_node_working_on_job = False
-    status_filter = FieldFilter("status", "==", "RUNNING")
-    job_filter = FieldFilter("current_job", "==", SELF["current_job"])
-    base_query = async_db.collection("nodes").where(filter=And([status_filter, job_filter]))
-    base_query = base_query.order_by(FieldPath.document_id())
-    query = base_query.start_after({FieldPath.document_id(): INSTANCE_NAME}).limit(1)
-    neighboring_node = await anext(query.stream(), None)
-    if not neighboring_node:
-        # means this ^ was either the only or last node, in this case get 0th node.
-        neighboring_node = await anext(base_query.limit(1).stream())
-        am_only_node_working_on_job = neighboring_node.id == INSTANCE_NAME
-    if not am_only_node_working_on_job:
-        return neighboring_node
-
-
 async def get_inputs_from_neighbor(neighboring_node, session, logger, auth_headers):
-    neighboring_node_host = neighboring_node.get("host") if neighboring_node else None
-
-    if (not neighboring_node) or SELF["SHUTTING_DOWN"]:
-        # logger.log("No neighbors to ask for more inputs ... I am the only node.")
-        return
-
     try:
-        url = f"{neighboring_node_host}/jobs/{SELF['current_job']}/inputs"
+        url = f"{neighboring_node['host']}/jobs/{SELF['current_job']}/inputs"
         # must be close to SHUTTING_DOWN check \/
         async with session.get(url, timeout=2, headers=auth_headers) as response:
             logger.log("Asked neighboring node for more inputs ...")  # must log after get ^
             if response.status in [204, 404]:
-                logger.log(f"{neighboring_node.id} doesn't have any extra inputs to give.")
+                instance_name = neighboring_node["instance_name"]
+                logger.log(f"{instance_name} doesn't have any extra inputs to give.")
                 return
             elif response.status == 200:
                 return pickle.loads(await response.read())
@@ -56,34 +38,6 @@ async def get_inputs_from_neighbor(neighboring_node, session, logger, auth_heade
                 logger.log(msg, "ERROR")
     except asyncio.TimeoutError:
         pass
-
-
-async def result_check_all_workers(session: aiohttp.ClientSession, logger: Logger):
-    async def _result_check_single_worker(worker):
-        url = f"{worker.url}/jobs/{SELF['current_job']}/results"
-        async with session.get(url) as http_response:
-            if http_response.status != 200:
-                return worker, http_response.status
-
-            response_content = await http_response.content.read()
-            response = pickle.loads(response_content)
-            for result in response["results"]:
-                SELF["results_queue"].put(result, len(result[2]))
-                SELF["num_results_received"] += 1
-
-            if response.get("udf_start_latency"):
-                SELF["udf_start_latency"] = response["udf_start_latency"]
-            if response.get("packages_to_install"):
-                SELF["packages_to_install"] = response["packages_to_install"]
-            if response.get("all_packages_installed"):
-                SELF["all_packages_installed"] = response["all_packages_installed"]
-
-            worker.is_idle = response["is_idle"]
-            worker.is_empty = response["is_empty"]
-            worker.currently_installing_package = response["currently_installing_package"]
-            return worker, http_response.status
-
-    return await asyncio.gather(*[_result_check_single_worker(w) for w in SELF["workers"]])
 
 
 async def _job_watcher(
@@ -140,25 +94,18 @@ async def _job_watcher(
         result_queue_not_too_big = SELF["results_queue"].size_gb < threshold
 
         if result_queue_not_too_big:
-            workers_info = await result_check_all_workers(session, logger)
+            try:
+                tasks = [load_results_from_worker(w, session) for w in SELF["workers"]]
+                await asyncio.gather(*tasks)
+            except Exception:
+                logger.log(f"Some workers failed. Rebooting containers...", severity="ERROR")
+                reboot_containers(logger=logger)
+                break
+
             SELF["current_parallelism"] = sum(not w.is_idle for w in SELF["workers"])
             SELF["currently_installing_package"] = SELF["workers"][0].currently_installing_package
             all_workers_empty = all(w.is_empty for w in SELF["workers"])
-            failed = [f"{w.container_name}:{status}" for w, status in workers_info if status != 200]
 
-            for worker, status in workers_info:
-                if status == 500:
-                    logs = worker.logs() if worker.exists() else "Unable to retrieve container logs"
-                    error_title = f"Worker {worker.container_name} returned status 500!"
-                    msg = f"{error_title} Logs from container:\n{logs.strip()}"
-                    firestore_client = firestore.Client(project=PROJECT_ID, database="burla")
-                    node_ref = firestore_client.collection("nodes").document(INSTANCE_NAME)
-                    node_ref.collection("logs").document().set({"msg": msg, "ts": time()})
-
-            if failed:
-                logger.log(f"workers failed: {', '.join(failed)}", severity="ERROR")
-                reboot_containers(logger=logger)
-                break
         else:
             msg = f"Result queue is too big ({SELF['results_queue'].size_gb:.2f}GB)"
             logger.log(f"{msg}, skipping result check...")
@@ -176,10 +123,11 @@ async def _job_watcher(
         )
         if finished_all_assigned_inputs:
             # logger.log("Finished all inputs.")
-            neighboring_node = await get_neighboring_node(async_db)
-            new_inputs = await get_inputs_from_neighbor(
-                neighboring_node, session, logger, auth_headers
-            )
+            neighboring_nodes = await get_neighboring_nodes(async_db)
+            new_inputs = []
+            if neighboring_nodes and not SELF["SHUTTING_DOWN"]:
+                args = (neighboring_nodes[0].to_dict(), session, logger, auth_headers)
+                new_inputs = await get_inputs_from_neighbor(*args)
             if new_inputs:
                 logger.log(f"Got {len(new_inputs)} more inputs from {neighboring_node.id}")
                 neighbor_had_no_inputs_at = None

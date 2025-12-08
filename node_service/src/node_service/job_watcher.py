@@ -22,19 +22,19 @@ CLIENT_DC_TIMEOUT_SEC = 5
 
 
 async def get_inputs_from_neighbor(neighboring_node, session, logger, auth_headers):
+    instance_name = neighboring_node["instance_name"]
     try:
         url = f"{neighboring_node['host']}/jobs/{SELF['current_job']}/inputs"
         # must be close to SHUTTING_DOWN check \/
         async with session.get(url, timeout=2, headers=auth_headers) as response:
             logger.log("Asked neighboring node for more inputs ...")  # must log after get ^
             if response.status in [204, 404]:
-                instance_name = neighboring_node["instance_name"]
                 logger.log(f"{instance_name} doesn't have any extra inputs to give.")
                 return
             elif response.status == 200:
                 return pickle.loads(await response.read())
             else:
-                msg = f"Error getting inputs from {neighboring_node.id}: {response.status}"
+                msg = f"Error getting inputs from {instance_name}: {response.status}"
                 logger.log(msg, "ERROR")
     except asyncio.TimeoutError:
         pass
@@ -59,7 +59,7 @@ async def _job_watcher(
     JOB_FAILED_TWO = False
     JOB_CANCELED = False
     LAST_CLIENT_PING_TIMESTAMP = time()
-    neighboring_node = None
+    neighboring_nodes = []
     neighbor_had_no_inputs_at = None
     seconds_neighbor_had_no_inputs = 0
 
@@ -129,7 +129,7 @@ async def _job_watcher(
                 args = (neighboring_nodes[0].to_dict(), session, logger, auth_headers)
                 new_inputs = await get_inputs_from_neighbor(*args)
             if new_inputs:
-                logger.log(f"Got {len(new_inputs)} more inputs from {neighboring_node.id}")
+                logger.log(f"Got {len(new_inputs)} more inputs from {neighboring_nodes[0].id}")
                 neighbor_had_no_inputs_at = None
                 seconds_neighbor_had_no_inputs = 0
                 rejected_inputs = await send_inputs_to_workers(session, new_inputs)
@@ -149,7 +149,7 @@ async def _job_watcher(
         job_is_done = False
         node_is_done = SELF["all_inputs_uploaded"] and all_workers_idle_twice
         node_is_done = node_is_done and (SELF["results_queue"].empty() or is_background_job)
-        neighbor_is_done = (not neighboring_node) or (seconds_neighbor_had_no_inputs > 2)
+        neighbor_is_done = (not neighboring_nodes) or (seconds_neighbor_had_no_inputs > 2)
 
         if node_is_done and neighbor_is_done:
             query_result = await node_docs_collection.sum("current_num_results").get()

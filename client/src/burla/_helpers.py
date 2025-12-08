@@ -229,7 +229,8 @@ def get_modules_required_on_remote(function_):
         if origin:
             is_package = "site-packages" in origin or "dist-packages" in origin
             is_builtin = origin in ("built-in", "frozen") or "lib/python" in origin
-            is_custom = not (is_package or is_builtin)
+            is_burla = "burla" in origin  # <- make dev mode not always false positive
+            is_custom = not (is_package or is_builtin or is_burla)
             if is_package:
                 base_module_name = module_name.split(".")[0]
                 package_module_names.add(base_module_name)

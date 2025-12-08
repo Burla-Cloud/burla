@@ -618,11 +618,15 @@ def remote_parallel_map(
     # Needs to operate on function_.__globals__ which cannot be reassigned -> must be done here.
     custom_module_names, package_module_names = get_modules_required_on_remote(function_)
     for module_name in custom_module_names:
+        print(f"HERE: {module_name}")
         cloudpickle.register_pickle_by_value(sys.modules[module_name])
     packages = {}
     for module_name in package_module_names:
-        # this happens: google.cloud.storage -> google -> every installed google package.
-        # too annoying to make it figure out exactly what ones it really uses, so installs all.
+        # some of these are unnecessary since we get all that map to the base module
+        # example google.cloud.storage -> google -> every installed google package
+        # for now we just install more packages than we need to, it's fast enough
+        if not PKG_MODULE_MAPPING.get(module_name):
+            continue
         for package_name in PKG_MODULE_MAPPING.get(module_name):
             packages[package_name] = metadata.version(package_name)
     # ------------------------------------------------

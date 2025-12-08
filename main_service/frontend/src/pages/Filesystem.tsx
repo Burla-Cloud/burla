@@ -1648,7 +1648,7 @@ export default function Filesystem() {
     return (
         <div className="flex-1 flex flex-col justify-start px-12 pt-6 pb-8">
             <div className="max-w-6xl mx-auto w-full flex-1 flex flex-col">
-                <h1 className="text-3xl font-bold mt-2 mb-6 text-primary">Filesystem</h1>
+                <h1 className="text-2xl font-bold mt-2 mb-6 text-primary">Cluster Filesystem</h1>
 
                 <div className="space-y-8 flex-1">
                     {showWelcome && (

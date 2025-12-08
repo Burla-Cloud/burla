@@ -130,7 +130,7 @@ const SettingsPage = () => {
     <div className="flex-1 flex flex-col justify-start px-12 pt-6">
       <div className="max-w-6xl mx-auto w-full flex-1 flex flex-col">
         <div className="flex items-center justify-between mt-2 mb-6">
-          <h1 className="text-3xl font-bold text-primary">Settings</h1>
+          <h1 className="text-2xl font-bold text-primary">Settings</h1>
 
           {hasUnsavedChanges && (
             <Button

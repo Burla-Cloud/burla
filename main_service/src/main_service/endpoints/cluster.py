@@ -3,7 +3,7 @@ import asyncio
 import docker
 import requests
 from time import time
-from datetime import datetime
+from datetime import datetime, timedelta
 import pytz
 import textwrap
 
@@ -292,3 +292,73 @@ async def node_log_stream(node_id: str, request: Request):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache, no-transform"},
     )
+
+
+@router.get("/v1/cluster/deleted_recent_paginated")
+def get_deleted_recent_paginated(
+    page: int = 0,
+    page_size: int = 15,
+):
+    now = datetime.utcnow()
+    seven_days_ago = now - timedelta(days=7)
+
+    statuses = ["DELETED", "FAILED"]
+    results = []
+
+    for status in statuses:
+        q = (
+            DB.collection("nodes")
+            .where(filter=FieldFilter("status", "==", status))
+        )
+
+        for doc in q.stream():
+            data = doc.to_dict()
+
+            ts = data.get("deleted_at") or data.get("started_booting_at")
+            if not ts:
+                continue
+
+            if isinstance(ts, (int, float)):
+                ts_dt = datetime.utcfromtimestamp(ts)
+                ts_value = ts
+            else:
+                ts_dt = ts
+                ts_value = ts.timestamp()
+
+            if ts_dt < seven_days_ago:
+                continue
+
+            results.append(
+                {
+                    "id": doc.id,
+                    "name": data.get("instance_name", doc.id),
+                    "status": data.get("status"),
+                    "type": data.get("machine_type"),
+                    "cpus": data.get("num_cpus"),
+                    "gpus": data.get("num_gpus"),
+                    "memory": data.get("memory"),
+                    "deletedAt": ts_value,
+                }
+            )
+
+    # newest first
+    results.sort(key=lambda x: x["deletedAt"], reverse=True)
+
+    total = len(results)
+
+    start = page * page_size
+    end = start + page_size
+    page_items = results[start:end]
+
+    # normalize deletedAt to ms for frontend
+    for item in page_items:
+        ts = item["deletedAt"]
+        if ts < 2_000_000_000:
+            item["deletedAt"] = ts * 1000
+
+    return {
+        "nodes": page_items,
+        "page": page,
+        "limit": page_size,
+        "total": total,
+    }

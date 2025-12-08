@@ -7,7 +7,6 @@ import subprocess
 import textwrap
 import logging
 import types
-from importlib import metadata
 from typing import Union
 from threading import Event
 
@@ -215,81 +214,41 @@ def install_signal_handlers(
     return original_signal_handlers
 
 
-def get_all_packages():
-    package_names = set()
-    package_to_module_mapping = metadata.packages_distributions()
-    for module_name, module in sys.modules.items():
-
-        # skip non-packages
-        spec = getattr(module, "__spec__", None)
-        origin = getattr(spec, "origin", None)
-        is_package = "site-packages" in origin if origin else False
-        if not is_package:
-            continue
-
-        packages_from_base_module = package_to_module_mapping.get(module_name.split(".")[0])
-        if packages_from_base_module:
-            # some of these are unnecessary since we get all that map to the base module
-            # example google.cloud.storage -> google -> every installed google package
-            # for now we just install more packages than we need to, it's fast enough
-            package_names.update(packages_from_base_module)
-
-    package_versions = {}
-    for package in package_names:
-        try:
-            package_versions[package] = metadata.version(package)
-        except metadata.PackageNotFoundError:
-            continue
-    return package_versions
-
-
-def get_packages_in_function_module(function_):
-    package_names = set()
-    package_to_module_mapping = metadata.packages_distributions()
-    for global_var in function_.__globals__.values():
-
-        # skip non-modules
-        if isinstance(global_var, types.ModuleType):
-            module_name = global_var.__name__
-            module = global_var
-        elif getattr(global_var, "__module__", None):
-            module_name = global_var.__module__
-            module = sys.modules.get(module_name)
-        else:
-            continue
-
-        # skip non-packages
-        spec = getattr(module, "__spec__", None)
-        origin = getattr(spec, "origin", None)
-        is_package = "site-packages" in origin if origin else False
-        if not is_package:
-            continue
-
-        packages_from_base_module = package_to_module_mapping.get(module_name.split(".")[0])
-        if packages_from_base_module:
-            # some of these are unnecessary since we get all that map to the base module
-            # example google.cloud.storage -> google -> every installed google package
-            # for now we just install more packages than we need to, it's fast enough
-            package_names.update(packages_from_base_module)
-
-    package_versions = {}
-    for package in package_names:
-        try:
-            package_versions[package] = metadata.version(package)
-        except metadata.PackageNotFoundError:
-            continue
-    return package_versions
-
-
-def get_custom_modules() -> list[types.ModuleType]:
-    custom_modules = []
+def get_modules_required_on_remote(function_):
+    """
+    Returns all package modules if custom user-defined modules exist.
+    (because I don't want to write code to inspect custom modules for required packages right now)
+    Only returns modules defined in `function_` namespace if there are no user-defined modules.
+    """
+    has_custom_modules = False
+    custom_module_names = set()
+    package_module_names = set()
     for module_name, module in sys.modules.items():
         spec = getattr(module, "__spec__", None)
         origin = getattr(spec, "origin", None)
         if origin:
-            is_builtin = origin in (None, "built-in", "frozen")
-            is_builtin = is_builtin or ("python" in origin and "lib/python" in origin)
-            is_site_package = "site-packages" in origin
-        if not (is_site_package or is_builtin):
-            custom_modules.append(module)
-    return custom_modules
+            is_package = "site-packages" in origin or "dist-packages" in origin
+            is_builtin = origin in ("built-in", "frozen") or "lib/python" in origin
+            is_burla = "burla" in origin  # <- make dev mode not always false positive
+            is_custom = not (is_package or is_builtin or is_burla)
+            if is_package:
+                base_module_name = module_name.split(".")[0]
+                package_module_names.add(base_module_name)
+            elif is_custom:
+                custom_module_names.add(module_name)
+                has_custom_modules = True
+
+    if not has_custom_modules:
+        # If there are NO custom modules, we install only packages that are in the namespace
+        # of the users function, because these are the only ones that might be used.
+        function_module_names = set()
+        for var in function_.__globals__.values():
+            is_module = isinstance(var, types.ModuleType)
+            has_module = getattr(var, "__module__", None)
+            if is_module or has_module:
+                module_name = var.__name__ if is_module else var.__module__
+                function_module_names.add(module_name.split(".")[0])
+
+        package_module_names = package_module_names.intersection(function_module_names)
+
+    return custom_module_names, package_module_names

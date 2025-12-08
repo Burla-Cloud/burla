@@ -36,10 +36,11 @@ from burla._helpers import (
     log_telemetry,
     log_telemetry_async,
     run_in_subprocess,
-    get_packages_from_modules,
-    get_function_modules,
-    get_all_custom_modules,
+    get_modules_required_on_remote,
 )
+
+# load on import and reuse because this is very slow in big envs
+PKG_MODULE_MAPPING = metadata.packages_distributions()
 
 # This is here to remind myself why I SHOULDN'T do it (at least for now):
 # If I warm up the connections on import like below, then RPM calls that are right next to each
@@ -605,30 +606,26 @@ def remote_parallel_map(
     # TODO: rename internally
     background = detach
 
-    ### TODO: implement internally instead of wrapping:
+    # ------------------------------------------------
+    # TODO: implement internally instead of wrapping:
     def wrapped_function_(args_tuple):
         return function_(*args_tuple)
 
     wrapped_function_.__name__ = function_.__name__
     inputs = [(i,) if not isinstance(i, tuple) else i for i in inputs]
 
-    # TODO: move back into `_execute_job` after ^ todo is done.
-    # (needs to operate on function_.__globals__ which cannot be reassigned to new func)
-    custom_modules = get_all_custom_modules()
-    if custom_modules:
-        # TODO: use better inspection to only install packages used by custom modules that are
-        # imported in the user functions namespace. Installing all is a stopgap.
-        all_modules = sys.modules
-        packages = get_packages_from_modules(all_modules)
-        for custom_module in custom_modules:
-            cloudpickle.register_pickle_by_value(custom_module)
-    else:
-        # modules defined in `function_` namespace
-        function_modules = get_function_modules(function_)
-        packages = get_packages_from_modules(function_modules)
-
-    print(packages)
-    ###
+    # Move below code back into `_execute_job` after above todo is done.
+    # Needs to operate on function_.__globals__ which cannot be reassigned -> must be done here.
+    custom_module_names, package_module_names = get_modules_required_on_remote(function_)
+    for module_name in custom_module_names:
+        cloudpickle.register_pickle_by_value(sys.modules[module_name])
+    packages = {}
+    for module_name in package_module_names:
+        # this happens: google.cloud.storage -> google -> every installed google package.
+        # too annoying to make it figure out exactly what ones it really uses, so installs all.
+        for package_name in PKG_MODULE_MAPPING.get(module_name):
+            packages[package_name] = metadata.version(package_name)
+    # ------------------------------------------------
 
     max_parallelism = max_parallelism if max_parallelism else len(inputs)
     job_id = str(uuid4())

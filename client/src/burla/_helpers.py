@@ -215,15 +215,15 @@ def install_signal_handlers(
     return original_signal_handlers
 
 
-def get_all_packages():
+def get_packages_from_modules(modules: dict[str, types.ModuleType]):
     package_names = set()
     package_to_module_mapping = metadata.packages_distributions()
-    for module_name, module in sys.modules.items():
+    for module_name, module in modules.items():
 
         # skip non-packages
         spec = getattr(module, "__spec__", None)
         origin = getattr(spec, "origin", None)
-        is_package = "site-packages" in origin if origin else False
+        is_package = ("site-packages" in origin or "dist-packages" in origin) if origin else False
         if not is_package:
             continue
 
@@ -243,47 +243,22 @@ def get_all_packages():
     return package_versions
 
 
-def get_packages_in_function_module(function_):
-    package_names = set()
-    package_to_module_mapping = metadata.packages_distributions()
+def get_function_modules(function_) -> dict[str, types.ModuleType]:
+    """Module objects defined inside `function_` namespace"""
+    function_modules = {}
     for global_var in function_.__globals__.values():
-
-        # skip non-modules
         if isinstance(global_var, types.ModuleType):
-            module_name = global_var.__name__
-            module = global_var
+            function_modules[global_var.__name__] = global_var
         elif getattr(global_var, "__module__", None):
-            module_name = global_var.__module__
-            module = sys.modules.get(module_name)
+            function_modules[global_var.__module__] = sys.modules.get(global_var.__module__)
         else:
             continue
-
-        # skip non-packages
-        spec = getattr(module, "__spec__", None)
-        origin = getattr(spec, "origin", None)
-        is_package = "site-packages" in origin if origin else False
-        if not is_package:
-            continue
-
-        packages_from_base_module = package_to_module_mapping.get(module_name.split(".")[0])
-        if packages_from_base_module:
-            # some of these are unnecessary since we get all that map to the base module
-            # example google.cloud.storage -> google -> every installed google package
-            # for now we just install more packages than we need to, it's fast enough
-            package_names.update(packages_from_base_module)
-
-    package_versions = {}
-    for package in package_names:
-        try:
-            package_versions[package] = metadata.version(package)
-        except metadata.PackageNotFoundError:
-            continue
-    return package_versions
+    return function_modules
 
 
-def get_custom_modules() -> list[types.ModuleType]:
+def get_all_custom_modules() -> list[types.ModuleType]:
     custom_modules = []
-    for module_name, module in sys.modules.items():
+    for _, module in sys.modules.items():
         spec = getattr(module, "__spec__", None)
         origin = getattr(spec, "origin", None)
         if origin:

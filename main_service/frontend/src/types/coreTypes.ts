@@ -21,6 +21,7 @@ export interface BurlaNode {
   memory?: string;
   age?: string;
   logs?: string[];
+  started_booting_at?: number;
   // set for anything that came from /v1/cluster/deleted_recent or SSE delete
   deletedAt?: number; // milliseconds since epoch
 }

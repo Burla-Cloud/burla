@@ -256,9 +256,9 @@ remote_parallel_map(my_function, list(range(1000)))`;
     const sortedNodes = useMemo(() => {
         const arr = [...nodes];
         arr.sort((a, b) => {
-            const ar = STATUS_RANK[String(a.status)] ?? 999;
-            const br = STATUS_RANK[String(b.status)] ?? 999;
-            if (ar !== br) return ar - br;
+            const aStarted = a.started_booting_at ?? 0;
+            const bStarted = b.started_booting_at ?? 0;
+            if (aStarted !== bStarted) return bStarted - aStarted;
             return String(a.name).localeCompare(String(b.name));
         });
         return arr;

@@ -15,7 +15,7 @@ build-frontend:
 	cd ./frontend; \
 	npm i; \
 	npm run build; \
-	rsync -a --delete --exclude='.*' dist/ ../src/main_service/static/; \
+	rsync -a --delete --exclude='.*' --exclude='login.html.j2' dist/ ../src/main_service/static/; \
 	cd ..; \
 	printf "$$(date +%s)" > .frontend_last_built_at.txt
 

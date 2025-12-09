@@ -104,11 +104,11 @@ function formatFileManagerSize(bytes: number): string {
 
 function formatFileManagerDate(value: string | Date | null | undefined): string {
     if (!value) {
-        return "—";
+        return "-";
     }
     const date = value instanceof Date ? value : new Date(value);
     if (Number.isNaN(date.getTime())) {
-        return "—";
+        return "-";
     }
     const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
     const monthNames = [
@@ -243,6 +243,8 @@ function clearDropHighlight(manager: FileManagerComponent | null | undefined) {
         element.removeAttribute("aria-dropeffect");
     }
 }
+
+type FileWithPath = File & { webkitRelativePath?: string };
 
 function ensureWebkitRelativePath(file: File, relativePath: string): FileWithPath {
     const fileWithPath = file as FileWithPath;
@@ -441,8 +443,6 @@ function fileInfoSize(file: FileInfo): number {
     return raw?.size ?? 0;
 }
 
-type FileWithPath = File & { webkitRelativePath?: string };
-
 type QueuedUpload = {
     rawFile: File | Blob;
     relativePath: string;
@@ -488,6 +488,7 @@ type FileSelection = {
 
 const MAX_SELECTION_FILES = 1000;
 const MAX_SELECTION_ERROR_CODE = "MAX_SELECTION_EXCEEDED";
+const PAGE_SIZE = 1000;
 
 function isMaxSelectionError(error: unknown): boolean {
     return error instanceof Error && error.message === MAX_SELECTION_ERROR_CODE;
@@ -522,11 +523,20 @@ function relativePathForFile(fileInfo: FileInfo): string {
 
 export default function Filesystem() {
     const fmRef = React.useRef<FileManagerComponent | null>(null);
+    const [pageIndex, setPageIndex] = React.useState(0);
+    const [totalCount, setTotalCount] = React.useState(0);
+    const [hasMore, setHasMore] = React.useState(false);
+
+    const currentPathRef = React.useRef<string | null>(null);
+
     const maxUploadSizeBytes = 10 * 1024 ** 4;
     const [activeUpload, setActiveUpload] = React.useState<ActiveUploadState | null>(null);
     const [isPreparingBatchDownload, setIsPreparingBatchDownload] = React.useState(false);
     const abortControllerRef = React.useRef<AbortController | null>(null);
     const batchDownloadAbortControllerRef = React.useRef<AbortController | null>(null);
+
+    const [isBusy, setIsBusy] = React.useState(false);
+
     const detailsViewColumns = React.useMemo(
         () => [
             {
@@ -1054,6 +1064,73 @@ export default function Filesystem() {
                 return;
             }
 
+            if (normalizedAction === "read") {
+                setIsBusy(true);
+
+                const ajax = args.ajaxSettings || {};
+                const rawData = ajax.data;
+
+                let payload: any = {};
+                if (typeof rawData === "string" && rawData.trim().length > 0) {
+                    try {
+                        payload = JSON.parse(rawData);
+                    } catch {
+                        payload = {};
+                    }
+                } else if (rawData && typeof rawData === "object") {
+                    payload = { ...rawData };
+                }
+
+                const rawPath =
+                    (payload && typeof payload.path === "string" && payload.path) ||
+                    (payload.data &&
+                        typeof payload.data === "object" &&
+                        typeof payload.data.path === "string" &&
+                        payload.data.path) ||
+                    "/";
+
+                const normalizedPath = rawPath || "/";
+
+                let effectivePageIndex = pageIndex;
+                if (currentPathRef.current === null || currentPathRef.current !== normalizedPath) {
+                    currentPathRef.current = normalizedPath;
+                    effectivePageIndex = 0;
+                    if (pageIndex !== 0) {
+                        setPageIndex(0);
+                    }
+                    setTotalCount(0);
+                    setHasMore(false);
+                }
+
+                const skip = effectivePageIndex * PAGE_SIZE;
+                const take = PAGE_SIZE;
+
+                const dataField =
+                    payload.data &&
+                    !Array.isArray(payload.data) &&
+                    typeof payload.data === "object"
+                        ? payload.data
+                        : {};
+
+                const nextPayload = {
+                    ...payload,
+                    skip,
+                    take,
+                    data: {
+                        ...dataField,
+                        skip,
+                        take,
+                    },
+                };
+
+                args.ajaxSettings = {
+                    ...ajax,
+                    data: JSON.stringify(nextPayload),
+                };
+
+                return;
+            }
+
             if (normalizedAction === "upload") {
                 args.cancel = true;
 
@@ -1107,7 +1184,7 @@ export default function Filesystem() {
                 clearUploaderFiles(manager?.uploadObj ?? null);
             }
         },
-        [processFilesSelection]
+        [processFilesSelection, pageIndex]
     );
 
     React.useEffect(() => {
@@ -1256,10 +1333,108 @@ export default function Filesystem() {
         lastSelectionTokenRef.current = null;
     }, []);
 
-    const handleSuccess = React.useCallback((args: any) => {
-        if (!args || args.action !== "move") return;
-        fmRef.current?.refreshFiles();
+    const scrollToTopOfGrid = React.useCallback(() => {
+        const manager = fmRef.current;
+        const host = (manager?.element as HTMLElement | undefined) ?? null;
+        if (!host) return;
+
+        const scrollEl =
+            host.querySelector<HTMLElement>(".e-content") ??
+            host.querySelector<HTMLElement>(".e-gridcontent");
+        if (scrollEl) {
+            scrollEl.scrollTop = 0;
+        }
     }, []);
+
+    const handleSuccess = React.useCallback((args: any) => {
+        if (!args) return;
+
+        if (args.action === "move") {
+            fmRef.current?.refreshFiles();
+        }
+
+        if (args.action === "read") {
+            const result = args.result as { count?: number; hasMore?: boolean } | undefined;
+            const count = result && typeof result.count === "number" ? result.count : 0;
+            const hasMoreFlag = !!(result && result.hasMore);
+
+            setTotalCount(count);
+            setHasMore(hasMoreFlag);
+
+            if (!hasMoreFlag) {
+                if (count > 0) {
+                    const maxPageIndex = Math.max(0, Math.ceil(count / PAGE_SIZE) - 1);
+                    setPageIndex((current) => (current > maxPageIndex ? maxPageIndex : current));
+                } else {
+                    setPageIndex(0);
+                }
+            }
+
+            setIsBusy(false);
+        }
+    }, []);
+
+    const handleFailure = React.useCallback((args: any) => {
+        console.error("FileManager request failed", args);
+        if (args && args.action === "read") {
+            setIsBusy(false);
+        }
+    }, []);
+
+    React.useEffect(() => {
+        const manager = fmRef.current;
+        const host = (manager?.element as HTMLElement | undefined) ?? undefined;
+        if (!host) return;
+
+        const gridContent =
+            host.querySelector<HTMLElement>(".e-gridcontent") ??
+            host.querySelector<HTMLElement>(".e-content");
+
+        if (!gridContent) return;
+
+        if (isBusy) {
+            gridContent.style.pointerEvents = "none";
+            gridContent.style.filter = "blur(2px)";
+            gridContent.style.opacity = "0.6";
+        } else {
+            gridContent.style.pointerEvents = "";
+            gridContent.style.filter = "";
+            gridContent.style.opacity = "";
+        }
+    }, [isBusy]);
+
+    const handlePageChange = React.useCallback(
+        (direction: "next" | "prev") => {
+            if (isBusy) {
+                return;
+            }
+
+            setPageIndex((current) => {
+                let nextIndex = current;
+
+                if (direction === "next") {
+                    if (hasMore || (current + 1) * PAGE_SIZE < totalCount) {
+                        nextIndex = current + 1;
+                    }
+                } else {
+                    nextIndex = Math.max(current - 1, 0);
+                }
+
+                if (nextIndex !== current) {
+                    setTimeout(() => {
+                        const manager = fmRef.current;
+                        if (manager) {
+                            manager.refreshFiles();
+                            scrollToTopOfGrid();
+                        }
+                    }, 0);
+                }
+
+                return nextIndex;
+            });
+        },
+        [totalCount, hasMore, scrollToTopOfGrid, isBusy]
+    );
 
     const handleFileLoad = React.useCallback((args: FileLoadEventArgs) => {
         const fileDetails = args.fileDetails as {
@@ -1276,12 +1451,12 @@ export default function Filesystem() {
         );
         if (!isFile) {
             if (sizeElement) {
-                sizeElement.textContent = "—";
-                sizeElement.title = "—";
+                sizeElement.textContent = "-";
+                sizeElement.title = "-";
             }
             if (modifiedElement) {
-                modifiedElement.textContent = "—";
-                modifiedElement.title = "—";
+                modifiedElement.textContent = "-";
+                modifiedElement.title = "-";
             }
             return;
         }
@@ -1463,172 +1638,231 @@ export default function Filesystem() {
         localStorage.setItem("filesystemWelcomeHidden", "true");
     };
 
+    const totalPages = totalCount > 0 ? Math.max(1, Math.ceil(totalCount / PAGE_SIZE)) : 1;
+    const displayTotal = hasMore ? "many" : totalPages.toString();
+
+    const isPrevDisabled = isBusy || pageIndex === 0;
+    const isNextDisabled =
+        isBusy || (!hasMore && (pageIndex + 1) * PAGE_SIZE >= totalCount);
+
     return (
-        <div className="flex-1 flex flex-col justify-start px-12 pt-6 pb-12 min-h-0">
-            <div className="max-w-7xl mx-auto w-full flex-1 flex flex-col min-h-0">
-                {showWelcome && (
-                    <div className="spotlight-surface rounded-xl my-8">
-                        <Card className="w-full relative rounded-xl shadow-lg shadow-black/5 bg-white/90 backdrop-blur">
-                            <button
-                                onClick={handleDismissWelcome}
-                                className="absolute top-2 right-2 p-1 hover:bg-gray-100 rounded-full"
-                                aria-label="Dismiss welcome message"
-                            >
-                                <X className="h-6 w-6" />
-                            </button>
-                            <CardHeader className="pb-4">
-                                <CardTitle className="text-[1.45rem] font-semibold text-primary">
-                                    📂 &nbsp;Welcome to Your Network Filesystem!
-                                </CardTitle>
-                            </CardHeader>
-                            <CardContent className="space-y-3">
-                                <p className="text-gray-700">
-                                    <ul className="list-disc pl-6 space-y-1 text-left">
-                                        <li>
-                                            Any files uploaded here will appear in "
-                                            <code>/workspace/shared</code>" inside the cluster.
-                                        </li>
-                                        <li>
-                                            Any files you write to "<code>/workspace/shared</code>"{" "}
-                                            inside the cluster, will appear here where you can
-                                            download them!
-                                        </li>
-                                    </ul>
-                                </p>
-                            </CardContent>
-                        </Card>
-                    </div>
-                )}
-                <div className="relative flex-1 rounded-lg border border-gray-200 bg-white shadow-sm filesystem-shell">
-                    <FileManagerComponent
-                        view="Details"
-                        ref={fmRef}
-                        allowDragAndDrop
-                        ajaxSettings={{
-                            url: "/api/sf/filemanager",
-                            uploadUrl: "/api/sf/upload",
-                        }}
-                        uploadSettings={{
-                            maxFileSize: maxUploadSizeBytes,
-                            directoryUpload: false,
-                        }}
-                        detailsViewSettings={{
-                            columns: detailsViewColumns,
-                        }}
-                        navigationPaneSettings={{ visible: false }}
-                        contextMenuSettings={{
-                            file: ["Download", "Delete", "Rename"],
-                            folder: ["Open", "Delete", "Rename", "Download"],
-                            layout: ["NewFolder", "Upload", "Refresh"],
-                        }}
-                        success={handleSuccess}
-                        toolbarSettings={{
-                            items: [
-                                "NewFolder",
-                                "Upload",
-                                "Delete",
-                                "Rename",
-                                "Download",
-                                "Refresh",
-                                "Selection",
-                            ],
-                        }}
-                        cssClass="filesystem-filemanager"
-                        beforeDownload={handleBeforeDownload}
-                        beforeSend={handleBeforeSend}
-                        fileLoad={handleFileLoad}
-                        height="100%"
-                        width="100%"
-                    >
-                        <Inject services={[NavigationPane, Toolbar, DetailsView, ContextMenu]} />
-                    </FileManagerComponent>
-                    {isPreparingBatchDownload && (
-                        <div className="absolute inset-0 z-30 flex items-center justify-center bg-slate-900/45 backdrop-blur-sm">
-                            <div className="pointer-events-auto relative flex w-full max-w-xl flex-col items-center gap-6 rounded-3xl border border-slate-200 bg-white px-8 py-8 text-slate-800 shadow-xl shadow-slate-900/10">
+        <div className="flex-1 flex flex-col justify-start px-12 pt-6 pb-8">
+            <div className="max-w-6xl mx-auto w-full flex-1 flex flex-col">
+                <h1 className="text-2xl font-bold mt-2 mb-6 text-primary">Cluster Filesystem</h1>
+
+                <div className="space-y-8 flex-1">
+                    {showWelcome && (
+                        <div className="spotlight-surface rounded-xl my-0">
+                            <Card className="w-full relative rounded-xl shadow-lg shadow-black/5 bg-white/90 backdrop-blur">
                                 <button
-                                    type="button"
-                                    className="absolute right-5 top-5 rounded-full p-2 text-slate-500 transition hover:bg-slate-100 hover:text-slate-800"
-                                    aria-label="Cancel download"
-                                    onClick={handleCancelBatchDownload}
+                                    onClick={handleDismissWelcome}
+                                    className="absolute top-2 right-2 p-1 hover:bg-gray-100 rounded-full"
+                                    aria-label="Dismiss welcome message"
                                 >
-                                    <X className="h-6 w-6" aria-hidden="true" />
+                                    <X className="h-6 w-6" />
                                 </button>
-                                <span
-                                    className="inline-flex h-10 w-10 animate-spin rounded-full border-[3px]"
-                                    style={{
-                                        borderColor: "rgba(15, 23, 42, 0.12)",
-                                        borderTopColor: "hsl(var(--brand))",
-                                    }}
-                                    aria-hidden="true"
-                                />
-                                <span className="text-base font-semibold tracking-tight text-slate-700 text-center">
-                                    Compressing files for download …
-                                </span>
-                            </div>
-                        </div>
-                    )}
-                    {activeUpload && (
-                        <div className="absolute inset-0 z-20 flex items-center justify-center bg-slate-900/45 backdrop-blur-sm">
-                            <div className="pointer-events-auto relative w-full max-w-2xl rounded-2xl bg-white/95 p-8 shadow-2xl">
-                                <div className="flex items-start justify-between gap-6">
-                                    <p className="flex-1 text-base font-semibold text-gray-700 truncate">
-                                        {activeUpload.state === "uploading"
-                                            ? `Uploading: ${activeUpload.name}`
-                                            : activeUpload.name}
+                                <CardHeader className="pb-4">
+                                    <CardTitle className="text-[1.45rem] font-semibold text-primary">
+                                        📂 &nbsp;Welcome to Your Network Filesystem!
+                                    </CardTitle>
+                                </CardHeader>
+                                <CardContent className="space-y-3">
+                                    <p className="text-gray-700">
+                                        <ul className="list-disc pl-6 space-y-1 text-left">
+                                            <li>
+                                                Any files uploaded here will appear in "
+                                                <code>/workspace/shared</code>" inside the cluster.
+                                            </li>
+                                            <li>
+                                                Any files you write to "<code>/workspace/shared</code>"
+                                                inside the cluster, will appear here where you can
+                                                download them!
+                                            </li>
+                                        </ul>
                                     </p>
-                                    {activeUpload.state === "uploading" && (
-                                        <button
-                                            type="button"
-                                            className="-mr-2 -mt-2 p-2 text-gray-500 transition hover:bg-gray-100 hover:text-gray-800 rounded-full"
-                                            aria-label="Cancel upload"
-                                            onClick={handleCancelUpload}
-                                        >
-                                            <X className="h-6 w-6" aria-hidden="true" />
-                                        </button>
-                                    )}
-                                </div>
-                                <div className="mt-5 h-4 w-full overflow-hidden rounded-full bg-gray-200">
-                                    <div
-                                        className="h-full rounded-full"
-                                        style={{
-                                            width: `${(() => {
-                                                if (activeUpload.totalBytes > 0) {
-                                                    return Math.min(
-                                                        100,
-                                                        Math.floor(
-                                                            (activeUpload.uploadedBytes /
-                                                                activeUpload.totalBytes) *
-                                                                100
-                                                        )
-                                                    );
-                                                }
-                                                return activeUpload.state === "done" ? 100 : 0;
-                                            })()}%`,
-                                            backgroundColor:
-                                                activeUpload.state === "error"
-                                                    ? "rgb(239 68 68)"
-                                                    : activeUpload.state === "cancelled"
-                                                    ? "rgb(245 158 11)"
-                                                    : "hsl(var(--brand))",
-                                        }}
-                                    />
-                                </div>
-                                <p className="mt-4 text-xs font-medium text-gray-500">
-                                    {activeUpload.state === "uploading"
-                                        ? `${formatBytes(
-                                              activeUpload.uploadedBytes
-                                          )} of ${formatBytes(activeUpload.totalBytes)}`
-                                        : activeUpload.state === "done"
-                                        ? "Upload complete"
-                                        : activeUpload.state === "cancelled"
-                                        ? `Upload cancelled at ${formatBytes(
-                                              activeUpload.uploadedBytes
-                                          )}`
-                                        : "Upload failed"}
-                                </p>
-                            </div>
+                                </CardContent>
+                            </Card>
                         </div>
                     )}
+
+                    <div className="relative rounded-lg border border-gray-200 bg-white shadow-sm filesystem-shell">
+                        <FileManagerComponent
+                            view="Details"
+                            ref={fmRef}
+                            allowDragAndDrop
+                            ajaxSettings={{
+                                url: "/api/sf/filemanager",
+                                uploadUrl: "/api/sf/upload",
+                            }}
+                            uploadSettings={{
+                                maxFileSize: maxUploadSizeBytes,
+                                directoryUpload: false,
+                            }}
+                            detailsViewSettings={{
+                                columns: detailsViewColumns,
+                            }}
+                            navigationPaneSettings={{ visible: false }}
+                            contextMenuSettings={{
+                                file: ["Download", "Delete", "Rename"],
+                                folder: ["Open", "Delete", "Rename", "Download"],
+                                layout: ["NewFolder", "Upload", "Refresh"],
+                            }}
+                            success={handleSuccess}
+                            failure={handleFailure}
+                            toolbarSettings={{
+                                items: [
+                                    "NewFolder",
+                                    "Upload",
+                                    "Delete",
+                                    "Rename",
+                                    "Download",
+                                    "Refresh",
+                                    "Selection",
+                                ],
+                            }}
+                            cssClass="filesystem-filemanager"
+                            beforeDownload={handleBeforeDownload}
+                            beforeSend={handleBeforeSend}
+                            fileLoad={handleFileLoad}
+                            height="82vh"
+                            width="100%"
+                        >
+                            <Inject
+                                services={[NavigationPane, Toolbar, DetailsView, ContextMenu]}
+                            />
+                        </FileManagerComponent>
+
+                        {(totalCount > PAGE_SIZE || hasMore) && (
+                            <div className="flex items-center justify-between px-4 py-2 border-t border-gray-200 text-sm text-gray-600">
+                                <div>
+                                    Page {pageIndex + 1} of {displayTotal}
+                                </div>
+                                <div className="space-x-2">
+                                    <button
+                                        type="button"
+                                        className={`px-2 py-1 border rounded transition-colors ${
+                                            isPrevDisabled
+                                                ? "bg-gray-100 text-gray-400 border-gray-300"
+                                                : "bg-white text-gray-800 border-gray-300 hover:bg-gray-50"
+                                        }`}
+                                        onClick={() => handlePageChange("prev")}
+                                        disabled={isPrevDisabled}
+                                        style={{
+                                            cursor: isPrevDisabled ? "default" : "pointer",
+                                        }}
+                                    >
+                                        Previous
+                                    </button>
+                                    <button
+                                        type="button"
+                                        className={`px-2 py-1 border rounded transition-colors ${
+                                            isNextDisabled
+                                                ? "bg-gray-100 text-gray-400 border-gray-300"
+                                                : "bg-white text-gray-800 border-gray-300 hover:bg-gray-50"
+                                        }`}
+                                        onClick={() => handlePageChange("next")}
+                                        disabled={isNextDisabled}
+                                        style={{
+                                            cursor: isNextDisabled ? "default" : "pointer",
+                                        }}
+                                    >
+                                        Next
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+
+                        {isPreparingBatchDownload && (
+                            <div className="absolute inset-0 z-30 flex items-center justify-center bg-slate-900/45 backdrop-blur-sm">
+                                <div className="pointer-events-auto relative flex w-full max-w-xl flex-col items-center gap-6 rounded-3xl border border-slate-200 bg-white px-8 py-8 text-slate-800 shadow-xl shadow-slate-900/10">
+                                    <button
+                                        type="button"
+                                        className="absolute right-5 top-5 rounded-full p-2 text-slate-500 transition hover:bg-slate-100 hover:text-slate-800"
+                                        aria-label="Cancel download"
+                                        onClick={handleCancelBatchDownload}
+                                    >
+                                        <X className="h-6 w-6" aria-hidden="true" />
+                                    </button>
+                                    <span
+                                        className="inline-flex h-10 w-10 animate-spin rounded-full border-[3px]"
+                                        style={{
+                                            borderColor: "rgba(15, 23, 42, 0.12)",
+                                            borderTopColor: "hsl(var(--brand))",
+                                        }}
+                                        aria-hidden="true"
+                                    />
+                                    <span className="text-base font-semibold tracking-tight text-slate-700 text-center">
+                                        Compressing files for download …
+                                    </span>
+                                </div>
+                            </div>
+                        )}
+
+                        {activeUpload && (
+                            <div className="absolute inset-0 z-20 flex items-center justify-center bg-slate-900/45 backdrop-blur-sm">
+                                <div className="pointer-events-auto relative w-full max-w-2xl rounded-2xl bg-white/95 p-8 shadow-2xl">
+                                    <div className="flex items-start justify-between gap-6">
+                                        <p className="flex-1 text-base font-semibold text-gray-700 truncate">
+                                            {activeUpload.state === "uploading"
+                                                ? `Uploading: ${activeUpload.name}`
+                                                : activeUpload.name}
+                                        </p>
+                                        {activeUpload.state === "uploading" && (
+                                            <button
+                                                type="button"
+                                                className="-mr-2 -mt-2 p-2 text-gray-500 transition hover:bg-gray-100 hover:text-gray-800 rounded-full"
+                                                aria-label="Cancel upload"
+                                                onClick={handleCancelUpload}
+                                            >
+                                                <X className="h-6 w-6" />
+                                            </button>
+                                        )}
+                                    </div>
+                                    <div className="mt-5 h-4 w-full overflow-hidden rounded-full bg-gray-200">
+                                        <div
+                                            className="h-full rounded-full"
+                                            style={{
+                                                width: `${(() => {
+                                                    if (activeUpload.totalBytes > 0) {
+                                                        return Math.min(
+                                                            100,
+                                                            Math.floor(
+                                                                (activeUpload.uploadedBytes /
+                                                                    activeUpload.totalBytes) *
+                                                                    100
+                                                            )
+                                                        );
+                                                    }
+                                                    return activeUpload.state === "done"
+                                                        ? 100
+                                                        : 0;
+                                                })()}%`,
+                                                backgroundColor:
+                                                    activeUpload.state === "error"
+                                                        ? "rgb(239 68 68)"
+                                                        : activeUpload.state === "cancelled"
+                                                        ? "rgb(245 158 11)"
+                                                        : "hsl(var(--brand))",
+                                            }}
+                                        />
+                                    </div>
+                                    <p className="mt-4 text-xs font-medium text-gray-500">
+                                        {activeUpload.state === "uploading"
+                                            ? `${formatBytes(
+                                                  activeUpload.uploadedBytes
+                                              )} of ${formatBytes(activeUpload.totalBytes)}`
+                                            : activeUpload.state === "done"
+                                            ? "Upload complete"
+                                            : activeUpload.state === "cancelled"
+                                            ? `Upload cancelled at ${formatBytes(
+                                                  activeUpload.uploadedBytes
+                                              )}`
+                                            : "Upload failed"}
+                                    </p>
+                                </div>
+                            </div>
+                        )}
+                    </div>
                 </div>
             </div>
         </div>

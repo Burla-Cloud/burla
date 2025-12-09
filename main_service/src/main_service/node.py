@@ -422,7 +422,7 @@ class Node:
         jq '. + {{"max-concurrent-downloads": 32}}' /etc/docker/daemon.json 2>/dev/null || echo '{{}}' | jq '. + {{"max-concurrent-downloads": 32}}' > /etc/docker/daemon.json
         killall -HUP dockerd || open -a Docker
 
-        # start gcsfuse to sync working dirs with GCS bucket if specified
+        # start gcsfuse
         cd /
         mkdir -p /workspace/shared
         if [ "{self.sync_gcs_bucket_name}" != "None" ]; then

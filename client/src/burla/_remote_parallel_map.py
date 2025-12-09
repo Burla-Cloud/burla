@@ -629,6 +629,10 @@ def remote_parallel_map(
             continue
         for package_name in PKG_MODULE_MAPPING.get(module_name):
             packages[package_name] = metadata.version(package_name)
+
+    # unnecessary / already installed
+    for package in ["ipython", "burla"]:
+        packages.pop(package, None)
     # ------------------------------------------------
 
     max_parallelism = max_parallelism if max_parallelism else len(inputs)

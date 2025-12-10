@@ -56,7 +56,9 @@ export interface ServiceAccount {
 }
 
 export interface LogEntry {
-  created_at: number;
-  message: string;
-  id?: string;
+    id?: string;
+    message: string;
+    created_at: number;
+    index?: number | string;
+    is_error?: boolean;
 }

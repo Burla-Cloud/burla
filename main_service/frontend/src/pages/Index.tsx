@@ -25,7 +25,7 @@ const Dashboard = () => {
     });
 
     const [welcomeVisible, setWelcomeVisible] = useState(
-        () => localStorage.getItem("welcomeMessageHidden") !== "true"
+        () => localStorage.getItem("welcomeMessageHidden") !== "true" 
     );
 
     useEffect(() => {

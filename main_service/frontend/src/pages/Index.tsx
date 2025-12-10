@@ -17,7 +17,12 @@ const Dashboard = () => {
 
     const [disableStartButton, setDisableStartButton] = useState(false);
     const [disableStopButton, setDisableStopButton] = useState(false);
-    const [showDeleted, setShowDeleted] = useState(false);
+    const SHOW_DELETED_STORAGE_KEY = "nodesShowDeleted";
+
+    const [showDeleted, setShowDeleted] = useState(() => {
+        if (typeof window === "undefined") return false;
+        return localStorage.getItem(SHOW_DELETED_STORAGE_KEY) === "true";
+    });
 
     const [welcomeVisible, setWelcomeVisible] = useState(
         () => localStorage.getItem("welcomeMessageHidden") !== "true"
@@ -32,6 +37,11 @@ const Dashboard = () => {
         return () =>
             window.removeEventListener("welcomeVisibilityChanged", handler as EventListener);
     }, []);
+
+    useEffect(() => {
+        if (typeof window === "undefined") return;
+        localStorage.setItem(SHOW_DELETED_STORAGE_KEY, showDeleted ? "true" : "false");
+    }, [showDeleted]);
 
     const countedNodes = useMemo(() => nodes.filter((n) => ACTIVE_STATUSES.has(n.status)), [nodes]);
 

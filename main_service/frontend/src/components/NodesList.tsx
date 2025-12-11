@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
     Table,
@@ -253,16 +253,23 @@ remote_parallel_map(my_function, list(range(1000)))`;
         READY: 5,
     };
 
+    const sortNodes = useCallback((a: BurlaNode, b: BurlaNode) => {
+        const aStarted = a.started_booting_at ?? 0;
+        const bStarted = b.started_booting_at ?? 0;
+        if (aStarted !== bStarted) return bStarted - aStarted;
+
+        const aStatus = STATUS_RANK[String(a.status || "").toUpperCase()] ?? 0;
+        const bStatus = STATUS_RANK[String(b.status || "").toUpperCase()] ?? 0;
+        if (aStatus !== bStatus) return bStatus - aStatus;
+
+        return String(a.name).localeCompare(String(b.name));
+    }, []);
+
     const sortedNodes = useMemo(() => {
         const arr = [...nodes];
-        arr.sort((a, b) => {
-            const aStarted = a.started_booting_at ?? 0;
-            const bStarted = b.started_booting_at ?? 0;
-            if (aStarted !== bStarted) return bStarted - aStarted;
-            return String(a.name).localeCompare(String(b.name));
-        });
+        arr.sort(sortNodes);
         return arr;
-    }, [nodes]);
+    }, [nodes, sortNodes]);
 
     const activeNodes = useMemo(() => {
         return sortedNodes.filter((n) => {
@@ -367,10 +374,24 @@ remote_parallel_map(my_function, list(range(1000)))`;
         didMountRef.current = true;
     }, []);
 
-    const displayNodes = showDeleted ? deletedNodes : activePagedNodes;
+    const displayNodes = useMemo(() => {
+        if (!showDeleted) return activePagedNodes;
+
+        const combined = [...sortedNodes];
+        const seen = new Set(combined.map((node) => node.id));
+
+        deletedNodes.forEach((node) => {
+            if (!seen.has(node.id)) {
+                combined.push(node);
+            }
+        });
+
+        combined.sort(sortNodes);
+        return combined;
+    }, [showDeleted, activePagedNodes, sortedNodes, deletedNodes, sortNodes]);
 
     const noActiveNodes = !showDeleted && activeNodes.length === 0;
-    const noDeletedNodes = showDeleted && !deletedLoading && deletedNodes.length === 0;
+    const noDeletedNodes = showDeleted && !deletedLoading && displayNodes.length === 0;
 
     const handleShowDeletedChange = (value: boolean) => {
         onShowDeletedChange(value);
@@ -540,9 +561,7 @@ remote_parallel_map(my_function, list(range(1000)))`;
 
                             {noDeletedNodes && showDeleted && (
                                 <div className="border-2 border-dashed rounded-lg p-8 text-center text-muted-foreground">
-                                    <div className="text-sm">
-                                        No failed or deleted nodes in the last 7 days.
-                                    </div>
+                                    <div className="text-sm">No nodes to display.</div>
                                 </div>
                             )}
 

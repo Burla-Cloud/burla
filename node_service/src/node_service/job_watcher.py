@@ -171,7 +171,8 @@ async def _job_watcher(
             LAST_CLIENT_PING_TIMESTAMP = sync_job_doc.get().to_dict()["last_ping_from_client"]
             seconds_since_last_ping = time() - LAST_CLIENT_PING_TIMESTAMP
             client_disconnected = seconds_since_last_ping > CLIENT_DC_TIMEOUT_SEC
-            logger.log(f"HERE!")
+            if client_disconnected == False:
+                logger.log(f"Second client disconnect check saved this job from failure.")
 
         results_queue_empty = SELF["results_queue"].empty()
         not_waiting_for_client = results_queue_empty or client_disconnected

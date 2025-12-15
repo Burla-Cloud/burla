@@ -42,6 +42,8 @@ from burla._helpers import (
 # load on import and reuse because this is very slow in big envs
 PKG_MODULE_MAPPING = metadata.packages_distributions()
 
+LOGIN_TIMEOUT_SEC = 3
+
 # This is here to remind myself why I SHOULDN'T do it (at least for now):
 # If I warm up the connections on import like below, then RPM calls that are right next to each
 # other, cause GRPC issues. This is possible to fix but not a priority right now.
@@ -153,7 +155,7 @@ async def _get_ready_nodes(db: AsyncClient):
     status_filter = FieldFilter("status", "==", "READY")
     ready_nodes_coroutine = db.collection("nodes").where(filter=status_filter).get()
     try:
-        docs = await asyncio.wait_for(ready_nodes_coroutine, timeout=2)
+        docs = await asyncio.wait_for(ready_nodes_coroutine, timeout=LOGIN_TIMEOUT_SEC)
     except asyncio.TimeoutError:
         msg = "\nTimeout waiting for DB.\nPlease run `burla login` and try again.\n"
         raise FirestoreTimeout(msg)

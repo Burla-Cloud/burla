@@ -618,7 +618,6 @@ def remote_parallel_map(
     # Needs to operate on function_.__globals__ which cannot be reassigned -> must be done here.
     custom_module_names, package_module_names = get_modules_required_on_remote(function_)
     for module_name in custom_module_names:
-        print(f"HERE: {module_name}")
         cloudpickle.register_pickle_by_value(sys.modules[module_name])
     packages = {}
     for module_name in package_module_names:

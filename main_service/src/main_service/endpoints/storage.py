@@ -337,7 +337,9 @@ def delete_action(payload: Dict[str, Any]) -> Dict[str, Any]:
     if not data_items:
         raise ValueError("No items provided for delete action")
     for item in data_items:
-        name = validate_entry_name(item.get("name"))
+        name = item.get("name")
+        if not name:
+            raise ValueError("Name is required")
         if is_file_entry(item):
             blob_name = f"{directory_prefix}{name}"
             blob = GCS_BUCKET.blob(blob_name)

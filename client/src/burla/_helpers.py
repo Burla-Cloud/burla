@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+import sysconfig
 import signal
 import requests
 import subprocess
@@ -220,6 +221,11 @@ def get_modules_required_on_remote(function_):
     (because I don't want to write code to inspect custom modules for required packages right now)
     Only returns modules defined in `function_` namespace if there are no user-defined modules.
     """
+    paths = sysconfig.get_paths()
+    normalize = lambda p: os.path.normcase(os.path.abspath(p))
+    stdlib_paths = [normalize(p) for p in (paths.get("stdlib"), paths.get("platstdlib")) if p]
+    stdlib_paths.append(normalize(os.path.join(sys.base_prefix, "DLLs")))
+    site_packages_paths = [normalize(p) for p in (paths.get("purelib"), paths.get("platlib")) if p]
     has_custom_modules = False
     custom_module_names = set()
     package_module_names = set()
@@ -227,9 +233,14 @@ def get_modules_required_on_remote(function_):
         spec = getattr(module, "__spec__", None)
         origin = getattr(spec, "origin", None)
         if origin:
-            is_package = "site-packages" in origin or "dist-packages" in origin
-            is_builtin = origin in ("built-in", "frozen") or "lib/python" in origin
-            is_burla = "burla" in origin  # <- make dev mode not always false positive
+            if origin in ("built-in", "frozen"):
+                normalized_origin = ""
+                is_builtin = True
+            else:
+                normalized_origin = normalize(origin)
+                is_builtin = any(normalized_origin.startswith(path) for path in stdlib_paths)
+            is_package = any(normalized_origin.startswith(path) for path in site_packages_paths)
+            is_burla = "burla" in normalized_origin  # make dev mode not always false positive
             is_custom = not (is_package or is_builtin or is_burla)
             if is_package:
                 base_module_name = module_name.split(".")[0]

@@ -530,7 +530,7 @@ async def _execute_job(
 
             if spinner and all_packages_installed:
                 spinner.text = (
-                    f"Calling `{function_.__name__}` on {len(inputs)} inputs "
+                    f"Calling `{function_.__name__}` "
                     f"({n_results}/{len(inputs)} completed) "
                     f"({total_parallelism} running)"
                 )
@@ -703,7 +703,7 @@ def remote_parallel_map(
                 n_results += 1
 
         if spinner:
-            msg = f"Done! Called `{function_.__name__}` on {len(inputs)} inputs "
+            msg = f"Done calling `{function_.__name__}`! "
             msg += f"({len(inputs)}/{len(inputs)} completed)"
             spinner.text = msg
             spinner.ok("✔")

@@ -9,6 +9,7 @@ import {
     Toolbar,
     ContextMenu,
 } from "@syncfusion/ej2-react-filemanager";
+import { DialogUtility } from "@syncfusion/ej2-popups";
 import { X } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
@@ -1106,9 +1107,7 @@ export default function Filesystem() {
                 const take = PAGE_SIZE;
 
                 const dataField =
-                    payload.data &&
-                    !Array.isArray(payload.data) &&
-                    typeof payload.data === "object"
+                    payload.data && !Array.isArray(payload.data) && typeof payload.data === "object"
                         ? payload.data
                         : {};
 
@@ -1346,8 +1345,36 @@ export default function Filesystem() {
         }
     }, []);
 
+    const showBackgroundDeletePopup = React.useCallback((message: string) => {
+        DialogUtility.alert({
+            title: "Background delete",
+            content: message.replace(/\n/g, "<br/>"),
+            okButton: { text: "ok" },
+            showCloseIcon: false,
+            isModal: true,
+        });
+    }, []);
+
     const handleSuccess = React.useCallback((args: any) => {
         if (!args) return;
+
+        if (args.action === "delete") {
+            const result = (args.result ?? {}) as {
+                backgroundDelete?: boolean;
+                deletedCount?: number;
+            };
+
+            if (result.backgroundDelete) {
+                const itemCount =
+                    typeof result.deletedCount === "number" && result.deletedCount > 0
+                        ? result.deletedCount
+                        : null;
+                const countLabel = itemCount ? `${itemCount} items` : "selected items";
+                showBackgroundDeletePopup(
+                    `Due to the high number of items to delete, this operation will be completed in the background.`
+                );
+            }
+        }
 
         if (args.action === "move") {
             fmRef.current?.refreshFiles();
@@ -1642,8 +1669,7 @@ export default function Filesystem() {
     const displayTotal = hasMore ? "many" : totalPages.toString();
 
     const isPrevDisabled = isBusy || pageIndex === 0;
-    const isNextDisabled =
-        isBusy || (!hasMore && (pageIndex + 1) * PAGE_SIZE >= totalCount);
+    const isNextDisabled = isBusy || (!hasMore && (pageIndex + 1) * PAGE_SIZE >= totalCount);
 
     return (
         <div className="flex-1 flex flex-col justify-start px-12 pt-6 pb-8">
@@ -1674,9 +1700,9 @@ export default function Filesystem() {
                                                 <code>/workspace/shared</code>" inside the cluster.
                                             </li>
                                             <li>
-                                                Any files you write to "<code>/workspace/shared</code>"
-                                                inside the cluster, will appear here where you can
-                                                download them!
+                                                Any files you write to "
+                                                <code>/workspace/shared</code>" inside the cluster,
+                                                will appear here where you can download them!
                                             </li>
                                         </ul>
                                     </p>
@@ -1833,9 +1859,7 @@ export default function Filesystem() {
                                                             )
                                                         );
                                                     }
-                                                    return activeUpload.state === "done"
-                                                        ? 100
-                                                        : 0;
+                                                    return activeUpload.state === "done" ? 100 : 0;
                                                 })()}%`,
                                                 backgroundColor:
                                                     activeUpload.state === "error"

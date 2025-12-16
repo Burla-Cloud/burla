@@ -3,15 +3,15 @@ import time
 import tempfile
 import zipfile
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from google.cloud import storage
 from google.api_core.exceptions import GoogleAPIError, NotFound
 from google.auth import default, impersonated_credentials
 
-from main_service import PROJECT_ID, DB
+from main_service import PROJECT_ID, DB, get_add_background_task_function
 
 
 router = APIRouter()
@@ -29,6 +29,9 @@ GCS_BUCKET_IMPERSONATED = gcs_client_impersonated.bucket(cluster_config["gcs_buc
 
 gcs_client = storage.Client(project=project_id)
 GCS_BUCKET = gcs_client.bucket(cluster_config["gcs_bucket_name"])
+
+BATCH_DELETE_BACKGROUND_THRESHOLD = 1000
+BATCH_DELETE_CHUNK_SIZE = 1000
 
 
 def error_response(message: str, code: str = "400") -> Dict[str, Any]:
@@ -79,16 +82,9 @@ def isoformat_value(timestamp: Optional[datetime.datetime]) -> str:
     return timestamp.isoformat().replace("+00:00", "Z")
 
 
-def folder_has_children(prefix: str) -> bool:
-    iterator = GCS_BUCKET.list_blobs(prefix=prefix, max_results=2)
-    for blob in iterator:
-        if blob.name == prefix:
-            continue
-        return True
-    return False
-
-
-def build_directory_metadata(prefix: str, parent_prefix: str) -> Dict[str, Any]:
+def build_directory_metadata(
+    prefix: str, parent_prefix: str, has_children: bool = True
+) -> Dict[str, Any]:
     if prefix.endswith("/"):
         prefix = prefix
     else:
@@ -104,7 +100,7 @@ def build_directory_metadata(prefix: str, parent_prefix: str) -> Dict[str, Any]:
         "dateModified": "",
         "type": "folder",
         "isFile": False,
-        "hasChild": folder_has_children(prefix),
+        "hasChild": has_children,
         "path": directory_path,
         "filterPath": directory_path,
     }
@@ -163,6 +159,63 @@ def folder_exists(prefix: str) -> bool:
     return False
 
 
+def chunked(items: List[str], size: int) -> List[List[str]]:
+    return [items[index : index + size] for index in range(0, len(items), size)]
+
+
+def collect_blob_names(
+    directory_prefix: str, items: List[Dict[str, Any]], limit: Optional[int] = None
+) -> tuple[List[str], bool]:
+    names: List[str] = []
+    seen: set[str] = set()
+    truncated = False
+
+    for item in items:
+        entry_name = item["name"]
+        entry_is_file = item["isFile"]
+
+        if entry_is_file:
+            blob_name = f"{directory_prefix}{entry_name}"
+            if blob_name not in seen:
+                seen.add(blob_name)
+                names.append(blob_name)
+        else:
+            prefix = f"{directory_prefix}{entry_name}/"
+            for blob in GCS_BUCKET.list_blobs(prefix=prefix):
+                if blob.name in seen:
+                    continue
+                seen.add(blob.name)
+                names.append(blob.name)
+                if limit is not None and len(names) >= limit:
+                    truncated = True
+                    return names, truncated
+
+        if limit is not None and len(names) >= limit:
+            truncated = True
+            return names, truncated
+
+    return names, truncated
+
+
+def delete_blobs_in_batches(blob_names: List[str]) -> None:
+    if not blob_names:
+        return
+
+    for group in chunked(blob_names, BATCH_DELETE_CHUNK_SIZE):
+        with gcs_client.batch():
+            for blob_name in group:
+                blob = GCS_BUCKET.blob(blob_name)
+                try:
+                    blob.delete(client=gcs_client)
+                except NotFound:
+                    continue
+
+
+def schedule_background_delete(directory_prefix: str, items: List[Dict[str, Any]]) -> None:
+    blob_names, _ = collect_blob_names(directory_prefix, items)
+    delete_blobs_in_batches(blob_names)
+
+
 def delete_prefix(prefix: str) -> None:
     blobs = GCS_BUCKET.list_blobs(prefix=prefix)
     for blob in blobs:
@@ -212,7 +265,12 @@ def get_directory_page(
     skip: int,
     take: int,
 ) -> tuple[List[Dict[str, Any]], int, bool]:
-    iterator = GCS_BUCKET.list_blobs(prefix=directory_prefix, delimiter="/")
+    needed = skip + take + 1
+    iterator = GCS_BUCKET.list_blobs(
+        prefix=directory_prefix,
+        delimiter="/",
+        max_results=max(needed, 1),
+    )
 
     entries: List[Dict[str, Any]] = []
     seen = 0
@@ -227,7 +285,7 @@ def get_directory_page(
                 break
 
             if seen >= skip:
-                entries.append(build_directory_metadata(prefix, directory_prefix))
+                entries.append(build_directory_metadata(prefix, directory_prefix, True))
 
             seen += 1
 
@@ -314,13 +372,13 @@ def create_action(payload: Dict[str, Any]) -> Dict[str, Any]:
         if file_blob is not None:
             raise ValueError(f"A file named '{name}' already exists")
         if folder_exists(folder_prefix):
-            metadata = build_directory_metadata(folder_prefix, directory_prefix)
+            metadata = build_directory_metadata(folder_prefix, directory_prefix, True)
             entries.append(metadata)
             continue
         if GCS_BUCKET.get_blob(folder_prefix) is None:
             marker_blob = GCS_BUCKET.blob(folder_prefix)
             marker_blob.upload_from_string(b"", content_type="application/x-directory")
-        metadata = build_directory_metadata(folder_prefix, directory_prefix)
+        metadata = build_directory_metadata(folder_prefix, directory_prefix, False)
         metadata["dateModified"] = isoformat_value(
             datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
         )
@@ -328,7 +386,9 @@ def create_action(payload: Dict[str, Any]) -> Dict[str, Any]:
     return {"files": entries}
 
 
-def delete_action(payload: Dict[str, Any]) -> Dict[str, Any]:
+def delete_action(
+    payload: Dict[str, Any], add_background_task: Optional[Callable] = None
+) -> Dict[str, Any]:
     directory_prefix = normalize_directory_path(payload.get("path"))
     data_items = payload.get("data") or []
     if not data_items:
@@ -336,20 +396,30 @@ def delete_action(payload: Dict[str, Any]) -> Dict[str, Any]:
         data_items = [{"name": name} for name in names]
     if not data_items:
         raise ValueError("No items provided for delete action")
+    normalized_items: List[Dict[str, Any]] = []
     for item in data_items:
-        name = item.get("name")
-        if not name:
-            raise ValueError("Name is required")
-        if is_file_entry(item):
-            blob_name = f"{directory_prefix}{name}"
-            blob = GCS_BUCKET.blob(blob_name)
-            try:
-                blob.delete()
-            except NotFound:
-                continue
-        else:
-            folder_prefix = f"{directory_prefix}{name}/"
-            delete_prefix(folder_prefix)
+        name = validate_entry_name(item.get("name"))
+        normalized_items.append({"name": name, "isFile": is_file_entry(item)})
+
+    preview_names, truncated = collect_blob_names(
+        directory_prefix, normalized_items, BATCH_DELETE_BACKGROUND_THRESHOLD + 1
+    )
+
+    over_background_threshold = truncated or len(preview_names) > BATCH_DELETE_BACKGROUND_THRESHOLD
+
+    if over_background_threshold and add_background_task is not None:
+        add_background_task(schedule_background_delete, directory_prefix, normalized_items)
+        estimated_count = (
+            len(preview_names) if not truncated else BATCH_DELETE_BACKGROUND_THRESHOLD + 1
+        )
+        return {
+            "files": [],
+            "backgroundDelete": True,
+            "deletedCount": estimated_count,
+        }
+
+    full_names, _ = collect_blob_names(directory_prefix, normalized_items)
+    delete_blobs_in_batches(full_names)
     return {"files": []}
 
 
@@ -402,7 +472,7 @@ def move_action(payload: Dict[str, Any]) -> Dict[str, Any]:
             if folder_exists(destination_prefix):
                 raise ValueError(f"A folder named '{name}' already exists at the destination")
             move_prefix(source_prefix, destination_prefix)
-            metadata = build_directory_metadata(destination_prefix, target_directory_prefix)
+            metadata = build_directory_metadata(destination_prefix, target_directory_prefix, True)
             metadata["dateModified"] = isoformat_value(
                 datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
             )
@@ -437,7 +507,7 @@ def rename_action(payload: Dict[str, Any]) -> Dict[str, Any]:
         if folder_exists(destination_prefix):
             raise ValueError(f"Folder '{new_name}' already exists")
         move_prefix(source_prefix, destination_prefix)
-        metadata = build_directory_metadata(destination_prefix, directory_prefix)
+        metadata = build_directory_metadata(destination_prefix, directory_prefix, True)
         metadata["dateModified"] = isoformat_value(
             datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
         )
@@ -473,7 +543,9 @@ def details_action(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 @router.post("/api/sf/filemanager")
-async def filemanager_endpoint(request: Request):
+async def filemanager_endpoint(
+    request: Request, add_background_task=Depends(get_add_background_task_function)
+):
     request_json = await request.json()
     action = (request_json.get("action") or "").lower()
     try:
@@ -482,7 +554,7 @@ async def filemanager_endpoint(request: Request):
         if action == "create":
             return create_action(request_json)
         if action == "delete":
-            return delete_action(request_json)
+            return delete_action(request_json, add_background_task)
         if action == "move":
             return move_action(request_json)
         if action == "rename":

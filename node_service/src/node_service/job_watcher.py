@@ -59,6 +59,7 @@ async def _job_watcher(
     JOB_FAILED_TWO = False
     JOB_CANCELED = False
     LAST_CLIENT_PING_TIMESTAMP = time()
+    watcher_start_time = time()
     neighboring_nodes = []
     neighbor_had_no_inputs_at = None
     seconds_neighbor_had_no_inputs = 0
@@ -167,10 +168,16 @@ async def _job_watcher(
         client_disconnected = False
         seconds_since_last_ping = time() - LAST_CLIENT_PING_TIMESTAMP
         if seconds_since_last_ping > CLIENT_DC_TIMEOUT_SEC:
-            # double check cause sometimes the the thread just didnt get enough attention:
+            # double check synchronously, sometimes the the thread just didnt get enough attention:
             LAST_CLIENT_PING_TIMESTAMP = sync_job_doc.get().to_dict()["last_ping_from_client"]
             seconds_since_last_ping = time() - LAST_CLIENT_PING_TIMESTAMP
-            client_disconnected = seconds_since_last_ping > CLIENT_DC_TIMEOUT_SEC
+            seconds_since_watcher_start = time() - watcher_start_time
+            _client_disconnected = seconds_since_last_ping > CLIENT_DC_TIMEOUT_SEC
+
+            # sometimes client dosen't send a ping for first 5-6 seconds
+            # this is intentional to keep short jobs fast / udf_start_latency low
+            client_disconnected = _client_disconnected and seconds_since_watcher_start > 7
+
             if client_disconnected == False:
                 logger.log(f"Second client disconnect check saved this job from failure.")
 

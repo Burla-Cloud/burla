@@ -43,6 +43,7 @@ from burla._helpers import (
 PKG_MODULE_MAPPING = metadata.packages_distributions()
 
 LOGIN_TIMEOUT_SEC = 3
+BANNED_PACKAGES = ["ipython", "burla", "google-colab"]
 
 # This is here to remind myself why I SHOULDN'T do it (at least for now):
 # If I warm up the connections on import like below, then RPM calls that are right next to each
@@ -529,9 +530,8 @@ async def _execute_job(
 
             if spinner and all_packages_installed:
                 spinner.text = (
-                    f"Calling `{function_.__name__}` on {len(inputs)} inputs "
-                    f"({n_results}/{len(inputs)} completed) "
-                    f"({total_parallelism} running)"
+                    f"Calling `{function_.__name__}`: {n_results}/{len(inputs)} completed, "
+                    f"{total_parallelism} running."
                 )
 
             if len(nodes) == 0 and return_queue.empty():  # nodes removed in _check_single_node
@@ -631,8 +631,8 @@ def remote_parallel_map(
         for package_name in PKG_MODULE_MAPPING.get(module_name):
             packages[package_name] = metadata.version(package_name)
 
-    # unnecessary / already installed
-    for package in ["ipython", "burla"]:
+    # unnecessary / already installed / will break stuff
+    for package in BANNED_PACKAGES:
         packages.pop(package, None)
     # ------------------------------------------------
 
@@ -646,7 +646,7 @@ def remote_parallel_map(
         if spinner:
             spinner = yaspin(sigmap={})  # <- .start will overwrite my handlers without sigmap={}
             spinner.start()
-            spinner.text = f"Preparing to call `{function_.__name__}` on {len(inputs)} inputs"
+            spinner.text = f"Preparing to call `{function_.__name__}` on {len(inputs)} inputs ..."
         job_canceled_event = Event()
         inputs_done_event = Event()
         original_signal_handlers = install_signal_handlers(
@@ -702,8 +702,8 @@ def remote_parallel_map(
                 n_results += 1
 
         if spinner:
-            msg = f"Done! Called `{function_.__name__}` on {len(inputs)} inputs "
-            msg += f"({len(inputs)}/{len(inputs)} completed)"
+            msg = f"Done calling `{function_.__name__}`! "
+            msg += f"{len(inputs)}/{len(inputs)} completed."
             spinner.text = msg
             spinner.ok("✔")
 

@@ -1,7 +1,6 @@
 import sys
 import pickle
 import json
-import types
 import asyncio
 import traceback
 from importlib import metadata
@@ -634,6 +633,10 @@ def remote_parallel_map(
     # unnecessary / already installed / will break stuff
     for package in BANNED_PACKAGES:
         packages.pop(package, None)
+
+    # not an official dep
+    if packages.get("SQLAlchemy") and "psycopg2-binary" in PKG_MODULE_MAPPING.get("psycopg2", []):
+        packages["psycopg2-binary"] = metadata.version("psycopg2-binary")
     # ------------------------------------------------
 
     max_parallelism = max_parallelism if max_parallelism else len(inputs)

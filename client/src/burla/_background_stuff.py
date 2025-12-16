@@ -23,7 +23,7 @@ def send_alive_pings(job_id: str):
     """
     sync_db, _ = get_db_clients()
     job_doc = sync_db.collection("jobs").document(job_id)
-    last_update_time = 0
+    last_update_time = time()
     while True:
         now = time()
         elapsed_time = now - last_update_time

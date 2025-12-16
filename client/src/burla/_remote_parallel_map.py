@@ -703,7 +703,7 @@ def remote_parallel_map(
 
         if spinner:
             msg = f"Done calling `{function_.__name__}`! "
-            msg += f"{len(inputs)}/{len(inputs)} completed"
+            msg += f"{len(inputs)}/{len(inputs)} completed."
             spinner.text = msg
             spinner.ok("✔")
 

@@ -69,12 +69,16 @@ async def _job_watcher(
         nonlocal LAST_CLIENT_PING_TIMESTAMP, JOB_FAILED, JOB_CANCELED
         for change in changes:
             job_dict = change.document.to_dict()
-            if LAST_CLIENT_PING_TIMESTAMP is None and job_dict.get("last_ping_from_client"):
-                seconds_since_watcher_start = time() - watcher_start_time
-                logger.log(
-                    f"First ping recieved! Watcher started {seconds_since_watcher_start}s ago."
-                )
             LAST_CLIENT_PING_TIMESTAMP = job_dict.get("last_ping_from_client")
+
+            if LAST_CLIENT_PING_TIMESTAMP is None:
+                logger.log(f"Here")
+            if LAST_CLIENT_PING_TIMESTAMP:
+                seconds_since_watcher_start = time() - watcher_start_time
+                msg = f"First ping recieved! ({LAST_CLIENT_PING_TIMESTAMP})"
+                msg += f"Watcher started {seconds_since_watcher_start}s ago."
+                logger.log(msg)
+
             if job_dict["status"] == "FAILED":
                 JOB_FAILED = True
                 break

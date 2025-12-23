@@ -177,17 +177,14 @@ async def _job_watcher(
 
         # `not_waiting_for_client` used to make sure client has time to grab errors when failed.
         client_disconnected = False
-        seconds_since_last_ping = time() - LAST_CLIENT_PING_TIMESTAMP
-        if seconds_since_last_ping > CLIENT_DC_TIMEOUT_SEC:
-            # double check synchronously, sometimes the the thread just didnt get enough attention:
-            LAST_CLIENT_PING_TIMESTAMP = sync_job_doc.get().to_dict()["last_ping_from_client"]
+        if LAST_CLIENT_PING_TIMESTAMP:
             seconds_since_last_ping = time() - LAST_CLIENT_PING_TIMESTAMP
-            seconds_since_watcher_start = time() - watcher_start_time
-            _client_disconnected = seconds_since_last_ping > CLIENT_DC_TIMEOUT_SEC
-
-            # sometimes client dosen't send a ping for first 5-6 seconds
-            # this is intentional to keep short jobs fast / udf_start_latency low
-            client_disconnected = _client_disconnected and seconds_since_watcher_start > 7
+            if seconds_since_last_ping > CLIENT_DC_TIMEOUT_SEC:
+                # double check synchronously, sometimes the thread just didnt get enough attention:
+                LAST_CLIENT_PING_TIMESTAMP = sync_job_doc.get().to_dict()["last_ping_from_client"]
+                seconds_since_last_ping = time() - LAST_CLIENT_PING_TIMESTAMP
+                seconds_since_watcher_start = time() - watcher_start_time
+                client_disconnected = seconds_since_last_ping > CLIENT_DC_TIMEOUT_SEC
 
         if client_disconnected:
             msg = f"Client disconnected! Last ping recieved {seconds_since_last_ping}s ago."

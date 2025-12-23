@@ -303,19 +303,6 @@ def get_deleted_recent_paginated(
     page = max(page, 0)
     page_size = max(page_size, 1)
 
-    statuses = ["DELETED", "FAILED"]
-    base_query = (
-        DB.collection("nodes")
-        .where(filter=FieldFilter("status", "in", statuses))
-        .order_by("started_booting_at", direction=firestore.Query.DESCENDING)
-    )
-
-    paged_query = base_query.offset(page * page_size).limit(page_size)
-    docs = list(paged_query.stream())
-
-    count_snapshot = base_query.count().get()
-    total = count_snapshot[0][0].value if count_snapshot else 0
-
     def to_millis(value):
         if value is None:
             return None
@@ -323,24 +310,48 @@ def get_deleted_recent_paginated(
             return int(value * 1000) if value < 2_000_000_000_000 else int(value)
         return int(value.timestamp() * 1000)
 
-    nodes = []
-    for doc in docs:
-        data = doc.to_dict() or {}
-        started_booting_at = to_millis(data.get("started_booting_at"))
-        deleted_at = to_millis(data.get("deleted_at"))
-
-        nodes.append(
-            {
-                "id": doc.id,
-                "name": data.get("instance_name", doc.id),
-                "status": data.get("status"),
-                "type": data.get("machine_type"),
-                "cpus": data.get("num_cpus"),
-                "gpus": data.get("num_gpus"),
-                "memory": data.get("memory"),
-                "deletedAt": deleted_at,
-                "started_booting_at": started_booting_at,
-            }
+    def fetch_nodes_for_status(status: str, limit: int):
+        query = (
+            DB.collection("nodes")
+            .where(filter=FieldFilter("status", "==", status))
+            .order_by("started_booting_at", direction=firestore.Query.DESCENDING)
+            .limit(limit)
         )
+        docs = list(query.stream())
+        count_snapshot = query.count().get()
+        total_count = count_snapshot[0][0].value if count_snapshot else 0
 
-    return {"nodes": nodes, "page": page, "limit": page_size, "total": total}
+        mapped = []
+        for doc in docs:
+            data = doc.to_dict() or {}
+            mapped.append(
+                {
+                    "id": doc.id,
+                    "name": data.get("instance_name", doc.id),
+                    "status": data.get("status"),
+                    "type": data.get("machine_type"),
+                    "cpus": data.get("num_cpus"),
+                    "gpus": data.get("num_gpus"),
+                    "memory": data.get("memory"),
+                    "deletedAt": to_millis(data.get("deleted_at")),
+                    "started_booting_at": to_millis(data.get("started_booting_at")),
+                }
+            )
+
+        return mapped, total_count
+
+    combined_limit = (page + 1) * page_size
+
+    deleted_nodes, deleted_total = fetch_nodes_for_status("DELETED", combined_limit)
+    failed_nodes, failed_total = fetch_nodes_for_status("FAILED", combined_limit)
+
+    nodes = deleted_nodes + failed_nodes
+    nodes.sort(key=lambda n: n.get("started_booting_at") or 0, reverse=True)
+
+    start = page * page_size
+    end = start + page_size
+    paged_nodes = nodes[start:end]
+
+    total = deleted_total + failed_total
+
+    return {"nodes": paged_nodes, "page": page, "limit": page_size, "total": total}

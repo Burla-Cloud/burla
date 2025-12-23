@@ -73,7 +73,7 @@ async def _job_watcher(
 
             if LAST_CLIENT_PING_TIMESTAMP is None:
                 logger.log(f"Here")
-            if LAST_CLIENT_PING_TIMESTAMP:
+            if LAST_CLIENT_PING_TIMESTAMP and not TEMP_LAST_LAST_CLIENT_PING_TIMESTAMP:
                 seconds_since_watcher_start = time() - watcher_start_time
                 msg = f"First ping recieved! ({LAST_CLIENT_PING_TIMESTAMP})"
                 msg += f"Watcher started {seconds_since_watcher_start}s ago."

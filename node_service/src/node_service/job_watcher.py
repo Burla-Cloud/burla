@@ -69,7 +69,7 @@ async def _job_watcher(
         nonlocal LAST_CLIENT_PING_TIMESTAMP, JOB_FAILED, JOB_CANCELED
         for change in changes:
             job_dict = change.document.to_dict()
-            LAST_CLIENT_PING_TIMESTAMP = job_dict["last_ping_from_client"]
+            LAST_CLIENT_PING_TIMESTAMP = job_dict.get("last_ping_from_client")
             if job_dict["status"] == "FAILED":
                 JOB_FAILED = True
                 break
@@ -171,10 +171,11 @@ async def _job_watcher(
             logger.log(f"First ping recieved! Watcher started {seconds_since_watcher_start}s ago.")
             TEMP_LAST_LAST_CLIENT_PING_TIMESTAMP = LAST_CLIENT_PING_TIMESTAMP
 
-        if LAST_CLIENT_PING_TIMESTAMP != TEMP_LAST_LAST_CLIENT_PING_TIMESTAMP:
-            ping_diff = LAST_CLIENT_PING_TIMESTAMP - TEMP_LAST_LAST_CLIENT_PING_TIMESTAMP
-            logger.log(f"Ping recieved at {time()}. Time between pings: {ping_diff}s")
-            TEMP_LAST_LAST_CLIENT_PING_TIMESTAMP = LAST_CLIENT_PING_TIMESTAMP
+        if LAST_CLIENT_PING_TIMESTAMP and TEMP_LAST_LAST_CLIENT_PING_TIMESTAMP:
+            if LAST_CLIENT_PING_TIMESTAMP != TEMP_LAST_LAST_CLIENT_PING_TIMESTAMP:
+                ping_diff = LAST_CLIENT_PING_TIMESTAMP - TEMP_LAST_LAST_CLIENT_PING_TIMESTAMP
+                logger.log(f"Ping recieved at {time()}. Time between pings: {ping_diff}s")
+                TEMP_LAST_LAST_CLIENT_PING_TIMESTAMP = LAST_CLIENT_PING_TIMESTAMP
 
         # `not_waiting_for_client` used to make sure client has time to grab errors when failed.
         client_disconnected = False

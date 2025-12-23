@@ -17,7 +17,7 @@ from node_service.lifecycle_endpoints import (
     load_results_from_worker,
 )
 
-FIRST_PING_TIMEOUT = 12
+FIRST_PING_TIMEOUT = 15
 CLIENT_DC_TIMEOUT_SEC = 5
 
 

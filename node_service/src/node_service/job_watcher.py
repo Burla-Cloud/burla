@@ -58,7 +58,8 @@ async def _job_watcher(
     JOB_FAILED = False
     JOB_FAILED_TWO = False
     JOB_CANCELED = False
-    LAST_CLIENT_PING_TIMESTAMP = time()
+    LAST_CLIENT_PING_TIMESTAMP = None
+    TEMP_LAST_LAST_CLIENT_PING_TIMESTAMP = None
     watcher_start_time = time()
     neighboring_nodes = []
     neighbor_had_no_inputs_at = None
@@ -79,8 +80,6 @@ async def _job_watcher(
     # Client intentionally updates the job doc every 2sec to signal that it's still listening.
     sync_job_doc = sync_db.collection("jobs").document(SELF["current_job"])
     job_watch = sync_job_doc.on_snapshot(_on_job_snapshot)
-
-    TEMP_LAST_LAST_CLIENT_PING_TIMESTAMP = None
 
     all_workers_idle = False
     all_workers_empty = False
@@ -167,10 +166,13 @@ async def _job_watcher(
                 client_has_all_results or not_waiting_for_client
             )
 
-        if TEMP_LAST_LAST_CLIENT_PING_TIMESTAMP:
-            if LAST_CLIENT_PING_TIMESTAMP != TEMP_LAST_LAST_CLIENT_PING_TIMESTAMP:
-                ping_diff = LAST_CLIENT_PING_TIMESTAMP - TEMP_LAST_LAST_CLIENT_PING_TIMESTAMP
-                logger.log(f"New client ping. Time between pings: {ping_diff}s")
+        if LAST_CLIENT_PING_TIMESTAMP and not TEMP_LAST_LAST_CLIENT_PING_TIMESTAMP:
+            logger.log(f"First ping recieved! Watcher started {seconds_since_watcher_start}s ago.")
+            TEMP_LAST_LAST_CLIENT_PING_TIMESTAMP = LAST_CLIENT_PING_TIMESTAMP
+
+        if LAST_CLIENT_PING_TIMESTAMP != TEMP_LAST_LAST_CLIENT_PING_TIMESTAMP:
+            ping_diff = LAST_CLIENT_PING_TIMESTAMP - TEMP_LAST_LAST_CLIENT_PING_TIMESTAMP
+            logger.log(f"Ping recieved at {time()}. Time between pings: {ping_diff}s")
             TEMP_LAST_LAST_CLIENT_PING_TIMESTAMP = LAST_CLIENT_PING_TIMESTAMP
 
         # `not_waiting_for_client` used to make sure client has time to grab errors when failed.

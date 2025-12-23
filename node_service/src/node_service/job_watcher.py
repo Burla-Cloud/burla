@@ -80,6 +80,8 @@ async def _job_watcher(
     sync_job_doc = sync_db.collection("jobs").document(SELF["current_job"])
     job_watch = sync_job_doc.on_snapshot(_on_job_snapshot)
 
+    TEMP_LAST_LAST_CLIENT_PING_TIMESTAMP = 0
+
     all_workers_idle = False
     all_workers_empty = False
     while not SELF["job_watcher_stop_event"].is_set():
@@ -165,6 +167,11 @@ async def _job_watcher(
                 client_has_all_results or not_waiting_for_client
             )
 
+        if LAST_CLIENT_PING_TIMESTAMP != TEMP_LAST_LAST_CLIENT_PING_TIMESTAMP:
+            ping_diff = LAST_CLIENT_PING_TIMESTAMP - TEMP_LAST_LAST_CLIENT_PING_TIMESTAMP
+            logger.log(f"New client ping. Time between pings: {ping_diff}s")
+            TEMP_LAST_LAST_CLIENT_PING_TIMESTAMP = LAST_CLIENT_PING_TIMESTAMP
+
         # `not_waiting_for_client` used to make sure client has time to grab errors when failed.
         client_disconnected = False
         seconds_since_last_ping = time() - LAST_CLIENT_PING_TIMESTAMP
@@ -179,7 +186,7 @@ async def _job_watcher(
             # this is intentional to keep short jobs fast / udf_start_latency low
             client_disconnected = _client_disconnected and seconds_since_watcher_start > 7
 
-        if _client_disconnected:
+        if client_disconnected:
             msg = f"Client disconnected! Last ping recieved {seconds_since_last_ping}s ago."
             logger.log(msg)
 

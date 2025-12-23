@@ -166,16 +166,16 @@ async def _job_watcher(
                 client_has_all_results or not_waiting_for_client
             )
 
-        if LAST_CLIENT_PING_TIMESTAMP and not LAST_LAST_CLIENT_PING_TIMESTAMP:
-            seconds_since_watcher_start = time() - watcher_start_time
-            logger.log(f"First ping recieved! Watcher started {seconds_since_watcher_start}s ago.")
-            LAST_LAST_CLIENT_PING_TIMESTAMP = LAST_CLIENT_PING_TIMESTAMP
+        # if LAST_CLIENT_PING_TIMESTAMP and not LAST_LAST_CLIENT_PING_TIMESTAMP:
+        #     seconds_since_watcher_start = time() - watcher_start_time
+        #     logger.log(f"First ping recieved! Watcher started {seconds_since_watcher_start}s ago.")
+        #     LAST_LAST_CLIENT_PING_TIMESTAMP = LAST_CLIENT_PING_TIMESTAMP
 
-        if LAST_CLIENT_PING_TIMESTAMP and LAST_LAST_CLIENT_PING_TIMESTAMP:
-            if LAST_CLIENT_PING_TIMESTAMP != LAST_LAST_CLIENT_PING_TIMESTAMP:
-                ping_diff = LAST_CLIENT_PING_TIMESTAMP - LAST_LAST_CLIENT_PING_TIMESTAMP
-                logger.log(f"Ping recieved at {time()}. Time between pings: {ping_diff}s")
-                LAST_LAST_CLIENT_PING_TIMESTAMP = LAST_CLIENT_PING_TIMESTAMP
+        # if LAST_CLIENT_PING_TIMESTAMP and LAST_LAST_CLIENT_PING_TIMESTAMP:
+        #     if LAST_CLIENT_PING_TIMESTAMP != LAST_LAST_CLIENT_PING_TIMESTAMP:
+        #         ping_diff = LAST_CLIENT_PING_TIMESTAMP - LAST_LAST_CLIENT_PING_TIMESTAMP
+        #         logger.log(f"Ping recieved at {time()}. Time between pings: {ping_diff}s")
+        #         LAST_LAST_CLIENT_PING_TIMESTAMP = LAST_CLIENT_PING_TIMESTAMP
 
         # `not_waiting_for_client` used to make sure client has time to grab errors when failed.
         client_disconnected = False

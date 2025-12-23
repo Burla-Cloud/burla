@@ -167,6 +167,7 @@ async def _job_watcher(
             )
 
         if LAST_CLIENT_PING_TIMESTAMP and not TEMP_LAST_LAST_CLIENT_PING_TIMESTAMP:
+            seconds_since_watcher_start = time() - watcher_start_time
             logger.log(f"First ping recieved! Watcher started {seconds_since_watcher_start}s ago.")
             TEMP_LAST_LAST_CLIENT_PING_TIMESTAMP = LAST_CLIENT_PING_TIMESTAMP
 
@@ -265,6 +266,14 @@ async def job_watcher_logged(n_inputs: int, is_background_job: bool, auth_header
             tb_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
             traceback_str = format_traceback(tb_details)
             logger.log(str(e), "ERROR", traceback=traceback_str)
+            try:
+                job_doc = async_db.collection("jobs").document(SELF["current_job"])
+                await job_doc.update({"status": "FAILED", "fail_reason": ArrayUnion([str(e)])})
+            except Exception:
+                # ignore because this can get hit by like 100's of nodes at once
+                # one of them will succeed and the others will throw errors we can ignore.
+                pass
+            await restart_workers(session, logger, async_db)
 
 
 async def reinit_node(assigned_workers: list, async_db: AsyncClient):

@@ -270,7 +270,6 @@ async def _execute_job(
             "function_name": function_.__name__,
             "function_size_gb": function_size_gb,
             "started_at": start_time,
-            "last_ping_from_client": time(),
             "is_background_job": background,
             "client_has_all_results": False,
             "fail_reason": [],

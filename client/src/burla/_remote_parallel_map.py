@@ -270,7 +270,6 @@ async def _execute_job(
             "function_name": function_.__name__,
             "function_size_gb": function_size_gb,
             "started_at": start_time,
-            "last_ping_from_client": time(),
             "is_background_job": background,
             "client_has_all_results": False,
             "fail_reason": [],
@@ -731,7 +730,7 @@ def remote_parallel_map(
         # Report errors back to Burla's cloud.
         if not user_function_error.is_set():
             exec_types_to_chill = [NoNodes, AllNodesBusy, NoCompatibleNodes, JobCanceled]
-            exec_types_to_chill.extend([VersionMismatch, FunctionTooBig])
+            exec_types_to_chill.extend([VersionMismatch, FunctionTooBig, FirestoreTimeout])
             chill_exception = any([isinstance(e, e_type) for e_type in exec_types_to_chill])
 
             exc_type, exc_value, exc_traceback = sys.exc_info()

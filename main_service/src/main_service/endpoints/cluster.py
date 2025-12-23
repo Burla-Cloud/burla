@@ -8,6 +8,7 @@ import pytz
 import textwrap
 
 from fastapi import APIRouter, Depends, Request
+from google.cloud import firestore
 from google.cloud.firestore_v1 import FieldFilter
 from google.cloud.compute_v1 import InstancesClient
 from starlette.responses import StreamingResponse
@@ -299,36 +300,76 @@ def get_deleted_recent_paginated(
     page: int = 0,
     page_size: int = 15,
 ):
-    now = datetime.utcnow()
-    seven_days_ago = now - timedelta(days=7)
+    page = max(page, 0)
+    page_size = max(page_size, 1)
 
-    statuses = ["DELETED", "FAILED"]
-    results = []
+    def to_millis(value):
+        if value is None:
+            return None
+        if isinstance(value, (int, float)):
+            return int(value * 1000) if value < 2_000_000_000_000 else int(value)
+        return int(value.timestamp() * 1000)
 
-    for status in statuses:
-        q = (
-            DB.collection("nodes")
-            .where(filter=FieldFilter("status", "==", status))
+    ready_statuses = {"READY", "BOOTING"}
+    deleted_statuses = {"DELETED", "FAILED"}
+
+    # Fetch all ready/booting nodes (few in number), then keep them sorted in-memory.
+    ready_docs = list(
+        DB.collection("nodes")
+        .where(filter=FieldFilter("status", "in", list(ready_statuses)))
+        .stream()
+    )
+    ready_nodes = []
+    for doc in ready_docs:
+        data = doc.to_dict() or {}
+        ready_nodes.append(
+            {
+                "id": doc.id,
+                "name": data.get("instance_name", doc.id),
+                "status": data.get("status"),
+                "type": data.get("machine_type"),
+                "cpus": data.get("num_cpus"),
+                "gpus": data.get("num_gpus"),
+                "memory": data.get("memory"),
+                "deletedAt": to_millis(data.get("deleted_at")),
+                "started_booting_at": to_millis(data.get("started_booting_at")),
+            }
         )
 
-        for doc in q.stream():
-            data = doc.to_dict()
+    ready_nodes.sort(key=lambda n: n.get("started_booting_at") or 0, reverse=True)
+    ready_ids = {n["id"] for n in ready_nodes}
 
-            ts = data.get("deleted_at") or data.get("started_booting_at")
-            if not ts:
+    # Pull a descending slice by started_booting_at without filtering, then strip out ready/booting.
+    needed = (page + 1) * page_size
+    first_batch_size = needed + len(ready_nodes) + 20
+    others: list[dict] = []
+    last_doc = None
+    batch_size = first_batch_size
+
+    while len(others) < needed:
+        query = DB.collection("nodes").order_by(
+            "started_booting_at", direction=firestore.Query.DESCENDING
+        )
+        if last_doc:
+            query = query.start_after(last_doc)
+            batch_size = max(page_size, 20)
+
+        docs = list(query.limit(batch_size).stream())
+        if not docs:
+            break
+
+        last_doc = docs[-1]
+
+        for doc in docs:
+            if doc.id in ready_ids:
                 continue
 
-            if isinstance(ts, (int, float)):
-                ts_dt = datetime.utcfromtimestamp(ts)
-                ts_value = ts
-            else:
-                ts_dt = ts
-                ts_value = ts.timestamp()
-
-            if ts_dt < seven_days_ago:
+            data = doc.to_dict() or {}
+            status = str(data.get("status") or "").upper()
+            if status not in deleted_statuses:
                 continue
 
-            results.append(
+            others.append(
                 {
                     "id": doc.id,
                     "name": data.get("instance_name", doc.id),
@@ -337,28 +378,28 @@ def get_deleted_recent_paginated(
                     "cpus": data.get("num_cpus"),
                     "gpus": data.get("num_gpus"),
                     "memory": data.get("memory"),
-                    "deletedAt": ts_value,
+                    "deletedAt": to_millis(data.get("deleted_at")),
+                    "started_booting_at": to_millis(data.get("started_booting_at")),
                 }
             )
 
-    # newest first
-    results.sort(key=lambda x: x["deletedAt"], reverse=True)
+        if len(docs) < batch_size:
+            break
 
-    total = len(results)
-
+    combined = ready_nodes + others
     start = page * page_size
     end = start + page_size
-    page_items = results[start:end]
+    paged_nodes = combined[start:end]
 
-    # normalize deletedAt to ms for frontend
-    for item in page_items:
-        ts = item["deletedAt"]
-        if ts < 2_000_000_000:
-            item["deletedAt"] = ts * 1000
+    deleted_total_snapshot = (
+        DB.collection("nodes").where(filter=FieldFilter("status", "==", "DELETED")).count().get()
+    )
+    failed_total_snapshot = (
+        DB.collection("nodes").where(filter=FieldFilter("status", "==", "FAILED")).count().get()
+    )
 
-    return {
-        "nodes": page_items,
-        "page": page,
-        "limit": page_size,
-        "total": total,
-    }
+    deleted_total = deleted_total_snapshot[0][0].value if deleted_total_snapshot else 0
+    failed_total = failed_total_snapshot[0][0].value if failed_total_snapshot else 0
+    total = deleted_total + failed_total
+
+    return {"nodes": paged_nodes, "page": page, "limit": page_size, "total": total}

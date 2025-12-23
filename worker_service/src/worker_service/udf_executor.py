@@ -286,6 +286,10 @@ def install_pkgs_and_execute_job(
     logged_idle = False
     udf_start_latency_logged = False
     while not SELF["STOP_PROCESSING_EVENT"].is_set():
+
+        # sometimes users change this and it shouldnt affect the next function call
+        os.chdir("/workspace")
+
         try:
             SELF["in_progress_input"] = SELF["inputs_queue"].get_nowait()
             input_index, input_pkl = SELF["in_progress_input"]

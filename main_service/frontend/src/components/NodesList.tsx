@@ -244,23 +244,22 @@ remote_parallel_map(my_function, list(range(1000)))`;
         setExpandedNodeId((prev) => (prev === nodeId ? null : nodeId));
     };
 
-    const STATUS_RANK: Record<string, number> = {
-        DELETED: 0,
-        FAILED: 1,
-        STOPPING: 2,
-        BOOTING: 3,
-        RUNNING: 4,
-        READY: 5,
+    const getStatusPriority = (status: NodeStatusLike) => {
+        const normalized = String(status || "").toUpperCase();
+        if (normalized === "READY") return 0;
+        if (normalized === "BOOTING") return 1;
+        if (DELETED_STATUSES.has(normalized)) return 3;
+        return 2;
     };
 
     const sortNodes = useCallback((a: BurlaNode, b: BurlaNode) => {
+        const aPriority = getStatusPriority(a.status);
+        const bPriority = getStatusPriority(b.status);
+        if (aPriority !== bPriority) return aPriority - bPriority;
+
         const aStarted = a.started_booting_at ?? 0;
         const bStarted = b.started_booting_at ?? 0;
         if (aStarted !== bStarted) return bStarted - aStarted;
-
-        const aStatus = STATUS_RANK[String(a.status || "").toUpperCase()] ?? 0;
-        const bStatus = STATUS_RANK[String(b.status || "").toUpperCase()] ?? 0;
-        if (aStatus !== bStatus) return bStatus - aStatus;
 
         return String(a.name).localeCompare(String(b.name));
     }, []);
@@ -346,6 +345,10 @@ remote_parallel_map(my_function, list(range(1000)))`;
                     memory: raw.memory ?? undefined,
                     age: undefined,
                     logs: undefined,
+                    started_booting_at:
+                        typeof raw.started_booting_at === "number"
+                            ? raw.started_booting_at
+                            : undefined,
                     deletedAt: typeof raw.deletedAt === "number" ? raw.deletedAt : undefined,
                 }));
 
@@ -377,18 +380,14 @@ remote_parallel_map(my_function, list(range(1000)))`;
     const displayNodes = useMemo(() => {
         if (!showDeleted) return activePagedNodes;
 
-        const combined = [...sortedNodes];
-        const seen = new Set(combined.map((node) => node.id));
-
-        deletedNodes.forEach((node) => {
-            if (!seen.has(node.id)) {
-                combined.push(node);
-            }
+        const deletedSorted = [...deletedNodes].sort((a, b) => {
+            const aStarted = a.started_booting_at ?? 0;
+            const bStarted = b.started_booting_at ?? 0;
+            return bStarted - aStarted;
         });
 
-        combined.sort(sortNodes);
-        return combined;
-    }, [showDeleted, activePagedNodes, sortedNodes, deletedNodes, sortNodes]);
+        return [...activeNodes, ...deletedSorted];
+    }, [showDeleted, activePagedNodes, deletedNodes, activeNodes]);
 
     const noActiveNodes = !showDeleted && activeNodes.length === 0;
     const noDeletedNodes = showDeleted && !deletedLoading && displayNodes.length === 0;

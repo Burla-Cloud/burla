@@ -27,7 +27,7 @@ def send_alive_pings(job_id: str):
     while True:
         now = time()
         elapsed_time = now - last_update_time
-        if elapsed_time > 4:
+        if elapsed_time > 3:
             msg = f"Failed to send alive pings at required frequency!"
             raise Exception(f"{msg}\nLast ping was sent {elapsed_time}s ago!")
         if elapsed_time > 1:

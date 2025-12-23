@@ -17,7 +17,7 @@ from node_service.lifecycle_endpoints import (
     load_results_from_worker,
 )
 
-
+FIRST_PING_TIMEOUT = 12
 CLIENT_DC_TIMEOUT_SEC = 5
 
 
@@ -59,7 +59,7 @@ async def _job_watcher(
     JOB_FAILED_TWO = False
     JOB_CANCELED = False
     LAST_CLIENT_PING_TIMESTAMP = None
-    TEMP_LAST_LAST_CLIENT_PING_TIMESTAMP = None
+    LAST_LAST_CLIENT_PING_TIMESTAMP = None
     watcher_start_time = time()
     neighboring_nodes = []
     neighbor_had_no_inputs_at = None
@@ -70,15 +70,6 @@ async def _job_watcher(
         for change in changes:
             job_dict = change.document.to_dict()
             LAST_CLIENT_PING_TIMESTAMP = job_dict.get("last_ping_from_client")
-
-            if LAST_CLIENT_PING_TIMESTAMP is None:
-                logger.log(f"Here")
-            if LAST_CLIENT_PING_TIMESTAMP and not TEMP_LAST_LAST_CLIENT_PING_TIMESTAMP:
-                seconds_since_watcher_start = time() - watcher_start_time
-                msg = f"First ping recieved! ({LAST_CLIENT_PING_TIMESTAMP})"
-                msg += f"Watcher started {seconds_since_watcher_start}s ago."
-                logger.log(msg)
-
             if job_dict["status"] == "FAILED":
                 JOB_FAILED = True
                 break
@@ -175,30 +166,36 @@ async def _job_watcher(
                 client_has_all_results or not_waiting_for_client
             )
 
-        if LAST_CLIENT_PING_TIMESTAMP and not TEMP_LAST_LAST_CLIENT_PING_TIMESTAMP:
+        if LAST_CLIENT_PING_TIMESTAMP and not LAST_LAST_CLIENT_PING_TIMESTAMP:
             seconds_since_watcher_start = time() - watcher_start_time
             logger.log(f"First ping recieved! Watcher started {seconds_since_watcher_start}s ago.")
-            TEMP_LAST_LAST_CLIENT_PING_TIMESTAMP = LAST_CLIENT_PING_TIMESTAMP
+            LAST_LAST_CLIENT_PING_TIMESTAMP = LAST_CLIENT_PING_TIMESTAMP
 
-        if LAST_CLIENT_PING_TIMESTAMP and TEMP_LAST_LAST_CLIENT_PING_TIMESTAMP:
-            if LAST_CLIENT_PING_TIMESTAMP != TEMP_LAST_LAST_CLIENT_PING_TIMESTAMP:
-                ping_diff = LAST_CLIENT_PING_TIMESTAMP - TEMP_LAST_LAST_CLIENT_PING_TIMESTAMP
+        if LAST_CLIENT_PING_TIMESTAMP and LAST_LAST_CLIENT_PING_TIMESTAMP:
+            if LAST_CLIENT_PING_TIMESTAMP != LAST_LAST_CLIENT_PING_TIMESTAMP:
+                ping_diff = LAST_CLIENT_PING_TIMESTAMP - LAST_LAST_CLIENT_PING_TIMESTAMP
                 logger.log(f"Ping recieved at {time()}. Time between pings: {ping_diff}s")
-                TEMP_LAST_LAST_CLIENT_PING_TIMESTAMP = LAST_CLIENT_PING_TIMESTAMP
+                LAST_LAST_CLIENT_PING_TIMESTAMP = LAST_CLIENT_PING_TIMESTAMP
 
         # `not_waiting_for_client` used to make sure client has time to grab errors when failed.
         client_disconnected = False
+        client_never_connected = None
         if LAST_CLIENT_PING_TIMESTAMP:
             seconds_since_last_ping = time() - LAST_CLIENT_PING_TIMESTAMP
             if seconds_since_last_ping > CLIENT_DC_TIMEOUT_SEC:
                 # double check synchronously, sometimes the thread just didnt get enough attention:
                 LAST_CLIENT_PING_TIMESTAMP = sync_job_doc.get().to_dict()["last_ping_from_client"]
                 seconds_since_last_ping = time() - LAST_CLIENT_PING_TIMESTAMP
-                seconds_since_watcher_start = time() - watcher_start_time
                 client_disconnected = seconds_since_last_ping > CLIENT_DC_TIMEOUT_SEC
+        else:
+            seconds_since_watcher_start = time() - watcher_start_time
+            client_never_connected = seconds_since_watcher_start > FIRST_PING_TIMEOUT
 
         if client_disconnected:
             msg = f"Client disconnected! Last ping recieved {seconds_since_last_ping}s ago."
+            logger.log(msg)
+        elif client_never_connected:
+            msg = f"No ping from client after {FIRST_PING_TIMEOUT}s!"
             logger.log(msg)
 
         results_queue_empty = SELF["results_queue"].empty()
@@ -246,13 +243,10 @@ async def _job_watcher(
         can_fail_from_client_dc = can_fail_from_client_dc or not is_background_job
 
         # client still listening? (if this is NOT a background job)
-        if client_disconnected and can_fail_from_client_dc:
-            msg = f"No client ping in the last {CLIENT_DC_TIMEOUT_SEC}s, "
-            msg += "setting job status to FAILED"
-            logger.log(msg)
+        if (client_disconnected or client_never_connected) and can_fail_from_client_dc:
             try:
-                msg = f"job watcher ({INSTANCE_NAME}) hasn't had client ping in the last "
-                msg += f"{CLIENT_DC_TIMEOUT_SEC}s"
+                msg = "client disconnected" if client_disconnected else "client never connected"
+                msg = f"{msg}! ({INSTANCE_NAME})"
                 await job_doc.update({"status": "FAILED", "fail_reason": ArrayUnion([msg])})
             except Exception:
                 # ignore because this can get hit by like 100's of nodes at once

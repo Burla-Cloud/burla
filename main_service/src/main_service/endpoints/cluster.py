@@ -310,21 +310,66 @@ def get_deleted_recent_paginated(
             return int(value * 1000) if value < 2_000_000_000_000 else int(value)
         return int(value.timestamp() * 1000)
 
-    def fetch_nodes_for_status(status: str, limit: int):
-        query = (
-            DB.collection("nodes")
-            .where(filter=FieldFilter("status", "==", status))
-            .order_by("started_booting_at", direction=firestore.Query.DESCENDING)
-            .limit(limit)
-        )
-        docs = list(query.stream())
-        count_snapshot = query.count().get()
-        total_count = count_snapshot[0][0].value if count_snapshot else 0
+    ready_statuses = {"READY", "BOOTING"}
+    deleted_statuses = {"DELETED", "FAILED"}
 
-        mapped = []
+    # Fetch all ready/booting nodes (few in number), then keep them sorted in-memory.
+    ready_docs = list(
+        DB.collection("nodes")
+        .where(filter=FieldFilter("status", "in", list(ready_statuses)))
+        .stream()
+    )
+    ready_nodes = []
+    for doc in ready_docs:
+        data = doc.to_dict() or {}
+        ready_nodes.append(
+            {
+                "id": doc.id,
+                "name": data.get("instance_name", doc.id),
+                "status": data.get("status"),
+                "type": data.get("machine_type"),
+                "cpus": data.get("num_cpus"),
+                "gpus": data.get("num_gpus"),
+                "memory": data.get("memory"),
+                "deletedAt": to_millis(data.get("deleted_at")),
+                "started_booting_at": to_millis(data.get("started_booting_at")),
+            }
+        )
+
+    ready_nodes.sort(key=lambda n: n.get("started_booting_at") or 0, reverse=True)
+    ready_ids = {n["id"] for n in ready_nodes}
+
+    # Pull a descending slice by started_booting_at without filtering, then strip out ready/booting.
+    needed = (page + 1) * page_size
+    first_batch_size = needed + len(ready_nodes) + 20
+    others: list[dict] = []
+    last_doc = None
+    batch_size = first_batch_size
+
+    while len(others) < needed:
+        query = DB.collection("nodes").order_by(
+            "started_booting_at", direction=firestore.Query.DESCENDING
+        )
+        if last_doc:
+            query = query.start_after(last_doc)
+            batch_size = max(page_size, 20)
+
+        docs = list(query.limit(batch_size).stream())
+        if not docs:
+            break
+
+        last_doc = docs[-1]
+
         for doc in docs:
+            if doc.id in ready_ids:
+                continue
+
             data = doc.to_dict() or {}
-            mapped.append(
+            status = str(data.get("status") or "").upper()
+            if status not in deleted_statuses:
+                continue
+
+            others.append(
                 {
                     "id": doc.id,
                     "name": data.get("instance_name", doc.id),
@@ -338,20 +383,23 @@ def get_deleted_recent_paginated(
                 }
             )
 
-        return mapped, total_count
+        if len(docs) < batch_size:
+            break
 
-    combined_limit = (page + 1) * page_size
-
-    deleted_nodes, deleted_total = fetch_nodes_for_status("DELETED", combined_limit)
-    failed_nodes, failed_total = fetch_nodes_for_status("FAILED", combined_limit)
-
-    nodes = deleted_nodes + failed_nodes
-    nodes.sort(key=lambda n: n.get("started_booting_at") or 0, reverse=True)
-
+    combined = ready_nodes + others
     start = page * page_size
     end = start + page_size
-    paged_nodes = nodes[start:end]
+    paged_nodes = combined[start:end]
 
+    deleted_total_snapshot = (
+        DB.collection("nodes").where(filter=FieldFilter("status", "==", "DELETED")).count().get()
+    )
+    failed_total_snapshot = (
+        DB.collection("nodes").where(filter=FieldFilter("status", "==", "FAILED")).count().get()
+    )
+
+    deleted_total = deleted_total_snapshot[0][0].value if deleted_total_snapshot else 0
+    failed_total = failed_total_snapshot[0][0].value if failed_total_snapshot else 0
     total = deleted_total + failed_total
 
     return {"nodes": paged_nodes, "page": page, "limit": page_size, "total": total}

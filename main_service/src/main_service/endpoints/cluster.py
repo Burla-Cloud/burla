@@ -8,6 +8,7 @@ import pytz
 import textwrap
 
 from fastapi import APIRouter, Depends, Request
+from google.cloud import firestore
 from google.cloud.firestore_v1 import FieldFilter
 from google.cloud.compute_v1 import InstancesClient
 from starlette.responses import StreamingResponse
@@ -299,66 +300,47 @@ def get_deleted_recent_paginated(
     page: int = 0,
     page_size: int = 15,
 ):
-    now = datetime.utcnow()
-    seven_days_ago = now - timedelta(days=7)
+    page = max(page, 0)
+    page_size = max(page_size, 1)
 
     statuses = ["DELETED", "FAILED"]
-    results = []
+    base_query = (
+        DB.collection("nodes")
+        .where(filter=FieldFilter("status", "in", statuses))
+        .order_by("started_booting_at", direction=firestore.Query.DESCENDING)
+    )
 
-    for status in statuses:
-        q = (
-            DB.collection("nodes")
-            .where(filter=FieldFilter("status", "==", status))
+    paged_query = base_query.offset(page * page_size).limit(page_size)
+    docs = list(paged_query.stream())
+
+    count_snapshot = base_query.count().get()
+    total = count_snapshot[0][0].value if count_snapshot else 0
+
+    def to_millis(value):
+        if value is None:
+            return None
+        if isinstance(value, (int, float)):
+            return int(value * 1000) if value < 2_000_000_000_000 else int(value)
+        return int(value.timestamp() * 1000)
+
+    nodes = []
+    for doc in docs:
+        data = doc.to_dict() or {}
+        started_booting_at = to_millis(data.get("started_booting_at"))
+        deleted_at = to_millis(data.get("deleted_at"))
+
+        nodes.append(
+            {
+                "id": doc.id,
+                "name": data.get("instance_name", doc.id),
+                "status": data.get("status"),
+                "type": data.get("machine_type"),
+                "cpus": data.get("num_cpus"),
+                "gpus": data.get("num_gpus"),
+                "memory": data.get("memory"),
+                "deletedAt": deleted_at,
+                "started_booting_at": started_booting_at,
+            }
         )
 
-        for doc in q.stream():
-            data = doc.to_dict()
-
-            ts = data.get("deleted_at") or data.get("started_booting_at")
-            if not ts:
-                continue
-
-            if isinstance(ts, (int, float)):
-                ts_dt = datetime.utcfromtimestamp(ts)
-                ts_value = ts
-            else:
-                ts_dt = ts
-                ts_value = ts.timestamp()
-
-            if ts_dt < seven_days_ago:
-                continue
-
-            results.append(
-                {
-                    "id": doc.id,
-                    "name": data.get("instance_name", doc.id),
-                    "status": data.get("status"),
-                    "type": data.get("machine_type"),
-                    "cpus": data.get("num_cpus"),
-                    "gpus": data.get("num_gpus"),
-                    "memory": data.get("memory"),
-                    "deletedAt": ts_value,
-                }
-            )
-
-    # newest first
-    results.sort(key=lambda x: x["deletedAt"], reverse=True)
-
-    total = len(results)
-
-    start = page * page_size
-    end = start + page_size
-    page_items = results[start:end]
-
-    # normalize deletedAt to ms for frontend
-    for item in page_items:
-        ts = item["deletedAt"]
-        if ts < 2_000_000_000:
-            item["deletedAt"] = ts * 1000
-
-    return {
-        "nodes": page_items,
-        "page": page,
-        "limit": page_size,
-        "total": total,
-    }
+    return {"nodes": nodes, "page": page, "limit": page_size, "total": total}

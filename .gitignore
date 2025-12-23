@@ -201,4 +201,4 @@ main_service/.frontend_last_built_at.txt
 _worker_service_python_env/*
 _shared_workspace/*
 main_service/src/main_service/static/assets/*
-_python_version_marker/*5;9u
+_python_version_marker/*

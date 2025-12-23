@@ -80,7 +80,7 @@ async def _job_watcher(
     sync_job_doc = sync_db.collection("jobs").document(SELF["current_job"])
     job_watch = sync_job_doc.on_snapshot(_on_job_snapshot)
 
-    TEMP_LAST_LAST_CLIENT_PING_TIMESTAMP = 0
+    TEMP_LAST_LAST_CLIENT_PING_TIMESTAMP = None
 
     all_workers_idle = False
     all_workers_empty = False
@@ -167,9 +167,10 @@ async def _job_watcher(
                 client_has_all_results or not_waiting_for_client
             )
 
-        if LAST_CLIENT_PING_TIMESTAMP != TEMP_LAST_LAST_CLIENT_PING_TIMESTAMP:
-            ping_diff = LAST_CLIENT_PING_TIMESTAMP - TEMP_LAST_LAST_CLIENT_PING_TIMESTAMP
-            logger.log(f"New client ping. Time between pings: {ping_diff}s")
+        if TEMP_LAST_LAST_CLIENT_PING_TIMESTAMP:
+            if LAST_CLIENT_PING_TIMESTAMP != TEMP_LAST_LAST_CLIENT_PING_TIMESTAMP:
+                ping_diff = LAST_CLIENT_PING_TIMESTAMP - TEMP_LAST_LAST_CLIENT_PING_TIMESTAMP
+                logger.log(f"New client ping. Time between pings: {ping_diff}s")
             TEMP_LAST_LAST_CLIENT_PING_TIMESTAMP = LAST_CLIENT_PING_TIMESTAMP
 
         # `not_waiting_for_client` used to make sure client has time to grab errors when failed.

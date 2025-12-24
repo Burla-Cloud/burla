@@ -2,10 +2,12 @@ import json
 import asyncio
 from time import time
 from datetime import datetime, timezone
+from typing import Optional, Any, Iterable
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import JSONResponse
 from starlette.responses import StreamingResponse
+
 from google.cloud import firestore
 from google.cloud.firestore import ArrayUnion
 
@@ -15,49 +17,108 @@ router = APIRouter()
 ASYNC_DB = firestore.AsyncClient(project=PROJECT_ID, database="burla")
 
 
-async def current_num_results(job_id: str):
+async def current_num_results(job_id: str) -> int:
     job_doc = ASYNC_DB.collection("jobs").document(job_id)
     assigned_nodes_collection = job_doc.collection("assigned_nodes")
     query_result = await assigned_nodes_collection.sum("current_num_results").get()
-    return query_result[0][0].value
+    try:
+        return int(query_result[0][0].value or 0)
+    except Exception:
+        return 0
+
+
+def _normalize_index(raw_index: Any) -> Optional[int]:
+    if raw_index is None:
+        return None
+    try:
+        return int(raw_index)
+    except (TypeError, ValueError):
+        return None
+
+
+def _ts_to_seconds(ts_val: Any, fallback_ts: Any = None) -> int:
+    v = ts_val if ts_val is not None else fallback_ts
+    if v is None:
+        return 0
+
+    try:
+        return int(v.timestamp())
+    except Exception:
+        pass
+
+    if isinstance(v, (int, float)):
+        return int(v)
+
+    if isinstance(v, str):
+        try:
+            dt = datetime.fromisoformat(v.replace("Z", "+00:00"))
+            return int(dt.timestamp())
+        except Exception:
+            return 0
+
+    return 0
+
+
+def _extract_logs(doc_dict: dict) -> Iterable[dict]:
+    raw = doc_dict.get("logs", [])
+    if isinstance(raw, list):
+        for item in raw:
+            if isinstance(item, dict):
+                yield item
+            elif isinstance(item, str):
+                yield {"message": item}
+        return
+
+    if isinstance(raw, dict):
+        yield raw
+        return
+
+    if isinstance(raw, str):
+        yield {"message": raw}
+        return
 
 
 def job_stream(jobs_current_page: firestore.CollectionReference):
     queue = asyncio.Queue()
     loop = asyncio.get_running_loop()
-    running_jobs = {}
+    running_jobs: dict[str, asyncio.Future] = {}
 
     async def push_n_results_updates(job_id: str, event: dict):
         start = time()
+        last_check = 0
+
         while True:
             n_results = await current_num_results(job_id)
             event["n_results"] = n_results
             await queue.put(event)
             await asyncio.sleep(1)
-            if (time() - start) % 10 < 1:
-                # check job has nodes working on it
+
+            elapsed = int(time() - start)
+            if elapsed - last_check >= 10:
+                last_check = elapsed
                 filter_ = firestore.FieldFilter("current_job", "==", job_id)
                 nodes = ASYNC_DB.collection("nodes").where(filter=filter_)
                 nodes_working_on_job = await nodes.get()
 
-                # I think this situation is possible when uploading really large functions to many
-                # nodes, The timeout on that is 300s, so that's how long this has to  be true for
-                # here to cause an error.
-                if not nodes_working_on_job and (time() - start) > 300:
+                if not nodes_working_on_job and elapsed > 300:
                     msg = "Job failed due to internal cluster error."
                     timestamp = datetime.now(timezone.utc)
                     logs = [{"message": msg, "timestamp": timestamp}]
+
                     job_doc = ASYNC_DB.collection("jobs").document(job_id)
                     await job_doc.collection("logs").add({"logs": logs, "timestamp": timestamp})
-                    msg = 'main_svc: job is "running" but no nodes working on it ???'
-                    await job_doc.update({"status": "FAILED", "fail_reason": ArrayUnion([msg])})
+
+                    msg2 = 'main_svc: job is "running" but no nodes working on it ???'
+                    await job_doc.update({"status": "FAILED", "fail_reason": ArrayUnion([msg2])})
                     return
 
     def on_changed_job_doc(col_snapshot, changes, read_time):
         for change in changes:
-            job = change.document.to_dict()
+            job_id = change.document.id
+            job = change.document.to_dict() or {}
+
             event = {
-                "jobId": change.document.id,
+                "jobId": job_id,
                 "status": job.get("status"),
                 "user": job.get("user", "Unknown"),
                 "function_name": job.get("function_name", "Unknown"),
@@ -67,27 +128,30 @@ def job_stream(jobs_current_page: firestore.CollectionReference):
                 "deleted": change.type.name == "REMOVED",
             }
 
-            if (change.document.id in running_jobs) and (job.get("status") != "RUNNING"):
-                running_jobs[change.document.id].cancel()
-                del running_jobs[change.document.id]
-            elif (change.document.id not in running_jobs) and (job.get("status") == "RUNNING"):
-                coroutine = push_n_results_updates(change.document.id, event)
-                future = asyncio.run_coroutine_threadsafe(coroutine, loop)
-                running_jobs[change.document.id] = future
+            if change.type.name == "REMOVED":
+                if job_id in running_jobs:
+                    running_jobs[job_id].cancel()
+                    del running_jobs[job_id]
+            else:
+                if (job_id in running_jobs) and (job.get("status") != "RUNNING"):
+                    running_jobs[job_id].cancel()
+                    del running_jobs[job_id]
+                elif (job_id not in running_jobs) and (job.get("status") == "RUNNING"):
+                    coroutine = push_n_results_updates(job_id, event)
+                    future = asyncio.run_coroutine_threadsafe(coroutine, loop)
+                    running_jobs[job_id] = future
 
-            async def queue_job(job_id: str, event: dict):
-                # I cant figure out how to `current_num_results` synchronously
-                n_results = await current_num_results(job_id)
-                event["n_results"] = n_results
-                await queue.put(event)
+            async def queue_job(job_id_: str, event_: dict):
+                n_results = await current_num_results(job_id_)
+                event_["n_results"] = n_results
+                await queue.put(event_)
 
-            coroutine = queue_job(change.document.id, event)
-            asyncio.run_coroutine_threadsafe(coroutine, loop)
+            asyncio.run_coroutine_threadsafe(queue_job(job_id, event), loop)
 
     job_collection_stream = jobs_current_page.on_snapshot(on_changed_job_doc)
 
     async def event_stream():
-        yield "retry: 5000\n\n"  # <- make browser reconnect after 5s on error
+        yield "retry: 5000\n\n"
         yield ": init\n\n"
         try:
             while True:
@@ -95,7 +159,6 @@ def job_stream(jobs_current_page: firestore.CollectionReference):
                     event = await asyncio.wait_for(queue.get(), timeout=10)
                     yield f"data: {json.dumps(event)}\n\n"
                 except asyncio.TimeoutError:
-                    # heartbeat to keeps proxy from closing connection
                     yield ": keep-alive\n\n"
         finally:
             job_collection_stream.unsubscribe()
@@ -109,12 +172,13 @@ async def get_jobs(request: Request, page: int = 0, stream: bool = False):
     docs_per_page = 15
     _jobs_ref = DB.collection("jobs").order_by("started_at", direction=firestore.Query.DESCENDING)
     jobs_current_page = _jobs_ref.offset(page * docs_per_page).limit(docs_per_page)
+
     if stream:
         return job_stream(jobs_current_page)
 
     jobs = []
     for job_doc in jobs_current_page.stream():
-        job = job_doc.to_dict()
+        job = job_doc.to_dict() or {}
         jobs.append(
             {
                 "jobId": job_doc.id,
@@ -126,6 +190,7 @@ async def get_jobs(request: Request, page: int = 0, stream: bool = False):
                 "started_at": job.get("started_at"),
             }
         )
+
     total_jobs = await ASYNC_DB.collection("jobs").count().get()
     total_jobs = total_jobs[0][0].value
     return JSONResponse({"jobs": jobs, "page": page, "limit": docs_per_page, "total": total_jobs})
@@ -144,57 +209,241 @@ async def stop_job(job_id: str, request: Request):
 
 @router.get("/v1/jobs/{job_id}/logs")
 async def stream_or_fetch_job_logs(
-    job_id: str, stream: bool = False, page: int = 0, limit: int = 1000
+    job_id: str,
+    stream: bool = False,
+    index: Optional[int] = None,
+    index_start: Optional[int] = None,
+    index_end: Optional[int] = None,
+    include_global: bool = True,
+    summary: bool = False,
+    limit: int = 5000,
+    limit_per_index: int = 5000,
 ):
-    logs_ref = ASYNC_DB.collection("jobs").document(job_id).collection("logs")
-    logs_query = logs_ref.order_by("timestamp").offset(page * limit).limit(limit)
-    if not stream:
-        logs = []
-        async for doc in logs_query.stream():
-            for log in doc.to_dict()["logs"]:
-                ts = int(log["timestamp"].timestamp())
-                logs.append({"message": log["message"], "created_at": ts})
+    logs_ref = ASYNC_DB.collection("jobs").document(job_id).collection("logs").order_by("timestamp")
 
-        total_res = await logs_ref.count().get()
-        total = total_res[0][0].value
-        return JSONResponse({"logs": logs, "page": page, "limit": limit, "total": total})
+    def _matches_single(idx: Optional[int]) -> bool:
+        if index is None:
+            return True
+        if include_global and idx is None:
+            return True
+        return idx == index
 
-    queue = asyncio.Queue()
-    current_loop = asyncio.get_running_loop()
-    skip_first_snapshot = True
+    def _range_mode_active() -> bool:
+        return index_start is not None or index_end is not None
 
-    def on_snapshot(col_snapshot, changes, read_time):
-        nonlocal skip_first_snapshot
-        if skip_first_snapshot:
-            # Skip the initial on_snapshot flood (ADDED for all existing docs)
-            skip_first_snapshot = False
-            return
-
-        sort_key = lambda change: change.document.to_dict()["logs"][0]["timestamp"]
-        for change in sorted(changes, key=sort_key):
-            data = change.document.to_dict()
-            for log in data["logs"]:
-                event = {
-                    "message": log["message"],
-                    "created_at": int(log["timestamp"].timestamp()),
-                }
-                current_loop.call_soon_threadsafe(queue.put_nowait, event)
-
-    logs_ref = DB.collection("jobs").document(job_id).collection("logs")
-    logs_ref_watcher = logs_ref.on_snapshot(on_snapshot)
-
-    async def event_stream():
+    def _validate_range() -> tuple[int, int]:
+        if index_start is None or index_end is None:
+            raise HTTPException(status_code=400, detail="index_start and index_end must both be provided")
         try:
-            yield "retry: 5000\n\n"
-            yield ": init\n\n"
-            while True:
-                try:
-                    event = await asyncio.wait_for(queue.get(), timeout=2)
-                    yield f"data: {json.dumps(event)}\n\n"
-                except asyncio.TimeoutError:
-                    yield ": keep-alive\n\n"
-        finally:
-            logs_ref_watcher.unsubscribe()
+            s = int(index_start)
+            e = int(index_end)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="index_start and index_end must be integers")
+        if s < 0 or e < 0:
+            raise HTTPException(status_code=400, detail="index_start and index_end must be >= 0")
+        if e < s:
+            raise HTTPException(status_code=400, detail="index_end must be >= index_start")
+        if (e - s + 1) > 500:
+            raise HTTPException(status_code=400, detail="Range too large (max 500 indexes)")
+        return s, e
 
-    headers = {"Cache-Control": "no-cache, no-transform"}
-    return StreamingResponse(event_stream(), media_type="text/event-stream", headers=headers)
+    if summary and not stream:
+        first_error_by_index: dict[int, int] = {}
+        seen_indexes: set[int] = set()
+
+        async for doc in logs_ref.stream():
+            d = doc.to_dict() or {}
+            fallback_doc_ts = d.get("timestamp")
+
+            for log in _extract_logs(d):
+                idx = _normalize_index(log.get("index"))
+                if isinstance(idx, int):
+                    seen_indexes.add(idx)
+
+                is_err = bool(log.get("is_error", False))
+                if is_err and isinstance(idx, int):
+                    ts = _ts_to_seconds(log.get("timestamp"), fallback_doc_ts)
+                    prev = first_error_by_index.get(idx)
+                    if prev is None or ts < prev:
+                        first_error_by_index[idx] = ts
+
+        failed_indexes = [i for i, _ in sorted(first_error_by_index.items(), key=lambda kv: kv[1])]
+        return JSONResponse({"failed_indexes": failed_indexes, "seen_indexes": sorted(seen_indexes)})
+
+    if stream:
+        if _range_mode_active():
+            raise HTTPException(status_code=400, detail="Range loading is not supported in stream mode")
+
+        queue: asyncio.Queue = asyncio.Queue()
+        current_loop = asyncio.get_running_loop()
+        skip_first_snapshot = True
+
+        def on_snapshot(col_snapshot, changes, read_time):
+            nonlocal skip_first_snapshot
+            if skip_first_snapshot:
+                skip_first_snapshot = False
+                return
+
+            def sort_key(change):
+                d = change.document.to_dict() or {}
+                fallback_doc_ts = d.get("timestamp")
+                first = None
+                for lg in _extract_logs(d):
+                    first = lg
+                    break
+                if not first:
+                    return datetime.min.replace(tzinfo=timezone.utc)
+                ts_seconds = _ts_to_seconds(first.get("timestamp"), fallback_doc_ts)
+                return datetime.fromtimestamp(ts_seconds, tz=timezone.utc)
+
+            for change in sorted(changes, key=sort_key):
+                d = change.document.to_dict() or {}
+                doc_id = change.document.id
+                fallback_doc_ts = d.get("timestamp")
+
+                for i, log in enumerate(_extract_logs(d)):
+                    idx = _normalize_index(log.get("index"))
+                    if not _matches_single(idx):
+                        continue
+
+                    event = {
+                        "id": f"{doc_id}:{i}",
+                        "message": log.get("message"),
+                        "created_at": _ts_to_seconds(log.get("timestamp"), fallback_doc_ts),
+                        "index": idx,
+                        "is_error": bool(log.get("is_error", False)),
+                    }
+                    current_loop.call_soon_threadsafe(queue.put_nowait, event)
+
+        logs_ref_sync = DB.collection("jobs").document(job_id).collection("logs").order_by("timestamp")
+        watcher = logs_ref_sync.on_snapshot(on_snapshot)
+
+        async def event_stream():
+            try:
+                yield "retry: 5000\n\n"
+                yield ": init\n\n"
+                while True:
+                    try:
+                        event = await asyncio.wait_for(queue.get(), timeout=2)
+                        yield f"data: {json.dumps(event)}\n\n"
+                    except asyncio.TimeoutError:
+                        yield ": keep-alive\n\n"
+            finally:
+                watcher.unsubscribe()
+
+        headers = {"Cache-Control": "no-cache, no-transform"}
+        return StreamingResponse(event_stream(), media_type="text/event-stream", headers=headers)
+
+    if _range_mode_active():
+        s, e = _validate_range()
+
+        logs_by_index: dict[int, list] = {i: [] for i in range(s, e + 1)}
+        global_logs: list = []
+        per_index_counts: dict[int, int] = {i: 0 for i in range(s, e + 1)}
+        global_count = 0
+
+        truncated_indexes: set[int] = set()
+        truncated_global = False
+        truncated_total = False
+
+        max_total = 200_000
+        total_added = 0
+
+        async for doc in logs_ref.stream():
+            d = doc.to_dict() or {}
+            doc_id = doc.id
+            fallback_doc_ts = d.get("timestamp")
+
+            for i, log in enumerate(_extract_logs(d)):
+                if total_added >= max_total:
+                    truncated_total = True
+                    break
+
+                idx = _normalize_index(log.get("index"))
+                ts = _ts_to_seconds(log.get("timestamp"), fallback_doc_ts)
+
+                payload = {
+                    "id": f"{doc_id}:{i}",
+                    "message": log.get("message"),
+                    "created_at": ts,
+                    "index": idx,
+                    "is_error": bool(log.get("is_error", False)),
+                }
+
+                if idx is None:
+                    if not include_global:
+                        continue
+                    if global_count >= limit_per_index:
+                        truncated_global = True
+                        continue
+                    global_logs.append(payload)
+                    global_count += 1
+                    total_added += 1
+                    continue
+
+                if idx < s or idx > e:
+                    continue
+
+                if per_index_counts[idx] >= limit_per_index:
+                    truncated_indexes.add(idx)
+                    continue
+
+                logs_by_index[idx].append(payload)
+                per_index_counts[idx] += 1
+                total_added += 1
+
+            if truncated_total:
+                break
+
+        for idx in range(s, e + 1):
+            logs_by_index[idx].sort(key=lambda x: x["created_at"])
+        global_logs.sort(key=lambda x: x["created_at"])
+
+        return JSONResponse(
+            {
+                "index_start": s,
+                "index_end": e,
+                "limit_per_index": limit_per_index,
+                "include_global": include_global,
+                "global_logs": global_logs,
+                "logs_by_index": {str(k): v for k, v in logs_by_index.items()},
+                "truncated": bool(truncated_indexes) or truncated_global or truncated_total,
+                "truncated_indexes": sorted(list(truncated_indexes)),
+                "truncated_global": truncated_global,
+                "truncated_total": truncated_total,
+            }
+        )
+
+    logs = []
+    truncated = False
+
+    async for doc in logs_ref.stream():
+        d = doc.to_dict() or {}
+        doc_id = doc.id
+        fallback_doc_ts = d.get("timestamp")
+
+        for i, log in enumerate(_extract_logs(d)):
+            idx = _normalize_index(log.get("index"))
+            if not _matches_single(idx):
+                continue
+
+            logs.append(
+                {
+                    "id": f"{doc_id}:{i}",
+                    "message": log.get("message"),
+                    "created_at": _ts_to_seconds(log.get("timestamp"), fallback_doc_ts),
+                    "index": idx,
+                    "is_error": bool(log.get("is_error", False)),
+                }
+            )
+
+            if len(logs) >= limit:
+                truncated = True
+                break
+
+        if truncated:
+            break
+
+    logs.sort(key=lambda x: x["created_at"])
+    return JSONResponse({"logs": logs, "index": index, "limit": limit, "truncated": truncated})
+

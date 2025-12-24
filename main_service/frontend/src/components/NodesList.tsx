@@ -252,17 +252,41 @@ remote_parallel_map(my_function, list(range(1000)))`;
         return 2;
     };
 
-    const sortNodes = useCallback((a: BurlaNode, b: BurlaNode) => {
-        const aPriority = getStatusPriority(a.status);
-        const bPriority = getStatusPriority(b.status);
-        if (aPriority !== bPriority) return aPriority - bPriority;
+    const isDeletedOrFailed = (n: BurlaNode) => {
+        const status = String(n.status || "").toUpperCase();
+        return status === "FAILED" || status === "DELETED";
+    };
 
-        const aStarted = a.started_booting_at ?? 0;
-        const bStarted = b.started_booting_at ?? 0;
-        if (aStarted !== bStarted) return bStarted - aStarted;
+    const toMs = (ts?: number | null) => {
+        if (!ts) return 0;
+        // safety: handle both seconds and ms if anything slips through
+        return ts < 2_000_000_000 ? Math.floor(ts * 1000) : Math.floor(ts);
+    };
 
-        return String(a.name).localeCompare(String(b.name));
-    }, []);
+    const nodeStartedMs = (n: BurlaNode) =>
+        toMs(n.started_booting_at ?? n.deletedAt ?? 0);
+
+    const sortNodes = useCallback(
+        (a: BurlaNode, b: BurlaNode) => {
+            // group: active nodes first, then FAILED/DELETED
+            const aGroup = isDeletedOrFailed(a) ? 0 : 1;
+            const bGroup = isDeletedOrFailed(b) ? 0 : 1;
+            if (aGroup !== bGroup) return bGroup - aGroup;
+
+            // within group: most recent started_booting_at first
+            const aTs = nodeStartedMs(a);
+            const bTs = nodeStartedMs(b);
+            if (aTs !== bTs) return bTs - aTs;
+
+            // tie-breaker: status rank (minor)
+            const aStatus = STATUS_RANK[String(a.status || "").toUpperCase()] ?? 0;
+            const bStatus = STATUS_RANK[String(b.status || "").toUpperCase()] ?? 0;
+            if (aStatus !== bStatus) return bStatus - aStatus;
+
+            return String(a.name).localeCompare(String(b.name));
+        },
+        []
+    );
 
     const sortedNodes = useMemo(() => {
         const arr = [...nodes];
@@ -271,10 +295,7 @@ remote_parallel_map(my_function, list(range(1000)))`;
     }, [nodes, sortNodes]);
 
     const activeNodes = useMemo(() => {
-        return sortedNodes.filter((n) => {
-            const status = String(n.status || "").toUpperCase();
-            return !DELETED_STATUSES.has(status);
-        });
+        return sortedNodes.filter((n) => !isDeletedOrFailed(n));
     }, [sortedNodes]);
 
     const activeTotalPages = Math.max(1, Math.ceil(activeNodes.length / PAGE_SIZE));
@@ -346,9 +367,7 @@ remote_parallel_map(my_function, list(range(1000)))`;
                     age: undefined,
                     logs: undefined,
                     started_booting_at:
-                        typeof raw.started_booting_at === "number"
-                            ? raw.started_booting_at
-                            : undefined,
+                        typeof raw.started_booting_at === "number" ? raw.started_booting_at : undefined,
                     deletedAt: typeof raw.deletedAt === "number" ? raw.deletedAt : undefined,
                 }));
 
@@ -380,14 +399,17 @@ remote_parallel_map(my_function, list(range(1000)))`;
     const displayNodes = useMemo(() => {
         if (!showDeleted) return activePagedNodes;
 
-        const deletedSorted = [...deletedNodes].sort((a, b) => {
-            const aStarted = a.started_booting_at ?? 0;
-            const bStarted = b.started_booting_at ?? 0;
-            return bStarted - aStarted;
+        // show active first (paged), then deleted list appended, then sort with grouping rules
+        const combined = [...activePagedNodes];
+        const seen = new Set(combined.map((node) => node.id));
+
+        deletedNodes.forEach((node) => {
+            if (!seen.has(node.id)) combined.push(node);
         });
 
-        return [...activeNodes, ...deletedSorted];
-    }, [showDeleted, activePagedNodes, deletedNodes, activeNodes]);
+        combined.sort(sortNodes);
+        return combined;
+    }, [showDeleted, activePagedNodes, deletedNodes, sortNodes]);
 
     const noActiveNodes = !showDeleted && activeNodes.length === 0;
     const noDeletedNodes = showDeleted && !deletedLoading && displayNodes.length === 0;
@@ -639,9 +661,7 @@ remote_parallel_map(my_function, list(range(1000)))`;
                                                                 <Cpu className="h-4 w-4" />
                                                                 <span>
                                                                     {node.cpus ??
-                                                                        extractCpuCount(
-                                                                            node.type
-                                                                        ) ??
+                                                                        extractCpuCount(node.type) ??
                                                                         "?"}
                                                                 </span>
                                                             </div>
@@ -686,9 +706,7 @@ remote_parallel_map(my_function, list(range(1000)))`;
                                                                         </div>
                                                                     ) : (
                                                                         <pre className="whitespace-pre-wrap text-gray-600 text-sm">
-                                                                            {nodeLogs[
-                                                                                node.id
-                                                                            ]?.join("\n")}
+                                                                            {nodeLogs[node.id]?.join("\n")}
                                                                         </pre>
                                                                     )}
                                                                 </div>
@@ -705,9 +723,7 @@ remote_parallel_map(my_function, list(range(1000)))`;
                                             <>
                                                 {deletedPage > 0 && (
                                                     <button
-                                                        onClick={() =>
-                                                            setDeletedPage(deletedPage - 1)
-                                                        }
+                                                        onClick={() => setDeletedPage(deletedPage - 1)}
                                                         className="px-3 py-1 text-sm text-primary hover:underline disabled:text-gray-400 disabled:cursor-not-allowed"
                                                         disabled={deletedLoading}
                                                     >
@@ -727,14 +743,9 @@ remote_parallel_map(my_function, list(range(1000)))`;
                                                     1
                                                 </button>
 
-                                                {deletedPage > 3 && (
-                                                    <span className="px-1">...</span>
-                                                )}
+                                                {deletedPage > 3 && <span className="px-1">...</span>}
 
-                                                {Array.from(
-                                                    { length: deletedTotalPages },
-                                                    (_, i) => i
-                                                )
+                                                {Array.from({ length: deletedTotalPages }, (_, i) => i)
                                                     .filter(
                                                         (i) =>
                                                             i !== 0 &&
@@ -762,9 +773,7 @@ remote_parallel_map(my_function, list(range(1000)))`;
 
                                                 {deletedTotalPages > 1 && (
                                                     <button
-                                                        onClick={() =>
-                                                            setDeletedPage(deletedTotalPages - 1)
-                                                        }
+                                                        onClick={() => setDeletedPage(deletedTotalPages - 1)}
                                                         className={`px-3 py-1 rounded text-sm border ${
                                                             deletedPage === deletedTotalPages - 1
                                                                 ? "bg-primary text-primary-foreground"
@@ -778,9 +787,7 @@ remote_parallel_map(my_function, list(range(1000)))`;
 
                                                 {deletedPage < deletedTotalPages - 1 && (
                                                     <button
-                                                        onClick={() =>
-                                                            setDeletedPage(deletedPage + 1)
-                                                        }
+                                                        onClick={() => setDeletedPage(deletedPage + 1)}
                                                         className="px-3 py-1 text-sm text-primary hover:underline disabled:text-gray-400 disabled:cursor-not-allowed"
                                                         disabled={deletedLoading}
                                                     >
@@ -792,9 +799,7 @@ remote_parallel_map(my_function, list(range(1000)))`;
                                             <>
                                                 {activePage > 0 && (
                                                     <button
-                                                        onClick={() =>
-                                                            setActivePage(activePage - 1)
-                                                        }
+                                                        onClick={() => setActivePage(activePage - 1)}
                                                         className="px-3 py-1 text-sm text-primary hover:underline"
                                                     >
                                                         ‹ Prev
@@ -812,14 +817,9 @@ remote_parallel_map(my_function, list(range(1000)))`;
                                                     1
                                                 </button>
 
-                                                {activePage > 3 && (
-                                                    <span className="px-1">...</span>
-                                                )}
+                                                {activePage > 3 && <span className="px-1">...</span>}
 
-                                                {Array.from(
-                                                    { length: activeTotalPages },
-                                                    (_, i) => i
-                                                )
+                                                {Array.from({ length: activeTotalPages }, (_, i) => i)
                                                     .filter(
                                                         (i) =>
                                                             i !== 0 &&
@@ -846,9 +846,7 @@ remote_parallel_map(my_function, list(range(1000)))`;
 
                                                 {activeTotalPages > 1 && (
                                                     <button
-                                                        onClick={() =>
-                                                            setActivePage(activeTotalPages - 1)
-                                                        }
+                                                        onClick={() => setActivePage(activeTotalPages - 1)}
                                                         className={`px-3 py-1 rounded text-sm border ${
                                                             activePage === activeTotalPages - 1
                                                                 ? "bg-primary text-primary-foreground"
@@ -861,9 +859,7 @@ remote_parallel_map(my_function, list(range(1000)))`;
 
                                                 {activePage < activeTotalPages - 1 && (
                                                     <button
-                                                        onClick={() =>
-                                                            setActivePage(activePage + 1)
-                                                        }
+                                                        onClick={() => setActivePage(activePage + 1)}
                                                         className="px-3 py-1 text-sm text-primary hover:underline"
                                                     >
                                                         Next ›

@@ -137,12 +137,7 @@
 
 
 
-import {
-  createContext,
-  useContext,
-  useEffect,
-  useState,
-} from "react";
+import { createContext, useContext, useEffect, useState } from "react";
 import { BurlaNode, NodeStatus } from "@/types/coreTypes";
 
 interface NodesContextType {
@@ -163,15 +158,18 @@ export const NodesProvider = ({ children }: { children: React.ReactNode }) => {
 
   const handleNodeUpdate = (data: any) => {
     setNodes(prevNodes => {
-      const existingNode = prevNodes.find(node => node.id === data.nodeId);
+      const nodeId = String(data.nodeId || "");
+      if (!nodeId) return prevNodes;
+
+      const existingNode = prevNodes.find(n => n.id === nodeId);
 
       if (data.deleted) {
         const deletedAt = Date.now();
 
         if (!existingNode) {
           const tombstone: BurlaNode = {
-            id: data.nodeId,
-            name: data.nodeId,
+            id: nodeId,
+            name: nodeId,
             status: "DELETED",
             type: data.type || "unknown",
             cpus: data.cpus,
@@ -179,19 +177,21 @@ export const NodesProvider = ({ children }: { children: React.ReactNode }) => {
             memory: data.memory,
             age: data.age,
             logs: data.logs,
+            started_booting_at:
+              typeof data.started_booting_at === "number" ? data.started_booting_at : undefined,
             deletedAt,
           };
           return [...prevNodes, tombstone];
         }
 
-        return prevNodes.map(node =>
-          node.id === data.nodeId
+        return prevNodes.map(n =>
+          n.id === nodeId
             ? {
-                ...node,
+                ...n,
                 status: "DELETED" as NodeStatus,
                 deletedAt,
               }
-            : node
+            : n
         );
       }
 
@@ -199,19 +199,23 @@ export const NodesProvider = ({ children }: { children: React.ReactNode }) => {
         return [...prevNodes, createNewNode(data)];
       }
 
-      return prevNodes.map(node =>
-        node.id === data.nodeId
+      return prevNodes.map(n =>
+        n.id === nodeId
           ? {
-              ...node,
-              status: data.status as NodeStatus,
-              type: data.type ?? node.type,
-              cpus: data.cpus ?? node.cpus,
-              gpus: data.gpus ?? node.gpus,
-              memory: data.memory ?? node.memory,
-              age: data.age ?? node.age,
-              logs: data.logs ?? node.logs,
+              ...n,
+              status: (data.status as NodeStatus) ?? n.status,
+              type: data.type ?? n.type,
+              cpus: data.cpus ?? n.cpus,
+              gpus: data.gpus ?? n.gpus,
+              memory: data.memory ?? n.memory,
+              age: data.age ?? n.age,
+              logs: data.logs ?? n.logs,
+              started_booting_at:
+                typeof data.started_booting_at === "number"
+                  ? data.started_booting_at
+                  : n.started_booting_at,
             }
-          : node
+          : n
       );
     });
   };
@@ -257,11 +261,7 @@ export const NodesProvider = ({ children }: { children: React.ReactNode }) => {
         }
 
         if (data.type === "empty") {
-          setNodes(prev =>
-            prev.filter(
-              n => n.status === "DELETED" || n.status === "FAILED"
-            )
-          );
+          setNodes([]);
           return;
         }
 
@@ -292,8 +292,8 @@ export const NodesProvider = ({ children }: { children: React.ReactNode }) => {
 };
 
 const createNewNode = (data: any): BurlaNode => ({
-  id: data.nodeId,
-  name: data.nodeId,
+  id: String(data.nodeId),
+  name: String(data.nodeId),
   status: data.status as NodeStatus,
   type: data.type || "unknown",
   cpus: data.cpus,
@@ -301,6 +301,8 @@ const createNewNode = (data: any): BurlaNode => ({
   memory: data.memory,
   age: data.age,
   logs: data.logs,
+  started_booting_at:
+    typeof data.started_booting_at === "number" ? data.started_booting_at : undefined,
   deletedAt: undefined,
 });
 

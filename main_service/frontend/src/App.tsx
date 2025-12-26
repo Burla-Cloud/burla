@@ -4,7 +4,6 @@ import Dashboard from "@/pages/Index";
 import Jobs from "@/pages/Jobs";
 import Settings from "@/pages/Settings";
 import JobDetails from "@/pages/JobDetails";
-import Storage from "@/pages/Storage";
 import Filesystem from "@/pages/Filesystem";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -22,11 +21,16 @@ const Layout = () => {
   const [saving, setSaving] = useState(false);
 
   return (
-    <div className="flex min-h-screen items-stretch bg-gray-50">
+    <div className="flex h-screen w-full overflow-hidden bg-gray-50">
       <ProfilePicture />
-      <Sidebar disabled={saving} />
-      <div className="flex-1 py-10 px-12 flex items-stretch">
-        <Outlet context={{ saving, setSaving }} />
+      <div className="shrink-0">
+        <Sidebar disabled={saving} />
+      </div>
+
+      <div className="flex-1 min-w-0 overflow-x-hidden">
+        <div className="h-full w-full py-10 px-12 min-w-0 overflow-x-hidden flex items-stretch">
+          <Outlet context={{ saving, setSaving }} />
+        </div>
       </div>
     </div>
   );
@@ -49,10 +53,7 @@ const App = () => (
                       <Route path="/jobs" element={<Jobs />} />
                       <Route path="/jobs/:jobId" element={<JobDetails />} />
                       <Route path="/settings" element={<Settings />} />
-                                                <Route
-                                                    path="/filesystem"
-                                                    element={<Filesystem />}
-                                                />
+                      <Route path="/filesystem" element={<Filesystem />} />
                     </Route>
                   </Routes>
                 </Router>

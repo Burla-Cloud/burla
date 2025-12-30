@@ -39,7 +39,7 @@ type UsageContextValue = {
   daily: DailyHoursResponse | null;
   nodes: MonthNodesResponse | null;
 
-  selectedMonth: string;               // YYYY-MM
+  selectedMonth: string; // YYYY-MM
   setSelectedMonth: (m: string) => void;
 
   refresh: (monthOverride?: string) => Promise<void>;
@@ -130,3 +130,4 @@ export function useUsage() {
   if (!ctx) throw new Error("useUsage must be used within UsageProvider");
   return ctx;
 }
+

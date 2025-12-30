@@ -24,17 +24,7 @@ type NodeStatusLike = NodeStatus | string | null | undefined;
 
 const PAGE_SIZE = 15;
 
-// Higher number sorts later (worse)
-const STATUS_RANK: Record<string, number> = {
-  RUNNING: 0,
-  READY: 1,
-  BOOTING: 2,
-  STOPPING: 3,
-  FAILED: 4,
-  DELETED: 5,
-  UNKNOWN: 999,
-};
-
+const ACTIVE_STATUSES = new Set<string>(["RUNNING", "READY", "BOOTING"]);
 const DELETED_STATUSES = new Set<string>(["FAILED", "DELETED"]);
 
 export const NodesList: React.FC<NodesListProps> = ({
@@ -52,16 +42,17 @@ export const NodesList: React.FC<NodesListProps> = ({
 
   const didMountRef = useRef(false);
 
-  // active nodes pagination (client side)
-  const [activePage, setActivePage] = useState(0);
+  const [page, setPage] = useState(0);
 
-  // deleted nodes pagination (server side)
-  const [deletedPage, setDeletedPage] = useState(0);
-  const [deletedTotalPages, setDeletedTotalPages] = useState(1);
-  const [deletedNodes, setDeletedNodes] = useState<BurlaNode[]>([]);
+  // deleted fetch state (only used when showDeleted is true)
+  const [deletedSlice, setDeletedSlice] = useState<BurlaNode[]>([]);
+  const [deletedTotal, setDeletedTotal] = useState(0);
   const [deletedLoading, setDeletedLoading] = useState(false);
   const [deletedError, setDeletedError] = useState<string | null>(null);
   const deletedRequestIdRef = useRef(0);
+
+  // UX: when switching showDeleted on, show loader until first deleted page returns
+  const [showDeletedHydrating, setShowDeletedHydrating] = useState(false);
 
   const pythonExampleCode = `from burla import remote_parallel_map
 
@@ -260,84 +251,80 @@ remote_parallel_map(my_function, list(range(1000)))`;
     setExpandedNodeId(prev => (prev === nodeId ? null : nodeId));
   };
 
-  const isDeletedOrFailed = (n: BurlaNode) => {
-    const status = String(n.status || "").toUpperCase();
-    return DELETED_STATUSES.has(status);
-  };
-
   const toMs = (ts?: number | null) => {
     if (!ts) return 0;
     return ts < 2_000_000_000 ? Math.floor(ts * 1000) : Math.floor(ts);
   };
 
-  const nodeRecencyMs = (n: BurlaNode) => {
-    // For deleted nodes: prefer deletedAt, else started_booting_at
-    // For active nodes: started_booting_at
-    const started = toMs(n.started_booting_at ?? 0);
-    const deleted = toMs(n.deletedAt ?? 0);
-    return Math.max(deleted, started);
-  };
+  const activeNodes = useMemo(() => {
+    const actives = nodes.filter(n => ACTIVE_STATUSES.has(String(n.status || "").toUpperCase()));
+    actives.sort((a, b) => toMs(b.started_booting_at) - toMs(a.started_booting_at));
+    return actives;
+  }, [nodes]);
 
-  const sortNodes = useCallback((a: BurlaNode, b: BurlaNode) => {
-    // Active first always
-    const aDeleted = isDeletedOrFailed(a);
-    const bDeleted = isDeletedOrFailed(b);
-    if (aDeleted !== bDeleted) return aDeleted ? 1 : -1;
-
-    // Recency (newest first)
-    const aTs = nodeRecencyMs(a);
-    const bTs = nodeRecencyMs(b);
-    if (aTs !== bTs) return bTs - aTs;
-
-    // Status rank as tie breaker
-    const aRank = STATUS_RANK[String(a.status || "UNKNOWN").toUpperCase()] ?? 999;
-    const bRank = STATUS_RANK[String(b.status || "UNKNOWN").toUpperCase()] ?? 999;
-    if (aRank !== bRank) return aRank - bRank;
-
-    return String(a.name).localeCompare(String(b.name));
-  }, []);
-
-  const sortedNodes = useMemo(() => {
-    const arr = [...nodes];
-    arr.sort(sortNodes);
-    return arr;
-  }, [nodes, sortNodes]);
-
-  const activeNodes = useMemo(() => sortedNodes.filter(n => !isDeletedOrFailed(n)), [sortedNodes]);
-
-  const activeTotalPages = Math.max(1, Math.ceil(activeNodes.length / PAGE_SIZE));
+  // Combined pagination math when showDeleted is true:
+  // pages are over (activeNodes + deletedTotal)
+  const totalCount = showDeleted ? (activeNodes.length + deletedTotal) : activeNodes.length;
+  const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
 
   useEffect(() => {
-    if (activePage > 0 && activePage >= activeTotalPages) {
-      setActivePage(activeTotalPages - 1);
-    }
-  }, [activeTotalPages, activePage]);
+    if (page > 0 && page >= totalPages) setPage(totalPages - 1);
+  }, [page, totalPages]);
 
-  const activePagedNodes = useMemo(() => {
-    const start = activePage * PAGE_SIZE;
-    const end = start + PAGE_SIZE;
+  // Compute what this page needs from deleted
+  const pageStart = page * PAGE_SIZE;
+  const pageEnd = pageStart + PAGE_SIZE;
+
+  const activeSlice = useMemo(() => {
+    const start = Math.min(pageStart, activeNodes.length);
+    const end = Math.min(pageEnd, activeNodes.length);
     return activeNodes.slice(start, end);
-  }, [activeNodes, activePage]);
+  }, [activeNodes, pageStart, pageEnd]);
 
-  // clear or reset deleted pagination when toggling
+  const deletedOffset = useMemo(() => {
+    if (!showDeleted) return 0;
+    if (pageStart < activeNodes.length) return 0;
+    return pageStart - activeNodes.length;
+  }, [showDeleted, pageStart, activeNodes.length]);
+
+  const deletedLimit = useMemo(() => {
+    if (!showDeleted) return 0;
+    if (pageStart < activeNodes.length) {
+      const needed = Math.max(0, pageEnd - activeNodes.length);
+      return Math.min(PAGE_SIZE, needed);
+    }
+    return PAGE_SIZE;
+  }, [showDeleted, pageStart, pageEnd, activeNodes.length]);
+
+  // Handle toggle transitions
   useEffect(() => {
+    setExpandedNodeId(null);
+    setPage(0);
+
     if (showDeleted) {
-      setDeletedPage(0);
+      setShowDeletedHydrating(true);
+      setDeletedSlice([]);
+      setDeletedTotal(0);
+      setDeletedError(null);
     } else {
-      setDeletedNodes([]);
-      setDeletedTotalPages(1);
-      setDeletedPage(0);
-      setDeletedLoading(false);
+      setShowDeletedHydrating(false);
+      setDeletedSlice([]);
+      setDeletedTotal(0);
       setDeletedError(null);
       deletedRequestIdRef.current += 1;
     }
   }, [showDeleted]);
 
-  // fetch deleted nodes
+  // Fetch deleted slice for this page
   useEffect(() => {
     if (!showDeleted) return;
 
-    setExpandedNodeId(null);
+    // If this page is fully within active nodes, we still want deletedTotal for page count
+    // So request limit=1 just to get total. But we can also request limit=deletedLimit (0 allowed),
+    // and backend returns total either way. We will request limit=max(1,deletedLimit) if deletedLimit is 0.
+    const needsSlice = deletedLimit > 0;
+    const reqLimit = needsSlice ? deletedLimit : 1;
+    const reqOffset = needsSlice ? deletedOffset : 0;
 
     const controller = new AbortController();
     const requestId = ++deletedRequestIdRef.current;
@@ -348,73 +335,66 @@ remote_parallel_map(my_function, list(range(1000)))`;
         setDeletedError(null);
 
         const res = await fetch(
-          `/v1/cluster/deleted_recent_paginated?page=${deletedPage}&page_size=${PAGE_SIZE}`,
+          `/v1/cluster/deleted_recent_paginated?offset=${reqOffset}&limit=${reqLimit}`,
           { signal: controller.signal }
         );
-
         if (!res.ok) throw new Error(`status ${res.status}`);
 
         const json = await res.json();
         if (requestId !== deletedRequestIdRef.current) return;
 
-        const rawNodes: any[] = Array.isArray(json.nodes) ? json.nodes : [];
+        const total: number = typeof json.total === "number" ? json.total : 0;
+        setDeletedTotal(total);
 
-        const mapped: BurlaNode[] = rawNodes.map(raw => ({
-          id: raw.id,
-          name: raw.name ?? raw.id,
-          status: (raw.status || "DELETED") as NodeStatus,
-          type: raw.type || "unknown",
-          cpus: raw.cpus ?? undefined,
-          gpus: raw.gpus ?? undefined,
-          memory: raw.memory ?? undefined,
-          age: undefined,
-          logs: undefined,
-          started_booting_at:
-            typeof raw.started_booting_at === "number" ? raw.started_booting_at : undefined,
-          deletedAt: typeof raw.deletedAt === "number" ? raw.deletedAt : undefined,
-        }));
-
-        setDeletedNodes(mapped);
-
-        const total: number = typeof json.total === "number" ? json.total : mapped.length;
-        const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-        setDeletedTotalPages(pages);
+        if (needsSlice) {
+          const rawNodes: any[] = Array.isArray(json.nodes) ? json.nodes : [];
+          const mapped: BurlaNode[] = rawNodes.map(raw => ({
+            id: raw.id,
+            name: raw.name ?? raw.id,
+            status: (raw.status || "DELETED") as NodeStatus,
+            type: raw.type || "unknown",
+            cpus: raw.cpus ?? undefined,
+            gpus: raw.gpus ?? undefined,
+            memory: raw.memory ?? undefined,
+            age: undefined,
+            logs: undefined,
+            started_booting_at:
+              typeof raw.started_booting_at === "number" ? raw.started_booting_at : undefined,
+            deletedAt: typeof raw.deletedAt === "number" ? raw.deletedAt : undefined,
+          }));
+          setDeletedSlice(mapped);
+        } else {
+          setDeletedSlice([]);
+        }
       } catch (err: any) {
         if (err.name === "AbortError") return;
         console.error("error fetching deleted nodes", err);
         setDeletedError(err?.message || "Failed to load deleted nodes");
+        setDeletedTotal(0);
+        setDeletedSlice([]);
       } finally {
-        if (requestId === deletedRequestIdRef.current) setDeletedLoading(false);
+        if (requestId === deletedRequestIdRef.current) {
+          setDeletedLoading(false);
+          setShowDeletedHydrating(false);
+        }
       }
     };
 
     load();
     return () => controller.abort();
-  }, [showDeleted, deletedPage]);
+  }, [showDeleted, deletedOffset, deletedLimit]);
 
   useEffect(() => {
     didMountRef.current = true;
   }, []);
 
   const displayNodes = useMemo(() => {
-    if (!showDeleted) {
-      return activePagedNodes;
-    }
-
-    // When showing deleted: ALL active nodes first (no paging), then deleted (paged from server)
-    const combined = [...activeNodes];
-    const seen = new Set(combined.map(n => n.id));
-
-    for (const n of deletedNodes) {
-      if (!seen.has(n.id)) combined.push(n);
-    }
-
-    combined.sort(sortNodes);
-    return combined;
-  }, [showDeleted, activePagedNodes, activeNodes, deletedNodes, sortNodes]);
+    if (!showDeleted) return activeSlice;
+    return [...activeSlice, ...deletedSlice];
+  }, [showDeleted, activeSlice, deletedSlice]);
 
   const noActiveNodes = !showDeleted && activeNodes.length === 0;
-  const noDeletedNodes = showDeleted && !deletedLoading && displayNodes.length === 0;
+  const noCombinedNodes = showDeleted && !showDeletedHydrating && !deletedLoading && displayNodes.length === 0;
 
   const handleShowDeletedChange = (value: boolean) => {
     onShowDeletedChange(value);
@@ -442,23 +422,22 @@ remote_parallel_map(my_function, list(range(1000)))`;
                 <div className="space-y-4">
                   <ol className="list-none space-y-3">
                     <li>
-                      🔌 &nbsp;Hit <span className="font-semibold">⏻ Start</span> to boot some
-                      machines (1-2 min)
+                      Hit <span className="font-semibold">Start</span> to boot machines (1 to 2 min)
                     </li>
                     <li>
-                      📦 &nbsp;Run{" "}
+                      Run{" "}
                       <code className="bg-gray-100 px-1 py-0.5 rounded">
                         pip install burla
                       </code>
                     </li>
                     <li>
-                      🔑 &nbsp;Run{" "}
+                      Run{" "}
                       <code className="bg-gray-100 px-1 py-0.5 rounded">
                         burla login
                       </code>
                     </li>
                     <li>
-                      🚀 &nbsp;Run some code:
+                      Run some code:
                       <br />
                       <div className="relative mt-3 inline-block w-fit max-w-full">
                         <button
@@ -481,30 +460,7 @@ remote_parallel_map(my_function, list(range(1000)))`;
                           </span>
                         </button>
                         <pre className="bg-gray-50 border rounded p-3 overflow-x-auto text-sm font-mono pr-14 w-fit max-w-full">
-                          <code>
-                            <span className="text-blue-700">from</span>{" "}
-                            burla{" "}
-                            <span className="text-blue-700">import</span>{" "}
-                            remote_parallel_map
-                            <br />
-                            <br />
-                            <span className="text-blue-700">def</span>{" "}
-                            <span className="text-amber-800">my_function</span>(x):
-                            <br />
-                            {"    "}print(<span className="text-red-700">f</span>
-                            <span className="text-red-700">
-                              "Running on a remote computer in the cloud! #
-                            </span>
-                            {"{"}x{"}"}
-                            <span className="text-red-700">"</span>)
-                            <br />
-                            <br />
-                            remote_parallel_map(
-                            <span className="text-amber-800">my_function</span>,{" "}
-                            <span className="text-blue-700">list</span>(
-                            <span className="text-blue-700">range</span>(
-                            <span className="text-purple-700">1000</span>)))
-                          </code>
+                          <code>{pythonExampleCode}</code>
                         </pre>
                       </div>
                     </li>
@@ -530,8 +486,8 @@ remote_parallel_map(my_function, list(range(1000)))`;
         </CardHeader>
 
         <CardContent>
-          {showDeleted && deletedLoading ? (
-            <div className="flex justify-center py-8">
+          {(showDeletedHydrating || (showDeleted && deletedLoading)) ? (
+            <div className="flex justify-center py-10">
               <div className="w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin" />
             </div>
           ) : (
@@ -539,7 +495,7 @@ remote_parallel_map(my_function, list(range(1000)))`;
               {noActiveNodes && !showDeleted && (
                 <div className="border-2 border-dashed rounded-lg p-8 text-center text-muted-foreground">
                   <div className="text-sm">
-                    Zero nodes running, hit <span className="font-semibold">⏻ Start</span> to launch
+                    Zero nodes running, hit <span className="font-semibold">Start</span> to launch
                     some.
                   </div>
                   <div className="mt-6 space-y-2">
@@ -556,7 +512,7 @@ remote_parallel_map(my_function, list(range(1000)))`;
                 </div>
               )}
 
-              {noDeletedNodes && showDeleted && (
+              {noCombinedNodes && showDeleted && (
                 <div className="border-2 border-dashed rounded-lg p-8 text-center text-muted-foreground">
                   <div className="text-sm">No nodes to display.</div>
                 </div>
@@ -640,149 +596,71 @@ remote_parallel_map(my_function, list(range(1000)))`;
                   </Table>
 
                   <div className="flex justify-center mt-6 space-x-2 items-center">
-                    {showDeleted ? (
-                      <>
-                        {deletedPage > 0 && (
-                          <button
-                            onClick={() => setDeletedPage(deletedPage - 1)}
-                            className="px-3 py-1 text-sm text-primary hover:underline disabled:text-gray-400 disabled:cursor-not-allowed"
-                            disabled={deletedLoading}
-                          >
-                            ‹ Prev
-                          </button>
-                        )}
+                    {page > 0 && (
+                      <button
+                        onClick={() => setPage(page - 1)}
+                        className="px-3 py-1 text-sm text-primary hover:underline"
+                      >
+                        Prev
+                      </button>
+                    )}
 
+                    <button
+                      onClick={() => setPage(0)}
+                      className={`px-3 py-1 rounded text-sm border ${
+                        page === 0
+                          ? "bg-primary text-primary-foreground"
+                          : "bg-white text-gray-700 hover:bg-gray-100"
+                      }`}
+                    >
+                      1
+                    </button>
+
+                    {page > 3 && <span className="px-1">...</span>}
+
+                    {Array.from({ length: totalPages }, (_, i) => i)
+                      .filter(
+                        i =>
+                          i !== 0 &&
+                          i !== totalPages - 1 &&
+                          Math.abs(i - page) <= 2
+                      )
+                      .map(i => (
                         <button
-                          onClick={() => setDeletedPage(0)}
+                          key={i}
+                          onClick={() => setPage(i)}
                           className={`px-3 py-1 rounded text-sm border ${
-                            deletedPage === 0
-                              ? "bg-primary text-primary-foreground"
-                              : "bg-white text-gray-700 hover:bg-gray-100"
-                          }`}
-                          disabled={deletedLoading}
-                        >
-                          1
-                        </button>
-
-                        {deletedPage > 3 && <span className="px-1">...</span>}
-
-                        {Array.from({ length: deletedTotalPages }, (_, i) => i)
-                          .filter(
-                            i =>
-                              i !== 0 &&
-                              i !== deletedTotalPages - 1 &&
-                              Math.abs(i - deletedPage) <= 2
-                          )
-                          .map(i => (
-                            <button
-                              key={i}
-                              onClick={() => setDeletedPage(i)}
-                              className={`px-3 py-1 rounded text-sm border ${
-                                deletedPage === i
-                                  ? "bg-primary text-primary-foreground"
-                                  : "bg-white text-gray-700 hover:bg-gray-100"
-                              }`}
-                              disabled={deletedLoading}
-                            >
-                              {i + 1}
-                            </button>
-                          ))}
-
-                        {deletedPage < deletedTotalPages - 4 && <span className="px-1">...</span>}
-
-                        {deletedTotalPages > 1 && (
-                          <button
-                            onClick={() => setDeletedPage(deletedTotalPages - 1)}
-                            className={`px-3 py-1 rounded text-sm border ${
-                              deletedPage === deletedTotalPages - 1
-                                ? "bg-primary text-primary-foreground"
-                                : "bg-white text-gray-700 hover:bg-gray-100"
-                            }`}
-                            disabled={deletedLoading}
-                          >
-                            {deletedTotalPages}
-                          </button>
-                        )}
-
-                        {deletedPage < deletedTotalPages - 1 && (
-                          <button
-                            onClick={() => setDeletedPage(deletedPage + 1)}
-                            className="px-3 py-1 text-sm text-primary hover:underline disabled:text-gray-400 disabled:cursor-not-allowed"
-                            disabled={deletedLoading}
-                          >
-                            Next ›
-                          </button>
-                        )}
-                      </>
-                    ) : (
-                      <>
-                        {activePage > 0 && (
-                          <button
-                            onClick={() => setActivePage(activePage - 1)}
-                            className="px-3 py-1 text-sm text-primary hover:underline"
-                          >
-                            ‹ Prev
-                          </button>
-                        )}
-
-                        <button
-                          onClick={() => setActivePage(0)}
-                          className={`px-3 py-1 rounded text-sm border ${
-                            activePage === 0
+                            page === i
                               ? "bg-primary text-primary-foreground"
                               : "bg-white text-gray-700 hover:bg-gray-100"
                           }`}
                         >
-                          1
+                          {i + 1}
                         </button>
+                      ))}
 
-                        {activePage > 3 && <span className="px-1">...</span>}
+                    {page < totalPages - 4 && <span className="px-1">...</span>}
 
-                        {Array.from({ length: activeTotalPages }, (_, i) => i)
-                          .filter(
-                            i =>
-                              i !== 0 &&
-                              i !== activeTotalPages - 1 &&
-                              Math.abs(i - activePage) <= 2
-                          )
-                          .map(i => (
-                            <button
-                              key={i}
-                              onClick={() => setActivePage(i)}
-                              className={`px-3 py-1 rounded text-sm border ${
-                                activePage === i
-                                  ? "bg-primary text-primary-foreground"
-                                  : "bg-white text-gray-700 hover:bg-gray-100"
-                              }`}
-                            >
-                              {i + 1}
-                            </button>
-                          ))}
+                    {totalPages > 1 && (
+                      <button
+                        onClick={() => setPage(totalPages - 1)}
+                        className={`px-3 py-1 rounded text-sm border ${
+                          page === totalPages - 1
+                            ? "bg-primary text-primary-foreground"
+                            : "bg-white text-gray-700 hover:bg-gray-100"
+                        }`}
+                      >
+                        {totalPages}
+                      </button>
+                    )}
 
-                        {activePage < activeTotalPages - 4 && <span className="px-1">...</span>}
-
-                        {activeTotalPages > 1 && (
-                          <button
-                            onClick={() => setActivePage(activeTotalPages - 1)}
-                            className={`px-3 py-1 rounded text-sm border ${
-                              activePage === activeTotalPages - 1
-                                ? "bg-primary text-primary-foreground"
-                                : "bg-white text-gray-700 hover:bg-gray-100"
-                            }`}
-                          >
-                            {activeTotalPages}
-                          </button>
-                        )}
-
-                        {activePage < activeTotalPages - 1 && (
-                          <button
-                            onClick={() => setActivePage(activePage + 1)}
-                            className="px-3 py-1 text-sm text-primary hover:underline"
-                          >
-                            Next ›
-                          </button>
-                        )}
-                      </>
+                    {page < totalPages - 1 && (
+                      <button
+                        onClick={() => setPage(page + 1)}
+                        className="px-3 py-1 text-sm text-primary hover:underline"
+                      >
+                        Next
+                      </button>
                     )}
                   </div>
                 </>
@@ -794,3 +672,4 @@ remote_parallel_map(my_function, list(range(1000)))`;
     </div>
   );
 };
+

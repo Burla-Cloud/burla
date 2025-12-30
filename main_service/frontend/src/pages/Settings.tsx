@@ -274,7 +274,7 @@ const SettingsPage = () => {
 
         <div className="space-y-10 flex-1 min-w-0">{content}</div>
 
-        <div className="text-center text-sm text-gray-500 mt-auto pt-8">
+        <div className="text-center text-sm text-gray-500 mt-10 pb-2">
           Need help? Email me{" "}
           <a href="mailto:jake@burla.dev" className="text-blue-500 hover:underline">
             jake@burla.dev

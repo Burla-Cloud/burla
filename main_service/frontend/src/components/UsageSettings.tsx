@@ -342,20 +342,18 @@
 
 // export default UsageSettings;
 
+// src/pages/Settings/UsageSettings.tsx
+
+// src/pages/Settings/UsageSettings.tsx
+
+// src/pages/Settings/UsageSettings.tsx
+
 import { useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { AlertTriangle } from "lucide-react";
-import {
-  Area,
-  AreaChart,
-  CartesianGrid,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
+import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { getOnDemandHourlyUsd } from "@/types/constants";
 import { useUsage } from "@/contexts/UsageContext";
 
@@ -383,22 +381,11 @@ function fmtMonthLabel(yyyyMm: string) {
   return dt.toLocaleDateString(undefined, { month: "short", year: "numeric", timeZone: UTC_TZ });
 }
 
-function fmtDateTime(ms: number) {
-  const d = new Date(ms);
-  return d.toLocaleString(undefined, {
-    year: "numeric",
-    month: "short",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
 function lastNMonthsUtc(n: number) {
   const out: string[] = [];
   const now = new Date();
   let y = now.getUTCFullYear();
-  let m = now.getUTCMonth() + 1; // 1-12
+  let m = now.getUTCMonth() + 1;
 
   for (let i = 0; i < n; i++) {
     out.push(`${y}-${String(m).padStart(2, "0")}`);
@@ -480,6 +467,7 @@ const UsageSettings = () => {
         totalHours: number;
         cost: number;
         rateMissing: boolean;
+        nodeIds: Set<string>;
       }
     >();
 
@@ -491,12 +479,18 @@ const UsageSettings = () => {
       const h = Number(n.duration_hours || 0);
       const addCost = rate == null ? 0 : h * rate;
 
+      const nodeId = String(n.id || n.instance_name || "");
+
       const existing = map.get(key);
       if (existing) {
         existing.totalHours += h;
         existing.cost += addCost;
         existing.rateMissing = existing.rateMissing || rate == null;
+        if (nodeId) existing.nodeIds.add(nodeId);
       } else {
+        const s = new Set<string>();
+        if (nodeId) s.add(nodeId);
+
         map.set(key, {
           key,
           machine_type: machineType,
@@ -505,19 +499,46 @@ const UsageSettings = () => {
           totalHours: h,
           cost: addCost,
           rateMissing: rate == null,
+          nodeIds: s,
         });
       }
     }
 
     const rows = Array.from(map.values()).map((r) => ({
       ...r,
+      nodeCount: r.nodeIds.size,
       totalHours: Number(r.totalHours.toFixed(2)),
       cost: Number(r.cost.toFixed(2)),
     }));
 
-    rows.sort((a, b) => b.cost - a.cost || b.totalHours - a.totalHours || a.machine_type.localeCompare(b.machine_type));
+    rows.sort(
+      (a, b) =>
+        b.cost - a.cost ||
+        b.totalHours - a.totalHours ||
+        b.nodeCount - a.nodeCount ||
+        a.machine_type.localeCompare(b.machine_type)
+    );
+
     return rows;
   }, [nodes]);
+
+  const machineSummary = useMemo(() => {
+    let totalNodes = 0;
+    let totalHours = 0;
+    let totalCost = 0;
+
+    for (const r of machineRows) {
+      totalNodes += r.nodeCount;
+      totalHours += Number(r.totalHours || 0);
+      totalCost += Number(r.cost || 0);
+    }
+
+    return {
+      totalNodes,
+      totalHours: Number(totalHours.toFixed(2)),
+      totalCost: Number(totalCost.toFixed(2)),
+    };
+  }, [machineRows]);
 
   return (
     <div className="space-y-6 max-w-6xl mx-auto w-full">
@@ -657,37 +678,64 @@ const UsageSettings = () => {
 
               <Card>
                 <CardContent className="pt-6">
-                  <div className="text-sm text-muted-foreground">Machines</div>
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <div className="text-sm text-muted-foreground">Machines</div>
+                      <div className="mt-1 text-xs text-muted-foreground">
+                        Total{" "}
+                        <span className="font-medium text-foreground tabular-nums">
+                          {machineSummary.totalNodes}
+                        </span>{" "}
+                        nodes
+                        <span className="mx-2 text-muted-foreground/50">•</span>
+                        <span className="font-medium text-foreground tabular-nums">
+                          {machineSummary.totalHours.toFixed(2)}
+                        </span>{" "}
+                        hours
+                        <span className="mx-2 text-muted-foreground/50">•</span>
+                        <span className="font-medium text-foreground tabular-nums">
+                          {money(machineSummary.totalCost)}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
 
                   <div className="mt-4 rounded-md border border-border overflow-hidden">
                     <div className="grid grid-cols-12 bg-muted/30 text-xs font-medium text-muted-foreground">
-                      <div className="col-span-6 px-3 py-2">Machine</div>
-                      <div className="col-span-3 px-3 py-2">Type</div>
-                      <div className="col-span-1 px-3 py-2 text-right">Hours</div>
-                      <div className="col-span-2 px-3 py-2 text-right">Cost</div>
+                      <div className="col-span-5 px-4 py-3">Machine</div>
+                      <div className="col-span-2 px-4 py-3">Type</div>
+                      <div className="col-span-1 px-4 py-3 text-right">Nodes</div>
+                      <div className="col-span-2 px-4 py-3 text-right">Hours</div>
+                      <div className="col-span-2 px-4 py-3 text-right">Cost</div>
                     </div>
 
                     {machineRows.length === 0 ? (
-                      <div className="px-3 py-4 text-sm text-muted-foreground">
+                      <div className="px-4 py-4 text-sm text-muted-foreground">
                         No machines found for this month.
                       </div>
                     ) : (
                       machineRows.map((r) => (
-                        <div key={r.key} className="grid grid-cols-12 border-t border-border text-sm items-center">
-                          <div className="col-span-6 px-3 py-2 min-w-0">
-                            <div className="text-xs text-muted-foreground truncate">{r.machine_type}</div>
+                        <div key={r.key} className="grid grid-cols-12 border-t border-border items-center">
+                          <div className="col-span-5 px-4 py-3 min-w-0">
+                            <div className="font-medium text-sm truncate">{r.machine_type}</div>
                           </div>
 
-                          <div className="col-span-3 px-3 py-2">
-                            <div className="text-xs text-muted-foreground">{r.purchaseType}</div>
+                          <div className="col-span-2 px-4 py-3">
+                            <span className="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+                              {r.purchaseType}
+                            </span>
                           </div>
 
-                          <div className="col-span-1 px-3 py-2 text-right">
-                            <div className="text-xs tabular-nums">{r.totalHours.toFixed(2)}</div>
+                          <div className="col-span-1 px-4 py-3 text-right">
+                            <div className="text-sm tabular-nums">{r.nodeCount}</div>
                           </div>
 
-                          <div className="col-span-2 px-3 py-2 text-right">
-                            <div className="font-semibold tabular-nums">{money(r.cost)}</div>
+                          <div className="col-span-2 px-4 py-3 text-right">
+                            <div className="text-sm tabular-nums">{r.totalHours.toFixed(2)}</div>
+                          </div>
+
+                          <div className="col-span-2 px-4 py-3 text-right">
+                            <div className="font-semibold text-sm tabular-nums">{money(r.cost)}</div>
                             {r.rateMissing ? (
                               <div className="text-[10px] text-muted-foreground">missing rate</div>
                             ) : null}

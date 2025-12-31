@@ -348,13 +348,14 @@
 
 // src/pages/Settings/UsageSettings.tsx
 
+// UsageSettings.tsx
 import { useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { AlertTriangle } from "lucide-react";
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { getOnDemandHourlyUsd } from "@/types/constants";
+import { getOnDemandHourlyUsdForMachine, getVmCategory, VM_TYPES, type VmType } from "@/types/constants";
 import { useUsage } from "@/contexts/UsageContext";
 
 function money(n: number) {
@@ -415,7 +416,7 @@ const UsageSettings = () => {
       totalHours += Number(day.total_node_hours || 0);
 
       for (const g of day.groups || []) {
-        const rate = getOnDemandHourlyUsd(g.gcp_region, g.machine_type);
+        const rate = getOnDemandHourlyUsdForMachine(g.machine_type);
         const h = Number(g.total_node_hours || 0);
 
         if (rate == null) {
@@ -441,7 +442,7 @@ const UsageSettings = () => {
       let daySpend = 0;
 
       for (const g of d.groups || []) {
-        const rate = getOnDemandHourlyUsd(g.gcp_region, g.machine_type);
+        const rate = getOnDemandHourlyUsdForMachine(g.machine_type);
         if (rate == null) continue;
         daySpend += Number(g.total_node_hours || 0) * rate;
       }
@@ -456,89 +457,46 @@ const UsageSettings = () => {
     });
   }, [daily]);
 
-  const machineRows = useMemo(() => {
-    const map = new Map<
-      string,
-      {
-        key: string;
-        machine_type: string;
-        spot: boolean;
-        purchaseType: string;
-        totalHours: number;
-        cost: number;
-        rateMissing: boolean;
-        nodeIds: Set<string>;
-      }
-    >();
+  const vmRows = useMemo(() => {
+    const buckets = new Map<VmType, { vm: VmType; totalHours: number; cost: number; rateMissing: boolean }>();
+
+    // initialize stable ordering
+    for (const vm of VM_TYPES) {
+      buckets.set(vm, { vm, totalHours: 0, cost: 0, rateMissing: false });
+    }
 
     for (const n of nodes?.nodes || []) {
       const machineType = String(n.machine_type || "");
-      const key = `${machineType}::${n.spot ? "spot" : "ondemand"}`;
+      const vm = getVmCategory(machineType);
+      if (!vm) continue;
 
-      const rate = getOnDemandHourlyUsd(n.gcp_region, machineType);
       const h = Number(n.duration_hours || 0);
-      const addCost = rate == null ? 0 : h * rate;
+      const rate = getOnDemandHourlyUsdForMachine(machineType);
 
-      const nodeId = String(n.id || n.instance_name || "");
+      const b = buckets.get(vm);
+      if (!b) continue;
 
-      const existing = map.get(key);
-      if (existing) {
-        existing.totalHours += h;
-        existing.cost += addCost;
-        existing.rateMissing = existing.rateMissing || rate == null;
-        if (nodeId) existing.nodeIds.add(nodeId);
+      b.totalHours += h;
+      if (rate == null) {
+        b.rateMissing = true;
       } else {
-        const s = new Set<string>();
-        if (nodeId) s.add(nodeId);
-
-        map.set(key, {
-          key,
-          machine_type: machineType,
-          spot: !!n.spot,
-          purchaseType: n.spot ? "Spot" : "On-demand",
-          totalHours: h,
-          cost: addCost,
-          rateMissing: rate == null,
-          nodeIds: s,
-        });
+        b.cost += h * rate;
       }
     }
 
-    const rows = Array.from(map.values()).map((r) => ({
-      ...r,
-      nodeCount: r.nodeIds.size,
-      totalHours: Number(r.totalHours.toFixed(2)),
-      cost: Number(r.cost.toFixed(2)),
-    }));
+    const rows = Array.from(buckets.values())
+      .map((r) => ({
+        vm: r.vm,
+        totalHours: Number(r.totalHours.toFixed(2)),
+        cost: Number(r.cost.toFixed(2)),
+        rateMissing: r.rateMissing,
+      }))
+      .filter((r) => r.totalHours > 0);
 
-    rows.sort(
-      (a, b) =>
-        b.cost - a.cost ||
-        b.totalHours - a.totalHours ||
-        b.nodeCount - a.nodeCount ||
-        a.machine_type.localeCompare(b.machine_type)
-    );
+    rows.sort((a, b) => b.cost - a.cost || b.totalHours - a.totalHours);
 
     return rows;
   }, [nodes]);
-
-  const machineSummary = useMemo(() => {
-    let totalNodes = 0;
-    let totalHours = 0;
-    let totalCost = 0;
-
-    for (const r of machineRows) {
-      totalNodes += r.nodeCount;
-      totalHours += Number(r.totalHours || 0);
-      totalCost += Number(r.cost || 0);
-    }
-
-    return {
-      totalNodes,
-      totalHours: Number(totalHours.toFixed(2)),
-      totalCost: Number(totalCost.toFixed(2)),
-    };
-  }, [machineRows]);
 
   return (
     <div className="space-y-6 max-w-6xl mx-auto w-full">
@@ -629,7 +587,7 @@ const UsageSettings = () => {
               <Card>
                 <CardContent className="pt-6">
                   <div className="flex items-baseline justify-between gap-3">
-                    <div className="text-sm text-muted-foreground">Spend over time</div>
+                    <div className="text-sm text-muted-foreground">Cumulative spend</div>
                     <div className="text-sm text-muted-foreground">{monthLabel}</div>
                   </div>
 
@@ -678,63 +636,31 @@ const UsageSettings = () => {
 
               <Card>
                 <CardContent className="pt-6">
-                  <div className="flex items-start justify-between gap-4">
-                    <div>
-                      <div className="text-sm text-muted-foreground">Machines</div>
-                      <div className="mt-1 text-xs text-muted-foreground">
-                        Total{" "}
-                        <span className="font-medium text-foreground tabular-nums">
-                          {machineSummary.totalNodes}
-                        </span>{" "}
-                        nodes
-                        <span className="mx-2 text-muted-foreground/50">•</span>
-                        <span className="font-medium text-foreground tabular-nums">
-                          {machineSummary.totalHours.toFixed(2)}
-                        </span>{" "}
-                        hours
-                        <span className="mx-2 text-muted-foreground/50">•</span>
-                        <span className="font-medium text-foreground tabular-nums">
-                          {money(machineSummary.totalCost)}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
+                  <div className="text-sm text-muted-foreground">Compute types</div>
 
                   <div className="mt-4 rounded-md border border-border overflow-hidden">
                     <div className="grid grid-cols-12 bg-muted/30 text-xs font-medium text-muted-foreground">
-                      <div className="col-span-5 px-4 py-3">Machine</div>
-                      <div className="col-span-2 px-4 py-3">Type</div>
-                      <div className="col-span-1 px-4 py-3 text-right">Nodes</div>
-                      <div className="col-span-2 px-4 py-3 text-right">Hours</div>
-                      <div className="col-span-2 px-4 py-3 text-right">Cost</div>
+                      <div className="col-span-6 px-4 py-3">Type</div>
+                      <div className="col-span-3 px-4 py-3 text-right">Hours</div>
+                      <div className="col-span-3 px-4 py-3 text-right">Cost</div>
                     </div>
 
-                    {machineRows.length === 0 ? (
+                    {vmRows.length === 0 ? (
                       <div className="px-4 py-4 text-sm text-muted-foreground">
-                        No machines found for this month.
+                        No usage found for this month.
                       </div>
                     ) : (
-                      machineRows.map((r) => (
-                        <div key={r.key} className="grid grid-cols-12 border-t border-border items-center">
-                          <div className="col-span-5 px-4 py-3 min-w-0">
-                            <div className="font-medium text-sm truncate">{r.machine_type}</div>
+                      vmRows.map((r) => (
+                        <div key={r.vm} className="grid grid-cols-12 border-t border-border items-center">
+                          <div className="col-span-6 px-4 py-3 min-w-0">
+                            <div className="font-medium text-sm truncate">{r.vm}</div>
                           </div>
 
-                          <div className="col-span-2 px-4 py-3">
-                            <span className="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-                              {r.purchaseType}
-                            </span>
-                          </div>
-
-                          <div className="col-span-1 px-4 py-3 text-right">
-                            <div className="text-sm tabular-nums">{r.nodeCount}</div>
-                          </div>
-
-                          <div className="col-span-2 px-4 py-3 text-right">
+                          <div className="col-span-3 px-4 py-3 text-right">
                             <div className="text-sm tabular-nums">{r.totalHours.toFixed(2)}</div>
                           </div>
 
-                          <div className="col-span-2 px-4 py-3 text-right">
+                          <div className="col-span-3 px-4 py-3 text-right">
                             <div className="font-semibold text-sm tabular-nums">{money(r.cost)}</div>
                             {r.rateMissing ? (
                               <div className="text-[10px] text-muted-foreground">missing rate</div>

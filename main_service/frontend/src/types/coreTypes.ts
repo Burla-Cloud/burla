@@ -59,7 +59,7 @@
 //     id?: string;
 //     message: string;
 //     created_at: number;
-//     index?: number | string;
+//     input_index?: number | null;
 //     is_error?: boolean;
 // }
 
@@ -127,7 +127,7 @@ export interface LogEntry {
   id?: string;
   message: string;
   created_at: number;
-  index?: number | null;
+  input_index?: number | null;
   is_error?: boolean;
 }
 

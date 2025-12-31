@@ -86,7 +86,7 @@ class _FirestoreStdout:
         self._flusher_thread.join(timeout=1)
 
     def write(self, msg: str):
-        if not self.input_index:
+        if self.input_index is None:
             raise Exception("please set / change `input_index` on class instance between inputs!")
         if msg.strip():
             timestamp_str = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -356,6 +356,7 @@ def install_pkgs_and_execute_job(
             firestore_formatted_log_msg = {
                 "mapValue": {
                     "fields": {
+                        "input_index": {"integerValue": input_index},
                         "timestamp": {"timestampValue": timestamp_str},
                         "message": {"stringValue": tb_str},
                         "is_error": {"booleanValue": True},

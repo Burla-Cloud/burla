@@ -19,8 +19,15 @@ const PAGE_SIZE = 100;
 const LIMIT_PER_INDEX = 200;
 
 const JobLogs = ({ jobId, jobStatus, nInputs }: JobLogsProps) => {
-  const { getLogs, loadSummary, loadPage, evictToWindow, startLiveStream, closeLiveStream } =
-    useLogsContext();
+  const {
+    getLogs,
+    loadSummary,
+    loadPage,
+    evictToWindow,
+    startLiveStream,
+    closeLiveStream,
+    logsByJobId,
+  } = useLogsContext();
 
   const [selectedIndex, setSelectedIndex] = useState<number>(0);
   const [showFailedOnly, setShowFailedOnly] = useState(false);
@@ -97,13 +104,26 @@ const JobLogs = ({ jobId, jobStatus, nInputs }: JobLogsProps) => {
     return 0;
   }, [nInputs]);
 
+  const availableIndexesFromLogs = useMemo(() => {
+    const state = logsByJobId[jobId];
+    if (!state) return [];
+    return Object.keys(state.byIndex || {})
+      .map((k) => Number(k))
+      .filter((v) => Number.isFinite(v))
+      .sort((a, b) => a - b);
+  }, [jobId, logsByJobId]);
+
+  const hasAnyKnownIndexes =
+    seenIndexes.length > 0 || failedIndexes.length > 0 || availableIndexesFromLogs.length > 0;
+
   const activeIndexList = useMemo(() => {
     // Failed-only affects stepping ONLY, not the displayed label.
     if (showFailedOnly) return failedIndexes;
     if (totalInputs > 0) return Array.from({ length: totalInputs }, (_, i) => i);
     if (seenIndexes.length > 0) return seenIndexes;
+    if (availableIndexesFromLogs.length > 0) return availableIndexesFromLogs;
     return [];
-  }, [showFailedOnly, failedIndexes, totalInputs, seenIndexes]);
+  }, [showFailedOnly, failedIndexes, totalInputs, seenIndexes, availableIndexesFromLogs]);
 
   // Keep selectedIndex valid when lists change
   useEffect(() => {
@@ -126,7 +146,7 @@ const JobLogs = ({ jobId, jobStatus, nInputs }: JobLogsProps) => {
   );
 
   const pageEnd = useMemo(() => {
-    if (maxKnownIndex < 0) return -1;
+    if (maxKnownIndex < 0) return pageStart + PAGE_SIZE - 1;
     return Math.min(pageStart + PAGE_SIZE - 1, maxKnownIndex);
   }, [pageStart, maxKnownIndex]);
 
@@ -157,7 +177,7 @@ const JobLogs = ({ jobId, jobStatus, nInputs }: JobLogsProps) => {
   const logs = useMemo(() => getLogs(jobId, selectedIndex), [getLogs, jobId, selectedIndex]);
 
   const hasAnyIndexedLogs = useMemo(
-    () => logs.some((e: any) => e?.index !== null && e?.index !== undefined),
+    () => logs.some((logEntry: any) => logEntry?.input_index !== null && logEntry?.input_index !== undefined),
     [logs]
   );
 
@@ -193,7 +213,7 @@ const JobLogs = ({ jobId, jobStatus, nInputs }: JobLogsProps) => {
     }
 
     if (logs.length === 0) {
-      const jobHasAnyPerInputLogs = seenIndexes.length > 0 || failedIndexes.length > 0;
+      const jobHasAnyPerInputLogs = hasAnyKnownIndexes;
 
       result.push({
         type: "empty",
@@ -222,7 +242,7 @@ const JobLogs = ({ jobId, jobStatus, nInputs }: JobLogsProps) => {
 
       const id =
         entry.id ??
-        `${createdAt}-${entry.index ?? "na"}-${entry.is_error ? 1 : 0}-${entry.message ?? ""}`;
+        `${createdAt}-${entry.input_index ?? "na"}-${entry.is_error ? 1 : 0}-${entry.message ?? ""}`;
 
       result.push({
         type: "log",
@@ -239,7 +259,7 @@ const JobLogs = ({ jobId, jobStatus, nInputs }: JobLogsProps) => {
   const oldFormatNoPerInput =
     items.length === 1 && items[0]?.type === "empty" && logs.length > 0 && !hasAnyIndexedLogs;
 
-  const jobHasNoLogsAtAll = seenIndexes.length === 0 && failedIndexes.length === 0;
+  const jobHasNoLogsAtAll = !hasAnyKnownIndexes;
 
   const stepperDisabled =
     isPageLoading || activeIndexList.length === 0 || oldFormatNoPerInput || jobHasNoLogsAtAll;

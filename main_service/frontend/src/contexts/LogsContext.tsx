@@ -34,7 +34,7 @@ const LogsContext = createContext<LogsContextType>({
   closeLiveStream: () => {},
 });
 
-const keyFor = (e: LogEntry) => e.id ?? `${e.created_at}-${String(e.index ?? "g")}-${e.message}`;
+const keyFor = (e: LogEntry) => e.id ?? `${e.created_at}-${String(e.input_index ?? "g")}-${e.message}`;
 
 const mergeSortedUnique = (prev: LogEntry[], next: LogEntry[]) => {
   const m = new Map<string, LogEntry>();
@@ -43,11 +43,11 @@ const mergeSortedUnique = (prev: LogEntry[], next: LogEntry[]) => {
   return Array.from(m.values()).sort((a, b) => (a.created_at ?? 0) - (b.created_at ?? 0));
 };
 
-const normalizeIndexKey = (idx: any) => {
-  if (idx === null || idx === undefined) return null;
-  const n = Number(idx);
-  if (!Number.isFinite(n)) return null;
-  return String(Math.trunc(n));
+const normalizeIndexKey = (inputIndex: any) => {
+  if (inputIndex === null || inputIndex === undefined) return null;
+  const parsed = Number(inputIndex);
+  if (!Number.isFinite(parsed)) return null;
+  return String(Math.trunc(parsed));
 };
 
 export const LogsProvider = ({ children }: { children: React.ReactNode }) => {
@@ -121,7 +121,7 @@ export const LogsProvider = ({ children }: { children: React.ReactNode }) => {
           id: x.id,
           message: x.message,
           created_at: x.created_at,
-          index: x.index,
+          input_index: x.input_index,
           is_error: x.is_error,
         }));
 
@@ -132,7 +132,7 @@ export const LogsProvider = ({ children }: { children: React.ReactNode }) => {
             id: x.id,
             message: x.message,
             created_at: x.created_at,
-            index: x.index,
+            input_index: x.input_index,
             is_error: x.is_error,
           }));
         }
@@ -236,12 +236,13 @@ export const LogsProvider = ({ children }: { children: React.ReactNode }) => {
         try {
           const data = JSON.parse(event.data);
 
-          const idxKey = normalizeIndexKey(data.index);
+          const rawIdx = data.input_index ?? null;
+          const idxKey = normalizeIndexKey(rawIdx);
           const entry: LogEntry = {
             id: data.id,
             message: data.message,
             created_at: data.created_at,
-            index: data.index,
+            input_index: rawIdx,
             is_error: data.is_error,
           };
 

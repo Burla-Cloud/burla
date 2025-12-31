@@ -164,10 +164,13 @@ async def shutdown_node(logger: Logger = Depends(get_logger)):
     snapshot = await doc_ref.get()
     if snapshot.exists:
         node_dict = snapshot.to_dict()
+        update_fields = {"status": "DELETED", "ended_at": time()}
+        # TODO: `display_in_dashboard` does nothing and is not needed anymore
         if node_dict.get("status") != "FAILED" and node_dict.get("idle_for_too_long"):
-            await doc_ref.update({"status": "DELETED", "display_in_dashboard": True})
+            update_fields["display_in_dashboard"] = True
         elif node_dict.get("status") != "FAILED":
-            await doc_ref.update({"status": "DELETED", "display_in_dashboard": False})
+            update_fields["display_in_dashboard"] = False
+        await doc_ref.update(update_fields)
 
     # send inputs/results to other nodes if preempted
     try:

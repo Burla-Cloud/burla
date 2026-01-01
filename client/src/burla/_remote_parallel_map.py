@@ -360,7 +360,12 @@ async def _execute_job(
                         if job["status"] == "CANCELED":
                             JOB_CALCELED_MSG = log["message"]
                     else:
-                        spinner_compatible_print(log["message"])
+                        msg = log["message"]
+                        if msg.endswith("\r\n"):
+                            msg = msg[:-2]
+                        elif msg.endswith("\n"):
+                            msg = msg[:-1]
+                        spinner_compatible_print(msg)
                         FIRST_LOG_MESSAGE_PRINTED = True
 
         logs_collection = SYNC_DB.collection("jobs").document(job_id).collection("logs")

@@ -230,7 +230,7 @@ const JobDetails = () => {
 
                 {/* Logs Section */}
                 <div className="flex-1 min-h-0 flex flex-col">
-                    <JobLogs jobId={job.id} jobStatus={job.status} />
+                    <JobLogs jobId={job.id} jobStatus={job.status} nInputs={job.n_inputs} />
                 </div>
             </div>
         </div>

@@ -393,8 +393,8 @@ class Node:
                 -d "$payload" || true
 
             # set status as FAILED
-            status_payload=$(jq -n '{{"fields":{{"status":{{"stringValue":"FAILED"}},"display_in_dashboard":{{"booleanValue":true}}}}}}')
-            curl -sS -o /dev/null -X PATCH "$DB_BASE_URL/nodes/{self.instance_name}?updateMask.fieldPaths=status&updateMask.fieldPaths=display_in_dashboard" \
+            status_payload=$(jq -n --arg ts "$(date +%s)" '{{"fields":{{"status":{{"stringValue":"FAILED"}},"display_in_dashboard":{{"booleanValue":true}},"ended_at":{{"integerValue":$ts}}}}}}')
+            curl -sS -o /dev/null -X PATCH "$DB_BASE_URL/nodes/{self.instance_name}?updateMask.fieldPaths=status&updateMask.fieldPaths=display_in_dashboard&updateMask.fieldPaths=ended_at" \
                 -H "Authorization: Bearer $ACCESS_TOKEN" \
                 -H "Content-Type: application/json" \
                 -d "$status_payload" || true

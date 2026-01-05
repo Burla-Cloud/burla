@@ -65,6 +65,7 @@ class _FirestoreStdout:
 
     def __init__(self, job_id: str):
         self.job_id = job_id
+        self.input_index = None  # Expected that this is set before writing to stdout
         self._buffer = []
         self._buffer_size = 0
         self._last_flush_time = time()
@@ -84,7 +85,9 @@ class _FirestoreStdout:
         self._stop_event.set()
         self._flusher_thread.join(timeout=1)
 
-    def write(self, msg):
+    def write(self, msg: str):
+        if self.input_index is None:
+            raise Exception("please set / change `input_index` on class instance between inputs!")
         if msg.strip():
             timestamp_str = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
             msg_size = len(msg.encode("utf-8")) + 180  # for timestamp and dict overhead
@@ -96,6 +99,7 @@ class _FirestoreStdout:
             firestore_formatted_log_msg = {
                 "mapValue": {
                     "fields": {
+                        "input_index": {"integerValue": self.input_index},
                         "timestamp": {"timestampValue": timestamp_str},
                         "message": {"stringValue": msg},
                     }
@@ -304,6 +308,7 @@ def install_pkgs_and_execute_job(
             continue
 
         is_error = False
+        firestore_stdout.input_index = input_index
         with firestore_stdout:  # <- all stdout sent to firestore (where it's grabbed by client)
             try:
                 if user_defined_function is None:
@@ -351,6 +356,7 @@ def install_pkgs_and_execute_job(
             firestore_formatted_log_msg = {
                 "mapValue": {
                     "fields": {
+                        "input_index": {"integerValue": input_index},
                         "timestamp": {"timestampValue": timestamp_str},
                         "message": {"stringValue": tb_str},
                         "is_error": {"booleanValue": True},

@@ -4,7 +4,7 @@
 Burla makes it trivial to run Python functions on thousands of computers in the cloud.\
 It's a package that only has **one function**:
 
-<figure><img src="https://raw.githubusercontent.com/Burla-Cloud/.github/refs/heads/main/media/main_demo.gif" alt="" style="width:70%" /><figcaption></figcaption></figure>
+<figure><img src="https://raw.githubusercontent.com/Burla-Cloud/.github/refs/heads/main/media/main_demo.gif" alt="" style="width:80%" /><figcaption></figcaption></figure>
 
 This realtime example runs <code>my_function</code> on 1,000 separate computers in one second!
 
@@ -18,7 +18,7 @@ Burla enables anyone, even total beginners, to harness the full power of the clo
 
 Easily monitor workloads, and manage infrastructure from our open-source web dashboard:
 
-<figure><img src="https://raw.githubusercontent.com/Burla-Cloud/.github/refs/heads/main/media/platform_demo.gif" alt="" style="width:70%" /><figcaption></figcaption></figure>
+<figure><img src="https://raw.githubusercontent.com/Burla-Cloud/.github/refs/heads/main/media/platform_demo.gif" alt="" style="width:80%" /><figcaption></figcaption></figure>
 
 ### **How it works:**
 

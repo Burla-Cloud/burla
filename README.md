@@ -6,7 +6,7 @@ It's a package that only has **one function**:
 
 <figure><img src="https://raw.githubusercontent.com/Burla-Cloud/.github/refs/heads/main/media/main_demo.gif" alt="" style="width:70%" /><figcaption></figcaption></figure>
 
-<p align="center">This realtime example runs <code>my_function</code> on 1,000 separate computers in one second!</p>
+This realtime example runs <code>my_function</code> on 1,000 separate computers in one second!
 
 ### The full power of the cloud, in an easy to use, open platform:
 
@@ -77,7 +77,7 @@ results = remote_parallel_map(process_file, files)
 result = remote_parallel_map(combine_results, [results], func_ram=256)
 ```
 
-<p align="center">The above example demonstrates a basic map-reduce operation.</p>
+The above example demonstrates a basic map-reduce operation.
 
 ### Demo:
 

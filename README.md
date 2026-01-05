@@ -1,21 +1,29 @@
 
 ### Run any Python function on 1000 computers in 1 second.
 
-Burla is the simplest way to scale python, it's has one function: `remote_parallel_map`  
-It's open-source, works with GPU's, custom docker containers, and up to 10,000 CPU's at once.
+Burla makes it trivial to run Python functions on thousands of computers in the cloud.\
+It's a package that only has **one function**:
 
 <figure><img src="https://raw.githubusercontent.com/Burla-Cloud/.github/refs/heads/main/media/main_demo.gif" alt="" style="width:70%" /><figcaption></figcaption></figure>
 
-### A data-platform any team can learn in minutes:
+<p align="center">This realtime example runs <code>my_function</code> on 1,000 separate computers in one second!</p>
 
-Scale machine learning systems, or other research efforts without weeks of onboarding or setup.  
-Burla's open-source web platform makes it simple to monitor long running pipelines or training runs.
+### The full power of the cloud, in an easy to use, open platform:
+
+Burla enables anyone, even total beginners, to harness the full power of the cloud:
+
+* **Scalability:** See our [demo](examples/process-2.4tb-of-parquet-files-in-76s.md) where we process 2.4TB in 76s using 10,000 CPUs.
+* **Flexibility:** Runs any Python function, inside any Docker container, on any hardware.
+* **Simplicity:** Burla is just one function, with two required arguments.
+
+Easily monitor workloads, and manage infrastructure from our open-source web dashboard:
 
 <figure><img src="https://raw.githubusercontent.com/Burla-Cloud/.github/refs/heads/main/media/platform_demo.gif" alt="" style="width:70%" /><figcaption></figcaption></figure>
 
 ### **How it works:**
 
-Burla only has one function:
+Burla only has one function: `remote_parallel_map`  \
+When called, it runs the given function, on every input in the given list, each on a separate computer.
 
 ```python
 from burla import remote_parallel_map
@@ -29,11 +37,11 @@ def my_function(my_input):
 return_values = remote_parallel_map(my_function, my_inputs)
 ```
 
-With Burla, running code in the cloud feels the same as coding locally:
+Running code in the cloud with Burla feels the same as coding locally:
 
 * Anything you print appears in your local terminal.
 * Exceptions thrown in your code are thrown on your local machine.
-* Responses are pretty quick, you can call a million simple functions in a couple seconds!
+* Responses are quick, you run a million function calls in a couple seconds!
 
 ### Features:
 
@@ -43,52 +51,47 @@ Burla clusters automatically (and very quickly) install any missing python packa
 
 #### 🐋 Custom Containers
 
-Easily run code in any linux-based Docker container. Public or private, just paste an image URI in the settings, then hit start!
+Easily run code in any Docker container. Public or private, just paste an image URI in the settings, then hit start!
 
 #### 📂 Network Filesystem
 
-Need to get big data into/out of the cluster? Burla automatically mounts a cloud storage bucket to your working directory.
+Need to get big data into/out of the cluster? Burla automatically mounts a cloud storage bucket to `./shared` in every container.
 
 #### ⚙️ Variable Hardware Per-Function
 
 The `func_cpu` and `func_ram` args make it possible to assign more hardware to some functions, and less to others, unlocking new ways to simplify pipelines and architecture.
 
-### Easily create pipelines without special syntax.
 
-Nest `remote_parallel_map` calls to fan code in/out over thousands of machines.\
-Example: Process every record of many files in parallel, then combine results on one big machine.
+### Build scalable data-pipelines using plain Python:
+
+Fan code across thousands of machines, then combine results on one big machine.\
+The network filesystem mounted at `./shared` makes it easy to pass big data between steps.
 
 ```python
 from burla import remote_parallel_map
 
-def process_record(record):
-    # Pretend this does some math per-record!
-    return result
+# Run `process_file` on many small machines
+results = remote_parallel_map(process_file, files)
 
-def process_file(filepath):
-    # load records from disk (network storage)
-    results = remote_parallel_map(process_record, records)
-    # save results back to disk (network storage)
-
-def combine_results(result_filepaths):
-    # load results from disk (network storage), then combine!
-    
-result_filepaths = remote_parallel_map(process_file, filepaths)
-remote_parallel_map(combine_results, [result_filepaths], func_ram=256)
+# Combine results on one big machine
+result = remote_parallel_map(combine_results, [results], func_ram=256)
 ```
 
-### Watch our Demo:
+<p align="center">The above example demonstrates a basic map-reduce operation.</p>
+
+### Demo:
+
 [https://www.youtube.com/watch?v=9d22y_kWjyE](https://www.youtube.com/watch?v=9d22y_kWjyE)
 
-### Try it now
+### Try it out today:
 
-[Sign up here](https://burla.dev/signup) and we'll send you a free managed instance! Compute is on us.  
-If you decide you like it, you can deploy self-hosted Burla (currently Google Cloud only) with just two commands:
+There are two ways to host Burla:
 
-1. `pip install burla`  
-2. `burla install`
-
-See the [Getting Started guide](https://docs.burla.dev/getting-started) for more info.
+1. **In your cloud.**\
+   Burla is open-source, and can be deployed with one command (currently Google-Cloud only).\
+   [Click here](https://docs.burla.dev/get-started#quickstart-self-hosted) to get started with self-hosted Burla.
+2. **In our cloud.**\
+   First $1,000 in compute spend is free, try it now: [https://burla.dev/signup](https://docs.burla.dev/signup)
 
 ***
 

@@ -191,7 +191,7 @@ async def _job_watcher(
             seconds_since_watcher_start = time() - watcher_start_time
             client_never_connected = seconds_since_watcher_start > FIRST_PING_TIMEOUT
 
-        if client_disconnected:
+        if client_disconnected and not is_background_job:
             msg = f"Client disconnected! Last ping recieved {seconds_since_last_ping}s ago."
             logger.log(msg)
         elif client_never_connected:

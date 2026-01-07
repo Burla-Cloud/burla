@@ -602,6 +602,12 @@ def remote_parallel_map(
     start_time = time()
     user_function_error = Event()
 
+    inputs = [(i,) if not isinstance(i, tuple) else i for i in inputs]
+
+    # Short-circuit empty inputs
+    if not inputs:
+        return iter([]) if generator else []
+
     # TODO: rename internally
     background = detach
 
@@ -611,11 +617,6 @@ def remote_parallel_map(
         return function_(*args_tuple)
 
     wrapped_function_.__name__ = function_.__name__
-    inputs = [(i,) if not isinstance(i, tuple) else i for i in inputs]
-
-    # Short-circuit empty inputs
-    if not inputs:
-        return iter([]) if generator else []
 
     # Move below code back into `_execute_job` after above todo is done.
     # Needs to operate on function_.__globals__ which cannot be reassigned -> must be done here.

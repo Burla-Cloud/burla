@@ -615,7 +615,6 @@ def remote_parallel_map(
 
     # Short-circuit empty inputs
     if not inputs:
-        print("EMPTY INPUT, EXITING!")
         return iter([]) if generator else []
 
     # Move below code back into `_execute_job` after above todo is done.

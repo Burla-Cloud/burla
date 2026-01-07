@@ -1,41 +1,39 @@
-import sys
-import pickle
-import json
 import asyncio
+import json
+import pickle
+import sys
 import traceback
-from importlib import metadata
 from asyncio import create_task
-from time import time
-from six import reraise
-from queue import Queue
-from uuid import uuid4
-from typing import Callable, Optional, Union
 from contextlib import AsyncExitStack
-from threading import Thread, Event
+from importlib import metadata
 from pickle import UnpicklingError
-from aiohttp import ClientTimeout
+from queue import Queue
+from threading import Event, Thread
+from time import time
+from typing import Callable, Optional, Union
+from uuid import uuid4
 
 import aiohttp
 import cloudpickle
-from tblib import Traceback
-from google.cloud.firestore import ArrayUnion
-from google.cloud.firestore import FieldFilter
+from aiohttp import ClientError, ClientOSError, ClientTimeout
+from google.cloud.firestore import ArrayUnion, FieldFilter
 from google.cloud.firestore_v1.async_client import AsyncClient
-from yaspin import yaspin, Spinner
-from aiohttp import ClientOSError, ClientError
+from six import reraise
+from tblib import Traceback
+from yaspin import Spinner, yaspin
 
-from burla import __version__, CONFIG_PATH
+from burla import CONFIG_PATH, __version__
 from burla._auth import get_auth_headers
-from burla._background_stuff import upload_inputs, send_alive_pings
+from burla._background_stuff import send_alive_pings, upload_inputs
 from burla._helpers import (
     get_db_clients,
+    get_modules_required_on_remote,
     install_signal_handlers,
-    restore_signal_handlers,
-    parallelism_capacity,
     log_telemetry,
     log_telemetry_async,
+    parallelism_capacity,
+    restore_signal_handlers,
     run_in_subprocess,
-    get_modules_required_on_remote,
 )
 
 # load on import and reuse because this is very slow in big envs
@@ -342,7 +340,7 @@ async def _execute_job(
         msg += f"max_parallelism={max_parallelism}, job_id={job_id}"
         asyncio.create_task(log_telemetry_async(msg, session, project_id=project_id))
 
-        JOB_CALCELED_MSG = ""
+        JOB_CANCELED_MSG = ""
         FIRST_LOG_MESSAGE_PRINTED = False
         # start sending "alive" pings to nodes
         ping_process = await run_in_subprocess(send_alive_pings, job_id)
@@ -350,7 +348,7 @@ async def _execute_job(
 
         # start stdout/stderr stream
         def _on_new_logs_doc(col_snapshot, changes, read_time):
-            nonlocal JOB_CALCELED_MSG
+            nonlocal JOB_CANCELED_MSG
             nonlocal FIRST_LOG_MESSAGE_PRINTED
             for change in changes:
                 for log in change.document.to_dict()["logs"]:
@@ -358,7 +356,7 @@ async def _execute_job(
                     if log.get("is_error"):
                         job = SYNC_DB.collection("jobs").document(job_id).get().to_dict()
                         if job["status"] == "CANCELED":
-                            JOB_CALCELED_MSG = log["message"]
+                            JOB_CANCELED_MSG = log["message"]
                     else:
                         msg = log["message"]
                         if msg.endswith("\r\n"):
@@ -413,7 +411,7 @@ async def _execute_job(
                 try:
                     node_status = pickle.loads(await response.content.read())
                 except UnpicklingError as e:
-                    if not "Memo value not found at index" in str(e):
+                    if "Memo value not found at index" not in str(e):
                         raise e
 
                     job_doc = await job_ref.get()
@@ -476,8 +474,8 @@ async def _execute_job(
             if job_canceled_event.is_set():
                 # if this is set a nice user message was already printed.
                 return
-            if JOB_CALCELED_MSG:
-                raise JobCanceled(f"\n\n{JOB_CALCELED_MSG}\n")
+            if JOB_CANCELED_MSG:
+                raise JobCanceled(f"\n\n{JOB_CANCELED_MSG}\n")
 
             total_parallelism = 0
             all_nodes_empty = True
@@ -590,7 +588,7 @@ def remote_parallel_map(
             If set to False, disables the display of the status indicator/spinner. Defaults to True.
         max_parallelism (int, optional):
             The maximum number of `function_` instances allowed to be running at the same time.
-            Defaults to the number of available CPUs divided by `func_cpu`.
+            Defaults to the number of provided inputs.
 
     Returns:
         List[Any] or Generator[Any, None, None]:
@@ -603,10 +601,12 @@ def remote_parallel_map(
     """
     start_time = time()
     user_function_error = Event()
-    if not inputs and not generator:
-        return []
-    elif not inputs and generator:
-        return iter([])
+
+    inputs = [(i,) if not isinstance(i, tuple) else i for i in inputs]
+
+    # Short-circuit empty inputs
+    if not inputs:
+        return iter([]) if generator else []
 
     # TODO: rename internally
     background = detach
@@ -617,7 +617,6 @@ def remote_parallel_map(
         return function_(*args_tuple)
 
     wrapped_function_.__name__ = function_.__name__
-    inputs = [(i,) if not isinstance(i, tuple) else i for i in inputs]
 
     # Move below code back into `_execute_job` after above todo is done.
     # Needs to operate on function_.__globals__ which cannot be reassigned -> must be done here.

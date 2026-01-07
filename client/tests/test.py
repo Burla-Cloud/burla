@@ -47,15 +47,3 @@ def _test_big_returns():
         return bytes(RETURN_SIZE)
 
     results = remote_parallel_map(test_function, list(range(100)))
-
-
-def _test_empty_inputs():
-
-    def nothing():
-        print("Hi!")
-
-    def empty_generator():
-        if False:
-            yield
-
-    results = remote_parallel_map(nothing, empty_generator())

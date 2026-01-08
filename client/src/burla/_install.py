@@ -14,7 +14,6 @@ from google.api_core.exceptions import NotFound
 from burla import _BURLA_BACKEND_URL, __version__
 from burla._helpers import log_telemetry, run_command, VerboseCalledProcessError
 
-
 _python_version = f"{sys.version_info.major}.{sys.version_info.minor}"
 DEFAULT_CLUSTER_CONFIG = {
     "Nodes": [
@@ -84,9 +83,14 @@ def install():
 
 def _install(spinner):
     log_telemetry("Somebody is running `burla install`!")
-
     _check_gcloud_is_installed(spinner)
+
+    # TODO: re-enable
+    # If I remember correctly this was disabled because in the case that the user is not logged in,
+    # instead of throwing an error, gcloud simple freezes for almost 2 minutes.
+    # I could be wrong I don't fully remember why I commented this out.
     # _check_gcloud_is_logged_in(spinner)
+
     PROJECT_ID = _get_gcloud_GCP_project_id(spinner)
     log_telemetry("Installer has gcloud and is logged in.", project_id=PROJECT_ID)
 
@@ -519,8 +523,11 @@ def _create_firestore_database(spinner, PROJECT_ID):
         spinner.fail("✗")
         raise VerboseCalledProcessError(cmd, result.stderr)
 
-    if not client.collection("cluster_config").document("cluster_config").get().exists:
-        # wait for db to exist
+    try:
+        collection = client.collection("cluster_config")
+        collection.document("cluster_config").set(DEFAULT_CLUSTER_CONFIG)
+    except NotFound as e:
+        # retry until db is ready or 30s
         start = time()
         while True:
             try:

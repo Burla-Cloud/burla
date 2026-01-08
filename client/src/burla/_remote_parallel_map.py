@@ -603,8 +603,6 @@ def remote_parallel_map(
     user_function_error = Event()
 
     inputs = [(i,) if not isinstance(i, tuple) else i for i in inputs]
-
-    # Short-circuit empty inputs
     if not inputs:
         return iter([]) if generator else []
 

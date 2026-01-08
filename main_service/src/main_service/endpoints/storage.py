@@ -1,14 +1,14 @@
 import datetime
-import time
 import tempfile
 import zipfile
 from pathlib import Path
+from time import sleep
 from typing import Any, Callable, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from google.cloud import storage
-from google.api_core.exceptions import GoogleAPIError, NotFound
+from google.api_core.exceptions import GoogleAPIError, NotFound, PermissionDenied
 from google.auth import default, impersonated_credentials
 
 from main_service import PROJECT_ID, DB, get_add_background_task_function
@@ -23,7 +23,20 @@ signing_creds = impersonated_credentials.Credentials(
     target_principal=f"burla-main-service@{PROJECT_ID}.iam.gserviceaccount.com",
     target_scopes=["https://www.googleapis.com/auth/devstorage.read_write"],
 )
-cluster_config = DB.collection("cluster_config").document("cluster_config").get().to_dict()
+
+# When this service is deployed during install (after it's service-account was just created),
+# it sometimes does not have permission to pull this doc yet, but will within ~30s.
+n_retries = 0
+while True:
+    try:
+        cluster_config = DB.collection("cluster_config").document("cluster_config").get().to_dict()
+        break
+    except PermissionDenied as e:
+        if n_retries > 30:
+            raise e
+        n_retries += 1
+        sleep(2)
+
 gcs_client_impersonated = storage.Client(project=project_id, credentials=signing_creds)
 GCS_BUCKET_IMPERSONATED = gcs_client_impersonated.bucket(cluster_config["gcs_bucket_name"])
 

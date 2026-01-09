@@ -155,11 +155,11 @@ class Worker:
                     # echo "Tarball not found, falling back to git..."
                     echo "Tarball DISABLED, falling back to git..."
                     # Ensure git is installed
-                    if ! command -v git >/dev/null 2>&1; then
-                        echo "git not found, installing..."
-                        apt-get update && apt-get install -y git
-                    fi
-                    git clone --depth 1 --filter=blob:none --sparse --branch {__version__} https://github.com/Burla-Cloud/burla.git
+                    # if ! command -v git >/dev/null 2>&1; then
+                    echo "git not found, installing..."
+                    apt-get update && apt-get install -y git ca-certificates
+                    # fi
+                    git clone --depth 1 --branch {__version__} https://github.com/Burla-Cloud/burla.git burla
                     cd burla
                     git sparse-checkout set worker_service
                     cd worker_service

@@ -142,28 +142,17 @@ class Worker:
                     set +e
                 else
                     # try with tarball first because faster
-                    # TODO: fix tarball install, currently throws error:
-                    # ```
-                    # jakezuliani@MacBook-Air scratch % tar -xzf burla.tar.gz
-                    # tar: Error opening archive: Unrecognized archive format
-                    # ```
-                    # if curl -Ls -o burla.tar.gz https://github.com/Burla-Cloud/burla/archive/{__version__}.tar.gz; then
-                    #     echo "Installing from tarball ..."
-                    #     tar -xzf burla.tar.gz
-                    #     cd burla-{__version__}/worker_service
-                    # else
-                    # echo "Tarball not found, falling back to git..."
-                    echo "Tarball DISABLED, falling back to git..."
-                    # Ensure git is installed
-                    if ! command -v git >/dev/null 2>&1; then
-                        echo "git not found, installing..."
-                        apt-get update && apt-get install -y git
+                    if curl -Ls -o burla.tar.gz https://github.com/Burla-Cloud/burla/archive/{__version__}.tar.gz; then
+                        echo "Installing from tarball ..."
+                        tar -xzf burla.tar.gz
+                        cd burla-{__version__}/worker_service
+                    else
+                        echo "Tarball not found, falling back to git..."
+                        # Ensure git is installed
+                        apt-get update && apt-get install -y git ca-certificates
+                        git clone --depth 1 --branch {__version__} https://github.com/Burla-Cloud/burla.git burla
+                        cd burla/worker_service
                     fi
-                    git clone --depth 1 --filter=blob:none --sparse --branch {__version__} https://github.com/Burla-Cloud/burla.git
-                    cd burla
-                    git sparse-checkout set worker_service
-                    cd worker_service
-                    # fi
                     # can only do this with linux host, breaks in dev using macos host :(
                     export UV_CACHE_DIR=/worker_service_python_env/.uv-cache
                     mkdir -p "$UV_CACHE_DIR" /worker_service_python_env

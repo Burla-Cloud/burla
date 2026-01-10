@@ -142,14 +142,10 @@ class Worker:
                     set +e
                 else
                     # try with tarball first because faster
-                    if curl -Ls -o burla.tar.gz https://github.com/Burla-Cloud/burla/archive/1.3.30.tar.gz; then
+                    if curl -Ls -o burla.tar.gz https://github.com/Burla-Cloud/burla/archive/{__version__}.tar.gz; then
                         echo "Installing from tarball ..."
                         tar -xzf burla.tar.gz
-                        cd burla-1.3.30/worker_service
-                    # if curl -Ls -o burla.tar.gz https://github.com/Burla-Cloud/burla/archive/{__version__}.tar.gz; then
-                    #     echo "Installing from tarball ..."
-                    #     tar -xzf burla.tar.gz
-                    #     cd burla-{__version__}/worker_service
+                        cd burla-{__version__}/worker_service
                     else
                         echo "Tarball not found, falling back to git..."
                         # Ensure git is installed

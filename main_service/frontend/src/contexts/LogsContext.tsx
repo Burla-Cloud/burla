@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useCallback, useMemo, useRef, useState } from "react";
+import React, { createContext, useCallback, useContext, useMemo, useRef, useState } from "react";
 import { LogEntry } from "@/types/coreTypes";
 
 type JobLogsState = {
@@ -6,11 +6,22 @@ type JobLogsState = {
   byIndex: Record<string, LogEntry[]>;
 };
 
-type SummaryResp = { failed_indexes: number[]; seen_indexes: number[] };
+type SummaryResp = {
+  failed_indexes: number[];
+  seen_indexes: number[];
+  indexes_with_logs?: number[];
+};
+
+type SummaryOpts = { force?: boolean };
 
 interface LogsContextType {
+  logsByJobId: Record<string, JobLogsState>;
+
   getLogs: (jobId: string, index: number) => LogEntry[];
-  loadSummary: (jobId: string) => Promise<SummaryResp | null>;
+
+  loadSummary: (jobId: string, opts?: SummaryOpts) => Promise<SummaryResp | null>;
+  clearSummaryCache: (jobId: string) => void;
+
   loadPage: (
     jobId: string,
     indexStart: number,
@@ -18,30 +29,23 @@ interface LogsContextType {
     limitPerIndex?: number,
     includeGlobal?: boolean
   ) => Promise<void>;
+
   evictToWindow: (jobId: string, keepStart: number, keepEnd: number, windowPages?: number) => void;
+
   startLiveStream: (jobId: string, index: number, includeGlobal?: boolean) => () => void;
   closeLiveStream: (jobId: string) => void;
-  logsByJobId: Record<string, JobLogsState>;
 }
 
 const LogsContext = createContext<LogsContextType>({
   logsByJobId: {},
   getLogs: () => [],
   loadSummary: async () => null,
+  clearSummaryCache: () => {},
   loadPage: async () => {},
   evictToWindow: () => {},
   startLiveStream: () => () => {},
   closeLiveStream: () => {},
 });
-
-const keyFor = (e: LogEntry) => e.id ?? `${e.created_at}-${String(e.input_index ?? "g")}-${e.message}`;
-
-const mergeSortedUnique = (prev: LogEntry[], next: LogEntry[]) => {
-  const m = new Map<string, LogEntry>();
-  for (const e of prev) m.set(keyFor(e), e);
-  for (const e of next) m.set(keyFor(e), e);
-  return Array.from(m.values()).sort((a, b) => (a.created_at ?? 0) - (b.created_at ?? 0));
-};
 
 const normalizeIndexKey = (inputIndex: any) => {
   if (inputIndex === null || inputIndex === undefined) return null;
@@ -50,38 +54,99 @@ const normalizeIndexKey = (inputIndex: any) => {
   return String(Math.trunc(parsed));
 };
 
+// "same log twice" killer, even if id differs
+const sigFor = (e: LogEntry) =>
+  `${Number(e.created_at ?? 0)}|${String(e.input_index ?? "g")}|${String(e.message ?? "")}`;
+
+const keyFor = (e: LogEntry) => e.id ?? sigFor(e);
+
+// newest first
+const mergeSortedUnique = (prev: LogEntry[], next: LogEntry[]) => {
+  const m = new Map<string, LogEntry>();
+  for (const e of prev) m.set(keyFor(e), e);
+  for (const e of next) m.set(keyFor(e), e);
+
+  return Array.from(m.values()).sort(
+    (a, b) => Number(a.created_at ?? 0) - Number(b.created_at ?? 0)
+  );
+};
+
+const streamKey = (jobId: string, index: number, includeGlobal: boolean) =>
+  `${jobId}::${index}::${includeGlobal ? 1 : 0}`;
+
 export const LogsProvider = ({ children }: { children: React.ReactNode }) => {
   const [logsByJobId, setLogsByJobId] = useState<Record<string, JobLogsState>>({});
 
-  // per-job metadata that should NOT trigger rerenders
+  // per-job caches (no rerenders)
   const loadedPagesRef = useRef<Record<string, Set<string>>>({});
   const inflightPagesRef = useRef<Record<string, Set<string>>>({});
   const summaryCacheRef = useRef<Record<string, SummaryResp>>({});
-
-  const sourcesRef = useRef<Record<string, EventSource | null>>({});
-  const rotateTimersRef = useRef<Record<string, number | undefined>>({});
-  const closingForRotateRef = useRef<Record<string, boolean>>({});
-  const streamRefCountRef = useRef<Record<string, number>>({});
 
   const ensureSets = (jobId: string) => {
     if (!loadedPagesRef.current[jobId]) loadedPagesRef.current[jobId] = new Set();
     if (!inflightPagesRef.current[jobId]) inflightPagesRef.current[jobId] = new Set();
   };
 
+  // SSE keyed by (jobId,index,includeGlobal)
+  const sourcesRef = useRef<Record<string, EventSource | null>>({});
+  const rotateTimersRef = useRef<Record<string, number | undefined>>({});
+  const closingForRotateRef = useRef<Record<string, boolean>>({});
+  const streamRefCountRef = useRef<Record<string, number>>({});
+
+  const closeStreamKey = (k: string) => {
+    const t = rotateTimersRef.current[k];
+    if (t) window.clearTimeout(t);
+    rotateTimersRef.current[k] = undefined;
+
+    sourcesRef.current[k]?.close();
+    sourcesRef.current[k] = null;
+  };
+
+  const closeLiveStream = useCallback((jobId: string) => {
+    const prefix = `${jobId}::`;
+    for (const k of Object.keys(sourcesRef.current)) {
+      if (!k.startsWith(prefix)) continue;
+      streamRefCountRef.current[k] = 0;
+      closeStreamKey(k);
+    }
+  }, []);
+
+  // Full reset for a job
+  const clearSummaryCache = useCallback(
+    (jobId: string) => {
+      delete summaryCacheRef.current[jobId];
+      delete loadedPagesRef.current[jobId];
+      delete inflightPagesRef.current[jobId];
+
+      closeLiveStream(jobId);
+
+      setLogsByJobId((prev) => {
+        if (!prev[jobId]) return prev;
+        const next = { ...prev };
+        delete next[jobId];
+        return next;
+      });
+    },
+    [closeLiveStream]
+  );
+
   const getLogs = useCallback(
     (jobId: string, index: number) => {
       const state = logsByJobId[jobId];
       if (!state) return [];
+
       const idxKey = String(index);
       const global = state.global || [];
       const per = state.byIndex[idxKey] || [];
+
+      // keep newest first in merged output
       return mergeSortedUnique(global, per);
     },
     [logsByJobId]
   );
 
-  const loadSummary = useCallback(async (jobId: string) => {
-    if (summaryCacheRef.current[jobId]) return summaryCacheRef.current[jobId];
+  const loadSummary = useCallback(async (jobId: string, opts?: SummaryOpts) => {
+    if (!opts?.force && summaryCacheRef.current[jobId]) return summaryCacheRef.current[jobId];
 
     try {
       const res = await fetch(`/v1/jobs/${jobId}/logs?summary=true`);
@@ -95,9 +160,17 @@ export const LogsProvider = ({ children }: { children: React.ReactNode }) => {
   }, []);
 
   const loadPage = useCallback(
-    async (jobId: string, indexStart: number, indexEnd: number, limitPerIndex: number = 200, includeGlobal: boolean = true) => {
+    async (
+      jobId: string,
+      indexStart: number,
+      indexEnd: number,
+      limitPerIndex: number = 200,
+      includeGlobal: boolean = true
+    ) => {
       ensureSets(jobId);
-      const pageKey = `${indexStart}-${indexEnd}`;
+
+      // include params so caching never lies
+      const pageKey = `${indexStart}-${indexEnd}-${limitPerIndex}-${includeGlobal ? 1 : 0}`;
 
       if (loadedPagesRef.current[jobId].has(pageKey)) return;
       if (inflightPagesRef.current[jobId].has(pageKey)) return;
@@ -127,20 +200,25 @@ export const LogsProvider = ({ children }: { children: React.ReactNode }) => {
 
         const incomingByIndex: Record<string, LogEntry[]> = {};
         const rawByIndex = json.logs_by_index || {};
+
         for (const [k, arr] of Object.entries(rawByIndex)) {
-          incomingByIndex[String(k)] = (arr as any[]).map((x: any) => ({
+          const list = (arr as any[]).map((x: any) => ({
             id: x.id,
             message: x.message,
             created_at: x.created_at,
             input_index: x.input_index,
             is_error: x.is_error,
           }));
+
+          // never create empty buckets
+          if (list.length > 0) incomingByIndex[String(k)] = list;
         }
 
         setLogsByJobId((prev) => {
           const cur = prev[jobId] || { global: [], byIndex: {} };
 
-          const nextGlobal = includeGlobal ? mergeSortedUnique(cur.global, incomingGlobal) : cur.global;
+          const nextGlobal =
+            includeGlobal && incomingGlobal.length > 0 ? mergeSortedUnique(cur.global, incomingGlobal) : cur.global;
 
           const nextByIndex = { ...cur.byIndex };
           for (const [idxKey, arr] of Object.entries(incomingByIndex)) {
@@ -150,6 +228,7 @@ export const LogsProvider = ({ children }: { children: React.ReactNode }) => {
           return { ...prev, [jobId]: { global: nextGlobal, byIndex: nextByIndex } };
         });
 
+        // mark loaded even if empty, prevents refetch loops
         loadedPagesRef.current[jobId].add(pageKey);
       } finally {
         inflightPagesRef.current[jobId].delete(pageKey);
@@ -161,10 +240,9 @@ export const LogsProvider = ({ children }: { children: React.ReactNode }) => {
   const evictToWindow = useCallback((jobId: string, keepStart: number, keepEnd: number, windowPages: number = 3) => {
     ensureSets(jobId);
 
-    // keep current page plus neighbors
     const pageSize = keepEnd - keepStart + 1;
-
     const half = Math.floor(windowPages / 2);
+
     const allowedRanges: Array<[number, number]> = [];
     for (let i = -half; i <= half; i++) {
       const s = keepStart + i * pageSize;
@@ -174,17 +252,19 @@ export const LogsProvider = ({ children }: { children: React.ReactNode }) => {
     }
 
     const allowedIndex = (idx: number) => allowedRanges.some(([s, e]) => idx >= s && idx <= e);
-    const allowedPageKey = (k: string) => {
-      const [sRaw, eRaw] = k.split("-");
-      const s = Number(sRaw);
-      const e = Number(eRaw);
-      return Number.isFinite(s) && Number.isFinite(e) && allowedRanges.some(([as, ae]) => s === as && e === ae);
+
+    // loadedPages keys include params, so only match start-end prefix
+    const allowedPageKeyPrefix = (k: string) => {
+      const parts = k.split("-");
+      const s = Number(parts[0]);
+      const e = Number(parts[1]);
+      if (!Number.isFinite(s) || !Number.isFinite(e)) return false;
+      return allowedRanges.some(([as, ae]) => s === as && e === ae);
     };
 
-    // critical: if you evict a page, remove it from loadedPages so it can be re-fetched later
     const lp = loadedPagesRef.current[jobId];
     for (const k of Array.from(lp)) {
-      if (!allowedPageKey(k)) lp.delete(k);
+      if (!allowedPageKeyPrefix(k)) lp.delete(k);
     }
 
     setLogsByJobId((prev) => {
@@ -194,7 +274,7 @@ export const LogsProvider = ({ children }: { children: React.ReactNode }) => {
       const nextByIndex: Record<string, LogEntry[]> = {};
       for (const [k, arr] of Object.entries(cur.byIndex)) {
         const idx = Number(k);
-        if (Number.isFinite(idx) && allowedIndex(idx)) nextByIndex[k] = arr;
+        if (Number.isFinite(idx) && allowedIndex(idx) && arr.length > 0) nextByIndex[k] = arr;
       }
 
       return { ...prev, [jobId]: { global: cur.global, byIndex: nextByIndex } };
@@ -202,24 +282,12 @@ export const LogsProvider = ({ children }: { children: React.ReactNode }) => {
   }, []);
 
   const startLiveStream = useCallback((jobId: string, index: number, includeGlobal: boolean = true) => {
+    const k = streamKey(jobId, index, includeGlobal);
     let stopped = false;
-
-    const armRotationTimer = () => {
-      if (rotateTimersRef.current[jobId]) window.clearTimeout(rotateTimersRef.current[jobId]);
-      rotateTimersRef.current[jobId] = window.setTimeout(() => {
-        if (stopped) return;
-        closingForRotateRef.current[jobId] = true;
-        sourcesRef.current[jobId]?.close();
-        window.setTimeout(() => {
-          closingForRotateRef.current[jobId] = false;
-          open();
-        }, 0);
-      }, 55_000);
-    };
 
     const open = () => {
       if (stopped) return;
-      if (sourcesRef.current[jobId]) return;
+      if (sourcesRef.current[k]) return;
 
       const qs = new URLSearchParams({
         stream: "true",
@@ -228,7 +296,20 @@ export const LogsProvider = ({ children }: { children: React.ReactNode }) => {
       });
 
       const source = new EventSource(`/v1/jobs/${jobId}/logs?${qs.toString()}`);
-      sourcesRef.current[jobId] = source;
+      sourcesRef.current[k] = source;
+
+      const armRotationTimer = () => {
+        const t = rotateTimersRef.current[k];
+        if (t) window.clearTimeout(t);
+
+        rotateTimersRef.current[k] = window.setTimeout(() => {
+          if (stopped) return;
+          closingForRotateRef.current[k] = true;
+          closeStreamKey(k);
+          closingForRotateRef.current[k] = false;
+          open();
+        }, 55_000);
+      };
 
       source.onopen = () => armRotationTimer();
 
@@ -238,6 +319,7 @@ export const LogsProvider = ({ children }: { children: React.ReactNode }) => {
 
           const rawIdx = data.input_index ?? null;
           const idxKey = normalizeIndexKey(rawIdx);
+
           const entry: LogEntry = {
             id: data.id,
             message: data.message,
@@ -249,60 +331,49 @@ export const LogsProvider = ({ children }: { children: React.ReactNode }) => {
           setLogsByJobId((prev) => {
             const cur = prev[jobId] || { global: [], byIndex: {} };
 
+            // global log
             if (idxKey === null) {
+              if (!includeGlobal) return prev;
+
+              const merged = mergeSortedUnique(cur.global, [entry]);
               return {
                 ...prev,
-                [jobId]: {
-                  global: mergeSortedUnique(cur.global, [entry]),
-                  byIndex: cur.byIndex,
-                },
+                [jobId]: { global: merged, byIndex: cur.byIndex },
               };
             }
+
+            const existing = cur.byIndex[idxKey] || [];
+            const merged = mergeSortedUnique(existing, [entry]);
 
             return {
               ...prev,
               [jobId]: {
                 global: cur.global,
-                byIndex: {
-                  ...cur.byIndex,
-                  [idxKey]: mergeSortedUnique(cur.byIndex[idxKey] || [], [entry]),
-                },
+                byIndex: { ...cur.byIndex, [idxKey]: merged },
               },
             };
           });
         } catch {
-          // ignore bad SSE payloads
+          // ignore
         }
       };
 
       source.onerror = (err) => {
-        if (closingForRotateRef.current[jobId]) return;
-        if (rotateTimersRef.current[jobId]) window.clearTimeout(rotateTimersRef.current[jobId]);
+        if (closingForRotateRef.current[k]) return;
+        closeStreamKey(k);
         console.error("SSE error (job logs):", err);
       };
     };
 
-    streamRefCountRef.current[jobId] = (streamRefCountRef.current[jobId] || 0) + 1;
+    streamRefCountRef.current[k] = (streamRefCountRef.current[k] || 0) + 1;
     open();
 
     return () => {
       stopped = true;
-      const next = (streamRefCountRef.current[jobId] || 1) - 1;
-      streamRefCountRef.current[jobId] = next;
-
-      if (next <= 0) {
-        if (rotateTimersRef.current[jobId]) window.clearTimeout(rotateTimersRef.current[jobId]);
-        sourcesRef.current[jobId]?.close();
-        sourcesRef.current[jobId] = null;
-      }
+      const next = (streamRefCountRef.current[k] || 1) - 1;
+      streamRefCountRef.current[k] = next;
+      if (next <= 0) closeStreamKey(k);
     };
-  }, []);
-
-  const closeLiveStream = useCallback((jobId: string) => {
-    streamRefCountRef.current[jobId] = 0;
-    if (rotateTimersRef.current[jobId]) window.clearTimeout(rotateTimersRef.current[jobId]);
-    sourcesRef.current[jobId]?.close();
-    sourcesRef.current[jobId] = null;
   }, []);
 
   const value = useMemo(
@@ -310,17 +381,16 @@ export const LogsProvider = ({ children }: { children: React.ReactNode }) => {
       logsByJobId,
       getLogs,
       loadSummary,
+      clearSummaryCache,
       loadPage,
       evictToWindow,
       startLiveStream,
       closeLiveStream,
     }),
-    [logsByJobId, getLogs, loadSummary, loadPage, evictToWindow, startLiveStream, closeLiveStream]
+    [logsByJobId, getLogs, loadSummary, clearSummaryCache, loadPage, evictToWindow, startLiveStream, closeLiveStream]
   );
 
   return <LogsContext.Provider value={value}>{children}</LogsContext.Provider>;
 };
 
 export const useLogsContext = () => useContext(LogsContext);
-
-

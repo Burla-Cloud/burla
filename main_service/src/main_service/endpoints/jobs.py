@@ -203,16 +203,12 @@ async def stream_or_fetch_job_logs(
 
     def _validate_range() -> tuple[int, int]:
         if index_start is None or index_end is None:
-            raise HTTPException(
-                status_code=400, detail="index_start and index_end must both be provided"
-            )
+            raise HTTPException(status_code=400, detail="index_start and index_end must both be provided")
         try:
             s = int(index_start)
             e = int(index_end)
         except (TypeError, ValueError):
-            raise HTTPException(
-                status_code=400, detail="index_start and index_end must be integers"
-            )
+            raise HTTPException(status_code=400, detail="index_start and index_end must be integers")
         if s < 0 or e < 0:
             raise HTTPException(status_code=400, detail="index_start and index_end must be >= 0")
         if e < s:
@@ -222,34 +218,52 @@ async def stream_or_fetch_job_logs(
         return s, e
 
     if summary and not stream:
+        first_log_by_index: dict[int, int] = {}
         first_error_by_index: dict[int, int] = {}
-        seen_indexes: set[int] = set()
 
         async for doc in logs_ref.stream():
             d = doc.to_dict() or {}
             fallback_doc_ts = d.get("timestamp")
 
-            for log in d["logs"]:
-                idx = int(log["input_index"])
-                seen_indexes.add(idx)
+            for log in (d.get("logs", []) or []):
+                raw_idx = log.get("input_index", None)
+                if raw_idx is None:
+                    continue
 
-                is_err = bool(log.get("is_error", False))
-                if is_err:
-                    ts = _ts_to_seconds(log.get("timestamp"), fallback_doc_ts)
-                    prev = first_error_by_index.get(idx)
-                    if prev is None or ts < prev:
+                try:
+                    idx = int(raw_idx)
+                except Exception:
+                    continue
+
+                ts = _ts_to_seconds(log.get("timestamp"), fallback_doc_ts)
+                if ts <= 0:
+                    continue
+
+                prev_first = first_log_by_index.get(idx)
+                if prev_first is None or ts < prev_first:
+                    first_log_by_index[idx] = ts
+
+                if bool(log.get("is_error", False)):
+                    prev_err = first_error_by_index.get(idx)
+                    if prev_err is None or ts < prev_err:
                         first_error_by_index[idx] = ts
 
-        failed_indexes = [i for i, _ in sorted(first_error_by_index.items(), key=lambda kv: kv[1])]
+        # newest first-log first
+        indexes_with_logs = [i for i, _ts in sorted(first_log_by_index.items(), key=lambda kv: kv[1], reverse=True)]
+        failed_indexes = [i for i, _ts in sorted(first_error_by_index.items(), key=lambda kv: kv[1], reverse=True)]
+
         return JSONResponse(
-            {"failed_indexes": failed_indexes, "seen_indexes": sorted(seen_indexes)}
+            {
+                "failed_indexes": failed_indexes,
+                "seen_indexes": sorted(first_log_by_index.keys()),
+                "indexes_with_logs": indexes_with_logs,
+                "first_log_ts_by_index": {str(k): v for k, v in first_log_by_index.items()},
+            }
         )
 
     if stream:
         if _range_mode_active():
-            raise HTTPException(
-                status_code=400, detail="Range loading is not supported in stream mode"
-            )
+            raise HTTPException(status_code=400, detail="Range loading is not supported in stream mode")
 
         queue: asyncio.Queue = asyncio.Queue()
         current_loop = asyncio.get_running_loop()
@@ -265,21 +279,45 @@ async def stream_or_fetch_job_logs(
                 d = change.document.to_dict() or {}
                 fallback_doc_ts = d.get("timestamp")
                 first = None
-                for lg in d["logs"]:
+                for lg in (d.get("logs", []) or []):
                     first = lg
                     break
                 if not first:
                     return datetime.min.replace(tzinfo=timezone.utc)
                 ts_seconds = _ts_to_seconds(first.get("timestamp"), fallback_doc_ts)
-                return datetime.fromtimestamp(ts_seconds, tz=timezone.utc)
+                return datetime.fromtimestamp(ts_seconds or 0, tz=timezone.utc)
 
             for change in sorted(changes, key=sort_key):
                 d = change.document.to_dict() or {}
                 doc_id = change.document.id
                 fallback_doc_ts = d.get("timestamp")
 
-                for i, log in enumerate(d["logs"]):
-                    idx = int(log["input_index"])
+                for i, log in enumerate(d.get("logs", []) or []):
+                    raw_idx = log.get("input_index", None)
+
+                    # global log
+                    if raw_idx is None:
+                        if not include_global:
+                            continue
+                        if index is not None:
+                            # still include global logs when streaming a specific index, if include_global=true
+                            pass
+
+                        event = {
+                            "id": f"{doc_id}:{i}",
+                            "message": log.get("message"),
+                            "created_at": _ts_to_seconds(log.get("timestamp"), fallback_doc_ts),
+                            "input_index": None,
+                            "is_error": bool(log.get("is_error", False)),
+                        }
+                        current_loop.call_soon_threadsafe(queue.put_nowait, event)
+                        continue
+
+                    try:
+                        idx = int(raw_idx)
+                    except Exception:
+                        continue
+
                     if not _matches_single(idx):
                         continue
 
@@ -292,9 +330,7 @@ async def stream_or_fetch_job_logs(
                     }
                     current_loop.call_soon_threadsafe(queue.put_nowait, event)
 
-        logs_ref_sync = (
-            DB.collection("jobs").document(job_id).collection("logs").order_by("timestamp")
-        )
+        logs_ref_sync = DB.collection("jobs").document(job_id).collection("logs").order_by("timestamp")
         watcher = logs_ref_sync.on_snapshot(on_snapshot)
 
         async def event_stream():
@@ -304,7 +340,6 @@ async def stream_or_fetch_job_logs(
                 while True:
                     try:
                         event = await asyncio.wait_for(queue.get(), timeout=2)
-                        print(event)
                         yield f"data: {json.dumps(event)}\n\n"
                     except asyncio.TimeoutError:
                         yield ": keep-alive\n\n"
@@ -319,6 +354,7 @@ async def stream_or_fetch_job_logs(
 
         logs_by_index: dict[int, list] = {i: [] for i in range(s, e + 1)}
         global_logs: list = []
+
         per_index_counts: dict[int, int] = {i: 0 for i in range(s, e + 1)}
         global_count = 0
 
@@ -334,21 +370,40 @@ async def stream_or_fetch_job_logs(
             doc_id = doc.id
             fallback_doc_ts = d.get("timestamp")
 
-            for i, log in enumerate(d["logs"]):
+            for i, log in enumerate(d.get("logs", []) or []):
                 if total_added >= max_total:
                     truncated_total = True
                     break
 
-                idx = int(log["input_index"])
+                raw_idx = log.get("input_index", None)
                 ts = _ts_to_seconds(log.get("timestamp"), fallback_doc_ts)
 
                 payload = {
                     "id": f"{doc_id}:{i}",
                     "message": log.get("message"),
                     "created_at": ts,
-                    "input_index": idx,
+                    "input_index": None,
                     "is_error": bool(log.get("is_error", False)),
                 }
+
+                # global log
+                if raw_idx is None:
+                    if not include_global:
+                        continue
+                    if global_count >= limit:
+                        truncated_global = True
+                        continue
+                    global_logs.append(payload)
+                    global_count += 1
+                    total_added += 1
+                    continue
+
+                try:
+                    idx = int(raw_idx)
+                except Exception:
+                    continue
+
+                payload["input_index"] = idx
 
                 if idx < s or idx > e:
                     continue
@@ -367,6 +422,7 @@ async def stream_or_fetch_job_logs(
         for idx in range(s, e + 1):
             logs_by_index[idx].sort(key=lambda x: x["created_at"])
         global_logs.sort(key=lambda x: x["created_at"])
+
         return JSONResponse(
             {
                 "index_start": s,
@@ -382,8 +438,7 @@ async def stream_or_fetch_job_logs(
             }
         )
 
-    # TODO: I am 90% sure that all code below here is never used in any scenario.
-
+    # single-index fetch (rarely used)
     logs = []
     truncated = False
 
@@ -392,20 +447,42 @@ async def stream_or_fetch_job_logs(
         doc_id = doc.id
         fallback_doc_ts = d.get("timestamp")
 
-        for i, log in enumerate(d["logs"]):
-            idx = int(log["input_index"])
-            if not _matches_single(idx):
-                continue
+        for i, log in enumerate(d.get("logs", []) or []):
+            raw_idx = log.get("input_index", None)
 
-            logs.append(
-                {
-                    "id": f"{doc_id}:{i}",
-                    "message": log.get("message"),
-                    "created_at": _ts_to_seconds(log.get("timestamp"), fallback_doc_ts),
-                    "input_index": idx,
-                    "is_error": bool(log.get("is_error", False)),
-                }
-            )
+            if raw_idx is None:
+                if not include_global:
+                    continue
+                if index is not None:
+                    # still allow global logs even in single-index mode if include_global=true
+                    pass
+                logs.append(
+                    {
+                        "id": f"{doc_id}:{i}",
+                        "message": log.get("message"),
+                        "created_at": _ts_to_seconds(log.get("timestamp"), fallback_doc_ts),
+                        "input_index": None,
+                        "is_error": bool(log.get("is_error", False)),
+                    }
+                )
+            else:
+                try:
+                    idx = int(raw_idx)
+                except Exception:
+                    continue
+
+                if not _matches_single(idx):
+                    continue
+
+                logs.append(
+                    {
+                        "id": f"{doc_id}:{i}",
+                        "message": log.get("message"),
+                        "created_at": _ts_to_seconds(log.get("timestamp"), fallback_doc_ts),
+                        "input_index": idx,
+                        "is_error": bool(log.get("is_error", False)),
+                    }
+                )
 
             if len(logs) >= limit:
                 truncated = True
@@ -415,6 +492,4 @@ async def stream_or_fetch_job_logs(
             break
 
     logs.sort(key=lambda x: x["created_at"])
-    return JSONResponse(
-        {"logs": logs, "input_index": index, "limit": limit, "truncated": truncated}
-    )
+    return JSONResponse({"logs": logs, "input_index": index, "limit": limit, "truncated": truncated})

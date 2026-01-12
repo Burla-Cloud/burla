@@ -1,4 +1,3 @@
-
 import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import { useLogsContext } from "@/contexts/LogsContext";
 import { VariableSizeList as List } from "react-window";
@@ -7,7 +6,6 @@ import { Switch } from "@/components/ui/switch";
 interface JobLogsProps {
   jobId: string;
   jobStatus?: string;
-  nInputs?: number;
 }
 
 type RowItem =
@@ -15,38 +13,42 @@ type RowItem =
   | { type: "empty"; key: string; label: string }
   | { type: "log"; key: string; id: string; createdAt: number; message: string };
 
-const PAGE_SIZE = 100;
+type LogGroup = {
+  inputIndex: number;
+  sortKey: number;
+};
+
 const LIMIT_PER_INDEX = 200;
+const SUMMARY_POLL_MS = 4000;
 
-const JobLogs = ({ jobId, jobStatus, nInputs }: JobLogsProps) => {
-  const {
-    getLogs,
-    loadSummary,
-    loadPage,
-    evictToWindow,
-    startLiveStream,
-    closeLiveStream,
-    logsByJobId,
-  } = useLogsContext();
+const JobLogs = ({ jobId, jobStatus }: JobLogsProps) => {
+  const { getLogs, loadSummary, clearSummaryCache, loadPage, evictToWindow, startLiveStream, closeLiveStream } =
+    useLogsContext();
 
-  const [selectedIndex, setSelectedIndex] = useState<number>(0);
   const [showFailedOnly, setShowFailedOnly] = useState(false);
-
   const [failedIndexes, setFailedIndexes] = useState<number[]>([]);
-  const [seenIndexes, setSeenIndexes] = useState<number[]>([]);
+  const [groups, setGroups] = useState<LogGroup[]>([]);
+  const [selectedPos, setSelectedPos] = useState(0);
 
-  const [isPageLoading, setIsPageLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(true);
 
   const [hasAutoScrolled, setHasAutoScrolled] = useState(false);
   const [windowWidth, setWindowWidth] = useState(window.innerWidth);
 
-  const listRef = useRef<List>(null);
-  const containerRef = useRef<HTMLDivElement | null>(null);
-
   const [listHeight, setListHeight] = useState<number>(300);
   const [hasMeasuredContainer, setHasMeasuredContainer] = useState<boolean>(false);
 
+  const [hasNewGroups, setHasNewGroups] = useState(false);
+  const pendingOrderedIndexesRef = useRef<number[] | null>(null);
+  const pendingFailedIndexesRef = useRef<number[] | null>(null);
+
+  const listRef = useRef<List>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+
   const sizeMapRef = useRef<Record<string, number>>({});
+
+  // hard reset on job change
+  const lastJobIdRef = useRef<string>("");
 
   const setSizeForKey = useCallback((key: string, size: number, fromIndex: number) => {
     if (sizeMapRef.current[key] !== size) {
@@ -55,28 +57,151 @@ const JobLogs = ({ jobId, jobStatus, nInputs }: JobLogsProps) => {
     }
   }, []);
 
-  // Load summary once per job
+  const failedSet = useMemo(() => new Set(failedIndexes), [failedIndexes]);
+
+  const activeGroups = useMemo(() => {
+    if (!showFailedOnly) return groups;
+    return groups.filter((g) => failedSet.has(g.inputIndex));
+  }, [groups, showFailedOnly, failedSet]);
+
+  const jobHasNoLogsAtAll = activeGroups.length === 0;
+
+  // keep selectedPos valid
+  useEffect(() => {
+    if (activeGroups.length === 0) {
+      setSelectedPos(0);
+      return;
+    }
+    if (selectedPos >= activeGroups.length) setSelectedPos(0);
+  }, [activeGroups.length, selectedPos]);
+
+  const selectedInputIndex = useMemo(() => {
+    if (activeGroups.length === 0) return 0;
+    return activeGroups[Math.max(0, Math.min(selectedPos, activeGroups.length - 1))].inputIndex;
+  }, [activeGroups, selectedPos]);
+
+  const applySummaryToGroups = useCallback((ordered: number[] | undefined, failed: number[] | undefined) => {
+    const safeOrdered = (ordered || []).map(Number).filter(Number.isFinite);
+    const safeFailed = (failed || []).map(Number).filter(Number.isFinite);
+
+    setFailedIndexes(safeFailed);
+
+    // only include calls that actually have logs, ordered newest-first
+    const nextGroups: LogGroup[] = safeOrdered.map((idx, pos) => ({
+      inputIndex: idx,
+      sortKey: safeOrdered.length - pos,
+    }));
+
+    setGroups(nextGroups);
+
+    if (safeFailed.length === 0) setShowFailedOnly(false);
+
+    // always jump to Call 1
+    setSelectedPos(0);
+  }, []);
+
+  // initial load summary (forced) + ALWAYS start at Call 1 for new job
   useEffect(() => {
     let cancelled = false;
+
     (async () => {
-      const s = await loadSummary(jobId);
-      if (cancelled) return;
+      const prevJobId = lastJobIdRef.current;
+      const isNewJob = prevJobId !== jobId;
+      lastJobIdRef.current = jobId;
 
-      const failed = (s?.failed_indexes || []).slice().sort((a, b) => a - b);
-      const seen = (s?.seen_indexes || []).slice().sort((a, b) => a - b);
+      setIsLoading(true);
+      setHasNewGroups(false);
+      pendingOrderedIndexesRef.current = null;
+      pendingFailedIndexesRef.current = null;
 
-      setFailedIndexes(failed);
-      setSeenIndexes(seen);
+      if (isNewJob && prevJobId) {
+        closeLiveStream(prevJobId);
+      }
 
-      if (failed.length === 0) setShowFailedOnly(false);
+      if (isNewJob) {
+        setShowFailedOnly(false);
+        setSelectedPos(0);
+        sizeMapRef.current = {};
+        listRef.current?.resetAfterIndex(0, true);
+        setHasAutoScrolled(false);
+      }
+
+      clearSummaryCache(jobId);
+
+      try {
+        const s = await loadSummary(jobId, { force: true });
+        if (cancelled) return;
+        applySummaryToGroups(s?.indexes_with_logs, s?.failed_indexes);
+      } finally {
+        if (!cancelled) setIsLoading(false);
+      }
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [jobId, loadSummary]);
+  }, [jobId, loadSummary, clearSummaryCache, applySummaryToGroups, closeLiveStream]);
 
-  // Resize plumbing
+  // poll summary while RUNNING/FAILED and show refresh button if new indexes appear OR failed indexes change
+  useEffect(() => {
+    const shouldPoll = jobStatus === "RUNNING" || jobStatus === "FAILED";
+    if (!shouldPoll) return;
+
+    let cancelled = false;
+
+    const tick = async () => {
+      try {
+        const s = await loadSummary(jobId, { force: true });
+        if (cancelled) return;
+
+        const incoming = (s?.indexes_with_logs ?? s?.seen_indexes ?? []).map(Number).filter(Number.isFinite);
+        const incomingFailed = (s?.failed_indexes ?? []).map(Number).filter(Number.isFinite);
+
+        const current = groups.map((g) => g.inputIndex);
+        const currentSet = new Set(current);
+
+        const hasNewIndexes = incoming.some((idx) => !currentSet.has(idx));
+
+        const failedChanged =
+          incomingFailed.length !== failedIndexes.length || incomingFailed.some((x) => !failedSet.has(x));
+
+        if (hasNewIndexes || failedChanged) {
+          pendingOrderedIndexesRef.current = incoming;
+          pendingFailedIndexesRef.current = incomingFailed;
+          setHasNewGroups(true);
+        }
+      } catch {
+        // ignore
+      }
+    };
+
+    const id = window.setInterval(tick, SUMMARY_POLL_MS);
+    tick();
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [jobId, jobStatus, loadSummary, groups, failedIndexes, failedSet]);
+
+  const onRefreshNewGroups = useCallback(async () => {
+    setHasNewGroups(false);
+
+    const pendingOrdered = pendingOrderedIndexesRef.current;
+    const pendingFailed = pendingFailedIndexesRef.current;
+
+    if (pendingOrdered && pendingOrdered.length > 0) {
+      applySummaryToGroups(pendingOrdered, pendingFailed || []);
+      pendingOrderedIndexesRef.current = null;
+      pendingFailedIndexesRef.current = null;
+      return;
+    }
+
+    const s = await loadSummary(jobId, { force: true });
+    applySummaryToGroups(s?.indexes_with_logs, s?.failed_indexes);
+  }, [jobId, loadSummary, applySummaryToGroups]);
+
+  // resize plumbing
   useEffect(() => {
     const updateWidth = () => setWindowWidth(window.innerWidth);
     window.addEventListener("resize", updateWidth);
@@ -99,96 +224,42 @@ const JobLogs = ({ jobId, jobStatus, nInputs }: JobLogsProps) => {
     };
   }, []);
 
-  const totalInputs = useMemo(() => {
-    if (typeof nInputs === "number" && nInputs > 0) return nInputs;
-    return 0;
-  }, [nInputs]);
-
-  const availableIndexesFromLogs = useMemo(() => {
-    const state = logsByJobId[jobId];
-    if (!state) return [];
-    return Object.keys(state.byIndex || {})
-      .map((k) => Number(k))
-      .filter((v) => Number.isFinite(v))
-      .sort((a, b) => a - b);
-  }, [jobId, logsByJobId]);
-
-  const hasAnyKnownIndexes =
-    seenIndexes.length > 0 || failedIndexes.length > 0 || availableIndexesFromLogs.length > 0;
-
-  const activeIndexList = useMemo(() => {
-    // Failed-only affects stepping ONLY, not the displayed label.
-    if (showFailedOnly) return failedIndexes;
-    if (totalInputs > 0) return Array.from({ length: totalInputs }, (_, i) => i);
-    if (seenIndexes.length > 0) return seenIndexes;
-    if (availableIndexesFromLogs.length > 0) return availableIndexesFromLogs;
-    return [];
-  }, [showFailedOnly, failedIndexes, totalInputs, seenIndexes, availableIndexesFromLogs]);
-
-  // Keep selectedIndex valid when lists change
+  // Load only the selected inputIndex page
   useEffect(() => {
-    if (activeIndexList.length === 0) {
-      setSelectedIndex(0);
-      return;
-    }
-    if (!activeIndexList.includes(selectedIndex)) setSelectedIndex(activeIndexList[0]);
-  }, [activeIndexList, selectedIndex]);
-
-  const maxKnownIndex = useMemo(() => {
-    if (totalInputs > 0) return totalInputs - 1;
-    if (activeIndexList.length > 0) return Math.max(...activeIndexList);
-    return -1;
-  }, [totalInputs, activeIndexList]);
-
-  const pageStart = useMemo(
-    () => Math.floor(Math.max(0, selectedIndex) / PAGE_SIZE) * PAGE_SIZE,
-    [selectedIndex]
-  );
-
-  const pageEnd = useMemo(() => {
-    if (maxKnownIndex < 0) return pageStart + PAGE_SIZE - 1;
-    return Math.min(pageStart + PAGE_SIZE - 1, maxKnownIndex);
-  }, [pageStart, maxKnownIndex]);
-
-  // Load current page and keep a small window cached
-  useEffect(() => {
-    if (pageEnd < pageStart || pageEnd < 0) {
-      setIsPageLoading(false);
-      return;
-    }
+    if (jobHasNoLogsAtAll) return;
 
     let cancelled = false;
     (async () => {
-      setIsPageLoading(true);
+      setIsLoading(true);
       try {
-        await loadPage(jobId, pageStart, pageEnd, LIMIT_PER_INDEX, true);
-        evictToWindow(jobId, pageStart, pageEnd, 3);
+        await loadPage(jobId, selectedInputIndex, selectedInputIndex, LIMIT_PER_INDEX, true);
+        evictToWindow(jobId, selectedInputIndex, selectedInputIndex, 3);
       } finally {
-        if (!cancelled) setIsPageLoading(false);
+        if (!cancelled) setIsLoading(false);
       }
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [jobId, pageStart, pageEnd, loadPage, evictToWindow]);
+  }, [jobId, selectedInputIndex, jobHasNoLogsAtAll, loadPage, evictToWindow]);
 
-  // Logs for current index
-  const logs = useMemo(() => getLogs(jobId, selectedIndex), [getLogs, jobId, selectedIndex]);
+  const logs = useMemo(() => getLogs(jobId, selectedInputIndex), [getLogs, jobId, selectedInputIndex]);
 
-  const hasAnyIndexedLogs = useMemo(
-    () => logs.some((logEntry: any) => logEntry?.input_index !== null && logEntry?.input_index !== undefined),
+  const indexedLogs = useMemo(
+    () => logs.filter((e: any) => e?.input_index !== null && e?.input_index !== undefined),
+    [logs]
+  );
+  const globalLogs = useMemo(
+    () => logs.filter((e: any) => e?.input_index === null || e?.input_index === undefined),
     [logs]
   );
 
+  const showOnlyGlobal = indexedLogs.length === 0 && globalLogs.length > 0;
+
   const formatDateLabel = (tsSeconds: number) => {
     const d = new Date(tsSeconds * 1000);
-    return d.toLocaleDateString("en-US", {
-      weekday: "long",
-      month: "long",
-      day: "numeric",
-      year: "numeric",
-    });
+    return d.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" });
   };
 
   const getDateKey = (tsSeconds: number) => {
@@ -199,50 +270,47 @@ const JobLogs = ({ jobId, jobStatus, nInputs }: JobLogsProps) => {
     return `${y}-${m}-${da}`;
   };
 
+  const formatTime = (ts: number) => {
+    const date = new Date(ts * 1000);
+    return date.toLocaleTimeString("en-US", {
+      hour: "numeric",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: true,
+    });
+  };
+
   const items: RowItem[] = useMemo(() => {
     const result: RowItem[] = [];
 
-    // Logs exist but no per-input indexing (older format / global-only)
-    if (logs.length > 0 && !hasAnyIndexedLogs) {
-      result.push({
-        type: "empty",
-        key: "no-index",
-        label: "Logs are not available",
-      });
+    if (jobHasNoLogsAtAll) {
+      result.push({ type: "empty", key: "empty-job", label: "This job produced no log output" });
       return result;
     }
 
-    if (logs.length === 0) {
-      const jobHasAnyPerInputLogs = hasAnyKnownIndexes;
+    const chosen = showOnlyGlobal ? globalLogs : indexedLogs;
 
-      result.push({
-        type: "empty",
-        key: "empty",
-        label: jobHasAnyPerInputLogs
-          ? `No logs for input ${selectedIndex + 1}`
-          : "This job produced no log output",
-      });
+    if (chosen.length === 0) {
+      result.push({ type: "empty", key: "empty", label: isLoading ? "Loading logs…" : "No log output" });
       return result;
     }
+
+    // inside a call, render oldest to newest (newest ends at bottom)
+    const ordered = [...chosen].sort((a: any, b: any) => Number(a?.created_at ?? 0) - Number(b?.created_at ?? 0));
 
     let lastDateKey: string | null = null;
 
-    for (const entry of logs as any[]) {
-      const createdAt = entry.created_at ?? 0;
+    for (const entry of ordered as any[]) {
+      const createdAt = Number(entry.created_at ?? 0);
       const dateKey = getDateKey(createdAt);
 
       if (lastDateKey !== dateKey) {
-        result.push({
-          type: "divider",
-          key: `divider-${dateKey}`,
-          label: formatDateLabel(createdAt),
-        });
+        result.push({ type: "divider", key: `divider-${dateKey}`, label: formatDateLabel(createdAt) });
         lastDateKey = dateKey;
       }
 
       const id =
-        entry.id ??
-        `${createdAt}-${entry.input_index ?? "na"}-${entry.is_error ? 1 : 0}-${entry.message ?? ""}`;
+        entry.id ?? `${createdAt}-${entry.input_index ?? "g"}-${entry.is_error ? 1 : 0}-${entry.message ?? ""}`;
 
       result.push({
         type: "log",
@@ -254,57 +322,36 @@ const JobLogs = ({ jobId, jobStatus, nInputs }: JobLogsProps) => {
     }
 
     return result;
-  }, [logs, hasAnyIndexedLogs, selectedIndex, seenIndexes.length, failedIndexes.length]);
+  }, [jobHasNoLogsAtAll, isLoading, indexedLogs, globalLogs, showOnlyGlobal]);
 
-  const oldFormatNoPerInput =
-    items.length === 1 && items[0]?.type === "empty" && logs.length > 0 && !hasAnyIndexedLogs;
-
-  const jobHasNoLogsAtAll = !hasAnyKnownIndexes;
-
-  const stepperDisabled =
-    isPageLoading || activeIndexList.length === 0 || oldFormatNoPerInput || jobHasNoLogsAtAll;
+  const stepperDisabled = isLoading || jobHasNoLogsAtAll || showOnlyGlobal;
 
   const goPrev = () => {
     if (stepperDisabled) return;
-    const pos = activeIndexList.indexOf(selectedIndex);
-    const nextPos = pos <= 0 ? activeIndexList.length - 1 : pos - 1;
-    setSelectedIndex(activeIndexList[nextPos]);
+    setSelectedPos((p) => (p <= 0 ? activeGroups.length - 1 : p - 1));
   };
 
   const goNext = () => {
     if (stepperDisabled) return;
-    const pos = activeIndexList.indexOf(selectedIndex);
-    const nextPos = pos === -1 || pos === activeIndexList.length - 1 ? 0 : pos + 1;
-    setSelectedIndex(activeIndexList[nextPos]);
+    setSelectedPos((p) => (p >= activeGroups.length - 1 ? 0 : p + 1));
   };
 
-  // Stream logs for current index while RUNNING
+  // Stream logs for current selected inputIndex while RUNNING
   useEffect(() => {
-    if (jobStatus === "RUNNING") {
-      const stop = startLiveStream(jobId, selectedIndex, true);
+    if (jobStatus === "RUNNING" && !jobHasNoLogsAtAll) {
+      const stop = startLiveStream(jobId, selectedInputIndex, true);
       return () => stop();
     }
-
     closeLiveStream(jobId);
     return () => {};
-  }, [jobId, jobStatus, selectedIndex, startLiveStream, closeLiveStream]);
+  }, [jobId, jobStatus, selectedInputIndex, jobHasNoLogsAtAll, startLiveStream, closeLiveStream]);
 
-  // Reset react-window sizing on index/toggle changes
+  // Reset react-window sizing when view changes
   useEffect(() => {
     sizeMapRef.current = {};
     listRef.current?.resetAfterIndex(0, true);
     setHasAutoScrolled(false);
-  }, [jobId, selectedIndex, showFailedOnly]);
-
-  const formatTime = (ts: number) => {
-    const date = new Date(ts * 1000);
-    return date.toLocaleTimeString("en-US", {
-      hour: "numeric",
-      minute: "2-digit",
-      second: "2-digit",
-      hour12: true,
-    });
-  };
+  }, [jobId, selectedPos, showFailedOnly, showOnlyGlobal]);
 
   const getItemSize = useCallback(
     (index: number) => {
@@ -317,6 +364,7 @@ const JobLogs = ({ jobId, jobStatus, nInputs }: JobLogsProps) => {
     [items]
   );
 
+  // Inside a call, newest should be at bottom. Scroll to bottom once per view.
   useEffect(() => {
     if (!hasMeasuredContainer) return;
     if (items.length === 0) return;
@@ -331,9 +379,7 @@ const JobLogs = ({ jobId, jobStatus, nInputs }: JobLogsProps) => {
         <div className="flex items-center justify-between mb-3">
           <h2 className="text-lg font-semibold text-primary">Logs</h2>
         </div>
-        <div className="text-gray-500 italic text-sm text-center p-4">
-          Logs are hidden on small screens.
-        </div>
+        <div className="text-gray-500 italic text-sm text-center p-4">Logs are hidden on small screens.</div>
       </div>
     );
   }
@@ -343,91 +389,94 @@ const JobLogs = ({ jobId, jobStatus, nInputs }: JobLogsProps) => {
       ? "h-8 w-8 grid place-items-center rounded-md border border-gray-200 bg-white opacity-50 cursor-default"
       : "h-8 w-8 grid place-items-center rounded-md border border-gray-200 bg-white hover:bg-gray-50 active:bg-gray-100";
 
-  // Always show Input X of Y (even when failed-only is on)
-  const actualInputLabel = useMemo(() => {
-    const total = totalInputs || (maxKnownIndex >= 0 ? maxKnownIndex + 1 : 0);
-    const actual = selectedIndex + 1;
-    return total > 0 ? `Input ${actual} of ${total}` : `Input ${actual}`;
-  }, [selectedIndex, totalInputs, maxKnownIndex]);
+  const headerLabel = useMemo(() => {
+    if (activeGroups.length === 0) return "Calls";
+    return `Call ${selectedPos + 1} of ${activeGroups.length}`;
+  }, [activeGroups.length, selectedPos]);
 
   const failedCount = failedIndexes.length;
 
-  // FIX: keep red the same regardless of toggle, optionally fade when disabled
   const failedPillClass =
     failedCount === 0
       ? "border-gray-200 bg-white text-gray-700"
       : stepperDisabled
-        ? "border-red-200 bg-red-50 text-red-400 opacity-60"
-        : "border-red-200 bg-red-50 text-red-700";
+      ? "border-red-200 bg-red-50 text-red-400 opacity-60"
+      : "border-red-200 bg-red-50 text-red-700";
+
+  const refreshPillClass = stepperDisabled
+    ? "h-8 px-3 rounded-full border border-gray-200 bg-gray-50 text-xs text-gray-400 cursor-default"
+    : "h-8 px-3 rounded-full border border-blue-200 bg-blue-50 text-xs text-blue-700 hover:bg-blue-100";
 
   return (
     <div className="mt-4 mb-4 flex flex-col flex-1 min-h-0">
       <div className="flex items-center justify-between mb-3">
         <h2 className="text-lg font-semibold text-primary">Logs</h2>
 
-        <div className="flex items-center">
-          <div className="flex items-center gap-3 rounded-full border border-gray-200 bg-gray-50 px-3 py-2 shadow-sm">
-            <span className="text-sm text-gray-800 tabular-nums whitespace-nowrap">
-              {actualInputLabel}
-            </span>
+        <div className="flex items-center gap-3 rounded-full border border-gray-200 bg-gray-50 px-3 py-2 shadow-sm">
+          {hasNewGroups ? (
+            <button
+              type="button"
+              onClick={onRefreshNewGroups}
+              disabled={stepperDisabled}
+              className={refreshPillClass}
+              title="New logs exist. Click to refresh the call list."
+            >
+              Refresh: new logs
+            </button>
+          ) : null}
 
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={goPrev}
-                disabled={stepperDisabled}
-                className={iconBtnClass(stepperDisabled)}
-                aria-label="Previous input"
-                title="Previous"
-              >
-                <span className="text-sm">{`<`}</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={goNext}
-                disabled={stepperDisabled}
-                className={iconBtnClass(stepperDisabled)}
-                aria-label="Next input"
-                title="Next"
-              >
-                <span className="text-sm">{`>`}</span>
-              </button>
-            </div>
-
-            <div className="h-6 w-px bg-gray-200" aria-hidden="true" />
-
-            <label className="flex items-center gap-2 text-sm text-gray-700 select-none">
-              <Switch
-                checked={showFailedOnly}
-                onCheckedChange={(checked) => {
-                  setShowFailedOnly(checked);
-
-                  if (checked) {
-                    if (failedIndexes.length > 0) setSelectedIndex(failedIndexes[0]);
-                  } else {
-                    // FIX: when turning off failed-only, go back to Input 1
-                    setSelectedIndex(0);
-                  }
-                }}
-                disabled={failedCount === 0 || stepperDisabled}
-                className="scale-75 origin-left disabled:cursor-default"
-              />
-
-              <span className="whitespace-nowrap text-muted-foreground">Failed only</span>
-
-              <span
-                className={`ml-1 inline-flex items-center rounded-full border px-2.5 py-1 text-xs tabular-nums ${failedPillClass}`}
-              >
-                {failedCount}
-              </span>
-            </label>
+          <div className="flex flex-col leading-tight">
+            <span className="text-sm text-gray-800 tabular-nums whitespace-nowrap">{headerLabel}</span>
           </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={goPrev}
+              disabled={stepperDisabled}
+              className={iconBtnClass(stepperDisabled)}
+              title="Previous"
+            >
+              <span className="text-sm">{`<`}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={goNext}
+              disabled={stepperDisabled}
+              className={iconBtnClass(stepperDisabled)}
+              title="Next"
+            >
+              <span className="text-sm">{`>`}</span>
+            </button>
+          </div>
+
+          <div className="h-6 w-px bg-gray-200" aria-hidden="true" />
+
+          <label className="flex items-center gap-2 text-sm text-gray-700 select-none">
+            <Switch
+              checked={showFailedOnly}
+              onCheckedChange={(checked) => {
+                setShowFailedOnly(checked);
+                setSelectedPos(0);
+              }}
+              disabled={failedCount === 0 || stepperDisabled}
+              className="scale-75 origin-left disabled:cursor-default"
+            />
+
+            <span className="whitespace-nowrap text-muted-foreground">Failed only</span>
+
+            <span
+              className={`ml-1 inline-flex items-center rounded-full border px-2.5 py-1 text-xs tabular-nums ${failedPillClass}`}
+            >
+              {failedCount}
+            </span>
+          </label>
         </div>
       </div>
 
       <div className="flex-1 min-h-0 bg-white border border-gray-200 rounded-lg shadow-sm relative">
-        {isPageLoading ? (
+        {isLoading ? (
           <div ref={containerRef} className="h-full w-full flex items-center justify-center">
             <div className="flex flex-col items-center text-gray-500">
               <div
@@ -495,9 +544,7 @@ const JobLogs = ({ jobId, jobStatus, nInputs }: JobLogsProps) => {
                       }}
                       className={`grid grid-cols-[8rem,1fr] gap-2 px-4 py-2 border-t border-gray-200 transition ${background}`}
                     >
-                      <div className="text-gray-500 text-left tabular-nums">
-                        {formatTime(row.createdAt)}
-                      </div>
+                      <div className="text-gray-500 text-left tabular-nums">{formatTime(row.createdAt)}</div>
                       <div className="whitespace-pre-wrap break-words">{row.message}</div>
                     </div>
                   </div>

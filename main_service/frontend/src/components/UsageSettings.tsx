@@ -353,7 +353,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { AlertTriangle } from "lucide-react";
-import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { getOnDemandHourlyUsdForMachine, getVmCategory, VM_TYPES, type VmType } from "@/types/constants";
 import { useUsage } from "@/contexts/UsageContext";
 
@@ -407,61 +407,65 @@ const UsageSettings = () => {
   const monthLabel = useMemo(() => fmtMonthLabel(selectedMonth), [selectedMonth]);
 
   const totals = useMemo(() => {
-    let totalHours = 0;
-    let totalSpend = 0;
-    let unknownHours = 0;
+    let totalComputeHours = 0; // usage
+    let totalSpend = 0; // cost
+    let unknownNodeHours = 0; // missing pricing impacts spend
 
     for (const day of daily?.days || []) {
-      totalHours += Number(day.total_node_hours || 0);
+      totalComputeHours += Number(day.total_compute_hours || 0);
 
       for (const g of day.groups || []) {
         const rate = getOnDemandHourlyUsdForMachine(g.machine_type);
-        const h = Number(g.total_node_hours || 0);
+        const nodeHours = Number(g.total_node_hours || 0);
 
         if (rate == null) {
-          unknownHours += h;
+          unknownNodeHours += nodeHours;
           continue;
         }
 
-        totalSpend += h * rate;
+        totalSpend += nodeHours * rate;
       }
     }
 
     return {
-      totalHours,
+      totalComputeHours,
       totalSpend: Number(totalSpend.toFixed(2)),
-      unknownHours,
+      unknownNodeHours,
     };
   }, [daily]);
 
   const chartData = useMemo(() => {
-    let cum = 0;
+  return (daily?.days || []).map((d) => {
+    let daySpend = 0;
+    let unknownHours = 0;
 
-    return (daily?.days || []).map((d) => {
-      let daySpend = 0;
+    for (const g of d.groups || []) {
+      const rate = getOnDemandHourlyUsdForMachine(g.machine_type);
+      const h = Number(g.total_node_hours || 0); // spend uses node-hours
 
-      for (const g of d.groups || []) {
-        const rate = getOnDemandHourlyUsdForMachine(g.machine_type);
-        if (rate == null) continue;
-        daySpend += Number(g.total_node_hours || 0) * rate;
+      if (rate == null) {
+        unknownHours += h;
+        continue;
       }
 
-      cum += daySpend;
+      daySpend += h * rate;
+    }
 
-      return {
-        date: d.date,
-        day: fmtDayLabel(d.date),
-        spend: Number(cum.toFixed(2)),
-      };
-    });
-  }, [daily]);
+    return {
+      date: d.date,
+      day: fmtDayLabel(d.date),
+      spend: Number(daySpend.toFixed(2)),
+      unknownHours: Number(unknownHours.toFixed(2)),
+      hours: Number(d.total_compute_hours || 0), // tooltip "total hours" (compute-hours)
+    };
+  });
+}, [daily]);
 
   const vmRows = useMemo(() => {
-    const buckets = new Map<VmType, { vm: VmType; totalHours: number; cost: number; rateMissing: boolean }>();
+    const buckets = new Map<VmType, { vm: VmType; totalComputeHours: number; cost: number; rateMissing: boolean }>();
 
-    // initialize stable ordering
     for (const vm of VM_TYPES) {
-      buckets.set(vm, { vm, totalHours: 0, cost: 0, rateMissing: false });
+      buckets.set(vm, { vm, totalComputeHours: 0, cost: 0, rateMissing: false });
     }
 
     for (const n of nodes?.nodes || []) {
@@ -469,30 +473,32 @@ const UsageSettings = () => {
       const vm = getVmCategory(machineType);
       if (!vm) continue;
 
-      const h = Number(n.duration_hours || 0);
+      const computeHours = Number(n.duration_compute_hours || 0);
+      const nodeHours = Number(n.duration_hours || 0);
       const rate = getOnDemandHourlyUsdForMachine(machineType);
 
       const b = buckets.get(vm);
       if (!b) continue;
 
-      b.totalHours += h;
+      b.totalComputeHours += computeHours;
+
       if (rate == null) {
         b.rateMissing = true;
       } else {
-        b.cost += h * rate;
+        b.cost += nodeHours * rate;
       }
     }
 
     const rows = Array.from(buckets.values())
       .map((r) => ({
         vm: r.vm,
-        totalHours: Number(r.totalHours.toFixed(2)),
+        totalComputeHours: Number(r.totalComputeHours.toFixed(2)),
         cost: Number(r.cost.toFixed(2)),
         rateMissing: r.rateMissing,
       }))
-      .filter((r) => r.totalHours > 0);
+      .filter((r) => r.totalComputeHours > 0);
 
-    rows.sort((a, b) => b.cost - a.cost || b.totalHours - a.totalHours);
+    rows.sort((a, b) => b.cost - a.cost || b.totalComputeHours - a.totalComputeHours);
 
     return rows;
   }, [nodes]);
@@ -564,7 +570,7 @@ const UsageSettings = () => {
                 <Card>
                   <CardContent className="pt-6">
                     <div className="text-sm text-muted-foreground">Usage</div>
-                    <div className="text-3xl font-semibold mt-1">{hours(totals.totalHours)}</div>
+                    <div className="text-3xl font-semibold mt-1">{hours(totals.totalComputeHours)}</div>
                     <div className="text-sm text-muted-foreground mt-2">{monthLabel}</div>
                   </CardContent>
                 </Card>
@@ -574,9 +580,9 @@ const UsageSettings = () => {
                     <div className="text-sm text-muted-foreground">Spend</div>
                     <div className="text-3xl font-semibold mt-1">{money(totals.totalSpend)}</div>
                     <div className="text-sm text-muted-foreground mt-2">{monthLabel}</div>
-                    {totals.unknownHours > 0 ? (
+                    {totals.unknownNodeHours > 0 ? (
                       <div className="text-xs text-muted-foreground mt-2">
-                        Missing pricing for {hours(totals.unknownHours)}.
+                        Missing pricing for {hours(totals.unknownNodeHours)}.
                       </div>
                     ) : null}
                   </CardContent>
@@ -586,13 +592,13 @@ const UsageSettings = () => {
               <Card>
                 <CardContent className="pt-6">
                   <div className="flex items-baseline justify-between gap-3">
-                    <div className="text-sm text-muted-foreground">Cumulative spend</div>
+                    <div className="text-sm text-muted-foreground">Daily spend</div>
                     <div className="text-sm text-muted-foreground">{monthLabel}</div>
                   </div>
 
                   <div className="h-64 mt-3">
                     <ResponsiveContainer width="100%" height="100%">
-                      <AreaChart data={chartData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                      <BarChart data={chartData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
                         <CartesianGrid stroke="hsl(var(--border))" vertical={false} />
                         <XAxis
                           dataKey="day"
@@ -608,26 +614,36 @@ const UsageSettings = () => {
                           tickFormatter={(v) => money(Number(v || 0))}
                         />
                         <Tooltip
-                          formatter={(value: any) => [money(Number(value || 0)), "Spend"]}
-                          labelFormatter={(_, payload) =>
-                            payload?.[0]?.payload?.date ? `${payload[0].payload.date}` : ""
-                          }
-                          contentStyle={{
-                            borderRadius: 10,
-                            borderColor: "hsl(var(--border))",
-                            background: "hsl(var(--background))",
-                          }}
-                        />
-                        <Area
-                          type="monotone"
-                          dataKey="spend"
-                          stroke={PRIMARY}
-                          fill={PRIMARY}
-                          fillOpacity={0.12}
-                          strokeWidth={2}
-                          dot={false}
-                        />
-                      </AreaChart>
+                          content={({ active, payload }) => {
+                              if (!active || !payload?.length) return null;
+
+                              const p: any = payload[0]?.payload || {};
+                              const spend = money(Number(p.spend || 0));
+                              const h = Number(p.hours || 0);
+                              const u = Number(p.unknownHours || 0);
+
+                              return (
+                                <div
+                                  style={{
+                                    borderRadius: 10,
+                                    border: "1px solid hsl(var(--border))",
+                                    background: "hsl(var(--background))",
+                                    padding: "10px 12px",
+                                  }}
+                                >
+                                  <div className="text-sm font-medium">{p.date}</div>
+                                  <div className="text-sm mt-1">Spend: {spend}</div>
+                                  {u > 0 ? (
+                                    <div className="text-xs text-muted-foreground mt-1">
+                                      Missing rate for {hours(u)}
+                                    </div>
+                                  ) : null}
+                                </div>
+                              );
+                            }}
+                          />
+                        <Bar dataKey="spend" fill={PRIMARY} radius={[6, 6, 0, 0]} />
+                      </BarChart>
                     </ResponsiveContainer>
                   </div>
                 </CardContent>
@@ -645,9 +661,7 @@ const UsageSettings = () => {
                     </div>
 
                     {vmRows.length === 0 ? (
-                      <div className="px-4 py-4 text-sm text-muted-foreground">
-                        No usage found for this month.
-                      </div>
+                      <div className="px-4 py-4 text-sm text-muted-foreground">No usage found for this month.</div>
                     ) : (
                       vmRows.map((r) => (
                         <div key={r.vm} className="grid grid-cols-12 border-t border-border items-center">
@@ -656,14 +670,12 @@ const UsageSettings = () => {
                           </div>
 
                           <div className="col-span-3 px-4 py-3 text-right">
-                            <div className="text-sm tabular-nums">{r.totalHours.toFixed(2)}</div>
+                            <div className="text-sm tabular-nums">{r.totalComputeHours.toFixed(2)}</div>
                           </div>
 
                           <div className="col-span-3 px-4 py-3 text-right">
                             <div className="font-semibold text-sm tabular-nums">{money(r.cost)}</div>
-                            {r.rateMissing ? (
-                              <div className="text-[10px] text-muted-foreground">missing rate</div>
-                            ) : null}
+                            {r.rateMissing ? <div className="text-[10px] text-muted-foreground">missing rate</div> : null}
                           </div>
                         </div>
                       ))
@@ -680,4 +692,3 @@ const UsageSettings = () => {
 };
 
 export default UsageSettings;
-

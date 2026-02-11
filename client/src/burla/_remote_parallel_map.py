@@ -619,6 +619,12 @@ def remote_parallel_map(
     # Move below code back into `_execute_job` after above todo is done.
     # Needs to operate on function_.__globals__ which cannot be reassigned -> must be done here.
     custom_module_names, package_module_names = get_modules_required_on_remote(function_)
+
+    # temp fix: is mistetected as a pypi package but is not:
+    if "clim_shift" in package_module_names:
+        package_module_names.remove("clim_shift")
+        custom_module_names.append("clim_shift")
+
     for module_name in custom_module_names:
         cloudpickle.register_pickle_by_value(sys.modules[module_name])
     packages = {}

@@ -1,7 +1,7 @@
 .ONESHELL:
 .SILENT:
 
-BURLA_VERSION = 1.3.33
+BURLA_VERSION = 1.3.34
 WEBSERVICE_NAME = burla-main-service
 PYTHON_MODULE_NAME = main_service
 

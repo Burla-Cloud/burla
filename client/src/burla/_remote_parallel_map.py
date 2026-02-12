@@ -627,6 +627,9 @@ def remote_parallel_map(
     if "climate_analysis_toolkit" in package_module_names:
         package_module_names.remove("climate_analysis_toolkit")
         custom_module_names.add("climate_analysis_toolkit")
+    # temp fix: these are not listed as dependencies but are often required!
+    if "xarray" in package_module_names:
+        package_module_names.update(["netcdf4", "h5netcdf", "h5py"])
 
     for module_name in custom_module_names:
         cloudpickle.register_pickle_by_value(sys.modules[module_name])

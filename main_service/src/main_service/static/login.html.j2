@@ -14,9 +14,10 @@
     p.tagline { margin:0 0 28px; font-size:14px; color:#36555c; text-align:center; }
     .banner { background:#fdecea; color:#611a15; border:1px solid #f5c2c0; border-radius:6px; padding:12px; font-size:13px; width:100%; text-align:left; margin-bottom:24px; }
     .banner strong { display:block; margin-bottom:4px; }
-    .google-btn { display:inline-flex; align-items:center; justify-content:center; gap:8px; height:44px; padding:0 20px; font-size:14px; font-weight:500; color:#36555c; background:white; border:1px solid #dadce0; border-radius:6px; text-decoration:none; transition:background .14s, box-shadow .14s; width:100%; }
-    .google-btn:hover { background:#f6f8fa; box-shadow:0 2px 4px rgba(0,0,0,.05); }
-    .google-btn img { width:18px; height:18px; }
+    .login-btn { display:inline-flex; align-items:center; justify-content:center; gap:8px; height:44px; padding:0 20px; font-size:14px; font-weight:500; color:#36555c; background:white; border:1px solid #dadce0; border-radius:6px; text-decoration:none; transition:background .14s, box-shadow .14s; width:100%; }
+    .login-btn:hover { background:#f6f8fa; box-shadow:0 2px 4px rgba(0,0,0,.05); }
+    .login-btn img { width:18px; height:18px; }
+    .login-btn + .login-btn { margin-top:10px; }
     .switch-account { display:block; margin-top:10px; font-size:12px; color:#36555c; text-decoration:underline; cursor:pointer; text-align:center; }
   </style>
 </head>
@@ -37,18 +38,29 @@
       {{ user_email }} is not authorized.<br>Contact your admin to request access.
     </div>
     {% endif %}
-    <a id="login-btn" href="#" class="google-btn">
+    <a id="google-login-btn" href="#" class="login-btn">
       <img src="https://developers.google.com/identity/images/g-logo.png" alt="Google logo" />
       <span>Sign in with Google</span>
     </a>
+    <a id="microsoft-login-btn" href="#" class="login-btn">
+      <img src="https://upload.wikimedia.org/wikipedia/commons/4/44/Microsoft_logo.svg" alt="Microsoft logo" />
+      <span>Sign in with Microsoft</span>
+    </a>
   </div>
   <script>
-    document.getElementById("login-btn").addEventListener("click", function (event) {
+    const redirectLocally = {{ redirect_locally | tojson }};
+    const projectId = {{ project_id | tojson }};
+    const queryParams = `?redirect_locally=${redirectLocally}&project_id=${projectId}`;
+
+    document.getElementById("google-login-btn").addEventListener("click", function (event) {
       event.preventDefault();
       const baseUrl = `https://backend.burla.dev/v3/login/dashboard`;
-      const redirectLocally = {{ redirect_locally | tojson }};
-      const projectId = {{ project_id | tojson }};
-      const queryParams = `?redirect_locally=${redirectLocally}&project_id=${projectId}`;
+      window.location.href = baseUrl + queryParams;
+    });
+
+    document.getElementById("microsoft-login-btn").addEventListener("click", function (event) {
+      event.preventDefault();
+      const baseUrl = `https://backend.burla.dev/v1/login/microsoft/dashboard`;
       window.location.href = baseUrl + queryParams;
     });
   </script>

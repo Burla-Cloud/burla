@@ -11,7 +11,7 @@ interface ClusterControlsProps {
     disableStartButton?: boolean;
     disableStopButton?: boolean;
     highlightStart?: boolean;
-}
+} 
 
 export const ClusterControls = ({
     status,

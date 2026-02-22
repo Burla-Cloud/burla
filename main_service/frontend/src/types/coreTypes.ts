@@ -98,7 +98,6 @@ export interface BurlaJob {
   id: string;
   status: JobsStatus | null;
   user: string;
-  checked: boolean;
   n_inputs: number;
   n_results: number;
   started_at?: Date; // parsed from UNIX timestamp in jobContext & jobs_paginated

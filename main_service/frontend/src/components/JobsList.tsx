@@ -13,7 +13,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
 export const JobsList = () => {
-  const { jobs, setJobs, page, setPage, totalPages, isLoading } = useJobs();
+  const { jobs, page, setPage, totalPages, isLoading } = useJobs();
 
   const [userTimeZone, setUserTimeZone] = useState<string>(() => {
     const stored = typeof window !== "undefined" ? localStorage.getItem("userTimezone") : null;
@@ -102,15 +102,6 @@ export const JobsList = () => {
     });
   };
 
-  const handleCheckboxChange = (id: string) => {
-    setJobs((prev) => prev.map((job) => (job.id === id ? { ...job, checked: !job.checked } : job)));
-  };
-
-  const handleSelectAllChange = () => {
-    const selectAll = !jobs.every((job) => job.checked);
-    setJobs((prev) => prev.map((job) => ({ ...job, checked: selectAll })));
-  };
-
   const getStatusClass = (status: string | null) => {
     const statusClasses: Record<string, string> = {
       PENDING: "bg-gray-400",
@@ -141,14 +132,6 @@ export const JobsList = () => {
                 <Table className="w-full min-w-[920px]">
                   <TableHeader>
                     <TableRow>
-                      <TableHead className="w-10">
-                        <input
-                          type="checkbox"
-                          checked={jobs.every((j) => j.checked)}
-                          onChange={handleSelectAllChange}
-                          className="w-4 h-4 border-2 border-gray-400 rounded-none appearance-none checked:bg-primary checked:border-primary cursor-pointer"
-                        />
-                      </TableHead>
                       <TableHead>Status</TableHead>
                       <TableHead>Function</TableHead>
                       <TableHead>Results</TableHead>
@@ -172,15 +155,6 @@ export const JobsList = () => {
                   <TableBody>
                     {jobs.map((job) => (
                       <TableRow key={job.id}>
-                        <TableCell>
-                          <input
-                            type="checkbox"
-                            checked={job.checked}
-                            onChange={() => handleCheckboxChange(job.id)}
-                            className="w-4 h-4 border-2 border-gray-400 rounded-none appearance-none checked:bg-primary checked:border-primary cursor-pointer"
-                          />
-                        </TableCell>
-
                         <TableCell>
                           <div className="flex items-center space-x-2">
                             <div className={getStatusClass(job.status)} />

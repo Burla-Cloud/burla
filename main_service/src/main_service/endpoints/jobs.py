@@ -191,7 +191,9 @@ async def stream_or_fetch_job_logs(
     limit: int = 5000,
     limit_per_index: int = 5000,
 ):
-    logs_ref = ASYNC_DB.collection("jobs").document(job_id).collection("logs").order_by("timestamp")
+    ascending_logs_ref = (
+        ASYNC_DB.collection("jobs").document(job_id).collection("logs").order_by("timestamp")
+    )
 
     def _matches_single(idx: Optional[int]) -> bool:
         if index is None:
@@ -225,7 +227,7 @@ async def stream_or_fetch_job_logs(
         first_error_by_index: dict[int, int] = {}
         seen_indexes: set[int] = set()
 
-        async for doc in logs_ref.stream():
+        async for doc in ascending_logs_ref.stream():
             d = doc.to_dict() or {}
             fallback_doc_ts = d.get("timestamp")
 
@@ -246,6 +248,7 @@ async def stream_or_fetch_job_logs(
         )
 
     if stream:
+        logs_ref = ascending_logs_ref
         if _range_mode_active():
             raise HTTPException(
                 status_code=400, detail="Range loading is not supported in stream mode"
@@ -314,6 +317,13 @@ async def stream_or_fetch_job_logs(
         headers = {"Cache-Control": "no-cache, no-transform"}
         return StreamingResponse(event_stream(), media_type="text/event-stream", headers=headers)
 
+    descending_logs_ref = (
+        ASYNC_DB.collection("jobs")
+        .document(job_id)
+        .collection("logs")
+        .order_by("timestamp", direction=firestore.Query.DESCENDING)
+    )
+
     if _range_mode_active():
         s, e = _validate_range()
 
@@ -325,11 +335,12 @@ async def stream_or_fetch_job_logs(
         truncated_indexes: set[int] = set()
         truncated_global = False
         truncated_total = False
+        indexes_still_collecting: set[int] = set(range(s, e + 1))
 
         max_total = 200_000
         total_added = 0
 
-        async for doc in logs_ref.stream():
+        async for doc in descending_logs_ref.stream():
             d = doc.to_dict() or {}
             doc_id = doc.id
             fallback_doc_ts = d.get("timestamp")
@@ -355,13 +366,21 @@ async def stream_or_fetch_job_logs(
 
                 if per_index_counts[idx] >= limit_per_index:
                     truncated_indexes.add(idx)
+                    if idx in indexes_still_collecting:
+                        indexes_still_collecting.remove(idx)
                     continue
 
                 logs_by_index[idx].append(payload)
                 per_index_counts[idx] += 1
                 total_added += 1
 
+                if per_index_counts[idx] >= limit_per_index and idx in indexes_still_collecting:
+                    indexes_still_collecting.remove(idx)
+
             if truncated_total:
+                break
+
+            if not include_global and not indexes_still_collecting:
                 break
 
         for idx in range(s, e + 1):
@@ -387,7 +406,7 @@ async def stream_or_fetch_job_logs(
     logs = []
     truncated = False
 
-    async for doc in logs_ref.stream():
+    async for doc in descending_logs_ref.stream():
         d = doc.to_dict() or {}
         doc_id = doc.id
         fallback_doc_ts = d.get("timestamp")

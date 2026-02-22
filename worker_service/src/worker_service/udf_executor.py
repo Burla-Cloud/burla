@@ -214,6 +214,8 @@ class _FirestoreStdout:
             except Exception:
                 pass
 
+        self.actually_flush()
+
     def _flush_loop(self):
         while not self._stop_event.wait(1.0):
             if (time() - self._last_flush_time) > 1:

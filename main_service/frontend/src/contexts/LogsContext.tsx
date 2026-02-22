@@ -4,12 +4,19 @@ import { LogEntry } from "@/types/coreTypes";
 type JobLogsState = {
   global: LogEntry[];
   byIndex: Record<string, LogEntry[]>;
+  truncationByPage: Record<string, PageTruncationState>;
 };
 
 type SummaryResp = { failed_indexes: number[]; seen_indexes: number[] };
+type PageTruncationState = {
+  truncated: boolean;
+  truncatedIndexes: number[];
+  truncatedTotal: boolean;
+};
 
 interface LogsContextType {
   getLogs: (jobId: string, index: number) => LogEntry[];
+  getPageTruncation: (jobId: string, indexStart: number, indexEnd: number) => PageTruncationState | null;
   loadSummary: (jobId: string) => Promise<SummaryResp | null>;
   loadPage: (
     jobId: string,
@@ -27,6 +34,7 @@ interface LogsContextType {
 const LogsContext = createContext<LogsContextType>({
   logsByJobId: {},
   getLogs: () => [],
+  getPageTruncation: () => null,
   loadSummary: async () => null,
   loadPage: async () => {},
   evictToWindow: () => {},
@@ -80,6 +88,16 @@ export const LogsProvider = ({ children }: { children: React.ReactNode }) => {
     [logsByJobId]
   );
 
+  const getPageTruncation = useCallback(
+    (jobId: string, indexStart: number, indexEnd: number) => {
+      const state = logsByJobId[jobId];
+      if (!state) return null;
+      const pageKey = `${indexStart}-${indexEnd}`;
+      return state.truncationByPage[pageKey] || null;
+    },
+    [logsByJobId]
+  );
+
   const loadSummary = useCallback(async (jobId: string) => {
     if (summaryCacheRef.current[jobId]) return summaryCacheRef.current[jobId];
 
@@ -95,7 +113,13 @@ export const LogsProvider = ({ children }: { children: React.ReactNode }) => {
   }, []);
 
   const loadPage = useCallback(
-    async (jobId: string, indexStart: number, indexEnd: number, limitPerIndex: number = 200, includeGlobal: boolean = true) => {
+    async (
+      jobId: string,
+      indexStart: number,
+      indexEnd: number,
+      limitPerIndex: number = 200,
+      includeGlobal: boolean = true
+    ) => {
       ensureSets(jobId);
       const pageKey = `${indexStart}-${indexEnd}`;
 
@@ -105,40 +129,73 @@ export const LogsProvider = ({ children }: { children: React.ReactNode }) => {
       inflightPagesRef.current[jobId].add(pageKey);
 
       try {
-        const qs = new URLSearchParams({
-          index_start: String(indexStart),
-          index_end: String(indexEnd),
-          limit_per_index: String(limitPerIndex),
-          include_global: includeGlobal ? "true" : "false",
-        });
+        const singleIndexOnlyMode = indexStart === indexEnd && !includeGlobal;
+        const qs = singleIndexOnlyMode
+          ? new URLSearchParams({
+              index: String(indexStart),
+              limit: String(limitPerIndex),
+            })
+          : new URLSearchParams({
+              index_start: String(indexStart),
+              index_end: String(indexEnd),
+              limit_per_index: String(limitPerIndex),
+              include_global: includeGlobal ? "true" : "false",
+            });
 
         const res = await fetch(`/v1/jobs/${jobId}/logs?${qs.toString()}`);
         if (!res.ok) return;
 
         const json = await res.json();
 
-        const incomingGlobal: LogEntry[] = (json.global_logs || []).map((x: any) => ({
-          id: x.id,
-          message: x.message,
-          created_at: x.created_at,
-          input_index: x.input_index,
-          is_error: x.is_error,
-        }));
+        const incomingGlobal: LogEntry[] = singleIndexOnlyMode
+          ? []
+          : (json.global_logs || []).map((x: any) => ({
+              id: x.id,
+              message: x.message,
+              created_at: x.created_at,
+              input_index: x.input_index,
+              is_error: x.is_error,
+            }));
 
-        const incomingByIndex: Record<string, LogEntry[]> = {};
-        const rawByIndex = json.logs_by_index || {};
-        for (const [k, arr] of Object.entries(rawByIndex)) {
-          incomingByIndex[String(k)] = (arr as any[]).map((x: any) => ({
-            id: x.id,
-            message: x.message,
-            created_at: x.created_at,
-            input_index: x.input_index,
-            is_error: x.is_error,
-          }));
-        }
+        const incomingByIndex: Record<string, LogEntry[]> = singleIndexOnlyMode
+          ? {
+              [String(indexStart)]: (json.logs || []).map((x: any) => ({
+                id: x.id,
+                message: x.message,
+                created_at: x.created_at,
+                input_index: x.input_index,
+                is_error: x.is_error,
+              })),
+            }
+          : Object.fromEntries(
+              Object.entries(json.logs_by_index || {}).map(([indexKey, entries]) => [
+                String(indexKey),
+                (entries as any[]).map((x: any) => ({
+                  id: x.id,
+                  message: x.message,
+                  created_at: x.created_at,
+                  input_index: x.input_index,
+                  is_error: x.is_error,
+                })),
+              ])
+            );
+
+        const pageTruncation: PageTruncationState = singleIndexOnlyMode
+          ? {
+              truncated: Boolean(json.truncated),
+              truncatedIndexes: json.truncated ? [indexStart] : [],
+              truncatedTotal: false,
+            }
+          : {
+              truncated: Boolean(json.truncated),
+              truncatedIndexes: Array.isArray(json.truncated_indexes)
+                ? json.truncated_indexes.map((value: any) => Number(value)).filter(Number.isFinite)
+                : [],
+              truncatedTotal: Boolean(json.truncated_total),
+            };
 
         setLogsByJobId((prev) => {
-          const cur = prev[jobId] || { global: [], byIndex: {} };
+          const cur = prev[jobId] || { global: [], byIndex: {}, truncationByPage: {} };
 
           const nextGlobal = includeGlobal ? mergeSortedUnique(cur.global, incomingGlobal) : cur.global;
 
@@ -147,7 +204,19 @@ export const LogsProvider = ({ children }: { children: React.ReactNode }) => {
             nextByIndex[idxKey] = mergeSortedUnique(nextByIndex[idxKey] || [], arr);
           }
 
-          return { ...prev, [jobId]: { global: nextGlobal, byIndex: nextByIndex } };
+          const nextTruncationByPage = {
+            ...cur.truncationByPage,
+            [pageKey]: pageTruncation,
+          };
+
+          return {
+            ...prev,
+            [jobId]: {
+              global: nextGlobal,
+              byIndex: nextByIndex,
+              truncationByPage: nextTruncationByPage,
+            },
+          };
         });
 
         loadedPagesRef.current[jobId].add(pageKey);
@@ -197,7 +266,10 @@ export const LogsProvider = ({ children }: { children: React.ReactNode }) => {
         if (Number.isFinite(idx) && allowedIndex(idx)) nextByIndex[k] = arr;
       }
 
-      return { ...prev, [jobId]: { global: cur.global, byIndex: nextByIndex } };
+      return {
+        ...prev,
+        [jobId]: { global: cur.global, byIndex: nextByIndex, truncationByPage: cur.truncationByPage },
+      };
     });
   }, []);
 
@@ -247,7 +319,7 @@ export const LogsProvider = ({ children }: { children: React.ReactNode }) => {
           };
 
           setLogsByJobId((prev) => {
-            const cur = prev[jobId] || { global: [], byIndex: {} };
+            const cur = prev[jobId] || { global: [], byIndex: {}, truncationByPage: {} };
 
             if (idxKey === null) {
               return {
@@ -255,6 +327,7 @@ export const LogsProvider = ({ children }: { children: React.ReactNode }) => {
                 [jobId]: {
                   global: mergeSortedUnique(cur.global, [entry]),
                   byIndex: cur.byIndex,
+                  truncationByPage: cur.truncationByPage,
                 },
               };
             }
@@ -267,6 +340,7 @@ export const LogsProvider = ({ children }: { children: React.ReactNode }) => {
                   ...cur.byIndex,
                   [idxKey]: mergeSortedUnique(cur.byIndex[idxKey] || [], [entry]),
                 },
+                truncationByPage: cur.truncationByPage,
               },
             };
           });
@@ -309,13 +383,14 @@ export const LogsProvider = ({ children }: { children: React.ReactNode }) => {
     () => ({
       logsByJobId,
       getLogs,
+      getPageTruncation,
       loadSummary,
       loadPage,
       evictToWindow,
       startLiveStream,
       closeLiveStream,
     }),
-    [logsByJobId, getLogs, loadSummary, loadPage, evictToWindow, startLiveStream, closeLiveStream]
+    [logsByJobId, getLogs, getPageTruncation, loadSummary, loadPage, evictToWindow, startLiveStream, closeLiveStream]
   );
 
   return <LogsContext.Provider value={value}>{children}</LogsContext.Provider>;

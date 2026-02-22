@@ -3,6 +3,7 @@ import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import { useLogsContext } from "@/contexts/LogsContext";
 import { VariableSizeList as List } from "react-window";
 import { Switch } from "@/components/ui/switch";
+import { LogEntry } from "@/types/coreTypes";
 
 interface JobLogsProps {
   jobId: string;
@@ -15,15 +16,14 @@ type RowItem =
   | { type: "empty"; key: string; label: string }
   | { type: "log"; key: string; id: string; createdAt: number; message: string };
 
-const PAGE_SIZE = 100;
 const LIMIT_PER_INDEX = 200;
 
 const JobLogs = ({ jobId, jobStatus, nInputs }: JobLogsProps) => {
   const {
     getLogs,
+    getPageTruncation,
     loadSummary,
     loadPage,
-    evictToWindow,
     startLiveStream,
     closeLiveStream,
     logsByJobId,
@@ -140,19 +140,13 @@ const JobLogs = ({ jobId, jobStatus, nInputs }: JobLogsProps) => {
     return -1;
   }, [totalInputs, activeIndexList]);
 
-  const pageStart = useMemo(
-    () => Math.floor(Math.max(0, selectedIndex) / PAGE_SIZE) * PAGE_SIZE,
-    [selectedIndex]
-  );
+  const pageStart = selectedIndex;
+  const pageEnd = selectedIndex;
+  const pageRangeKey = useMemo(() => `${pageStart}-${pageEnd}`, [pageStart, pageEnd]);
 
-  const pageEnd = useMemo(() => {
-    if (maxKnownIndex < 0) return pageStart + PAGE_SIZE - 1;
-    return Math.min(pageStart + PAGE_SIZE - 1, maxKnownIndex);
-  }, [pageStart, maxKnownIndex]);
-
-  // Load current page and keep a small window cached
+  // Load only the currently viewed input index.
   useEffect(() => {
-    if (pageEnd < pageStart || pageEnd < 0) {
+    if (selectedIndex < 0 || maxKnownIndex < 0) {
       setIsPageLoading(false);
       return;
     }
@@ -161,8 +155,13 @@ const JobLogs = ({ jobId, jobStatus, nInputs }: JobLogsProps) => {
     (async () => {
       setIsPageLoading(true);
       try {
-        await loadPage(jobId, pageStart, pageEnd, LIMIT_PER_INDEX, true);
-        evictToWindow(jobId, pageStart, pageEnd, 3);
+        await loadPage(
+          jobId,
+          pageStart,
+          pageEnd,
+          LIMIT_PER_INDEX,
+          false
+        );
       } finally {
         if (!cancelled) setIsPageLoading(false);
       }
@@ -171,13 +170,21 @@ const JobLogs = ({ jobId, jobStatus, nInputs }: JobLogsProps) => {
     return () => {
       cancelled = true;
     };
-  }, [jobId, pageStart, pageEnd, loadPage, evictToWindow]);
+  }, [jobId, selectedIndex, maxKnownIndex, pageStart, pageEnd, loadPage]);
 
   // Logs for current index
   const logs = useMemo(() => getLogs(jobId, selectedIndex), [getLogs, jobId, selectedIndex]);
+  const pageTruncation = useMemo(
+    () => getPageTruncation(jobId, pageStart, pageEnd),
+    [getPageTruncation, jobId, pageStart, pageEnd]
+  );
+  const selectedIndexWasTruncated = useMemo(() => {
+    if (!pageTruncation?.truncated) return false;
+    return pageTruncation.truncatedIndexes.includes(selectedIndex);
+  }, [pageTruncation, selectedIndex]);
 
   const hasAnyIndexedLogs = useMemo(
-    () => logs.some((logEntry: any) => logEntry?.input_index !== null && logEntry?.input_index !== undefined),
+    () => logs.some((logEntry) => logEntry?.input_index !== null && logEntry?.input_index !== undefined),
     [logs]
   );
 
@@ -227,7 +234,7 @@ const JobLogs = ({ jobId, jobStatus, nInputs }: JobLogsProps) => {
 
     let lastDateKey: string | null = null;
 
-    for (const entry of logs as any[]) {
+    for (const entry of logs as LogEntry[]) {
       const createdAt = entry.created_at ?? 0;
       const dateKey = getDateKey(createdAt);
 
@@ -254,7 +261,7 @@ const JobLogs = ({ jobId, jobStatus, nInputs }: JobLogsProps) => {
     }
 
     return result;
-  }, [logs, hasAnyIndexedLogs, selectedIndex, seenIndexes.length, failedIndexes.length]);
+  }, [logs, hasAnyIndexedLogs, hasAnyKnownIndexes, selectedIndex]);
 
   const oldFormatNoPerInput =
     items.length === 1 && items[0]?.type === "empty" && logs.length > 0 && !hasAnyIndexedLogs;
@@ -325,6 +332,13 @@ const JobLogs = ({ jobId, jobStatus, nInputs }: JobLogsProps) => {
     setHasAutoScrolled(true);
   }, [items.length, hasMeasuredContainer, hasAutoScrolled]);
 
+  // Always show Input X of Y (even when failed-only is on)
+  const actualInputLabel = useMemo(() => {
+    const total = totalInputs || (maxKnownIndex >= 0 ? maxKnownIndex + 1 : 0);
+    const actual = selectedIndex + 1;
+    return total > 0 ? `Input ${actual} of ${total}` : `Input ${actual}`;
+  }, [selectedIndex, totalInputs, maxKnownIndex]);
+
   if (windowWidth <= 1000) {
     return (
       <div className="mt-4 mb-4 flex flex-col">
@@ -342,13 +356,6 @@ const JobLogs = ({ jobId, jobStatus, nInputs }: JobLogsProps) => {
     disabled
       ? "h-8 w-8 grid place-items-center rounded-md border border-gray-200 bg-white opacity-50 cursor-default"
       : "h-8 w-8 grid place-items-center rounded-md border border-gray-200 bg-white hover:bg-gray-50 active:bg-gray-100";
-
-  // Always show Input X of Y (even when failed-only is on)
-  const actualInputLabel = useMemo(() => {
-    const total = totalInputs || (maxKnownIndex >= 0 ? maxKnownIndex + 1 : 0);
-    const actual = selectedIndex + 1;
-    return total > 0 ? `Input ${actual} of ${total}` : `Input ${actual}`;
-  }, [selectedIndex, totalInputs, maxKnownIndex]);
 
   const failedCount = failedIndexes.length;
 
@@ -427,6 +434,13 @@ const JobLogs = ({ jobId, jobStatus, nInputs }: JobLogsProps) => {
       </div>
 
       <div className="flex-1 min-h-0 bg-white border border-gray-200 rounded-lg shadow-sm relative">
+        {pageTruncation?.truncated && (
+          <div className="px-4 py-2 border-b border-amber-200 bg-amber-50 text-amber-900 text-xs">
+            {selectedIndexWasTruncated
+              ? "Showing only the most recent logs for this input because log volume exceeded the fetch limit."
+              : "Showing only the most recent logs for some inputs because log volume exceeded the fetch limit."}
+          </div>
+        )}
         {isPageLoading ? (
           <div ref={containerRef} className="h-full w-full flex items-center justify-center">
             <div className="flex flex-col items-center text-gray-500">
@@ -445,7 +459,7 @@ const JobLogs = ({ jobId, jobStatus, nInputs }: JobLogsProps) => {
               itemCount={items.length}
               itemSize={getItemSize}
               width="100%"
-              ref={listRef as any}
+              ref={listRef}
               itemKey={(index) => items[index]?.key ?? index}
             >
               {({ index, style }) => {

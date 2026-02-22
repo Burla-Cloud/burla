@@ -191,9 +191,8 @@ async def stream_or_fetch_job_logs(
     limit: int = 5000,
     limit_per_index: int = 5000,
 ):
-    ascending_logs_ref = (
-        ASYNC_DB.collection("jobs").document(job_id).collection("logs").order_by("timestamp")
-    )
+    logs_collection = ASYNC_DB.collection("jobs").document(job_id).collection("logs")
+    ascending_logs_ref = logs_collection.order_by("timestamp")
 
     def _matches_single(idx: Optional[int]) -> bool:
         if index is None:
@@ -230,9 +229,11 @@ async def stream_or_fetch_job_logs(
         async for doc in ascending_logs_ref.stream():
             d = doc.to_dict() or {}
             fallback_doc_ts = d.get("timestamp")
+            doc_input_index = d.get("input_index")
+            logs = d.get("logs", [])
 
-            for log in d["logs"]:
-                idx = int(log["input_index"])
+            for log in logs:
+                idx = int(doc_input_index if doc_input_index is not None else log["input_index"])
                 seen_indexes.add(idx)
 
                 is_err = bool(log.get("is_error", False))
@@ -280,10 +281,13 @@ async def stream_or_fetch_job_logs(
                 d = change.document.to_dict() or {}
                 doc_id = change.document.id
                 fallback_doc_ts = d.get("timestamp")
+                doc_input_index = d.get("input_index")
+                if doc_input_index is not None and not _matches_single(int(doc_input_index)):
+                    continue
 
                 for i, log in enumerate(d["logs"]):
-                    idx = int(log["input_index"])
-                    if not _matches_single(idx):
+                    idx = int(doc_input_index if doc_input_index is not None else log["input_index"])
+                    if doc_input_index is None and not _matches_single(idx):
                         continue
 
                     event = {
@@ -295,9 +299,11 @@ async def stream_or_fetch_job_logs(
                     }
                     current_loop.call_soon_threadsafe(queue.put_nowait, event)
 
-        logs_ref_sync = (
-            DB.collection("jobs").document(job_id).collection("logs").order_by("timestamp")
-        )
+        logs_ref_sync = DB.collection("jobs").document(job_id).collection("logs").order_by("timestamp")
+        if index is not None:
+            logs_ref_sync = logs_ref_sync.where(
+                filter=firestore.FieldFilter("input_index", "==", int(index))
+            )
         watcher = logs_ref_sync.on_snapshot(on_snapshot)
 
         async def event_stream():
@@ -317,12 +323,44 @@ async def stream_or_fetch_job_logs(
         headers = {"Cache-Control": "no-cache, no-transform"}
         return StreamingResponse(event_stream(), media_type="text/event-stream", headers=headers)
 
-    descending_logs_ref = (
-        ASYNC_DB.collection("jobs")
-        .document(job_id)
-        .collection("logs")
-        .order_by("timestamp", direction=firestore.Query.DESCENDING)
-    )
+    descending_logs_ref = logs_collection.order_by("timestamp", direction=firestore.Query.DESCENDING)
+
+    if index is not None and not _range_mode_active():
+        single_input_logs_ref = descending_logs_ref.where(
+            filter=firestore.FieldFilter("input_index", "==", int(index))
+        )
+        logs = []
+        truncated = False
+
+        async for doc in single_input_logs_ref.stream():
+            d = doc.to_dict() or {}
+            doc_id = doc.id
+            fallback_doc_ts = d.get("timestamp")
+            doc_logs = d.get("logs", [])
+
+            for reverse_offset, log in enumerate(reversed(doc_logs)):
+                i = len(doc_logs) - reverse_offset - 1
+                logs.append(
+                    {
+                        "id": f"{doc_id}:{i}",
+                        "message": log.get("message"),
+                        "created_at": _ts_to_seconds(log.get("timestamp"), fallback_doc_ts),
+                        "input_index": int(index),
+                        "is_error": bool(log.get("is_error", False)),
+                    }
+                )
+
+                if len(logs) >= limit:
+                    truncated = True
+                    break
+
+            if truncated:
+                break
+
+        logs.reverse()
+        return JSONResponse(
+            {"logs": logs, "input_index": index, "limit": limit, "truncated": truncated}
+        )
 
     if _range_mode_active():
         s, e = _validate_range()
@@ -345,12 +383,24 @@ async def stream_or_fetch_job_logs(
             doc_id = doc.id
             fallback_doc_ts = d.get("timestamp")
 
-            for i, log in enumerate(d["logs"]):
+            doc_input_index = d.get("input_index")
+            doc_logs = d.get("logs", [])
+            if doc_input_index is not None:
+                idx = int(doc_input_index)
+                if idx < s or idx > e:
+                    continue
+                if per_index_counts[idx] >= limit_per_index:
+                    truncated_indexes.add(idx)
+                    if idx in indexes_still_collecting:
+                        indexes_still_collecting.remove(idx)
+                    continue
+
+            for i, log in enumerate(doc_logs):
                 if total_added >= max_total:
                     truncated_total = True
                     break
 
-                idx = int(log["input_index"])
+                idx = int(doc_input_index if doc_input_index is not None else log["input_index"])
                 ts = _ts_to_seconds(log.get("timestamp"), fallback_doc_ts)
 
                 payload = {

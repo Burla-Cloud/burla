@@ -146,7 +146,7 @@ const JobLogs = ({ jobId, jobStatus, nInputs }: JobLogsProps) => {
 
   // Load only the currently viewed input index.
   useEffect(() => {
-    if (selectedIndex < 0 || maxKnownIndex < 0) {
+    if (selectedIndex < 0) {
       setIsPageLoading(false);
       return;
     }
@@ -170,7 +170,7 @@ const JobLogs = ({ jobId, jobStatus, nInputs }: JobLogsProps) => {
     return () => {
       cancelled = true;
     };
-  }, [jobId, selectedIndex, maxKnownIndex, pageStart, pageEnd, loadPage]);
+  }, [jobId, selectedIndex, pageStart, pageEnd, loadPage]);
 
   // Logs for current index
   const logs = useMemo(() => getLogs(jobId, selectedIndex), [getLogs, jobId, selectedIndex]);

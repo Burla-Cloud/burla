@@ -99,7 +99,6 @@ class _FirestoreStdout:
             firestore_formatted_log_msg = {
                 "mapValue": {
                     "fields": {
-                        "input_index": {"integerValue": self.input_index},
                         "timestamp": {"timestampValue": timestamp_str},
                         "message": {"stringValue": msg},
                     }
@@ -122,7 +121,14 @@ class _FirestoreStdout:
             timestamp_str = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
             timestamp_field = {"timestampValue": timestamp_str}
             logs_field = {"arrayValue": {"values": [self._buffer]}}
-            data = {"fields": {"logs": logs_field, "timestamp": timestamp_field}}
+            input_index_field = {"integerValue": self.input_index}
+            data = {
+                "fields": {
+                    "logs": logs_field,
+                    "timestamp": timestamp_field,
+                    "input_index": input_index_field,
+                }
+            }
             url = f"{DB_BASE_URL}/jobs/{self.job_id}/logs"
             try:
                 response = request_with_valid_dbheaders("post", url, json=data, timeout=5)

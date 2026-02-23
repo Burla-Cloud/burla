@@ -77,7 +77,7 @@ async def load_results_from_worker(
             msg = f"{error_title} Logs from container:\n{logs.strip()}"
             firestore_client = firestore.AsyncClient(project=PROJECT_ID, database="burla")
             node_ref = firestore_client.collection("nodes").document(INSTANCE_NAME)
-            node_ref.collection("logs").document().set({"msg": msg, "ts": time()})
+            await node_ref.collection("logs").document().set({"msg": msg, "ts": time()})
         http_response.raise_for_status()
 
         response_content = await http_response.content.read()

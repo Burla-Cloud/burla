@@ -99,7 +99,6 @@ class _FirestoreStdout:
             firestore_formatted_log_msg = {
                 "mapValue": {
                     "fields": {
-                        "input_index": {"integerValue": self.input_index},
                         "timestamp": {"timestampValue": timestamp_str},
                         "message": {"stringValue": msg},
                     }
@@ -122,7 +121,14 @@ class _FirestoreStdout:
             timestamp_str = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
             timestamp_field = {"timestampValue": timestamp_str}
             logs_field = {"arrayValue": {"values": [self._buffer]}}
-            data = {"fields": {"logs": logs_field, "timestamp": timestamp_field}}
+            input_index_field = {"integerValue": self.input_index}
+            data = {
+                "fields": {
+                    "logs": logs_field,
+                    "timestamp": timestamp_field,
+                    "input_index": input_index_field,
+                }
+            }
             url = f"{DB_BASE_URL}/jobs/{self.job_id}/logs"
             try:
                 response = request_with_valid_dbheaders("post", url, json=data, timeout=5)
@@ -213,6 +219,8 @@ class _FirestoreStdout:
                 sys.stdout.flush()
             except Exception:
                 pass
+
+        self.actually_flush()
 
     def _flush_loop(self):
         while not self._stop_event.wait(1.0):
@@ -356,15 +364,21 @@ def install_pkgs_and_execute_job(
             firestore_formatted_log_msg = {
                 "mapValue": {
                     "fields": {
-                        "input_index": {"integerValue": input_index},
                         "timestamp": {"timestampValue": timestamp_str},
                         "message": {"stringValue": tb_str},
-                        "is_error": {"booleanValue": True},
                     }
                 }
             }
             logs_field = {"arrayValue": {"values": [firestore_formatted_log_msg]}}
-            data = {"fields": {"logs": logs_field, "timestamp": {"timestampValue": timestamp_str}}}
+            input_index_field = {"integerValue": input_index}
+            data = {
+                "fields": {
+                    "logs": logs_field,
+                    "timestamp": {"timestampValue": timestamp_str},
+                    "input_index": input_index_field,
+                    "is_error": {"booleanValue": True},
+                }
+            }
             url = f"{DB_BASE_URL}/jobs/{job_id}/logs"
             response = request_with_valid_dbheaders("post", url, json=data, timeout=5)
             # response = requests.post(url, headers=DB_HEADERS, json=data, timeout=5)

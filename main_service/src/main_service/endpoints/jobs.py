@@ -3,6 +3,7 @@ import asyncio
 from time import time
 from datetime import datetime, timezone
 from typing import Optional, Any, Iterable
+import re
 
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import JSONResponse
@@ -27,27 +28,30 @@ async def current_num_results(job_id: str) -> int:
         return 0
 
 
-def _ts_to_seconds(ts_val: Any, fallback_ts: Any = None) -> int:
+def _ts_to_nanoseconds(ts_val: Any, fallback_ts: Any = None) -> int:
     v = ts_val if ts_val is not None else fallback_ts
     if v is None:
         return 0
 
-    try:
-        return int(v.timestamp())
-    except Exception:
-        pass
-
     if isinstance(v, (int, float)):
-        return int(v)
+        return int(v * 1_000_000_000)
 
     if isinstance(v, str):
-        try:
-            dt = datetime.fromisoformat(v.replace("Z", "+00:00"))
-            return int(dt.timestamp())
-        except Exception:
+        timestamp_match = re.match(
+            r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?(Z|[+-]\d{2}:\d{2})$",
+            v,
+        )
+        if not timestamp_match:
             return 0
+        base_timestamp, fractional_part, timezone_part = timestamp_match.groups()
+        normalized_timezone = "+00:00" if timezone_part == "Z" else timezone_part
+        dt = datetime.fromisoformat(f"{base_timestamp}{normalized_timezone}")
+        fractional_nanoseconds = int((fractional_part or "").ljust(9, "0")[:9] or "0")
+        return int(dt.timestamp()) * 1_000_000_000 + fractional_nanoseconds
 
-    return 0
+    epoch_seconds = int(v.timestamp())
+    nanosecond_component = getattr(v, "nanosecond", v.microsecond * 1_000)
+    return epoch_seconds * 1_000_000_000 + nanosecond_component
 
 
 def job_stream(jobs_current_page: firestore.CollectionReference):
@@ -219,7 +223,7 @@ async def get_next_failed_input_index(
 async def stream_or_fetch_job_logs(
     job_id: str,
     index: int,
-    oldest_timestamp: Optional[int] = None,
+    oldest_timestamp: Optional[str] = None,
 ):
     fixed_limit = 500
     logs_collection = ASYNC_DB.collection("jobs").document(job_id).collection("logs")
@@ -234,8 +238,9 @@ async def stream_or_fetch_job_logs(
         filter=firestore.FieldFilter("input_index", "==", int(index))
     )  # .order_by("timestamp", direction=firestore.Query.DESCENDING)
 
-    candidate_logs = []
+    candidate_logs: list[tuple[int, dict[str, Any]]] = []
     filtered_log_count = 0
+    oldest_timestamp_nanos = int(oldest_timestamp) if oldest_timestamp is not None else None
 
     async for doc in logs_query.stream():
         d = doc.to_dict() or {}
@@ -245,24 +250,28 @@ async def stream_or_fetch_job_logs(
 
         for reverse_offset, log in enumerate(reversed(doc_logs)):
             log_index_in_document = len(doc_logs) - reverse_offset - 1
-            created_at = _ts_to_seconds(log.get("timestamp"), fallback_doc_ts)
-            if oldest_timestamp is not None and created_at >= int(oldest_timestamp):
+            created_at_nanos = _ts_to_nanoseconds(log.get("timestamp"), fallback_doc_ts)
+            if oldest_timestamp_nanos is not None and created_at_nanos >= oldest_timestamp_nanos:
                 continue
 
             filtered_log_count += 1
             candidate_logs.append(
-                {
-                    "id": f"{doc_id}:{log_index_in_document}",
-                    "message": log.get("message"),
-                    "created_at": created_at,
-                    "input_index": int(index),
-                    "is_error": bool(log.get("is_error", False)),
-                }
+                (
+                    created_at_nanos,
+                    {
+                        "id": f"{doc_id}:{log_index_in_document}",
+                        "message": log.get("message"),
+                        "created_at": created_at_nanos / 1_000_000_000,
+                        "created_at_nanos": str(created_at_nanos),
+                        "input_index": int(index),
+                        "is_error": bool(log.get("is_error", False)),
+                    },
+                )
             )
 
-    candidate_logs.sort(key=lambda item: item["created_at"], reverse=True)
-    selected_logs = candidate_logs[:fixed_limit]
-    selected_logs.sort(key=lambda item: item["created_at"])
+    candidate_logs.sort(key=lambda item: item[0], reverse=True)
+    selected_logs = [item[1] for item in candidate_logs[:fixed_limit]]
+    selected_logs.sort(key=lambda item: int(item["created_at_nanos"]))
     has_more_older = filtered_log_count > fixed_limit
 
     return JSONResponse(

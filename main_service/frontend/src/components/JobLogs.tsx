@@ -441,12 +441,16 @@ const JobLogs = ({ jobId, nInputs }: JobLogsProps) => {
                 if (!hasMoreOlderLogs) return;
                 if (logs.length === 0) return;
 
-                const oldestLoadedTimestamp = logs[0]?.created_at;
-                if (oldestLoadedTimestamp === undefined || oldestLoadedTimestamp === null) return;
+                const oldestLoadedTimestampNanos =
+                  logs[0]?.created_at_nanos ??
+                  (logs[0]?.created_at !== undefined
+                    ? String(Math.trunc(logs[0].created_at * 1_000_000_000))
+                    : undefined);
+                if (oldestLoadedTimestampNanos === undefined) return;
 
                 topAnchorLogIdRef.current = logs[0]?.id ? String(logs[0].id) : null;
                 setIsLoadingOlderLogs(true);
-                void loadInputLogs(jobId, selectedIndex, oldestLoadedTimestamp).finally(() => {
+                void loadInputLogs(jobId, selectedIndex, oldestLoadedTimestampNanos).finally(() => {
                   setIsLoadingOlderLogs(false);
                 });
               }}

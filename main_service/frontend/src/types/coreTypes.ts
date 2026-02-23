@@ -127,6 +127,7 @@ export interface LogEntry {
   id?: string;
   message: string;
   created_at: number;
+  created_at_nanos?: string;
   input_index?: number | null;
   is_error?: boolean;
 }

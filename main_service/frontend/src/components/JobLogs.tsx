@@ -13,13 +13,17 @@ interface JobLogsProps {
 type RowItem =
   | { type: "divider"; key: string; label: string }
   | { type: "empty"; key: string; label: string }
-  | { type: "log"; key: string; id: string; createdAt: number; message: string };
+  | { type: "log"; key: string; id: string; logTimestamp: number; message: string };
+
+const getLogRowIdentifier = (logEntry: LogEntry) =>
+  `${logEntry.log_timestamp}-${logEntry.is_error ? 1 : 0}-${logEntry.message ?? ""}`;
 
 const JobLogs = ({ jobId, nInputs }: JobLogsProps) => {
   const {
     getLogs,
     getFailedInputsCount,
     getHasMoreOlderLogs,
+    getOldestLoadedLogDocumentTimestamp,
     getNextFailedInputIndex,
     loadInputLogs,
     logsByJobId,
@@ -136,14 +140,10 @@ const JobLogs = ({ jobId, nInputs }: JobLogsProps) => {
   // Logs for current index
   const logs = useMemo(() => getLogs(jobId, selectedIndex), [getLogs, jobId, selectedIndex]);
   const hasMoreOlderLogs = getHasMoreOlderLogs(jobId, selectedIndex);
+  const oldestLoadedLogDocumentTimestamp = getOldestLoadedLogDocumentTimestamp(jobId, selectedIndex);
 
-  const hasAnyIndexedLogs = useMemo(
-    () => logs.some((logEntry) => logEntry?.input_index !== null && logEntry?.input_index !== undefined),
-    [logs]
-  );
-
-  const formatDateLabel = (tsSeconds: number) => {
-    const d = new Date(tsSeconds * 1000);
+  const formatDateLabel = (logTimestamp: number) => {
+    const d = new Date(logTimestamp * 1000);
     return d.toLocaleDateString("en-US", {
       weekday: "long",
       month: "long",
@@ -152,8 +152,8 @@ const JobLogs = ({ jobId, nInputs }: JobLogsProps) => {
     });
   };
 
-  const getDateKey = (tsSeconds: number) => {
-    const d = new Date(tsSeconds * 1000);
+  const getDateKey = (logTimestamp: number) => {
+    const d = new Date(logTimestamp * 1000);
     const y = d.getFullYear();
     const m = String(d.getMonth() + 1).padStart(2, "0");
     const da = String(d.getDate()).padStart(2, "0");
@@ -162,16 +162,6 @@ const JobLogs = ({ jobId, nInputs }: JobLogsProps) => {
 
   const items: RowItem[] = useMemo(() => {
     const result: RowItem[] = [];
-
-    // Logs exist but no per-input indexing (older format / global-only)
-    if (logs.length > 0 && !hasAnyIndexedLogs) {
-      result.push({
-        type: "empty",
-        key: "no-index",
-        label: "Logs are not available",
-      });
-      return result;
-    }
 
     if (logs.length === 0) {
       const jobHasAnyPerInputLogs = hasAnyKnownIndexes;
@@ -187,43 +177,41 @@ const JobLogs = ({ jobId, nInputs }: JobLogsProps) => {
     }
 
     let lastDateKey: string | null = null;
+    const occurrenceBySignature = new Map<string, number>();
 
     for (const entry of logs as LogEntry[]) {
-      const createdAt = entry.created_at ?? 0;
-      const dateKey = getDateKey(createdAt);
+      const logTimestamp = entry.log_timestamp;
+      const dateKey = getDateKey(logTimestamp);
 
       if (lastDateKey !== dateKey) {
         result.push({
           type: "divider",
           key: `divider-${dateKey}`,
-          label: formatDateLabel(createdAt),
+          label: formatDateLabel(logTimestamp),
         });
         lastDateKey = dateKey;
       }
 
-      const id =
-        entry.id ??
-        `${createdAt}-${entry.input_index ?? "na"}-${entry.is_error ? 1 : 0}-${entry.message ?? ""}`;
+      const signature = getLogRowIdentifier(entry);
+      const nextOccurrence = (occurrenceBySignature.get(signature) ?? 0) + 1;
+      occurrenceBySignature.set(signature, nextOccurrence);
+      const id = `${signature}::${nextOccurrence}`;
 
       result.push({
         type: "log",
         key: `log-${id}`,
         id: String(id),
-        createdAt,
+        logTimestamp,
         message: entry.message || "No message",
       });
     }
 
     return result;
-  }, [logs, hasAnyIndexedLogs, hasAnyKnownIndexes, selectedIndex]);
-
-  const oldFormatNoPerInput =
-    items.length === 1 && items[0]?.type === "empty" && logs.length > 0 && !hasAnyIndexedLogs;
+  }, [logs, hasAnyKnownIndexes, selectedIndex]);
 
   const jobHasNoLogsAtAll = !hasAnyKnownIndexes;
 
-  const stepperDisabled =
-    isPageLoading || activeIndexList.length === 0 || oldFormatNoPerInput || jobHasNoLogsAtAll;
+  const stepperDisabled = isPageLoading || activeIndexList.length === 0 || jobHasNoLogsAtAll;
 
   const goPrev = () => {
     if (stepperDisabled) return;
@@ -261,8 +249,8 @@ const JobLogs = ({ jobId, nInputs }: JobLogsProps) => {
     setHasAutoScrolled(false);
   }, [jobId, selectedIndex, showFailedOnly]);
 
-  const formatTime = (ts: number) => {
-    const date = new Date(ts * 1000);
+  const formatTime = (logTimestamp: number) => {
+    const date = new Date(logTimestamp * 1000);
     return date.toLocaleTimeString("en-US", {
       hour: "numeric",
       minute: "2-digit",
@@ -439,18 +427,13 @@ const JobLogs = ({ jobId, nInputs }: JobLogsProps) => {
                 if (scrollOffset > 0) return;
                 if (isPageLoading || isLoadingOlderLogs) return;
                 if (!hasMoreOlderLogs) return;
-                if (logs.length === 0) return;
+                if (oldestLoadedLogDocumentTimestamp === undefined) return;
 
-                const oldestLoadedTimestampNanos =
-                  logs[0]?.created_at_nanos ??
-                  (logs[0]?.created_at !== undefined
-                    ? String(Math.trunc(logs[0].created_at * 1_000_000_000))
-                    : undefined);
-                if (oldestLoadedTimestampNanos === undefined) return;
-
-                topAnchorLogIdRef.current = logs[0]?.id ? String(logs[0].id) : null;
+                const firstVisibleLogRow = items.find((row) => row.type === "log");
+                if (!firstVisibleLogRow || firstVisibleLogRow.type !== "log") return;
+                topAnchorLogIdRef.current = firstVisibleLogRow.id;
                 setIsLoadingOlderLogs(true);
-                void loadInputLogs(jobId, selectedIndex, oldestLoadedTimestampNanos).finally(() => {
+                void loadInputLogs(jobId, selectedIndex, oldestLoadedLogDocumentTimestamp).finally(() => {
                   setIsLoadingOlderLogs(false);
                 });
               }}
@@ -503,7 +486,7 @@ const JobLogs = ({ jobId, nInputs }: JobLogsProps) => {
                       className={`grid grid-cols-[8rem,1fr] gap-2 px-4 py-2 border-t border-gray-200 transition ${background}`}
                     >
                       <div className="text-gray-500 text-left tabular-nums">
-                        {formatTime(row.createdAt)}
+                        {formatTime(row.logTimestamp)}
                       </div>
                       <div className="whitespace-pre-wrap break-words">{row.message}</div>
                     </div>

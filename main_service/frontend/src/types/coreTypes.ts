@@ -124,11 +124,8 @@ export interface ServiceAccount {
 }
 
 export interface LogEntry {
-  id?: string;
   message: string;
-  created_at: number;
-  created_at_nanos?: string;
-  input_index?: number | null;
+  log_timestamp: number;
   is_error?: boolean;
 }
 

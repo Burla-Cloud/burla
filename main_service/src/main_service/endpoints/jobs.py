@@ -2,8 +2,7 @@ import json
 import asyncio
 from time import time
 from datetime import datetime, timezone
-from typing import Optional, Any, Iterable
-import re
+from typing import Optional, Iterable
 
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import JSONResponse
@@ -26,32 +25,6 @@ async def current_num_results(job_id: str) -> int:
         return int(query_result[0][0].value or 0)
     except Exception:
         return 0
-
-
-def _ts_to_nanoseconds(ts_val: Any, fallback_ts: Any = None) -> int:
-    v = ts_val if ts_val is not None else fallback_ts
-    if v is None:
-        return 0
-
-    if isinstance(v, (int, float)):
-        return int(v * 1_000_000_000)
-
-    if isinstance(v, str):
-        timestamp_match = re.match(
-            r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?(Z|[+-]\d{2}:\d{2})$",
-            v,
-        )
-        if not timestamp_match:
-            return 0
-        base_timestamp, fractional_part, timezone_part = timestamp_match.groups()
-        normalized_timezone = "+00:00" if timezone_part == "Z" else timezone_part
-        dt = datetime.fromisoformat(f"{base_timestamp}{normalized_timezone}")
-        fractional_nanoseconds = int((fractional_part or "").ljust(9, "0")[:9] or "0")
-        return int(dt.timestamp()) * 1_000_000_000 + fractional_nanoseconds
-
-    epoch_seconds = int(v.timestamp())
-    nanosecond_component = getattr(v, "nanosecond", v.microsecond * 1_000)
-    return epoch_seconds * 1_000_000_000 + nanosecond_component
 
 
 def job_stream(jobs_current_page: firestore.CollectionReference):
@@ -225,7 +198,6 @@ async def stream_or_fetch_job_logs(
     index: int,
     oldest_timestamp: Optional[str] = None,
 ):
-    fixed_limit = 500
     logs_collection = ASYNC_DB.collection("jobs").document(job_id).collection("logs")
     error_documents_query = logs_collection.where(
         filter=firestore.FieldFilter("is_error", "==", True)
@@ -234,51 +206,45 @@ async def stream_or_fetch_job_logs(
     failed_inputs_count_response = await error_documents_query.count().get()
     failed_inputs_count = int(failed_inputs_count_response[0][0].value or 0)
 
+    oldest_log_document_timestamp = float(oldest_timestamp) if oldest_timestamp else None
+    newest_document = None
+    newest_document_timestamp = None
+    has_more_older = False
+
     logs_query = logs_collection.where(
         filter=firestore.FieldFilter("input_index", "==", int(index))
-    )  # .order_by("timestamp", direction=firestore.Query.DESCENDING)
-
-    candidate_logs: list[tuple[int, dict[str, Any]]] = []
-    filtered_log_count = 0
-    oldest_timestamp_nanos = int(oldest_timestamp) if oldest_timestamp is not None else None
-
+    )
     async for doc in logs_query.stream():
-        d = doc.to_dict() or {}
-        doc_id = doc.id
-        fallback_doc_ts = d.get("timestamp")
-        doc_logs = d.get("logs", [])
+        log_document = doc.to_dict()
+        document_timestamp = log_document["timestamp"].timestamp()
+        if (
+            oldest_log_document_timestamp is not None
+            and document_timestamp >= oldest_log_document_timestamp
+        ):
+            continue
+        if newest_document_timestamp is None or document_timestamp > newest_document_timestamp:
+            if newest_document is not None:
+                has_more_older = True
+            newest_document = log_document
+            newest_document_timestamp = document_timestamp
+            continue
+        has_more_older = True
 
-        for reverse_offset, log in enumerate(reversed(doc_logs)):
-            log_index_in_document = len(doc_logs) - reverse_offset - 1
-            created_at_nanos = _ts_to_nanoseconds(log.get("timestamp"), fallback_doc_ts)
-            if oldest_timestamp_nanos is not None and created_at_nanos >= oldest_timestamp_nanos:
-                continue
-
-            filtered_log_count += 1
-            candidate_logs.append(
-                (
-                    created_at_nanos,
-                    {
-                        "id": f"{doc_id}:{log_index_in_document}",
-                        "message": log.get("message"),
-                        "created_at": created_at_nanos / 1_000_000_000,
-                        "created_at_nanos": str(created_at_nanos),
-                        "input_index": int(index),
-                        "is_error": bool(log.get("is_error", False)),
-                    },
-                )
+    logs = []
+    if newest_document is not None:
+        for log in newest_document["logs"]:
+            logs.append(
+                {
+                    "message": log["message"],
+                    "log_timestamp": log["timestamp"].timestamp(),
+                }
             )
-
-    candidate_logs.sort(key=lambda item: item[0], reverse=True)
-    selected_logs = [item[1] for item in candidate_logs[:fixed_limit]]
-    selected_logs.sort(key=lambda item: int(item["created_at_nanos"]))
-    has_more_older = filtered_log_count > fixed_limit
 
     return JSONResponse(
         {
-            "logs": selected_logs,
+            "logs": logs,
             "input_index": int(index),
-            "limit": fixed_limit,
+            "log_document_timestamp": newest_document_timestamp,
             "truncated": has_more_older,
             "has_more_older": has_more_older,
             "failed_inputs_count": failed_inputs_count,

@@ -7,7 +7,6 @@ import { LogEntry } from "@/types/coreTypes";
 
 interface JobLogsProps {
   jobId: string;
-  jobStatus?: string;
   nInputs?: number;
 }
 
@@ -16,24 +15,17 @@ type RowItem =
   | { type: "empty"; key: string; label: string }
   | { type: "log"; key: string; id: string; createdAt: number; message: string };
 
-const LIMIT_PER_INDEX = 200;
-
-const JobLogs = ({ jobId, jobStatus, nInputs }: JobLogsProps) => {
+const JobLogs = ({ jobId, nInputs }: JobLogsProps) => {
   const {
     getLogs,
-    getPageTruncation,
-    loadSummary,
-    loadPage,
-    startLiveStream,
-    closeLiveStream,
+    getFailedInputsCount,
+    getNextFailedInputIndex,
+    loadInputLogs,
     logsByJobId,
   } = useLogsContext();
 
   const [selectedIndex, setSelectedIndex] = useState<number>(0);
   const [showFailedOnly, setShowFailedOnly] = useState(false);
-
-  const [failedIndexes, setFailedIndexes] = useState<number[]>([]);
-  const [seenIndexes, setSeenIndexes] = useState<number[]>([]);
 
   const [isPageLoading, setIsPageLoading] = useState(true);
 
@@ -54,27 +46,6 @@ const JobLogs = ({ jobId, jobStatus, nInputs }: JobLogsProps) => {
       listRef.current?.resetAfterIndex(fromIndex, true);
     }
   }, []);
-
-  // Load summary once per job
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      const s = await loadSummary(jobId);
-      if (cancelled) return;
-
-      const failed = (s?.failed_indexes || []).slice().sort((a, b) => a - b);
-      const seen = (s?.seen_indexes || []).slice().sort((a, b) => a - b);
-
-      setFailedIndexes(failed);
-      setSeenIndexes(seen);
-
-      if (failed.length === 0) setShowFailedOnly(false);
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [jobId, loadSummary]);
 
   // Resize plumbing
   useEffect(() => {
@@ -113,17 +84,14 @@ const JobLogs = ({ jobId, jobStatus, nInputs }: JobLogsProps) => {
       .sort((a, b) => a - b);
   }, [jobId, logsByJobId]);
 
-  const hasAnyKnownIndexes =
-    seenIndexes.length > 0 || failedIndexes.length > 0 || availableIndexesFromLogs.length > 0;
+  const hasAnyKnownIndexes = availableIndexesFromLogs.length > 0;
+  const failedInputsCount = getFailedInputsCount(jobId);
 
   const activeIndexList = useMemo(() => {
-    // Failed-only affects stepping ONLY, not the displayed label.
-    if (showFailedOnly) return failedIndexes;
     if (totalInputs > 0) return Array.from({ length: totalInputs }, (_, i) => i);
-    if (seenIndexes.length > 0) return seenIndexes;
     if (availableIndexesFromLogs.length > 0) return availableIndexesFromLogs;
     return [];
-  }, [showFailedOnly, failedIndexes, totalInputs, seenIndexes, availableIndexesFromLogs]);
+  }, [totalInputs, availableIndexesFromLogs]);
 
   // Keep selectedIndex valid when lists change
   useEffect(() => {
@@ -140,10 +108,6 @@ const JobLogs = ({ jobId, jobStatus, nInputs }: JobLogsProps) => {
     return -1;
   }, [totalInputs, activeIndexList]);
 
-  const pageStart = selectedIndex;
-  const pageEnd = selectedIndex;
-  const pageRangeKey = useMemo(() => `${pageStart}-${pageEnd}`, [pageStart, pageEnd]);
-
   // Load only the currently viewed input index.
   useEffect(() => {
     if (selectedIndex < 0) {
@@ -155,13 +119,7 @@ const JobLogs = ({ jobId, jobStatus, nInputs }: JobLogsProps) => {
     (async () => {
       setIsPageLoading(true);
       try {
-        await loadPage(
-          jobId,
-          pageStart,
-          pageEnd,
-          LIMIT_PER_INDEX,
-          false
-        );
+        await loadInputLogs(jobId, selectedIndex);
       } finally {
         if (!cancelled) setIsPageLoading(false);
       }
@@ -170,18 +128,10 @@ const JobLogs = ({ jobId, jobStatus, nInputs }: JobLogsProps) => {
     return () => {
       cancelled = true;
     };
-  }, [jobId, selectedIndex, pageStart, pageEnd, loadPage]);
+  }, [jobId, selectedIndex, loadInputLogs]);
 
   // Logs for current index
   const logs = useMemo(() => getLogs(jobId, selectedIndex), [getLogs, jobId, selectedIndex]);
-  const pageTruncation = useMemo(
-    () => getPageTruncation(jobId, pageStart, pageEnd),
-    [getPageTruncation, jobId, pageStart, pageEnd]
-  );
-  const selectedIndexWasTruncated = useMemo(() => {
-    if (!pageTruncation?.truncated) return false;
-    return pageTruncation.truncatedIndexes.includes(selectedIndex);
-  }, [pageTruncation, selectedIndex]);
 
   const hasAnyIndexedLogs = useMemo(
     () => logs.some((logEntry) => logEntry?.input_index !== null && logEntry?.input_index !== undefined),
@@ -273,30 +223,25 @@ const JobLogs = ({ jobId, jobStatus, nInputs }: JobLogsProps) => {
 
   const goPrev = () => {
     if (stepperDisabled) return;
+    if (showFailedOnly) return;
     const pos = activeIndexList.indexOf(selectedIndex);
     const nextPos = pos <= 0 ? activeIndexList.length - 1 : pos - 1;
     setSelectedIndex(activeIndexList[nextPos]);
   };
 
-  const goNext = () => {
+  const goNext = async () => {
     if (stepperDisabled) return;
+    if (showFailedOnly) {
+      const nextFailedInputIndex = await getNextFailedInputIndex(jobId, selectedIndex);
+      if (nextFailedInputIndex !== null) setSelectedIndex(nextFailedInputIndex);
+      return;
+    }
     const pos = activeIndexList.indexOf(selectedIndex);
     const nextPos = pos === -1 || pos === activeIndexList.length - 1 ? 0 : pos + 1;
     setSelectedIndex(activeIndexList[nextPos]);
   };
 
-  // Stream logs for current index while RUNNING
-  useEffect(() => {
-    if (jobStatus === "RUNNING") {
-      const stop = startLiveStream(jobId, selectedIndex, true);
-      return () => stop();
-    }
-
-    closeLiveStream(jobId);
-    return () => {};
-  }, [jobId, jobStatus, selectedIndex, startLiveStream, closeLiveStream]);
-
-  // Reset react-window sizing on index/toggle changes
+  // Reset react-window sizing on index and filter changes
   useEffect(() => {
     sizeMapRef.current = {};
     listRef.current?.resetAfterIndex(0, true);
@@ -326,11 +271,22 @@ const JobLogs = ({ jobId, jobStatus, nInputs }: JobLogsProps) => {
 
   useEffect(() => {
     if (!hasMeasuredContainer) return;
+    if (isPageLoading) return;
     if (items.length === 0) return;
     if (hasAutoScrolled) return;
-    listRef.current?.scrollToItem(items.length - 1, "end");
+
+    const scrollToNewestLog = () => {
+      listRef.current?.scrollToItem(items.length - 1, "end");
+    };
+
+    scrollToNewestLog();
+    const delayedScrollTimer = window.setTimeout(scrollToNewestLog, 30);
     setHasAutoScrolled(true);
-  }, [items.length, hasMeasuredContainer, hasAutoScrolled]);
+
+    return () => {
+      window.clearTimeout(delayedScrollTimer);
+    };
+  }, [items.length, hasMeasuredContainer, hasAutoScrolled, isPageLoading]);
 
   // Always show Input X of Y (even when failed-only is on)
   const actualInputLabel = useMemo(() => {
@@ -356,16 +312,7 @@ const JobLogs = ({ jobId, jobStatus, nInputs }: JobLogsProps) => {
     disabled
       ? "h-8 w-8 grid place-items-center rounded-md border border-gray-200 bg-white opacity-50 cursor-default"
       : "h-8 w-8 grid place-items-center rounded-md border border-gray-200 bg-white hover:bg-gray-50 active:bg-gray-100";
-
-  const failedCount = failedIndexes.length;
-
-  // FIX: keep red the same regardless of toggle, optionally fade when disabled
-  const failedPillClass =
-    failedCount === 0
-      ? "border-gray-200 bg-white text-gray-700"
-      : stepperDisabled
-        ? "border-red-200 bg-red-50 text-red-400 opacity-60"
-        : "border-red-200 bg-red-50 text-red-700";
+  const failedCount = failedInputsCount;
 
   return (
     <div className="mt-4 mb-4 flex flex-col flex-1 min-h-0">
@@ -392,7 +339,9 @@ const JobLogs = ({ jobId, jobStatus, nInputs }: JobLogsProps) => {
 
               <button
                 type="button"
-                onClick={goNext}
+                onClick={() => {
+                  void goNext();
+                }}
                 disabled={stepperDisabled}
                 className={iconBtnClass(stepperDisabled)}
                 aria-label="Next input"
@@ -409,38 +358,30 @@ const JobLogs = ({ jobId, jobStatus, nInputs }: JobLogsProps) => {
                 checked={showFailedOnly}
                 onCheckedChange={(checked) => {
                   setShowFailedOnly(checked);
-
                   if (checked) {
-                    if (failedIndexes.length > 0) setSelectedIndex(failedIndexes[0]);
-                  } else {
-                    // FIX: when turning off failed-only, go back to Input 1
-                    setSelectedIndex(0);
+                    void (async () => {
+                      const nextFailedInputIndex = await getNextFailedInputIndex(
+                        jobId,
+                        selectedIndex
+                      );
+                      if (nextFailedInputIndex !== null) setSelectedIndex(nextFailedInputIndex);
+                    })();
                   }
                 }}
-                disabled={failedCount === 0 || stepperDisabled}
+                disabled={failedCount === 0}
                 className="scale-75 origin-left disabled:cursor-default"
               />
-
               <span className="whitespace-nowrap text-muted-foreground">Failed only</span>
-
-              <span
-                className={`ml-1 inline-flex items-center rounded-full border px-2.5 py-1 text-xs tabular-nums ${failedPillClass}`}
-              >
+              <span className="ml-1 inline-flex items-center rounded-full border border-red-200 bg-red-50 px-2.5 py-1 text-xs tabular-nums text-red-700">
                 {failedCount}
               </span>
             </label>
+
           </div>
         </div>
       </div>
 
       <div className="flex-1 min-h-0 bg-white border border-gray-200 rounded-lg shadow-sm relative">
-        {pageTruncation?.truncated && (
-          <div className="px-4 py-2 border-b border-amber-200 bg-amber-50 text-amber-900 text-xs">
-            {selectedIndexWasTruncated
-              ? "Showing only the most recent logs for this input because log volume exceeded the fetch limit."
-              : "Showing only the most recent logs for some inputs because log volume exceeded the fetch limit."}
-          </div>
-        )}
         {isPageLoading ? (
           <div ref={containerRef} className="h-full w-full flex items-center justify-center">
             <div className="flex flex-col items-center text-gray-500">

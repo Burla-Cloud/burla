@@ -364,15 +364,21 @@ def install_pkgs_and_execute_job(
             firestore_formatted_log_msg = {
                 "mapValue": {
                     "fields": {
-                        "input_index": {"integerValue": input_index},
                         "timestamp": {"timestampValue": timestamp_str},
                         "message": {"stringValue": tb_str},
-                        "is_error": {"booleanValue": True},
                     }
                 }
             }
             logs_field = {"arrayValue": {"values": [firestore_formatted_log_msg]}}
-            data = {"fields": {"logs": logs_field, "timestamp": {"timestampValue": timestamp_str}}}
+            input_index_field = {"integerValue": input_index}
+            data = {
+                "fields": {
+                    "logs": logs_field,
+                    "timestamp": {"timestampValue": timestamp_str},
+                    "input_index": input_index_field,
+                    "is_error": {"booleanValue": True},
+                }
+            }
             url = f"{DB_BASE_URL}/jobs/{job_id}/logs"
             response = request_with_valid_dbheaders("post", url, json=data, timeout=5)
             # response = requests.post(url, headers=DB_HEADERS, json=data, timeout=5)

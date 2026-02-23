@@ -219,6 +219,7 @@ async def get_next_failed_input_index(
 async def stream_or_fetch_job_logs(
     job_id: str,
     index: int,
+    oldest_timestamp: Optional[int] = None,
 ):
     fixed_limit = 500
     logs_collection = ASYNC_DB.collection("jobs").document(job_id).collection("logs")
@@ -233,8 +234,8 @@ async def stream_or_fetch_job_logs(
         filter=firestore.FieldFilter("input_index", "==", int(index))
     )  # .order_by("timestamp", direction=firestore.Query.DESCENDING)
 
-    logs = []
-    truncated = False
+    candidate_logs = []
+    filtered_log_count = 0
 
     async for doc in logs_query.stream():
         d = doc.to_dict() or {}
@@ -244,30 +245,33 @@ async def stream_or_fetch_job_logs(
 
         for reverse_offset, log in enumerate(reversed(doc_logs)):
             log_index_in_document = len(doc_logs) - reverse_offset - 1
-            logs.append(
+            created_at = _ts_to_seconds(log.get("timestamp"), fallback_doc_ts)
+            if oldest_timestamp is not None and created_at >= int(oldest_timestamp):
+                continue
+
+            filtered_log_count += 1
+            candidate_logs.append(
                 {
                     "id": f"{doc_id}:{log_index_in_document}",
                     "message": log.get("message"),
-                    "created_at": _ts_to_seconds(log.get("timestamp"), fallback_doc_ts),
+                    "created_at": created_at,
                     "input_index": int(index),
                     "is_error": bool(log.get("is_error", False)),
                 }
             )
 
-            if len(logs) >= fixed_limit:
-                truncated = True
-                break
+    candidate_logs.sort(key=lambda item: item["created_at"], reverse=True)
+    selected_logs = candidate_logs[:fixed_limit]
+    selected_logs.sort(key=lambda item: item["created_at"])
+    has_more_older = filtered_log_count > fixed_limit
 
-        if truncated:
-            break
-
-    logs.reverse()
     return JSONResponse(
         {
-            "logs": logs,
+            "logs": selected_logs,
             "input_index": int(index),
             "limit": fixed_limit,
-            "truncated": truncated,
+            "truncated": has_more_older,
+            "has_more_older": has_more_older,
             "failed_inputs_count": failed_inputs_count,
         }
     )

@@ -4,6 +4,7 @@ import { LogEntry } from "@/types/coreTypes";
 type JobLogsState = {
   byIndex: Record<string, LogEntry[]>;
   failedInputsCount: number;
+  hasMoreOlderByIndex: Record<string, boolean>;
 };
 
 type InputLogsResponse = {
@@ -15,6 +16,7 @@ type InputLogsResponse = {
     is_error?: boolean;
   }>;
   failed_inputs_count?: number;
+  has_more_older?: boolean;
 };
 
 type NextFailedInputResponse = {
@@ -24,8 +26,9 @@ type NextFailedInputResponse = {
 interface LogsContextType {
   getLogs: (jobId: string, index: number) => LogEntry[];
   getFailedInputsCount: (jobId: string) => number;
+  getHasMoreOlderLogs: (jobId: string, index: number) => boolean;
   getNextFailedInputIndex: (jobId: string, index: number) => Promise<number | null>;
-  loadInputLogs: (jobId: string, index: number) => Promise<void>;
+  loadInputLogs: (jobId: string, index: number, oldestTimestamp?: number) => Promise<void>;
   logsByJobId: Record<string, JobLogsState>;
 }
 
@@ -33,6 +36,7 @@ const LogsContext = createContext<LogsContextType>({
   logsByJobId: {},
   getLogs: () => [],
   getFailedInputsCount: () => 0,
+  getHasMoreOlderLogs: () => false,
   getNextFailedInputIndex: async () => null,
   loadInputLogs: async () => {},
 });
@@ -75,6 +79,15 @@ export const LogsProvider = ({ children }: { children: React.ReactNode }) => {
     [logsByJobId]
   );
 
+  const getHasMoreOlderLogs = useCallback(
+    (jobId: string, index: number) => {
+      const state = logsByJobId[jobId];
+      if (!state) return false;
+      return state.hasMoreOlderByIndex[String(index)] || false;
+    },
+    [logsByJobId]
+  );
+
   const getNextFailedInputIndex = useCallback(async (jobId: string, index: number) => {
     const queryString = new URLSearchParams({ index: String(index) });
     const response = await fetch(
@@ -85,15 +98,19 @@ export const LogsProvider = ({ children }: { children: React.ReactNode }) => {
     return payload.next_failed_input_index ?? null;
   }, []);
 
-  const loadInputLogs = useCallback(async (jobId: string, index: number) => {
+  const loadInputLogs = useCallback(async (jobId: string, index: number, oldestTimestamp?: number) => {
     ensureIndexSets(jobId);
-    if (loadedIndexesRef.current[jobId].has(index)) return;
+    const isInitialPageLoad = oldestTimestamp === undefined;
+    if (isInitialPageLoad && loadedIndexesRef.current[jobId].has(index)) return;
     if (inflightIndexesRef.current[jobId].has(index)) return;
 
     inflightIndexesRef.current[jobId].add(index);
 
     try {
       const qs = new URLSearchParams({ index: String(index) });
+      if (oldestTimestamp !== undefined) {
+        qs.set("oldest_timestamp", String(oldestTimestamp));
+      }
       const response = await fetch(`/v1/jobs/${jobId}/logs?${qs.toString()}`);
       if (!response.ok) return;
 
@@ -110,11 +127,16 @@ export const LogsProvider = ({ children }: { children: React.ReactNode }) => {
         const currentState = previousState[jobId] || {
           byIndex: {},
           failedInputsCount: 0,
+          hasMoreOlderByIndex: {},
         };
         return {
           ...previousState,
           [jobId]: {
             failedInputsCount: payload.failed_inputs_count || 0,
+            hasMoreOlderByIndex: {
+              ...currentState.hasMoreOlderByIndex,
+              [String(index)]: Boolean(payload.has_more_older),
+            },
             byIndex: {
               ...currentState.byIndex,
               [String(index)]: mergeSortedUnique(currentState.byIndex[String(index)] || [], nextLogsForIndex),
@@ -123,7 +145,9 @@ export const LogsProvider = ({ children }: { children: React.ReactNode }) => {
         };
       });
 
-      loadedIndexesRef.current[jobId].add(index);
+      if (isInitialPageLoad) {
+        loadedIndexesRef.current[jobId].add(index);
+      }
     } finally {
       inflightIndexesRef.current[jobId].delete(index);
     }
@@ -134,10 +158,11 @@ export const LogsProvider = ({ children }: { children: React.ReactNode }) => {
       logsByJobId,
       getLogs,
       getFailedInputsCount,
+      getHasMoreOlderLogs,
       getNextFailedInputIndex,
       loadInputLogs,
     }),
-    [logsByJobId, getLogs, getFailedInputsCount, getNextFailedInputIndex, loadInputLogs]
+    [logsByJobId, getLogs, getFailedInputsCount, getHasMoreOlderLogs, getNextFailedInputIndex, loadInputLogs]
   );
 
   return <LogsContext.Provider value={value}>{children}</LogsContext.Provider>;

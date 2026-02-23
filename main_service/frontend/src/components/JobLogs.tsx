@@ -19,6 +19,7 @@ const JobLogs = ({ jobId, nInputs }: JobLogsProps) => {
   const {
     getLogs,
     getFailedInputsCount,
+    getHasMoreOlderLogs,
     getNextFailedInputIndex,
     loadInputLogs,
     logsByJobId,
@@ -28,6 +29,7 @@ const JobLogs = ({ jobId, nInputs }: JobLogsProps) => {
   const [showFailedOnly, setShowFailedOnly] = useState(false);
 
   const [isPageLoading, setIsPageLoading] = useState(true);
+  const [isLoadingOlderLogs, setIsLoadingOlderLogs] = useState(false);
 
   const [hasAutoScrolled, setHasAutoScrolled] = useState(false);
   const [windowWidth, setWindowWidth] = useState(window.innerWidth);
@@ -39,6 +41,7 @@ const JobLogs = ({ jobId, nInputs }: JobLogsProps) => {
   const [hasMeasuredContainer, setHasMeasuredContainer] = useState<boolean>(false);
 
   const sizeMapRef = useRef<Record<string, number>>({});
+  const topAnchorLogIdRef = useRef<string | null>(null);
 
   const setSizeForKey = useCallback((key: string, size: number, fromIndex: number) => {
     if (sizeMapRef.current[key] !== size) {
@@ -132,6 +135,7 @@ const JobLogs = ({ jobId, nInputs }: JobLogsProps) => {
 
   // Logs for current index
   const logs = useMemo(() => getLogs(jobId, selectedIndex), [getLogs, jobId, selectedIndex]);
+  const hasMoreOlderLogs = getHasMoreOlderLogs(jobId, selectedIndex);
 
   const hasAnyIndexedLogs = useMemo(
     () => logs.some((logEntry) => logEntry?.input_index !== null && logEntry?.input_index !== undefined),
@@ -297,6 +301,20 @@ const JobLogs = ({ jobId, nInputs }: JobLogsProps) => {
     };
   }, [items.length, hasMeasuredContainer, hasAutoScrolled, isPageLoading]);
 
+  useEffect(() => {
+    if (isLoadingOlderLogs) return;
+    const anchorLogId = topAnchorLogIdRef.current;
+    if (!anchorLogId) return;
+
+    const anchorRowIndex = items.findIndex(
+      (row) => row.type === "log" && row.id === anchorLogId
+    );
+    if (anchorRowIndex >= 0) {
+      listRef.current?.scrollToItem(anchorRowIndex, "start");
+    }
+    topAnchorLogIdRef.current = null;
+  }, [items, isLoadingOlderLogs]);
+
   // Always show Input X of Y (even when failed-only is on)
   const actualInputLabel = useMemo(() => {
     const total = totalInputs || (maxKnownIndex >= 0 ? maxKnownIndex + 1 : 0);
@@ -397,7 +415,17 @@ const JobLogs = ({ jobId, nInputs }: JobLogsProps) => {
             </div>
           </div>
         ) : (
-          <div ref={containerRef} className="font-mono text-xs text-gray-800 h-full">
+          <div ref={containerRef} className="font-mono text-xs text-gray-800 h-full relative">
+            {isLoadingOlderLogs && (
+              <div className="absolute top-0 left-0 right-0 z-10 flex items-center justify-center gap-2 border-b border-gray-200 bg-white/95 py-2">
+                <div
+                  className="h-4 w-4 rounded-full border-2 border-gray-300 border-t-primary animate-spin"
+                  role="status"
+                  aria-label="Loading older logs"
+                />
+                <span className="text-xs text-gray-600">Loading older logs…</span>
+              </div>
+            )}
             <List
               height={listHeight}
               itemCount={items.length}
@@ -405,6 +433,23 @@ const JobLogs = ({ jobId, nInputs }: JobLogsProps) => {
               width="100%"
               ref={listRef}
               itemKey={(index) => items[index]?.key ?? index}
+              onScroll={({ scrollDirection, scrollOffset, scrollUpdateWasRequested }) => {
+                if (scrollUpdateWasRequested) return;
+                if (scrollDirection !== "backward") return;
+                if (scrollOffset > 0) return;
+                if (isPageLoading || isLoadingOlderLogs) return;
+                if (!hasMoreOlderLogs) return;
+                if (logs.length === 0) return;
+
+                const oldestLoadedTimestamp = logs[0]?.created_at;
+                if (oldestLoadedTimestamp === undefined || oldestLoadedTimestamp === null) return;
+
+                topAnchorLogIdRef.current = logs[0]?.id ? String(logs[0].id) : null;
+                setIsLoadingOlderLogs(true);
+                void loadInputLogs(jobId, selectedIndex, oldestLoadedTimestamp).finally(() => {
+                  setIsLoadingOlderLogs(false);
+                });
+              }}
             >
               {({ index, style }) => {
                 const row = items[index];

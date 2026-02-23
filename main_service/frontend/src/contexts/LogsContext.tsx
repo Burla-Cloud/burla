@@ -12,7 +12,7 @@ type SummaryResp = {
   indexes_with_logs?: number[];
 };
 
-type SummaryOpts = { force?: boolean };
+type SummaryOpts = { force?: boolean; signal?: AbortSignal };
 
 interface LogsContextType {
   logsByJobId: Record<string, JobLogsState>;
@@ -27,7 +27,8 @@ interface LogsContextType {
     indexStart: number,
     indexEnd: number,
     limitPerIndex?: number,
-    includeGlobal?: boolean
+    includeGlobal?: boolean,
+    signal?: AbortSignal
   ) => Promise<void>;
 
   evictToWindow: (jobId: string, keepStart: number, keepEnd: number, windowPages?: number) => void;
@@ -149,7 +150,7 @@ export const LogsProvider = ({ children }: { children: React.ReactNode }) => {
     if (!opts?.force && summaryCacheRef.current[jobId]) return summaryCacheRef.current[jobId];
 
     try {
-      const res = await fetch(`/v1/jobs/${jobId}/logs?summary=true`);
+      const res = await fetch(`/v1/jobs/${jobId}/logs?summary=true`, { signal: opts?.signal });
       if (!res.ok) return null;
       const json = (await res.json()) as SummaryResp;
       summaryCacheRef.current[jobId] = json;
@@ -165,7 +166,8 @@ export const LogsProvider = ({ children }: { children: React.ReactNode }) => {
       indexStart: number,
       indexEnd: number,
       limitPerIndex: number = 200,
-      includeGlobal: boolean = true
+      includeGlobal: boolean = true,
+      signal?: AbortSignal
     ) => {
       ensureSets(jobId);
 
@@ -185,7 +187,7 @@ export const LogsProvider = ({ children }: { children: React.ReactNode }) => {
           include_global: includeGlobal ? "true" : "false",
         });
 
-        const res = await fetch(`/v1/jobs/${jobId}/logs?${qs.toString()}`);
+        const res = await fetch(`/v1/jobs/${jobId}/logs?${qs.toString()}`, { signal });
         if (!res.ok) return;
 
         const json = await res.json();

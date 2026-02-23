@@ -1,28 +1,40 @@
 import { useParams, useNavigate } from "react-router-dom";
-import { useEffect, useState } from "react";
+import { useEffect, useCallback, useState } from "react";
 import { useJobs } from "@/contexts/JobsContext";
+import { useLogsContext } from "@/contexts/LogsContext";
 import JobLogs from "@/components/JobLogs";
 import { Button } from "@/components/ui/button";
 import { PowerOff } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
 
+type JobLogsSummary = {
+    failed_indexes: number[];
+    seen_indexes?: number[];
+    indexes_with_logs?: number[];
+};
+
 const JobDetails = () => {
     const { jobId } = useParams<{ jobId: string }>();
     const { jobs } = useJobs();
-    const navigate = useNavigate();
+    const { clearSummaryCache, closeLiveStream } = useLogsContext();
+    const navigate = useNavigate(); 
     const { toast } = useToast();
     const [isStopping, setIsStopping] = useState(false);
+    const [initialLogsSummary, setInitialLogsSummary] = useState<JobLogsSummary | null>(null);
+    const [failedCount, setFailedCount] = useState<number>(0);
+    const [isStatsLoading, setIsStatsLoading] = useState(true);
+    const job = jobId ? jobs.find((j) => j.id === jobId) : undefined;
     const [userTimeZone, setUserTimeZone] = useState<string>(() => {
         const stored = typeof window !== "undefined" ? localStorage.getItem("userTimezone") : null;
         if (stored) return stored;
         const cookieTz =
             typeof document !== "undefined"
-                ? document.cookie
+                ? document.cookie 
                       .split("; ")
-                      .find((row) => row.startsWith("timezone="))
-                      ?.split("=")[1]
+                      .find((row) => row.startsWith("timezone="))   
+                      ?.split("=")[1] 
                 : null;
-        return cookieTz || Intl.DateTimeFormat().resolvedOptions().timeZone;
+        return cookieTz || Intl.DateTimeFormat().resolvedOptions().timeZone;   
     });
 
     useEffect(() => {
@@ -55,6 +67,67 @@ const JobDetails = () => {
             cancelled = true;
         };
     }, []);
+
+    useEffect(() => {
+        if (!jobId) return;
+        return () => {
+            closeLiveStream(jobId);
+            clearSummaryCache(jobId);
+        };
+    }, [jobId, closeLiveStream, clearSummaryCache]);
+
+    const fetchLogsSummary = async (
+        activeJobId: string,
+        signal?: AbortSignal
+    ): Promise<JobLogsSummary | null> => {
+        try {
+            const res = await fetch(`/v1/jobs/${activeJobId}/logs?summary=true`, { signal });
+            if (!res.ok) return null;
+            const data = await res.json();
+            return {
+                failed_indexes: Array.isArray(data?.failed_indexes) ? data.failed_indexes : [],
+                seen_indexes: Array.isArray(data?.seen_indexes) ? data.seen_indexes : [],
+                indexes_with_logs: Array.isArray(data?.indexes_with_logs)
+                    ? data.indexes_with_logs
+                    : [],
+            };
+        } catch {
+            return null;
+        }
+    };
+
+    const handleFailedCountChange = useCallback((nextFailedCount: number) => {
+        setFailedCount((prev) => (prev === nextFailedCount ? prev : nextFailedCount));
+    }, []);
+
+    useEffect(() => {
+        if (!jobId) {
+            setInitialLogsSummary(null);
+            setFailedCount(0);
+            setIsStatsLoading(false);
+            return;
+        }
+
+        let cancelled = false;
+        const initialController = new AbortController();
+        setIsStatsLoading(true);
+        setInitialLogsSummary(null);
+        setFailedCount(0);
+
+        const loadInitialSummary = async () => {
+            const summary = await fetchLogsSummary(jobId, initialController.signal);
+            if (cancelled) return;
+            setInitialLogsSummary(summary);
+            setFailedCount(summary?.failed_indexes?.length ?? 0);
+            setIsStatsLoading(false);
+        };
+        loadInitialSummary();
+
+        return () => {
+            cancelled = true;
+            initialController.abort();
+        };
+    }, [jobId]);
 
     const getTimeZoneAbbr = (tz: string, at: Date): string => {
         const parts = new Intl.DateTimeFormat("en-US", {
@@ -140,101 +213,165 @@ const JobDetails = () => {
         );
     }
 
-    const job = jobs.find((j) => j.id === jobId);
+    const isPageLoading = !job || isStatsLoading;
 
-    if (!job) {
+    if (isPageLoading) {
         return (
             <div className="flex-1 flex flex-col items-center justify-center px-12 pt-10">
-                <h1 className="text-2xl font-semibold text-gray-500">Loading job...</h1>
+                <div className="inline-flex items-center gap-3 text-gray-600">
+                    <div
+                        className="h-7 w-7 rounded-full border-2 border-gray-300 border-t-primary animate-spin"
+                        role="status"
+                        aria-label="Loading job details"
+                    />
+                    <h1 className="text-2xl font-semibold text-gray-500">Loading job details...</h1>
+                </div>
             </div>
         );
     }
 
-    return (
-        <div className="flex flex-col flex-1 min-h-0 px-12 pt-0">
-            <div className="max-w-6xl mx-auto w-full flex flex-col flex-1 min-h-0">
-                {/* Breadcrumb */}
-                <h1 className="text-3xl font-bold mt-[-4px] mb-3 text-primary">
-                    <button
-                        onClick={() => navigate("/jobs")}
-                        className="hover:underline underline-offset-2 decoration-[0.5px] transition text-inherit"
-                    >
-                        Jobs
-                    </button>
-                    <span className="mx-2 text-inherit">›</span>
-                    <span className="text-inherit">{job.id}</span>
-                </h1>
+    const safeFailedCount = failedCount;
+    const succeededCount = Math.max(0, job.n_results - safeFailedCount);
+    const remainingCount = Math.max(0, job.n_inputs - job.n_results);
+    const completionPct = job.n_inputs ? Math.min(100, (job.n_results / job.n_inputs) * 100) : 0;
+    const succeededPct = job.n_inputs ? (succeededCount / job.n_inputs) * 100 : 0;
+    const failedPct = job.n_inputs ? (safeFailedCount / job.n_inputs) * 100 : 0;
+    const remainingPct = job.n_inputs ? (remainingCount / job.n_inputs) * 100 : 0;
 
-                {/* Metadata row with Stop button on the same row */}
-                <div className="flex flex-row items-center justify-between text-sm text-gray-600 mb-3">
-                    <div className="flex items-center space-x-6">
-                        <div className="flex items-center space-x-2">
-                            <div className={getStatusClass(job.status)} />
-                            <span className="text-sm capitalize">
-                                {job.status?.toUpperCase() || "UNKNOWN"}
-                            </span>
-                        </div>
-                        <div className="flex items-baseline">
-                            <strong>Function:</strong>
-                            <span className="ml-2">{job.function_name ?? "Unknown"}</span>
-                        </div>
-                        <div className="flex items-baseline">
-                            <strong>Started At:</strong>
-                            <span className="ml-2 flex items-baseline">
-                                <span className="tabular-nums">
-                                    {formatStartedAtTime(job.started_at)}
+    return (
+        <div className="flex min-h-0 flex-1 flex-col px-12 pt-0 pb-[25px] -mb-12">
+            <div className="mx-auto flex min-h-0 w-full max-w-6xl flex-1 flex-col">
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between lg:gap-8">
+                    <div className="min-w-0">
+                        <h1 className="mb-2 text-3xl font-bold text-primary">
+                            <button
+                                onClick={() => navigate("/jobs")}
+                                className="hover:underline underline-offset-2 decoration-[0.5px] transition text-inherit"
+                            >
+                                Jobs
+                            </button>
+                            <span className="mx-2 text-inherit">›</span>
+                            <span className="text-inherit">{job.id}</span>
+                        </h1>
+
+                        <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm text-gray-600">
+                            <div className="flex items-center space-x-2">
+                                <div className={getStatusClass(job.status)} />
+                                <span className="text-sm capitalize">
+                                    {job.status?.toUpperCase() || "UNKNOWN"}
                                 </span>
-                                <span className="ml-1">
-                                    {formatStartedAtWeekday(job.started_at)}
+                            </div>
+                            <div className="flex items-baseline">
+                                <strong>Function:</strong>
+                                <span className="ml-2">{job.function_name ?? "Unknown"}</span>
+                            </div>
+                            <div className="flex items-baseline">
+                                <strong>Started At:</strong>
+                                <span className="ml-2 flex items-baseline">
+                                    <span className="tabular-nums">
+                                        {formatStartedAtTime(job.started_at)}
+                                    </span>
+                                    <span className="ml-1">
+                                        {formatStartedAtWeekday(job.started_at)}
+                                    </span>
+                                    <span className="ml-1">
+                                        {formatStartedAtMonthDay(job.started_at)}
+                                    </span>
                                 </span>
-                                <span className="ml-1">
-                                    {formatStartedAtMonthDay(job.started_at)}
-                                </span>
-                            </span>
+                            </div>
                         </div>
                     </div>
-                    <Button
-                        variant="destructive"
-                        size="lg"
-                        className="w-32 -mt-2"
-                        onClick={stopJob}
-                        disabled={
-                            isStopping || (job?.status !== "RUNNING" && job?.status !== "PENDING")
-                        }
-                    >
-                        <PowerOff className="mr-2 h-4 w-4" />
-                        Stop
-                    </Button>
+
+                    <div className="flex w-full justify-end lg:w-auto lg:pt-2">
+                        <Button
+                            variant="destructive"
+                            size="lg"
+                            className="w-32"
+                            onClick={stopJob}
+                            disabled={
+                                isStopping || (job?.status !== "RUNNING" && job?.status !== "PENDING")
+                            }
+                        >
+                            <PowerOff className="mr-2 h-4 w-4" />
+                            Stop
+                        </Button>
+                    </div>
                 </div>
 
-                <div className="mb-4">
-                    <div className="flex flex-col space-y-0.5 min-w-[100px]">
+                <div className="mt-4 mb-3 rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-[0_1px_2px_rgba(15,23,42,0.05)]">
+                    <div className="flex items-end justify-between">
                         <div>
-                            <strong>Results:</strong> {job.n_results.toLocaleString()} /{" "}
-                            {job.n_inputs.toLocaleString()}
+                            <div className="text-[11px] font-semibold tracking-[0.08em] uppercase text-slate-500">
+                                Results
+                            </div>
+                            <div className="mt-0.5 text-lg font-semibold tabular-nums text-slate-700">
+                                {job.n_results.toLocaleString()}
+                                <span className="mx-1.5 text-slate-300">/</span>
+                                <span className="text-slate-500">{job.n_inputs.toLocaleString()}</span>
+                            </div>
                         </div>
-                        <div className="w-full bg-gray-200 rounded h-1.5 overflow-hidden">
+                        <div className="text-right">
+                            <div className="text-[11px] font-semibold tracking-[0.08em] uppercase text-slate-500">
+                                Completed
+                            </div>
+                            <div className="mt-0.5 text-sm font-semibold tabular-nums text-slate-700">
+                                {completionPct.toFixed(1)}%
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-slate-200">
+                        <div className="flex h-full w-full">
                             <div
-                                className="bg-primary h-1.5 transition-all"
-                                style={{
-                                    width: `${
-                                        job.n_inputs
-                                            ? Math.min(100, (job.n_results / job.n_inputs) * 100)
-                                            : 0
-                                    }%`,
-                                }}
+                                className="h-full bg-emerald-500 transition-all"
+                                style={{ width: `${succeededPct}%` }}
+                                aria-hidden="true"
+                            />
+                            <div
+                                className="h-full bg-rose-500 transition-all"
+                                style={{ width: `${failedPct}%` }}
+                                aria-hidden="true"
+                            />
+                            <div
+                                className="h-full bg-amber-400 transition-all"
+                                style={{ width: `${remainingPct}%` }}
+                                aria-hidden="true"
                             />
                         </div>
                     </div>
-                </div>
 
+                    <div className="mt-2 flex items-center gap-5 text-sm">
+                        <span className="inline-flex items-center gap-1.5 text-slate-700">
+                            <span className="h-2 w-2 rounded-full bg-emerald-500" />
+                            <span className="text-slate-500">Success</span>
+                            <strong className="tabular-nums">{succeededCount.toLocaleString()}</strong>
+                        </span>
+                        <span className="inline-flex items-center gap-1.5 text-slate-700">
+                            <span className="h-2 w-2 rounded-full bg-rose-500" />
+                            <span className="text-slate-500">Failed</span>
+                            <strong className="tabular-nums">{safeFailedCount.toLocaleString()}</strong>
+                        </span>
+                        <span className="inline-flex items-center gap-1.5 text-slate-700">
+                            <span className="h-2 w-2 rounded-full bg-amber-400" />
+                            <span className="text-slate-500">Remaining</span>
+                            <strong className="tabular-nums">{remainingCount.toLocaleString()}</strong>
+                        </span>
+                    </div>
+                </div>
+ 
                 {/* Logs Section */}
-                <div className="flex-1 min-h-0 flex flex-col">
-                    <JobLogs jobId={job.id} jobStatus={job.status} nInputs={job.n_inputs} />
+                <div className="mt-0 flex-1 min-h-0 flex flex-col">
+                    <JobLogs
+                        jobId={job.id}
+                        jobStatus={job.status}
+                        nResults={job.n_results}
+                        initialSummary={initialLogsSummary}
+                        onFailedCountChange={handleFailedCountChange}
+                    />
                 </div>
             </div>
         </div>
     );
 };
 
-export default JobDetails;
+export default JobDetails;  

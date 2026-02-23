@@ -15,6 +15,8 @@ from main_service import DB, PROJECT_ID
 
 router = APIRouter()
 ASYNC_DB = firestore.AsyncClient(project=PROJECT_ID, database="burla")
+SUMMARY_CACHE_TTL_SECONDS = 1.5
+SUMMARY_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 
 
 async def current_num_results(job_id: str) -> int:
@@ -42,7 +44,7 @@ def _ts_to_seconds(ts_val: Any, fallback_ts: Any = None) -> int:
 
     if isinstance(v, str):
         try:
-            dt = datetime.fromisoformat(v.replace("Z", "+00:00"))
+            dt = datetime.fromisoformat(v.replace("Z", "+00:00")) 
             return int(dt.timestamp())
         except Exception:
             return 0
@@ -50,12 +52,12 @@ def _ts_to_seconds(ts_val: Any, fallback_ts: Any = None) -> int:
     return 0
 
 
-def job_stream(jobs_current_page: firestore.CollectionReference):
+def job_stream(jobs_current_page: firestore.CollectionReference):  
     queue = asyncio.Queue()
-    loop = asyncio.get_running_loop()
+    loop = asyncio.get_running_loop() 
     running_jobs: dict[str, asyncio.Future] = {}
 
-    async def push_n_results_updates(job_id: str, event: dict):
+    async def push_n_results_updates(job_id: str, event: dict):  
         start = time()
         last_check = 0
 
@@ -78,11 +80,11 @@ def job_stream(jobs_current_page: firestore.CollectionReference):
                     logs = [{"message": msg, "timestamp": timestamp}]
 
                     job_doc = ASYNC_DB.collection("jobs").document(job_id)
-                    await job_doc.collection("logs").add({"logs": logs, "timestamp": timestamp})
+                    await job_doc.collection("logs").add({"logs": logs, "timestamp": timestamp})  
 
                     msg2 = 'main_svc: job is "running" but no nodes working on it ???'
-                    await job_doc.update({"status": "FAILED", "fail_reason": ArrayUnion([msg2])})
-                    return
+                    await job_doc.update({"status": "FAILED", "fail_reason": ArrayUnion([msg2])}) 
+                    return 
 
     def on_changed_job_doc(col_snapshot, changes, read_time):
         for change in changes:
@@ -181,6 +183,7 @@ async def stop_job(job_id: str, request: Request):
 
 @router.get("/v1/jobs/{job_id}/logs")
 async def stream_or_fetch_job_logs(
+    request: Request,
     job_id: str,
     stream: bool = False,
     index: Optional[int] = None,
@@ -218,16 +221,35 @@ async def stream_or_fetch_job_logs(
         return s, e
 
     if summary and not stream:
+        cache_now = time()
+        cached = SUMMARY_CACHE.get(job_id)
+        if cached and (cache_now - cached[0]) < SUMMARY_CACHE_TTL_SECONDS:
+            return JSONResponse(cached[1])
+
         first_log_by_index: dict[int, int] = {}
         first_error_by_index: dict[int, int] = {}
+        docs_scanned = 0
 
         async for doc in logs_ref.stream():
+            docs_scanned += 1
+            if docs_scanned % 100 == 0:
+                if await request.is_disconnected():
+                    return JSONResponse(
+                        {
+                            "failed_indexes": [],
+                            "seen_indexes": [],
+                            "indexes_with_logs": [],
+                            "first_log_ts_by_index": {},
+                        }
+                    )
+                await asyncio.sleep(0)
+
             d = doc.to_dict() or {}
             fallback_doc_ts = d.get("timestamp")
 
             for log in (d.get("logs", []) or []):
-                raw_idx = log.get("input_index", None)
-                if raw_idx is None:
+                raw_idx = log.get("input_index", None) 
+                if raw_idx is None: 
                     continue
 
                 try:
@@ -252,14 +274,14 @@ async def stream_or_fetch_job_logs(
         indexes_with_logs = [i for i, _ts in sorted(first_log_by_index.items(), key=lambda kv: kv[1], reverse=True)]
         failed_indexes = [i for i, _ts in sorted(first_error_by_index.items(), key=lambda kv: kv[1], reverse=True)]
 
-        return JSONResponse(
-            {
-                "failed_indexes": failed_indexes,
-                "seen_indexes": sorted(first_log_by_index.keys()),
-                "indexes_with_logs": indexes_with_logs,
-                "first_log_ts_by_index": {str(k): v for k, v in first_log_by_index.items()},
-            }
-        )
+        payload = {
+            "failed_indexes": failed_indexes,
+            "seen_indexes": sorted(first_log_by_index.keys()),
+            "indexes_with_logs": indexes_with_logs,
+            "first_log_ts_by_index": {str(k): v for k, v in first_log_by_index.items()},
+        }
+        SUMMARY_CACHE[job_id] = (cache_now, payload)
+        return JSONResponse(payload)
 
     if stream:
         if _range_mode_active():

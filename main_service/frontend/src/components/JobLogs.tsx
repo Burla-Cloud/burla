@@ -6,6 +6,13 @@ import { Switch } from "@/components/ui/switch";
 interface JobLogsProps {
   jobId: string;
   jobStatus?: string;
+  nResults?: number;
+  onFailedCountChange?: (failedCount: number) => void;
+  initialSummary?: {
+    failed_indexes: number[];
+    seen_indexes?: number[];
+    indexes_with_logs?: number[];
+  } | null;
 }
 
 type RowItem =
@@ -15,13 +22,18 @@ type RowItem =
 
 type LogGroup = {
   inputIndex: number;
-  sortKey: number;
 };
 
 const LIMIT_PER_INDEX = 200;
-const SUMMARY_POLL_MS = 4000;
+const SUMMARY_POLL_MS = 2500;
 
-const JobLogs = ({ jobId, jobStatus }: JobLogsProps) => {
+const JobLogs = ({
+  jobId,
+  jobStatus,
+  nResults = 0,
+  onFailedCountChange,
+  initialSummary = null,
+}: JobLogsProps) => {
   const { getLogs, loadSummary, clearSummaryCache, loadPage, evictToWindow, startLiveStream, closeLiveStream } =
     useLogsContext();
 
@@ -29,6 +41,7 @@ const JobLogs = ({ jobId, jobStatus }: JobLogsProps) => {
   const [failedIndexes, setFailedIndexes] = useState<number[]>([]);
   const [groups, setGroups] = useState<LogGroup[]>([]);
   const [selectedPos, setSelectedPos] = useState(0);
+  const [isSummaryLoading, setIsSummaryLoading] = useState(true);
 
   const [isLoading, setIsLoading] = useState(true);
 
@@ -38,12 +51,10 @@ const JobLogs = ({ jobId, jobStatus }: JobLogsProps) => {
   const [listHeight, setListHeight] = useState<number>(300);
   const [hasMeasuredContainer, setHasMeasuredContainer] = useState<boolean>(false);
 
-  const [hasNewGroups, setHasNewGroups] = useState(false);
-  const pendingOrderedIndexesRef = useRef<number[] | null>(null);
-  const pendingFailedIndexesRef = useRef<number[] | null>(null);
-
   const listRef = useRef<List>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const selectedInputIndexRef = useRef<number>(0);
+  const showFailedOnlyRef = useRef<boolean>(false);
 
   const sizeMapRef = useRef<Record<string, number>>({});
 
@@ -80,29 +91,56 @@ const JobLogs = ({ jobId, jobStatus }: JobLogsProps) => {
     return activeGroups[Math.max(0, Math.min(selectedPos, activeGroups.length - 1))].inputIndex;
   }, [activeGroups, selectedPos]);
 
-  const applySummaryToGroups = useCallback((ordered: number[] | undefined, failed: number[] | undefined) => {
-    const safeOrdered = (ordered || []).map(Number).filter(Number.isFinite);
-    const safeFailed = (failed || []).map(Number).filter(Number.isFinite);
+  useEffect(() => {
+    selectedInputIndexRef.current = selectedInputIndex;
+  }, [selectedInputIndex]);
+
+  useEffect(() => {
+    showFailedOnlyRef.current = showFailedOnly;
+  }, [showFailedOnly]);
+
+  const applySummaryToGroups = useCallback(
+    (
+      ordered: number[] | undefined,
+      failed: number[] | undefined,
+      opts?: { preserveSelection?: boolean }
+    ) => {
+    const safeOrdered = Array.from(new Set((ordered || []).map(Number).filter(Number.isFinite))).sort(
+      (a, b) => a - b
+    );
+    const safeFailed = Array.from(new Set((failed || []).map(Number).filter(Number.isFinite))).sort(
+      (a, b) => a - b
+    );
 
     setFailedIndexes(safeFailed);
+    if (onFailedCountChange) onFailedCountChange(safeFailed.length);
 
-    // only include calls that actually have logs, ordered newest-first
-    const nextGroups: LogGroup[] = safeOrdered.map((idx, pos) => ({
+    // only include calls that actually have logs, ordered by call index ascending
+    const nextGroups: LogGroup[] = safeOrdered.map((idx) => ({
       inputIndex: idx,
-      sortKey: safeOrdered.length - pos,
     }));
 
     setGroups(nextGroups);
 
     if (safeFailed.length === 0) setShowFailedOnly(false);
 
-    // always jump to Call 1
+    if (opts?.preserveSelection) {
+      const nextActive = showFailedOnlyRef.current
+        ? nextGroups.filter((g) => safeFailed.includes(g.inputIndex))
+        : nextGroups;
+      const nextPos = nextActive.findIndex((g) => g.inputIndex === selectedInputIndexRef.current);
+      setSelectedPos(nextPos >= 0 ? nextPos : 0);
+      return;
+    }
+
+    // initial load: always jump to first call
     setSelectedPos(0);
-  }, []);
+  }, [onFailedCountChange]);
 
   // initial load summary (forced) + ALWAYS start at Call 1 for new job
   useEffect(() => {
     let cancelled = false;
+    const summaryController = new AbortController();
 
     (async () => {
       const prevJobId = lastJobIdRef.current;
@@ -110,9 +148,7 @@ const JobLogs = ({ jobId, jobStatus }: JobLogsProps) => {
       lastJobIdRef.current = jobId;
 
       setIsLoading(true);
-      setHasNewGroups(false);
-      pendingOrderedIndexesRef.current = null;
-      pendingFailedIndexesRef.current = null;
+      setIsSummaryLoading(true);
 
       if (isNewJob && prevJobId) {
         closeLiveStream(prevJobId);
@@ -129,29 +165,43 @@ const JobLogs = ({ jobId, jobStatus }: JobLogsProps) => {
       clearSummaryCache(jobId);
 
       try {
-        const s = await loadSummary(jobId, { force: true });
+        if (initialSummary) {
+          applySummaryToGroups(initialSummary.indexes_with_logs, initialSummary.failed_indexes);
+          return;
+        }
+
+        const s = await loadSummary(jobId, { force: true, signal: summaryController.signal });
         if (cancelled) return;
         applySummaryToGroups(s?.indexes_with_logs, s?.failed_indexes);
       } finally {
-        if (!cancelled) setIsLoading(false);
+        if (!cancelled) {
+          setIsSummaryLoading(false);
+          setIsLoading(false);
+        }
       }
     })();
 
     return () => {
       cancelled = true;
+      summaryController.abort();
     };
-  }, [jobId, loadSummary, clearSummaryCache, applySummaryToGroups, closeLiveStream]);
+  }, [jobId, loadSummary, clearSummaryCache, applySummaryToGroups, closeLiveStream, initialSummary]);
 
-  // poll summary while RUNNING/FAILED and show refresh button if new indexes appear OR failed indexes change
+  // poll summary while RUNNING/FAILED and auto-apply updates
   useEffect(() => {
-    const shouldPoll = jobStatus === "RUNNING" || jobStatus === "FAILED";
-    if (!shouldPoll) return;
-
     let cancelled = false;
+    let inFlight = false;
+    let timeoutId: number | undefined;
+    let currentController: AbortController | null = null;
+    const shouldPoll = jobStatus === "RUNNING" || jobStatus === "FAILED";
+    const pollMs = jobStatus === "RUNNING" ? SUMMARY_POLL_MS : 4000;
 
     const tick = async () => {
+      if (cancelled || inFlight) return;
+      inFlight = true;
+      currentController = new AbortController();
       try {
-        const s = await loadSummary(jobId, { force: true });
+        const s = await loadSummary(jobId, { force: true, signal: currentController.signal });
         if (cancelled) return;
 
         const incoming = (s?.indexes_with_logs ?? s?.seen_indexes ?? []).map(Number).filter(Number.isFinite);
@@ -166,40 +216,31 @@ const JobLogs = ({ jobId, jobStatus }: JobLogsProps) => {
           incomingFailed.length !== failedIndexes.length || incomingFailed.some((x) => !failedSet.has(x));
 
         if (hasNewIndexes || failedChanged) {
-          pendingOrderedIndexesRef.current = incoming;
-          pendingFailedIndexesRef.current = incomingFailed;
-          setHasNewGroups(true);
+          applySummaryToGroups(incoming, incomingFailed, { preserveSelection: true });
         }
       } catch {
         // ignore
+      } finally {
+        currentController = null;
+        inFlight = false;
+        if (!cancelled && shouldPoll) timeoutId = window.setTimeout(tick, pollMs);
       }
     };
 
-    const id = window.setInterval(tick, SUMMARY_POLL_MS);
-    tick();
+    // If initial summary is already provided by JobDetails, avoid issuing an
+    // immediate duplicate summary scan; start the poll cycle after pollMs.
+    if (initialSummary) {
+      timeoutId = window.setTimeout(tick, pollMs);
+    } else {
+      tick();
+    }
 
     return () => {
       cancelled = true;
-      window.clearInterval(id);
+      if (currentController) currentController.abort();
+      if (timeoutId) window.clearTimeout(timeoutId);
     };
-  }, [jobId, jobStatus, loadSummary, groups, failedIndexes, failedSet]);
-
-  const onRefreshNewGroups = useCallback(async () => {
-    setHasNewGroups(false);
-
-    const pendingOrdered = pendingOrderedIndexesRef.current;
-    const pendingFailed = pendingFailedIndexesRef.current;
-
-    if (pendingOrdered && pendingOrdered.length > 0) {
-      applySummaryToGroups(pendingOrdered, pendingFailed || []);
-      pendingOrderedIndexesRef.current = null;
-      pendingFailedIndexesRef.current = null;
-      return;
-    }
-
-    const s = await loadSummary(jobId, { force: true });
-    applySummaryToGroups(s?.indexes_with_logs, s?.failed_indexes);
-  }, [jobId, loadSummary, applySummaryToGroups]);
+  }, [jobId, jobStatus, nResults, initialSummary, loadSummary, groups, failedIndexes, failedSet, applySummaryToGroups]);
 
   // resize plumbing
   useEffect(() => {
@@ -229,10 +270,18 @@ const JobLogs = ({ jobId, jobStatus }: JobLogsProps) => {
     if (jobHasNoLogsAtAll) return;
 
     let cancelled = false;
+    const pageController = new AbortController();
     (async () => {
       setIsLoading(true);
       try {
-        await loadPage(jobId, selectedInputIndex, selectedInputIndex, LIMIT_PER_INDEX, true);
+        await loadPage(
+          jobId,
+          selectedInputIndex,
+          selectedInputIndex,
+          LIMIT_PER_INDEX,
+          true,
+          pageController.signal
+        );
         evictToWindow(jobId, selectedInputIndex, selectedInputIndex, 3);
       } finally {
         if (!cancelled) setIsLoading(false);
@@ -241,6 +290,7 @@ const JobLogs = ({ jobId, jobStatus }: JobLogsProps) => {
 
     return () => {
       cancelled = true;
+      pageController.abort();
     };
   }, [jobId, selectedInputIndex, jobHasNoLogsAtAll, loadPage, evictToWindow]);
 
@@ -324,7 +374,7 @@ const JobLogs = ({ jobId, jobStatus }: JobLogsProps) => {
     return result;
   }, [jobHasNoLogsAtAll, isLoading, indexedLogs, globalLogs, showOnlyGlobal]);
 
-  const stepperDisabled = isLoading || jobHasNoLogsAtAll || showOnlyGlobal;
+  const stepperDisabled = isSummaryLoading || jobHasNoLogsAtAll || showOnlyGlobal;
 
   const goPrev = () => {
     if (stepperDisabled) return;
@@ -375,7 +425,7 @@ const JobLogs = ({ jobId, jobStatus }: JobLogsProps) => {
 
   if (windowWidth <= 1000) {
     return (
-      <div className="mt-4 mb-4 flex flex-col">
+      <div className="mt-2 mb-0 flex flex-col">
         <div className="flex items-center justify-between mb-3">
           <h2 className="text-lg font-semibold text-primary">Logs</h2>
         </div>
@@ -390,11 +440,17 @@ const JobLogs = ({ jobId, jobStatus }: JobLogsProps) => {
       : "h-8 w-8 grid place-items-center rounded-md border border-gray-200 bg-white hover:bg-gray-50 active:bg-gray-100";
 
   const headerLabel = useMemo(() => {
-    if (activeGroups.length === 0) return "Calls";
-    return `Call ${selectedPos + 1} of ${activeGroups.length}`;
-  }, [activeGroups.length, selectedPos]);
+    if (activeGroups.length === 0) return `Call 0 of ${nResults.toLocaleString()}`;
+    const currentInputIndex = selectedInputIndex;
+    return `Call ${currentInputIndex.toLocaleString()} of ${nResults.toLocaleString()}`;
+  }, [activeGroups.length, selectedInputIndex, nResults]);
 
   const failedCount = failedIndexes.length;
+  const failedProgressLabel = useMemo(() => {
+    if (failedCount === 0) return "0";
+    if (!showFailedOnly || activeGroups.length === 0) return failedCount.toLocaleString();
+    return `${(selectedPos + 1).toLocaleString()} of ${failedCount.toLocaleString()}`;
+  }, [failedCount, showFailedOnly, activeGroups.length, selectedPos]);
 
   const failedPillClass =
     failedCount === 0
@@ -403,28 +459,12 @@ const JobLogs = ({ jobId, jobStatus }: JobLogsProps) => {
       ? "border-red-200 bg-red-50 text-red-400 opacity-60"
       : "border-red-200 bg-red-50 text-red-700";
 
-  const refreshPillClass = stepperDisabled
-    ? "h-8 px-3 rounded-full border border-gray-200 bg-gray-50 text-xs text-gray-400 cursor-default"
-    : "h-8 px-3 rounded-full border border-blue-200 bg-blue-50 text-xs text-blue-700 hover:bg-blue-100";
-
   return (
-    <div className="mt-4 mb-4 flex flex-col flex-1 min-h-0">
-      <div className="flex items-center justify-between mb-3">
-        <h2 className="text-lg font-semibold text-primary">Logs</h2>
+    <div className="mt-0 mb-0 flex flex-col flex-1 min-h-0">
+      <div className="mt-2 mb-4 flex items-center justify-between">
+        <h2 className="text-lg font-semibold text-primary leading-none">Logs</h2>
 
-        <div className="flex items-center gap-3 rounded-full border border-gray-200 bg-gray-50 px-3 py-2 shadow-sm">
-          {hasNewGroups ? (
-            <button
-              type="button"
-              onClick={onRefreshNewGroups}
-              disabled={stepperDisabled}
-              className={refreshPillClass}
-              title="New logs exist. Click to refresh the call list."
-            >
-              Refresh: new logs
-            </button>
-          ) : null}
-
+        <div className="flex items-center gap-2 rounded-full border border-gray-200 bg-gray-50 px-3 py-1.5 shadow-sm">
           <div className="flex flex-col leading-tight">
             <span className="text-sm text-gray-800 tabular-nums whitespace-nowrap">{headerLabel}</span>
           </div>
@@ -469,14 +509,14 @@ const JobLogs = ({ jobId, jobStatus }: JobLogsProps) => {
             <span
               className={`ml-1 inline-flex items-center rounded-full border px-2.5 py-1 text-xs tabular-nums ${failedPillClass}`}
             >
-              {failedCount}
+              {failedProgressLabel}
             </span>
           </label>
         </div>
       </div>
 
-      <div className="flex-1 min-h-0 bg-white border border-gray-200 rounded-lg shadow-sm relative">
-        {isLoading ? (
+      <div className="mt-0 flex-1 min-h-0 h-full bg-white border border-gray-200 rounded-lg shadow-sm relative">
+        {isSummaryLoading || isLoading ? (
           <div ref={containerRef} className="h-full w-full flex items-center justify-center">
             <div className="flex flex-col items-center text-gray-500">
               <div
@@ -484,7 +524,9 @@ const JobLogs = ({ jobId, jobStatus }: JobLogsProps) => {
                 role="status"
                 aria-label="Loading logs"
               />
-              <div className="mt-2 text-sm">Loading logs…</div>
+              <div className="mt-2 text-sm">
+                {isSummaryLoading ? "Loading stepper..." : "Loading logs..."}
+              </div>
             </div>
           </div>
         ) : (

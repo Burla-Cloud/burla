@@ -229,11 +229,20 @@ const JobLogs = ({ jobId, nInputs }: JobLogsProps) => {
     setSelectedIndex(activeIndexList[nextPos]);
   };
 
+  const selectNextFailedInput = useCallback(async () => {
+    setIsPageLoading(true);
+    const nextFailedInputIndex = await getNextFailedInputIndex(jobId, selectedIndex);
+    if (nextFailedInputIndex === null || nextFailedInputIndex === selectedIndex) {
+      setIsPageLoading(false);
+      return;
+    }
+    setSelectedIndex(nextFailedInputIndex);
+  }, [getNextFailedInputIndex, jobId, selectedIndex]);
+
   const goNext = async () => {
     if (stepperDisabled) return;
     if (showFailedOnly) {
-      const nextFailedInputIndex = await getNextFailedInputIndex(jobId, selectedIndex);
-      if (nextFailedInputIndex !== null) setSelectedIndex(nextFailedInputIndex);
+      await selectNextFailedInput();
       return;
     }
     const pos = activeIndexList.indexOf(selectedIndex);
@@ -359,13 +368,7 @@ const JobLogs = ({ jobId, nInputs }: JobLogsProps) => {
                 onCheckedChange={(checked) => {
                   setShowFailedOnly(checked);
                   if (checked) {
-                    void (async () => {
-                      const nextFailedInputIndex = await getNextFailedInputIndex(
-                        jobId,
-                        selectedIndex
-                      );
-                      if (nextFailedInputIndex !== null) setSelectedIndex(nextFailedInputIndex);
-                    })();
+                    void selectNextFailedInput();
                   }
                 }}
                 disabled={failedCount === 0}

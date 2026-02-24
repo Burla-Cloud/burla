@@ -369,6 +369,7 @@ class Worker:
 
     def _start_log_streaming(self):
         def stream_logs():
+            docker_client = None
             try:
                 docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
                 log_generator = docker_client.logs(
@@ -380,33 +381,33 @@ class Worker:
             except Exception as e:
                 print(f"Log streaming stopped for {self.container_name}: {traceback.format_exc()}")
             finally:
-                docker_client.close()
+                if docker_client:
+                    docker_client.close()
 
         log_thread = threading.Thread(target=stream_logs, daemon=True)
         log_thread.start()
 
-    def exists(self):
+    def exists(self, docker_client: docker.APIClient):
         if not self.container_id:
             return False
         try:
-            docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
             docker_client.inspect_container(self.container_id)
             return True
         except docker.errors.NotFound:
             return False
-        finally:
-            docker_client.close()
 
-    def logs(self):
-        if self.exists():
-            docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
+    def logs(self, docker_client: docker.APIClient):
+        if self.exists(docker_client):
             logs = docker_client.logs(self.container_id).decode("utf-8", errors="ignore")
-            docker_client.close()
             return logs
         raise Exception("This worker no longer exists.")
 
     def log_debug_info(self):
-        logs = self.logs() if self.exists() else "Unable to retrieve container logs."
+        docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
+        exists = self.exists(docker_client)
+        logs = self.logs(docker_client) if exists else "Unable to retrieve container logs."
+        docker_client.close()
+
         struct = {"severity": "ERROR", "LOGS_FROM_FAILED_CONTAINER": logs}
         logging.Client().logger("node_service").log_struct(struct)
 

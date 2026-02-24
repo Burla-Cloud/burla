@@ -18,7 +18,8 @@ from node_service.lifecycle_endpoints import (
 )
 
 FIRST_PING_TIMEOUT = 15
-CLIENT_DC_TIMEOUT_SEC = 5
+BASE_CLIENT_DC_TIMEOUT_SEC = 10
+CLIENT_DC_TIMEOUT_SEC = BASE_CLIENT_DC_TIMEOUT_SEC
 
 
 async def get_inputs_from_neighbor(neighboring_node, session, logger, auth_headers):
@@ -59,7 +60,6 @@ async def _job_watcher(
     JOB_FAILED_TWO = False
     JOB_CANCELED = False
     LAST_CLIENT_PING_TIMESTAMP = None
-    LAST_LAST_CLIENT_PING_TIMESTAMP = None
     watcher_start_time = time()
     neighboring_nodes = []
     neighbor_had_no_inputs_at = None
@@ -69,6 +69,14 @@ async def _job_watcher(
         nonlocal LAST_CLIENT_PING_TIMESTAMP, JOB_FAILED, JOB_CANCELED
         for change in changes:
             job_dict = change.document.to_dict()
+            client_ping_lag = job_dict.get("client_ping_lag") or 0
+            if client_ping_lag > 0.5:
+                old_timeout = CLIENT_DC_TIMEOUT_SEC
+                CLIENT_DC_TIMEOUT_SEC = BASE_CLIENT_DC_TIMEOUT_SEC + client_ping_lag
+                msg = f"Client pings lagging by: {client_ping_lag}s! "
+                msg += f"Increasing timeout from {old_timeout}s to {CLIENT_DC_TIMEOUT_SEC}s!"
+                logger.log(msg, severity="WARNING")
+
             LAST_CLIENT_PING_TIMESTAMP = job_dict.get("last_ping_from_client")
             if job_dict["status"] == "FAILED":
                 JOB_FAILED = True
@@ -165,17 +173,6 @@ async def _job_watcher(
             job_is_done = all_inputs_processed and (
                 client_has_all_results or not_waiting_for_client
             )
-
-        # if LAST_CLIENT_PING_TIMESTAMP and not LAST_LAST_CLIENT_PING_TIMESTAMP:
-        #     seconds_since_watcher_start = time() - watcher_start_time
-        #     logger.log(f"First ping recieved! Watcher started {seconds_since_watcher_start}s ago.")
-        #     LAST_LAST_CLIENT_PING_TIMESTAMP = LAST_CLIENT_PING_TIMESTAMP
-
-        # if LAST_CLIENT_PING_TIMESTAMP and LAST_LAST_CLIENT_PING_TIMESTAMP:
-        #     if LAST_CLIENT_PING_TIMESTAMP != LAST_LAST_CLIENT_PING_TIMESTAMP:
-        #         ping_diff = LAST_CLIENT_PING_TIMESTAMP - LAST_LAST_CLIENT_PING_TIMESTAMP
-        #         logger.log(f"Ping recieved at {time()}. Time between pings: {ping_diff}s")
-        #         LAST_LAST_CLIENT_PING_TIMESTAMP = LAST_CLIENT_PING_TIMESTAMP
 
         # `not_waiting_for_client` used to make sure client has time to grab errors when failed.
         client_disconnected = False

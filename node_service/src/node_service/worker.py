@@ -369,6 +369,7 @@ class Worker:
 
     def _start_log_streaming(self):
         def stream_logs():
+            docker_client = None
             try:
                 docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
                 log_generator = docker_client.logs(
@@ -380,7 +381,8 @@ class Worker:
             except Exception as e:
                 print(f"Log streaming stopped for {self.container_name}: {traceback.format_exc()}")
             finally:
-                docker_client.close()
+                if docker_client:
+                    docker_client.close()
 
         log_thread = threading.Thread(target=stream_logs, daemon=True)
         log_thread.start()
@@ -388,6 +390,7 @@ class Worker:
     def exists(self):
         if not self.container_id:
             return False
+        docker_client = None
         try:
             docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
             docker_client.inspect_container(self.container_id)
@@ -395,7 +398,8 @@ class Worker:
         except docker.errors.NotFound:
             return False
         finally:
-            docker_client.close()
+            if docker_client:
+                docker_client.close()
 
     def logs(self):
         if self.exists():

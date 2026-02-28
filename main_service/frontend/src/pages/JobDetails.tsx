@@ -233,7 +233,6 @@ const JobDetails = () => {
     const safeFailedCount = failedCount;
     const succeededCount = Math.max(0, job.n_results - safeFailedCount);
     const remainingCount = Math.max(0, job.n_inputs - job.n_results);
-    const completionPct = job.n_inputs ? Math.min(100, (job.n_results / job.n_inputs) * 100) : 0;
     const succeededPct = job.n_inputs ? (succeededCount / job.n_inputs) * 100 : 0;
     const failedPct = job.n_inputs ? (safeFailedCount / job.n_inputs) * 100 : 0;
     const remainingPct = job.n_inputs ? (remainingCount / job.n_inputs) * 100 : 0;
@@ -298,8 +297,8 @@ const JobDetails = () => {
                     </div>
                 </div>
 
-                <div className="mt-4 mb-3 rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-[0_1px_2px_rgba(15,23,42,0.05)]">
-                    <div className="flex items-end justify-between">
+                <div className="mt-4 mb-3 px-1 py-1">
+                    <div className="flex items-end justify-between gap-6">
                         <div>
                             <div className="text-[11px] font-semibold tracking-[0.08em] uppercase text-slate-500">
                                 Results
@@ -310,17 +309,27 @@ const JobDetails = () => {
                                 <span className="text-slate-500">{job.n_inputs.toLocaleString()}</span>
                             </div>
                         </div>
-                        <div className="text-right">
-                            <div className="text-[11px] font-semibold tracking-[0.08em] uppercase text-slate-500">
-                                Completed
-                            </div>
-                            <div className="mt-0.5 text-sm font-semibold tabular-nums text-slate-700">
-                                {completionPct.toFixed(1)}%
-                            </div>
+
+                        <div className="flex flex-wrap items-center justify-end gap-5 text-sm">
+                            <span className="inline-flex items-center gap-1.5 text-slate-700">
+                                <span className="h-2 w-2 rounded-full bg-emerald-500" />
+                                <span className="text-slate-500">Success</span>
+                                <strong className="tabular-nums">{succeededCount.toLocaleString()}</strong>
+                            </span>
+                            <span className="inline-flex items-center gap-1.5 text-slate-700">
+                                <span className="h-2 w-2 rounded-full bg-rose-500" />
+                                <span className="text-slate-500">Failed</span>
+                                <strong className="tabular-nums">{safeFailedCount.toLocaleString()}</strong>
+                            </span>
+                            <span className="inline-flex items-center gap-1.5 text-slate-700">
+                                <span className="h-2 w-2 rounded-full bg-amber-400" />
+                                <span className="text-slate-500">Remaining</span>
+                                <strong className="tabular-nums">{remainingCount.toLocaleString()}</strong>
+                            </span>
                         </div>
                     </div>
 
-                    <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-slate-200">
+                    <div className="mt-2 h-2.5 w-full overflow-hidden rounded-full bg-slate-200">
                         <div className="flex h-full w-full">
                             <div
                                 className="h-full bg-emerald-500 transition-all"
@@ -339,24 +348,6 @@ const JobDetails = () => {
                             />
                         </div>
                     </div>
-
-                    <div className="mt-2 flex items-center gap-5 text-sm">
-                        <span className="inline-flex items-center gap-1.5 text-slate-700">
-                            <span className="h-2 w-2 rounded-full bg-emerald-500" />
-                            <span className="text-slate-500">Success</span>
-                            <strong className="tabular-nums">{succeededCount.toLocaleString()}</strong>
-                        </span>
-                        <span className="inline-flex items-center gap-1.5 text-slate-700">
-                            <span className="h-2 w-2 rounded-full bg-rose-500" />
-                            <span className="text-slate-500">Failed</span>
-                            <strong className="tabular-nums">{safeFailedCount.toLocaleString()}</strong>
-                        </span>
-                        <span className="inline-flex items-center gap-1.5 text-slate-700">
-                            <span className="h-2 w-2 rounded-full bg-amber-400" />
-                            <span className="text-slate-500">Remaining</span>
-                            <strong className="tabular-nums">{remainingCount.toLocaleString()}</strong>
-                        </span>
-                    </div>
                 </div>
  
                 {/* Logs Section */}
@@ -374,4 +365,4 @@ const JobDetails = () => {
     );
 };
 
-export default JobDetails;  
+export default JobDetails;   

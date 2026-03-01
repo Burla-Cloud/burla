@@ -21,6 +21,13 @@ type InputLogsResponse = {
 
 type NextFailedInputResponse = {
     next_failed_input_index?: number | null;
+    failed_input_indexes?: number[];
+};
+
+type LoggedInputIndexesResponse = {
+    indexes_with_logs?: number[];
+    failed_indexes?: number[];
+    non_failed_indexes_with_logs?: number[];
 };
 
 interface LogsContextType {
@@ -29,6 +36,8 @@ interface LogsContextType {
     getHasMoreOlderLogs: (jobId: string, index: number) => boolean;
     getOldestLoadedLogDocumentTimestamp: (jobId: string, index: number) => number | undefined;
     getNextFailedInputIndex: (jobId: string, index: number) => Promise<number | null>;
+    getFailedInputIndexes: (jobId: string) => Promise<number[]>;
+    getIndexesWithLogs: (jobId: string) => Promise<number[]>;
     loadInputLogs: (jobId: string, index: number, oldestLogTimestamp?: number) => Promise<void>;
     logsByJobId: Record<string, JobLogsState>;
 }
@@ -40,6 +49,8 @@ const LogsContext = createContext<LogsContextType>({
     getHasMoreOlderLogs: () => false,
     getOldestLoadedLogDocumentTimestamp: () => undefined,
     getNextFailedInputIndex: async () => null,
+    getFailedInputIndexes: async () => [],
+    getIndexesWithLogs: async () => [],
     loadInputLogs: async () => {},
 });
 
@@ -106,6 +117,31 @@ export const LogsProvider = ({ children }: { children: React.ReactNode }) => {
         if (!response.ok) return null;
         const payload = (await response.json()) as NextFailedInputResponse;
         return payload.next_failed_input_index ?? null;
+    }, []);
+
+    const getFailedInputIndexes = useCallback(async (jobId: string) => {
+        const queryString = new URLSearchParams({ index: "-1" });
+        const response = await fetch(
+            `/v1/jobs/${jobId}/next-failed-input?${queryString.toString()}`,
+        );
+        if (!response.ok) return [];
+        const payload = (await response.json()) as NextFailedInputResponse;
+        if (!Array.isArray(payload.failed_input_indexes)) return [];
+        return payload.failed_input_indexes
+            .map((value) => Number(value))
+            .filter((value) => Number.isFinite(value))
+            .sort((a, b) => a - b);
+    }, []);
+
+    const getIndexesWithLogs = useCallback(async (jobId: string) => {
+        const response = await fetch(`/v1/jobs/${jobId}/logged-input-indexes`);
+        if (!response.ok) return [];
+        const payload = (await response.json()) as LoggedInputIndexesResponse;
+        if (!Array.isArray(payload.indexes_with_logs)) return [];
+        return payload.indexes_with_logs
+            .map((value) => Number(value))
+            .filter((value) => Number.isFinite(value))
+            .sort((a, b) => a - b);
     }, []);
 
     const loadInputLogs = useCallback(
@@ -185,6 +221,8 @@ export const LogsProvider = ({ children }: { children: React.ReactNode }) => {
             getHasMoreOlderLogs,
             getOldestLoadedLogDocumentTimestamp,
             getNextFailedInputIndex,
+            getFailedInputIndexes,
+            getIndexesWithLogs,
             loadInputLogs,
         }),
         [
@@ -194,6 +232,8 @@ export const LogsProvider = ({ children }: { children: React.ReactNode }) => {
             getHasMoreOlderLogs,
             getOldestLoadedLogDocumentTimestamp,
             getNextFailedInputIndex,
+            getFailedInputIndexes,
+            getIndexesWithLogs,
             loadInputLogs,
         ],
     );

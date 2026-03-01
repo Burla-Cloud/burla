@@ -1,4 +1,3 @@
-
 import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import { useLogsContext } from "@/contexts/LogsContext";
 import { VariableSizeList as List } from "react-window";
@@ -7,7 +6,10 @@ import { LogEntry } from "@/types/coreTypes";
 
 interface JobLogsProps {
   jobId: string;
+  jobStatus?: string | null;
   nInputs?: number;
+  failedCount?: number;
+  onFailedCountChange?: (failedCount: number) => void;
 }
 
 type RowItem =
@@ -18,19 +20,25 @@ type RowItem =
 const getLogRowIdentifier = (logEntry: LogEntry) =>
   `${logEntry.log_timestamp}-${logEntry.is_error ? 1 : 0}-${logEntry.message ?? ""}`;
 
-const JobLogs = ({ jobId, nInputs }: JobLogsProps) => {
+const JobLogs = ({ jobId, jobStatus, nInputs, failedCount, onFailedCountChange }: JobLogsProps) => {
   const {
     getLogs,
     getFailedInputsCount,
+    getFailedInputIndexes,
+    getIndexesWithLogs,
     getHasMoreOlderLogs,
     getOldestLoadedLogDocumentTimestamp,
-    getNextFailedInputIndex,
     loadInputLogs,
     logsByJobId,
   } = useLogsContext();
 
   const [selectedIndex, setSelectedIndex] = useState<number>(0);
   const [showFailedOnly, setShowFailedOnly] = useState(false);
+  const [showIndexesWithLogsOnly, setShowIndexesWithLogsOnly] = useState(false);
+  const [isHasLogsSyncing, setIsHasLogsSyncing] = useState(false);
+  const [failedIndexes, setFailedIndexes] = useState<number[]>([]);
+  const [failedIndexesReady, setFailedIndexesReady] = useState(false);
+  const [logsOnlyIndexes, setLogsOnlyIndexes] = useState<number[]>([]);
 
   const [isPageLoading, setIsPageLoading] = useState(true);
   const [isLoadingOlderLogs, setIsLoadingOlderLogs] = useState(false);
@@ -40,18 +48,32 @@ const JobLogs = ({ jobId, nInputs }: JobLogsProps) => {
 
   const listRef = useRef<List>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const outerListRef = useRef<HTMLDivElement | null>(null);
 
   const [listHeight, setListHeight] = useState<number>(300);
   const [hasMeasuredContainer, setHasMeasuredContainer] = useState<boolean>(false);
 
   const sizeMapRef = useRef<Record<string, number>>({});
   const topAnchorLogIdRef = useRef<string | null>(null);
+  const failedToggleRequestRef = useRef(0);
+  const logsOnlyToggleRequestRef = useRef(0);
+  const logsOnlyRefreshRequestRef = useRef(0);
+  const previousLogsLengthRef = useRef(0);
+  const shouldFollowTailRef = useRef(true);
+  const hasLogsSyncUnlockTimeoutRef = useRef<number | undefined>(undefined);
 
   const setSizeForKey = useCallback((key: string, size: number, fromIndex: number) => {
     if (sizeMapRef.current[key] !== size) {
       sizeMapRef.current[key] = size;
       listRef.current?.resetAfterIndex(fromIndex, true);
     }
+  }, []);
+
+  const updateShouldFollowTail = useCallback(() => {
+    const outerEl = outerListRef.current;
+    if (!outerEl) return;
+    const distanceFromBottom = outerEl.scrollHeight - (outerEl.scrollTop + outerEl.clientHeight);
+    shouldFollowTailRef.current = distanceFromBottom <= 24;
   }, []);
 
   // Resize plumbing
@@ -82,7 +104,7 @@ const JobLogs = ({ jobId, nInputs }: JobLogsProps) => {
     return 0;
   }, [nInputs]);
 
-  const availableIndexesFromLogs = useMemo(() => {
+  const fetchedIndexesFromLogs = useMemo(() => {
     const state = logsByJobId[jobId];
     if (!state) return [];
     return Object.keys(state.byIndex || {})
@@ -91,29 +113,68 @@ const JobLogs = ({ jobId, nInputs }: JobLogsProps) => {
       .sort((a, b) => a - b);
   }, [jobId, logsByJobId]);
 
-  const hasAnyKnownIndexes = availableIndexesFromLogs.length > 0;
-  const failedInputsCount = getFailedInputsCount(jobId);
+  const indexesWithLogs = useMemo(() => {
+    const state = logsByJobId[jobId];
+    if (!state) return [];
+    return Object.entries(state.byIndex || {})
+      .filter(([, entries]) => (entries || []).length > 0)
+      .map(([k]) => Number(k))
+      .filter((v) => Number.isFinite(v))
+      .sort((a, b) => a - b);
+  }, [jobId, logsByJobId]);
 
-  const activeIndexList = useMemo(() => {
+  const hasAnyKnownIndexes = indexesWithLogs.length > 0;
+  const failedInputsCount = getFailedInputsCount(jobId);
+  const effectiveFailedCount = Math.max(
+    0,
+    typeof failedCount === "number" ? failedCount : failedInputsCount
+  );
+  const hasLoadedFailedCount =
+    typeof failedCount === "number" || Boolean(logsByJobId[jobId]);
+
+  useEffect(() => {
+    if (!onFailedCountChange) return;
+    onFailedCountChange(effectiveFailedCount);
+  }, [effectiveFailedCount, onFailedCountChange]);
+
+  const allIndexList = useMemo(() => {
     if (totalInputs > 0) return Array.from({ length: totalInputs }, (_, i) => i);
-    if (availableIndexesFromLogs.length > 0) return availableIndexesFromLogs;
+    if (fetchedIndexesFromLogs.length > 0) return fetchedIndexesFromLogs;
     return [];
-  }, [totalInputs, availableIndexesFromLogs]);
+  }, [totalInputs, fetchedIndexesFromLogs]);
+
+  const activeFailedIndexes = useMemo(() => {
+    return failedIndexes;
+  }, [failedIndexes]);
+
+  const navigationIndexList = useMemo(() => {
+    if (showFailedOnly) return activeFailedIndexes;
+    if (showIndexesWithLogsOnly) return logsOnlyIndexes;
+    return allIndexList;
+  }, [showFailedOnly, activeFailedIndexes, showIndexesWithLogsOnly, logsOnlyIndexes, allIndexList]);
 
   // Keep selectedIndex valid when lists change
   useEffect(() => {
-    if (activeIndexList.length === 0) {
-      setSelectedIndex(0);
+    if (navigationIndexList.length === 0) {
+      // In filtered modes, avoid force-resetting to 0 on transient list refreshes.
+      if (!showIndexesWithLogsOnly && !showFailedOnly) {
+        setSelectedIndex(0);
+      }
       return;
     }
-    if (!activeIndexList.includes(selectedIndex)) setSelectedIndex(activeIndexList[0]);
-  }, [activeIndexList, selectedIndex]);
+    if (!navigationIndexList.includes(selectedIndex)) {
+      // Filter toggles explicitly choose an entry; don't auto-jump during live updates.
+      if (!showIndexesWithLogsOnly && !showFailedOnly) {
+        setSelectedIndex(navigationIndexList[0]);
+      }
+    }
+  }, [navigationIndexList, selectedIndex, showIndexesWithLogsOnly, showFailedOnly]);
 
   const maxKnownIndex = useMemo(() => {
     if (totalInputs > 0) return totalInputs - 1;
-    if (activeIndexList.length > 0) return Math.max(...activeIndexList);
+    if (allIndexList.length > 0) return Math.max(...allIndexList);
     return -1;
-  }, [totalInputs, activeIndexList]);
+  }, [totalInputs, allIndexList]);
 
   // Load only the currently viewed input index.
   useEffect(() => {
@@ -136,6 +197,20 @@ const JobLogs = ({ jobId, nInputs }: JobLogsProps) => {
       cancelled = true;
     };
   }, [jobId, selectedIndex, loadInputLogs]);
+
+  useEffect(() => {
+    if (jobStatus !== "RUNNING" && jobStatus !== "PENDING") return;
+
+    const intervalId = window.setInterval(() => {
+      // While user is reading older logs, do not replace the current window.
+      if (!shouldFollowTailRef.current) return;
+      void loadInputLogs(jobId, selectedIndex);
+    }, 2500);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [jobId, selectedIndex, jobStatus, loadInputLogs]);
 
   // Logs for current index
   const logs = useMemo(() => getLogs(jobId, selectedIndex), [getLogs, jobId, selectedIndex]);
@@ -164,14 +239,10 @@ const JobLogs = ({ jobId, nInputs }: JobLogsProps) => {
     const result: RowItem[] = [];
 
     if (logs.length === 0) {
-      const jobHasAnyPerInputLogs = hasAnyKnownIndexes;
-
       result.push({
         type: "empty",
         key: "empty",
-        label: jobHasAnyPerInputLogs
-          ? `No logs for input ${selectedIndex + 1}`
-          : "This job produced no log output",
+        label: `Index ${selectedIndex} doesn't have any logs.`,
       });
       return result;
     }
@@ -207,39 +278,125 @@ const JobLogs = ({ jobId, nInputs }: JobLogsProps) => {
     }
 
     return result;
-  }, [logs, hasAnyKnownIndexes, selectedIndex]);
+  }, [logs, selectedIndex]);
 
-  const jobHasNoLogsAtAll = !hasAnyKnownIndexes;
-
-  const stepperDisabled = isPageLoading || activeIndexList.length === 0 || jobHasNoLogsAtAll;
+  const stepperDisabled = isPageLoading || isHasLogsSyncing || navigationIndexList.length === 0;
 
   const goPrev = () => {
     if (stepperDisabled) return;
-    if (showFailedOnly) return;
-    const pos = activeIndexList.indexOf(selectedIndex);
-    const nextPos = pos <= 0 ? activeIndexList.length - 1 : pos - 1;
-    setSelectedIndex(activeIndexList[nextPos]);
+    const pos = navigationIndexList.indexOf(selectedIndex);
+    const nextPos = pos <= 0 ? navigationIndexList.length - 1 : pos - 1;
+    setSelectedIndex(navigationIndexList[nextPos]);
   };
 
-  const selectNextFailedInput = useCallback(async () => {
-    setIsPageLoading(true);
-    const nextFailedInputIndex = await getNextFailedInputIndex(jobId, selectedIndex);
-    if (nextFailedInputIndex === null || nextFailedInputIndex === selectedIndex) {
-      setIsPageLoading(false);
-      return;
-    }
-    setSelectedIndex(nextFailedInputIndex);
-  }, [getNextFailedInputIndex, jobId, selectedIndex]);
+  const jumpToFirstFailedInput = useCallback(async () => {
+    const requestId = ++failedToggleRequestRef.current;
+    setFailedIndexesReady(false);
+    const nextFailedIndexes = await getFailedInputIndexes(jobId);
+    if (requestId !== failedToggleRequestRef.current) return;
 
-  const goNext = async () => {
-    if (stepperDisabled) return;
-    if (showFailedOnly) {
-      await selectNextFailedInput();
+    setFailedIndexes(nextFailedIndexes);
+    setFailedIndexesReady(true);
+
+    if (nextFailedIndexes.length === 0) {
+      setShowFailedOnly(false);
       return;
     }
-    const pos = activeIndexList.indexOf(selectedIndex);
-    const nextPos = pos === -1 || pos === activeIndexList.length - 1 ? 0 : pos + 1;
-    setSelectedIndex(activeIndexList[nextPos]);
+
+    setSelectedIndex(nextFailedIndexes[0]);
+  }, [getFailedInputIndexes, jobId]);
+
+  const jumpToFirstIndexWithLogs = useCallback(async () => {
+    const requestId = ++logsOnlyToggleRequestRef.current;
+    setIsHasLogsSyncing(true);
+    const nextIndexes = await getIndexesWithLogs(jobId);
+    if (requestId !== logsOnlyToggleRequestRef.current) return;
+    setLogsOnlyIndexes(nextIndexes);
+    if (nextIndexes.length === 0) {
+      setShowIndexesWithLogsOnly(false);
+      setIsHasLogsSyncing(false);
+      return;
+    }
+    setSelectedIndex(nextIndexes[0]);
+    if (hasLogsSyncUnlockTimeoutRef.current) {
+      window.clearTimeout(hasLogsSyncUnlockTimeoutRef.current);
+    }
+    hasLogsSyncUnlockTimeoutRef.current = window.setTimeout(() => {
+      if (requestId !== logsOnlyToggleRequestRef.current) return;
+      setIsHasLogsSyncing(false);
+    }, 1000);
+  }, [getIndexesWithLogs, jobId]); 
+ 
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      const nextIndexes = await getIndexesWithLogs(jobId);
+      if (cancelled) return;
+      setLogsOnlyIndexes((previousIndexes) => {
+        if (nextIndexes.length === 0 && previousIndexes.length > 0) return previousIndexes;
+        return nextIndexes;
+      });
+    };
+    load();
+    return () => {
+      cancelled = true;
+      logsOnlyToggleRequestRef.current += 1;
+    };
+  }, [jobId, getIndexesWithLogs]);
+
+  useEffect(() => {
+    if (!showIndexesWithLogsOnly) return;
+    if (jobStatus !== "RUNNING" && jobStatus !== "PENDING") return;
+
+    let cancelled = false;
+
+    const syncIndexesWithLogs = async () => {
+      const requestId = ++logsOnlyRefreshRequestRef.current;
+      const nextIndexes = await getIndexesWithLogs(jobId);
+      if (cancelled || requestId !== logsOnlyRefreshRequestRef.current) return;
+      setLogsOnlyIndexes((previousIndexes) => {
+        if (nextIndexes.length === 0 && previousIndexes.length > 0) return previousIndexes;
+        return nextIndexes;
+      });
+    };
+
+    void syncIndexesWithLogs();
+
+    const intervalId = window.setInterval(() => {
+      void syncIndexesWithLogs();
+    }, 2500);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+      logsOnlyRefreshRequestRef.current += 1;
+    };
+  }, [jobId, jobStatus, showIndexesWithLogsOnly, getIndexesWithLogs]);
+
+  useEffect(() => {
+    setFailedIndexes([]);
+    setFailedIndexesReady(false);
+    setShowFailedOnly(false);
+    setIsHasLogsSyncing(false);
+    if (hasLogsSyncUnlockTimeoutRef.current) {
+      window.clearTimeout(hasLogsSyncUnlockTimeoutRef.current);
+      hasLogsSyncUnlockTimeoutRef.current = undefined;
+    }
+  }, [jobId]);
+
+  useEffect(() => {
+    return () => {
+      if (hasLogsSyncUnlockTimeoutRef.current) {
+        window.clearTimeout(hasLogsSyncUnlockTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  const goNext = () => {
+    if (stepperDisabled) return;
+    const pos = navigationIndexList.indexOf(selectedIndex);
+    const nextPos = pos === -1 || pos === navigationIndexList.length - 1 ? 0 : pos + 1;
+    setSelectedIndex(navigationIndexList[nextPos]);
   };
 
   // Reset react-window sizing on index and filter changes
@@ -247,7 +404,9 @@ const JobLogs = ({ jobId, nInputs }: JobLogsProps) => {
     sizeMapRef.current = {};
     listRef.current?.resetAfterIndex(0, true);
     setHasAutoScrolled(false);
-  }, [jobId, selectedIndex, showFailedOnly]);
+    shouldFollowTailRef.current = true;
+    previousLogsLengthRef.current = 0;
+  }, [jobId, selectedIndex, showFailedOnly, showIndexesWithLogsOnly]);
 
   const formatTime = (logTimestamp: number) => {
     const date = new Date(logTimestamp * 1000);
@@ -282,12 +441,26 @@ const JobLogs = ({ jobId, nInputs }: JobLogsProps) => {
 
     scrollToNewestLog();
     const delayedScrollTimer = window.setTimeout(scrollToNewestLog, 30);
+    shouldFollowTailRef.current = true;
     setHasAutoScrolled(true);
 
     return () => {
       window.clearTimeout(delayedScrollTimer);
     };
   }, [items.length, hasMeasuredContainer, hasAutoScrolled, isPageLoading]);
+
+  useEffect(() => {
+    if (!hasMeasuredContainer) return;
+    if (isPageLoading || isLoadingOlderLogs) return;
+    if (items.length === 0) return;
+    if (!shouldFollowTailRef.current) return;
+
+    const previousLength = previousLogsLengthRef.current;
+    previousLogsLengthRef.current = logs.length;
+    if (logs.length <= previousLength) return;
+
+    listRef.current?.scrollToItem(items.length - 1, "end");
+  }, [logs.length, items.length, hasMeasuredContainer, isPageLoading, isLoadingOlderLogs]);
 
   useEffect(() => {
     if (isLoadingOlderLogs) return;
@@ -303,12 +476,10 @@ const JobLogs = ({ jobId, nInputs }: JobLogsProps) => {
     topAnchorLogIdRef.current = null;
   }, [items, isLoadingOlderLogs]);
 
-  // Always show Input X of Y (even when failed-only is on)
-  const actualInputLabel = useMemo(() => {
+  const totalLabel = useMemo(() => {
     const total = totalInputs || (maxKnownIndex >= 0 ? maxKnownIndex + 1 : 0);
-    const actual = selectedIndex + 1;
-    return total > 0 ? `Input ${actual} of ${total}` : `Input ${actual}`;
-  }, [selectedIndex, totalInputs, maxKnownIndex]);
+    return total.toLocaleString();
+  }, [totalInputs, maxKnownIndex]);
 
   if (windowWidth <= 1000) {
     return (
@@ -327,7 +498,35 @@ const JobLogs = ({ jobId, nInputs }: JobLogsProps) => {
     disabled
       ? "h-8 w-8 grid place-items-center rounded-md border border-gray-200 bg-white opacity-50 cursor-default"
       : "h-8 w-8 grid place-items-center rounded-md border border-gray-200 bg-white hover:bg-gray-50 active:bg-gray-100";
-  const failedCount = failedInputsCount;
+  const failedPosition = useMemo(() => {
+    if (!showFailedOnly) return 0;
+    const pos = activeFailedIndexes.indexOf(selectedIndex);
+    return pos >= 0 ? pos : 0;
+  }, [showFailedOnly, activeFailedIndexes, selectedIndex]);
+
+  const failedProgressLabel = useMemo(() => {
+    if (!hasLoadedFailedCount) return "…";
+    if (effectiveFailedCount === 0) return "0";
+    if (!showFailedOnly) return effectiveFailedCount.toLocaleString();
+    if (!failedIndexesReady) return "…";
+    if (activeFailedIndexes.length === 0) return "…";
+    return `${(failedPosition + 1).toLocaleString()} of ${activeFailedIndexes.length.toLocaleString()}`;
+  }, [
+    hasLoadedFailedCount,
+    effectiveFailedCount,
+    showFailedOnly,
+    failedIndexesReady,
+    failedPosition,
+    activeFailedIndexes.length,
+  ]);
+  const failedPillClass =
+    !hasLoadedFailedCount
+      ? "border-gray-200 bg-white text-gray-500"
+      : effectiveFailedCount === 0
+      ? "border-gray-200 bg-white text-gray-700"
+      : stepperDisabled
+      ? "border-red-200 bg-red-50 text-red-400 opacity-60"
+      : "border-red-200 bg-red-50 text-red-700";
 
   return (
     <div className="mt-4 mb-4 flex flex-col flex-1 min-h-0">
@@ -335,10 +534,12 @@ const JobLogs = ({ jobId, nInputs }: JobLogsProps) => {
         <h2 className="text-lg font-semibold text-primary">Logs</h2>
 
         <div className="flex items-center">
-          <div className="flex items-center gap-3 rounded-full border border-gray-200 bg-gray-50 px-3 py-2 shadow-sm">
-            <span className="text-sm text-gray-800 tabular-nums whitespace-nowrap">
-              {actualInputLabel}
-            </span>
+          <div className="flex items-center gap-2.5 rounded-full border border-gray-200 bg-gray-50 px-3 py-1.5 shadow-sm">
+            <label className="text-sm text-gray-700 tabular-nums whitespace-nowrap flex items-center gap-1.5">
+              <span className="text-gray-500 font-medium">Index</span>
+              <span className="tabular-nums text-gray-900">{selectedIndex.toLocaleString()}</span>
+              <span>of {totalLabel}</span>
+            </label>
 
             <div className="flex items-center gap-2">
               <button
@@ -370,19 +571,52 @@ const JobLogs = ({ jobId, nInputs }: JobLogsProps) => {
 
             <label className="flex items-center gap-2 text-sm text-gray-700 select-none">
               <Switch
-                checked={showFailedOnly}
+                checked={showIndexesWithLogsOnly}
                 onCheckedChange={(checked) => {
-                  setShowFailedOnly(checked);
+                  if (showFailedOnly) return;
+                  if (hasLogsSyncUnlockTimeoutRef.current) {
+                    window.clearTimeout(hasLogsSyncUnlockTimeoutRef.current);
+                    hasLogsSyncUnlockTimeoutRef.current = undefined;
+                  }
+                  setShowIndexesWithLogsOnly(checked);
                   if (checked) {
-                    void selectNextFailedInput();
+                    void jumpToFirstIndexWithLogs();
+                  } else {
+                    logsOnlyToggleRequestRef.current += 1;
+                    setIsHasLogsSyncing(false);
+                    setSelectedIndex(0);
                   }
                 }}
-                disabled={failedCount === 0}
+                disabled={(logsOnlyIndexes.length === 0 && !showIndexesWithLogsOnly) || showFailedOnly}
+                className="scale-75 origin-left disabled:cursor-default"
+              />
+              <span className="whitespace-nowrap text-muted-foreground">Has logs</span>
+            </label>
+
+            <div className="h-6 w-px bg-gray-200" aria-hidden="true" />
+
+            <label className="flex items-center gap-2 text-sm text-gray-700 select-none">
+              <Switch
+                checked={showFailedOnly}
+                onCheckedChange={(checked) => {
+                  if (showIndexesWithLogsOnly) return;
+                  failedToggleRequestRef.current += 1;
+                  setShowFailedOnly(checked);
+                  if (checked) {
+                    void jumpToFirstFailedInput();
+                  } else {
+                    setFailedIndexesReady(false);
+                    setSelectedIndex(0);
+                  }
+                }}
+                disabled={!hasLoadedFailedCount || effectiveFailedCount === 0 || showIndexesWithLogsOnly}
                 className="scale-75 origin-left disabled:cursor-default"
               />
               <span className="whitespace-nowrap text-muted-foreground">Failed only</span>
-              <span className="ml-1 inline-flex items-center rounded-full border border-red-200 bg-red-50 px-2.5 py-1 text-xs tabular-nums text-red-700">
-                {failedCount}
+              <span
+                className={`ml-1 inline-flex items-center rounded-full border px-2.5 py-1 text-xs tabular-nums ${failedPillClass}`}
+              >
+                {failedProgressLabel}
               </span>
             </label>
 
@@ -420,8 +654,12 @@ const JobLogs = ({ jobId, nInputs }: JobLogsProps) => {
               itemSize={getItemSize}
               width="100%"
               ref={listRef}
+              outerRef={outerListRef}
               itemKey={(index) => items[index]?.key ?? index}
               onScroll={({ scrollDirection, scrollOffset, scrollUpdateWasRequested }) => {
+                if (!scrollUpdateWasRequested) {
+                  updateShouldFollowTail();
+                }
                 if (scrollUpdateWasRequested) return;
                 if (scrollDirection !== "backward") return;
                 if (scrollOffset > 0) return;

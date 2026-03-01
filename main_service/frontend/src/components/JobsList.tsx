@@ -170,8 +170,11 @@ export const JobsList = () => {
                   </TableHeader>
 
                   <TableBody>
-                    {jobs.map((job) => (
-                      <TableRow key={job.id}>
+                    {jobs.map((job) => {
+                      const failedCount = Math.max(0, job.n_failed ?? 0);
+                      const successfulCount = Math.max(0, job.n_results - failedCount);
+                      return (
+                        <TableRow key={job.id}>
                         <TableCell>
                           <input
                             type="checkbox"
@@ -204,7 +207,7 @@ export const JobsList = () => {
                         <TableCell>
                           <div className="flex flex-col space-y-1 min-w-[140px]">
                             <div>
-                              {job.n_results.toLocaleString()} / {job.n_inputs.toLocaleString()}
+                              {successfulCount.toLocaleString()} / {job.n_inputs.toLocaleString()}
                             </div>
                             <div className="w-full bg-gray-200 rounded h-1.5 overflow-hidden">
                               <div
@@ -212,7 +215,7 @@ export const JobsList = () => {
                                 style={{
                                   width: `${
                                     job.n_inputs
-                                      ? Math.min(100, (job.n_results / job.n_inputs) * 100)
+                                      ? Math.min(100, (successfulCount / job.n_inputs) * 100)
                                       : 0
                                   }%`,
                                 }}
@@ -237,8 +240,9 @@ export const JobsList = () => {
                         </TableCell>
 
                         <TableCell className="text-right" />
-                      </TableRow>
-                    ))}
+                        </TableRow>
+                      );
+                    })}
                   </TableBody>
                 </Table>
               </div>

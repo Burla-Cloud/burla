@@ -1,21 +1,34 @@
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
 
-type DailyGroup = {
+export type DailyGroup = {
   machine_type: string;
   gcp_region: string;
   spot: boolean;
-  total_node_hours: number;
+
+  total_node_hours: number; // VM-hours (cost)
+  total_compute_hours: number; // compute-hours (usage)
 };
 
 export type DailyHoursResponse = {
-  month: string; // YYYY-MM
+  month: string;
+
   total_node_hours: number;
+  total_compute_hours: number;
+
   days: Array<{
-    date: string; // YYYY-MM-DD
+    date: string;
+
     total_node_hours: number;
+    total_compute_hours: number;
+
     groups: DailyGroup[];
   }>;
-  meta?: any;
+
+  meta: {
+    hours_precision_decimals: number;
+    scanned: number;
+    max_scan: number;
+  };
 };
 
 export type MonthNodesCursor =
@@ -35,7 +48,9 @@ export type MonthNodesResponse = {
     spot: boolean;
     started_at_ms: number;
     ended_at_ms: number;
-    duration_hours: number;
+
+    duration_hours: number; // VM-hours (cost)
+    duration_compute_hours: number; // compute-hours (usage)
   }>;
   nextCursor?: MonthNodesCursor;
   meta?: any;
@@ -108,7 +123,6 @@ export function UsageProvider({ children }: { children: React.ReactNode }) {
     setError(null);
 
     try {
-      // Fetch daily and nodes in parallel, but we need nodes fully aggregated.
       const dailyPromise = fetchJson<DailyHoursResponse>(`/v1/nodes/daily_hours${qs({ month })}`);
 
       const pageLimit = 2000;
@@ -129,7 +143,6 @@ export function UsageProvider({ children }: { children: React.ReactNode }) {
 
         if (Array.isArray(page.nodes)) allNodes.push(...page.nodes);
 
-        // Backend sends nextCursor
         cursor = page.nextCursor ?? null;
 
         if (!cursor) {

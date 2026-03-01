@@ -16,25 +16,25 @@ const JobsContext = createContext<JobsContextType>({
     page: 0,
     setPage: () => {},
     totalPages: 1,
-    isLoading: false,
-});
+    isLoading: false, 
+});  
 
-export const JobsProvider = ({ children }: { children: React.ReactNode }) => {
+export const JobsProvider = ({ children }: { children: React.ReactNode }) => { 
     const [jobs, setJobs] = useState<BurlaJob[]>([]);
     const [page, setPage] = useState(0);
     const [totalPages, setTotalPages] = useState(1);
     const [isLoading, setIsLoading] = useState(false);
 
-    const fetchJobs = useCallback(async () => {
+    const fetchJobs = useCallback(async () => { 
         setIsLoading(true);
         try {
             const response = await fetch(`/v1/jobs?page=${page}`);
             const json = await response.json();
-            const jobList = (json.jobs ?? []).map(createNewJob);
+            const jobList = (json.jobs ?? []).map(createNewJob); 
 
             setJobs((prev) => {
                 if (page !== 0) {
-                    return jobList;
+                    return jobList; 
                 }
 
                 const existingIds = new Set(jobList.map((j) => j.id));
@@ -104,6 +104,7 @@ export const JobsProvider = ({ children }: { children: React.ReactNode }) => {
                         checked: false,
                         n_inputs: typeof data.n_inputs === "number" ? data.n_inputs : 0,
                         n_results: typeof data.n_results === "number" ? data.n_results : 0,
+                        n_failed: typeof data.n_failed === "number" ? data.n_failed : 0,
                         function_name:
                             typeof data.function_name === "string" ? data.function_name : "Unknown",
                         started_at:
@@ -171,6 +172,7 @@ const createNewJob = (data: any): BurlaJob => ({
     checked: false,
     n_inputs: typeof data.n_inputs === "number" ? data.n_inputs : 0,
     n_results: typeof data.n_results === "number" ? data.n_results : 0,
+    n_failed: typeof data.n_failed === "number" ? data.n_failed : 0,
     function_name: typeof data.function_name === "string" ? data.function_name : "Unknown",
     started_at: typeof data.started_at === "number" ? new Date(data.started_at * 1000) : undefined,
 });

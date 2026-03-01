@@ -27,6 +27,19 @@ async def current_num_results(job_id: str) -> int:
         return 0
 
 
+async def current_num_failed(job_id: str) -> int:
+    job_doc = ASYNC_DB.collection("jobs").document(job_id)
+    logs_collection = job_doc.collection("logs")
+    error_documents_query = logs_collection.where(
+        filter=firestore.FieldFilter("is_error", "==", True)
+    )
+    query_result = await error_documents_query.count().get()
+    try:
+        return int(query_result[0][0].value or 0)
+    except Exception:
+        return 0
+
+
 def job_stream(jobs_current_page: firestore.CollectionReference):
     queue = asyncio.Queue()
     loop = asyncio.get_running_loop()
@@ -38,7 +51,9 @@ def job_stream(jobs_current_page: firestore.CollectionReference):
 
         while True:
             n_results = await current_num_results(job_id)
+            n_failed = await current_num_failed(job_id)
             event["n_results"] = n_results
+            event["n_failed"] = n_failed
             await queue.put(event)
             await asyncio.sleep(1)
 
@@ -73,6 +88,7 @@ def job_stream(jobs_current_page: firestore.CollectionReference):
                 "function_name": job.get("function_name", "Unknown"),
                 "n_inputs": job.get("n_inputs", 0),
                 "n_results": None,
+                "n_failed": None,
                 "started_at": job.get("started_at"),
                 "deleted": change.type.name == "REMOVED",
             }
@@ -92,7 +108,9 @@ def job_stream(jobs_current_page: firestore.CollectionReference):
 
             async def queue_job(job_id_: str, event_: dict):
                 n_results = await current_num_results(job_id_)
+                n_failed = await current_num_failed(job_id_)
                 event_["n_results"] = n_results
+                event_["n_failed"] = n_failed
                 await queue.put(event_)
 
             asyncio.run_coroutine_threadsafe(queue_job(job_id, event), loop)
@@ -136,6 +154,7 @@ async def get_jobs(request: Request, page: int = 0, stream: bool = False):
                 "function_name": job.get("function_name", "Unknown"),
                 "n_inputs": job.get("n_inputs", 0),
                 "n_results": await current_num_results(job_doc.id),
+                "n_failed": await current_num_failed(job_doc.id),
                 "started_at": job.get("started_at"),
             }
         )
@@ -156,6 +175,57 @@ async def stop_job(job_id: str, request: Request):
     await job_doc.update({"status": "CANCELED"})
 
 
+@router.get("/v1/jobs/{job_id}/result-stats")
+async def get_job_result_stats(job_id: str):
+    job_doc_ref = ASYNC_DB.collection("jobs").document(job_id)
+    job_doc = await job_doc_ref.get()
+    if not job_doc.exists:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    job = job_doc.to_dict() or {}
+    n_inputs = int(job.get("n_inputs", 0) or 0)
+    n_results = await current_num_results(job_id)
+    n_failed = await current_num_failed(job_id)
+
+    return JSONResponse(
+        {
+            "job_id": job_id,
+            "n_inputs": n_inputs,
+            "n_results": n_results,
+            "n_failed": n_failed,
+        }
+    )
+
+
+@router.get("/v1/jobs/{job_id}/logged-input-indexes")
+async def get_logged_input_indexes(job_id: str):
+    logs_collection = ASYNC_DB.collection("jobs").document(job_id).collection("logs")
+
+    indexes_with_logs = set()
+    failed_indexes = set()
+
+    async for log_document in logs_collection.stream():
+        payload = log_document.to_dict() or {}
+        input_index = payload.get("input_index")
+        if input_index is None:
+            continue
+
+        normalized_index = int(input_index)
+        indexes_with_logs.add(normalized_index)
+        if payload.get("is_error") is True:
+            failed_indexes.add(normalized_index)
+
+    non_failed_indexes_with_logs = sorted(indexes_with_logs - failed_indexes)
+
+    return JSONResponse(
+        {
+            "indexes_with_logs": sorted(indexes_with_logs),
+            "failed_indexes": sorted(failed_indexes),
+            "non_failed_indexes_with_logs": non_failed_indexes_with_logs,
+        }
+    )
+
+
 @router.get("/v1/jobs/{job_id}/next-failed-input")
 async def get_next_failed_input_index(
     job_id: str,
@@ -169,17 +239,18 @@ async def get_next_failed_input_index(
         .where(filter=firestore.FieldFilter("is_error", "==", True))
     )
 
-    first_failed_input_index = None
-    next_failed_input_index = None
+    failed_input_indexes = set()
     async for failed_document in failed_documents.stream():
         failed_input_index = int(failed_document.to_dict()["input_index"])
+        failed_input_indexes.add(failed_input_index)
 
-        if first_failed_input_index is None or failed_input_index < first_failed_input_index:
-            first_failed_input_index = failed_input_index
-
+    ordered_failed_indexes = sorted(failed_input_indexes)
+    first_failed_input_index = ordered_failed_indexes[0] if ordered_failed_indexes else None
+    next_failed_input_index = None
+    for failed_input_index in ordered_failed_indexes:
         if failed_input_index > current_input_index:
-            if next_failed_input_index is None or failed_input_index < next_failed_input_index:
-                next_failed_input_index = failed_input_index
+            next_failed_input_index = failed_input_index
+            break
 
     return JSONResponse(
         {
@@ -188,6 +259,7 @@ async def get_next_failed_input_index(
                 if next_failed_input_index is not None
                 else first_failed_input_index
             ),
+            "failed_input_indexes": ordered_failed_indexes,
         }
     )
 
@@ -198,6 +270,7 @@ async def stream_or_fetch_job_logs(
     index: int,
     oldest_timestamp: Optional[str] = None,
 ):
+    max_logs_per_response = 500
     logs_collection = ASYNC_DB.collection("jobs").document(job_id).collection("logs")
     error_documents_query = logs_collection.where(
         filter=firestore.FieldFilter("is_error", "==", True)
@@ -206,47 +279,56 @@ async def stream_or_fetch_job_logs(
     failed_inputs_count_response = await error_documents_query.count().get()
     failed_inputs_count = int(failed_inputs_count_response[0][0].value or 0)
 
-    oldest_log_document_timestamp = float(oldest_timestamp) if oldest_timestamp else None
-    newest_document = None
-    newest_document_timestamp = None
-    has_more_older = False
+    oldest_requested_timestamp = float(oldest_timestamp) if oldest_timestamp else None
 
     logs_query = logs_collection.where(
         filter=firestore.FieldFilter("input_index", "==", int(index))
     )
+    matching_logs = []
     async for doc in logs_query.stream():
-        log_document = doc.to_dict()
-        document_timestamp = log_document["timestamp"].timestamp()
-        if (
-            oldest_log_document_timestamp is not None
-            and document_timestamp >= oldest_log_document_timestamp
-        ):
-            continue
-        if newest_document_timestamp is None or document_timestamp > newest_document_timestamp:
-            if newest_document is not None:
-                has_more_older = True
-            newest_document = log_document
-            newest_document_timestamp = document_timestamp
-            continue
-        has_more_older = True
-
-    logs = []
-    if newest_document is not None:
-        for log in newest_document["logs"]:
-            logs.append(
+        log_document = doc.to_dict() or {}
+        is_error_document = bool(log_document.get("is_error"))
+        for log in log_document.get("logs", []):
+            timestamp_value = log.get("timestamp")
+            if not timestamp_value:
+                continue
+            log_timestamp = (
+                timestamp_value.timestamp()
+                if hasattr(timestamp_value, "timestamp")
+                else float(timestamp_value)
+            )
+            if (
+                oldest_requested_timestamp is not None
+                and log_timestamp >= oldest_requested_timestamp
+            ):
+                continue
+            matching_logs.append(
                 {
-                    "message": log["message"],
-                    "log_timestamp": log["timestamp"].timestamp(),
+                    "message": log.get("message", ""),
+                    "log_timestamp": log_timestamp,
+                    "is_error": bool(log.get("is_error", False) or is_error_document),
                 }
             )
+
+    matching_logs.sort(key=lambda entry: entry["log_timestamp"], reverse=True)
+    has_more_older = len(matching_logs) > max_logs_per_response
+    newest_window_desc = matching_logs[:max_logs_per_response]
+    logs = sorted(newest_window_desc, key=lambda entry: entry["log_timestamp"])
+    oldest_returned_log_timestamp = (
+        min(entry["log_timestamp"] for entry in newest_window_desc)
+        if newest_window_desc
+        else None
+    )
 
     return JSONResponse(
         {
             "logs": logs,
             "input_index": int(index),
-            "log_document_timestamp": newest_document_timestamp,
+            "log_document_timestamp": oldest_returned_log_timestamp,
             "truncated": has_more_older,
             "has_more_older": has_more_older,
             "failed_inputs_count": failed_inputs_count,
         }
     )
+ 
+ 

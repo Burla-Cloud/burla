@@ -895,6 +895,7 @@
 import json
 import asyncio
 import docker
+import re
 import requests
 from time import time
 from datetime import datetime, timedelta, timezone
@@ -1027,6 +1028,18 @@ def _quantize_hours(hours: float, decimals: int = 6) -> float:
     if h <= 0:
         return 0.0
     return round(h, decimals)
+
+
+_N4_RE = re.compile(r"^n4-standard-(\d+)$")
+
+
+def _cpu_hour_multiplier(machine_type: str) -> int:
+    # Only apply to CPU VM types: n4-standard-{2,4,8,16,32,64,80}
+    m = _N4_RE.match(str(machine_type or ""))
+    if not m:
+        return 1
+    vcpu = int(m.group(1))
+    return vcpu if vcpu > 0 else 1
 
 
 # ============================
@@ -1193,7 +1206,10 @@ def nodes_monthly_hours(
         cur = _add_months(cur, 1)
 
     cutoff_sec = start_month_dt.timestamp()
+    # VM-hours per group per month
     buckets: dict[str, dict[str, float]] = {mk: {} for mk in month_keys}
+    # CPU compute-hours per group per month (only n4-standard-X multiplies)
+    compute_buckets: dict[str, dict[str, float]] = {mk: {} for mk in month_keys}
 
     last_doc = None
     scanned = 0
@@ -1235,6 +1251,7 @@ def nodes_monthly_hours(
                 continue
 
             group_key = f"{machine_type}|{gcp_region}|{1 if spot_bool else 0}"
+            mult = _cpu_hour_multiplier(machine_type)
 
             window_start = max(start_dt, start_month_dt)
             window_end = min(end_dt, end_boundary)
@@ -1251,6 +1268,10 @@ def nodes_monthly_hours(
                     mk = _month_key(m)
                     if mk in buckets:
                         buckets[mk][group_key] = buckets[mk].get(group_key, 0.0) + raw_hours
+                    if mk in compute_buckets:
+                        compute_buckets[mk][group_key] = (
+                            compute_buckets[mk].get(group_key, 0.0) + (raw_hours * mult)
+                        )
                 m = m_next
 
         if scanned >= max_scan:
@@ -1258,11 +1279,14 @@ def nodes_monthly_hours(
 
     months_out = []
     grand_total_raw = 0.0
+    grand_total_compute_raw = 0.0
 
     for mk in month_keys:
         groups_out = []
         month_total_raw = 0.0
+        month_total_compute_raw = 0.0
 
+        # iterate groups seen in VM-hours bucket; compute bucket uses same keys
         for group_key, raw in buckets[mk].items():
             machine_type, gcp_region, spot_int = group_key.split("|", 2)
             spot_bool = spot_int == "1"
@@ -1270,25 +1294,30 @@ def nodes_monthly_hours(
             if raw <= 0:
                 continue
 
-            hrs = _quantize_hours(raw)
+            raw_compute = compute_buckets[mk].get(group_key, 0.0)
+
             month_total_raw += raw
+            month_total_compute_raw += raw_compute
             groups_out.append(
                 {
                     "machine_type": machine_type,
                     "gcp_region": gcp_region,
                     "spot": spot_bool,
-                    "total_node_hours": hrs,
+                    "total_node_hours": _quantize_hours(raw),
+                    "total_compute_hours": _quantize_hours(raw_compute),
                 }
             )
 
         groups_out.sort(key=lambda g: g["total_node_hours"], reverse=True)
 
         grand_total_raw += month_total_raw
+        grand_total_compute_raw += month_total_compute_raw
 
         months_out.append(
             {
                 "month": mk,
                 "total_node_hours": _quantize_hours(month_total_raw),
+                "total_compute_hours": _quantize_hours(month_total_compute_raw),
                 "groups": groups_out,
             }
         )
@@ -1296,6 +1325,7 @@ def nodes_monthly_hours(
     return {
         "months": months_out,
         "total_node_hours": _quantize_hours(grand_total_raw),
+        "total_compute_hours": _quantize_hours(grand_total_compute_raw),
         "range": {
             "start_month": month_keys[0] if month_keys else None,
             "end_month": month_keys[-1] if month_keys else None,
@@ -1327,7 +1357,10 @@ def nodes_daily_hours(
         cur = _add_days(cur, 1)
 
     cutoff_sec = month_start.timestamp()
+    # VM-hours per group per day
     buckets: dict[str, dict[str, float]] = {dk: {} for dk in day_keys}
+    # CPU compute-hours per group per day
+    compute_buckets: dict[str, dict[str, float]] = {dk: {} for dk in day_keys}
 
     last_doc = None
     scanned = 0
@@ -1374,6 +1407,7 @@ def nodes_daily_hours(
                 continue
 
             group_key = f"{machine_type}|{gcp_region}|{1 if spot_bool else 0}"
+            mult = _cpu_hour_multiplier(machine_type)
 
             d = _day_start(window_start)
             while d < window_end:
@@ -1386,6 +1420,10 @@ def nodes_daily_hours(
                     dk = _date_key(d)
                     if dk in buckets:
                         buckets[dk][group_key] = buckets[dk].get(group_key, 0.0) + raw_hours
+                    if dk in compute_buckets:
+                        compute_buckets[dk][group_key] = (
+                            compute_buckets[dk].get(group_key, 0.0) + (raw_hours * mult)
+                        )
 
                 d = d_next
 
@@ -1394,10 +1432,12 @@ def nodes_daily_hours(
 
     days_out = []
     total_raw = 0.0
+    total_compute_raw = 0.0
 
     for dk in day_keys:
         groups_out = []
         day_total_raw = 0.0
+        day_total_compute_raw = 0.0
 
         for group_key, raw in buckets[dk].items():
             machine_type, gcp_region, spot_int = group_key.split("|", 2)
@@ -1406,24 +1446,29 @@ def nodes_daily_hours(
             if raw <= 0:
                 continue
 
-            hrs = _quantize_hours(raw)
+            raw_compute = compute_buckets[dk].get(group_key, 0.0)
+
             day_total_raw += raw
+            day_total_compute_raw += raw_compute
             groups_out.append(
                 {
                     "machine_type": machine_type,
                     "gcp_region": gcp_region,
                     "spot": spot_bool,
-                    "total_node_hours": hrs,
+                    "total_node_hours": _quantize_hours(raw),
+                    "total_compute_hours": _quantize_hours(raw_compute),
                 }
             )
 
         groups_out.sort(key=lambda g: g["total_node_hours"], reverse=True)
         total_raw += day_total_raw
+        total_compute_raw += day_total_compute_raw
 
         days_out.append(
             {
                 "date": dk,
                 "total_node_hours": _quantize_hours(day_total_raw),
+                "total_compute_hours": _quantize_hours(day_total_compute_raw),
                 "groups": groups_out,
             }
         )
@@ -1432,6 +1477,7 @@ def nodes_daily_hours(
         "month": _month_key(month_start),
         "days": days_out,
         "total_node_hours": _quantize_hours(total_raw),
+        "total_compute_hours": _quantize_hours(total_compute_raw),
         "meta": {
             "hours_precision_decimals": 6,
             "scanned": scanned,
@@ -1500,6 +1546,9 @@ def nodes_month_nodes(
             continue
 
         duration_hours = _quantize_hours(duration_hours_raw)
+        machine_type = data.get("machine_type")
+        mult = _cpu_hour_multiplier(machine_type)
+        duration_compute_hours = _quantize_hours(duration_hours_raw * mult)
 
         spot_bool = bool(data.get("spot")) if data.get("spot") is not None else False
 
@@ -1507,12 +1556,13 @@ def nodes_month_nodes(
             {
                 "id": doc.id,
                 "instance_name": data.get("instance_name", doc.id),
-                "machine_type": data.get("machine_type"),
+                "machine_type": machine_type,
                 "gcp_region": data.get("gcp_region"),
                 "spot": spot_bool,
                 "started_at_ms": _to_epoch_ms(window_start),
                 "ended_at_ms": _to_epoch_ms(window_end),
                 "duration_hours": duration_hours,
+                "duration_compute_hours": duration_compute_hours,
             }
         )
 

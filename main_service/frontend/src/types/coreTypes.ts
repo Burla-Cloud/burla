@@ -101,6 +101,7 @@ export interface BurlaJob {
   checked: boolean;
   n_inputs: number;
   n_results: number;
+  n_failed?: number;
   started_at?: Date; // parsed from UNIX timestamp in jobContext & jobs_paginated
   function_name?: string;
 }
@@ -128,4 +129,3 @@ export interface LogEntry {
   log_timestamp: number;
   is_error?: boolean;
 }
-

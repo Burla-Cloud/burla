@@ -194,7 +194,7 @@ const SettingsPage = () => {
     );
   })();
 
-  return (
+  return ( 
     <div className="flex-1 flex flex-col justify-start px-12 pt-6 min-w-0">
       <div className="max-w-6xl mx-auto w-full flex-1 flex flex-col min-w-0">
         <div className="mt-2 mb-10">

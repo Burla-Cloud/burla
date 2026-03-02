@@ -253,7 +253,7 @@ const JobDetails = () => {
             <div className="flex-1 flex flex-col items-center justify-center px-12 pt-10">
                 <div className="inline-flex items-center gap-3 text-gray-600">
                     <div
-                        className="h-7 w-7 rounded-full border-2 border-gray-300 border-t-primary animate-spin"
+                        className="h-6 w-6 rounded-full border-2 border-gray-300 border-t-primary animate-spin"
                         role="status"
                         aria-label="Loading job result stats"
                     />
@@ -359,7 +359,7 @@ const JobDetails = () => {
                                     {stats.n_inputs.toLocaleString()}
                                 </span>
                                 <span className="ml-2">
-                                    Function Calls Complete.
+                                    Function calls complete.
                                 </span>
                             </div>
                         </div>

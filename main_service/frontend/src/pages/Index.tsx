@@ -186,8 +186,8 @@ const Dashboard = () => {
 
                 <div className="space-y-8 flex-1">
                     {/* status + controls */}
-                    <div className="grid grid-cols-1 md:grid-cols-4 gap-8">
-                        <div className="md:col-span-3 justify-self-start">
+                    <div className="grid grid-cols-1 gap-8 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
+                        <div className="min-w-0">
                             {loading ? (
                                 <Card className="w-full animate-pulse">
                                     <CardHeader className="pb-2">
@@ -219,7 +219,7 @@ const Dashboard = () => {
                             )}
                         </div>
 
-                        <div className="flex items-center justify-center md:col-span-1">
+                        <div className="flex items-center justify-end">
                             <ClusterControls
                                 status={clusterStatus}
                                 onReboot={handleReboot}

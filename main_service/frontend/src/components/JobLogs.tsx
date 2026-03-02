@@ -708,7 +708,7 @@ const JobLogs = ({
           <div className="absolute inset-0 z-20 flex items-center justify-center bg-white/75">
             <div className="flex flex-col items-center text-gray-800">
               <div
-                className="h-8 w-8 rounded-full border-2 border-gray-300 border-t-primary animate-spin"
+                className="h-6 w-6 rounded-full border-2 border-gray-300 border-t-primary animate-spin"
                 role="status"
                 aria-label="Loading logs"
               />
@@ -720,7 +720,7 @@ const JobLogs = ({
           <div ref={containerRef} className="h-full w-full flex items-center justify-center">
             <div className="flex flex-col items-center text-gray-800">
               <div
-                className="h-8 w-8 rounded-full border-2 border-gray-300 border-t-primary animate-spin"
+                className="h-6 w-6 rounded-full border-2 border-gray-300 border-t-primary animate-spin"
                 role="status"
                 aria-label="Loading logs"
               />

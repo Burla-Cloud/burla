@@ -2,6 +2,8 @@ import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import { useLogsContext } from "@/contexts/LogsContext";
 import { VariableSizeList as List } from "react-window";
 import { Switch } from "@/components/ui/switch";
+import { Button } from "@/components/ui/button";
+import { PowerOff } from "lucide-react";
 import { LogEntry } from "@/types/coreTypes";
 
 interface JobLogsProps {
@@ -9,6 +11,8 @@ interface JobLogsProps {
   jobStatus?: string | null;
   nInputs?: number;
   failedCount?: number;
+  onStopJob?: () => void;
+  isStopDisabled?: boolean;
   onFailedCountChange?: (failedCount: number) => void;
 }
 
@@ -20,7 +24,15 @@ type RowItem =
 const getLogRowIdentifier = (logEntry: LogEntry) =>
   `${logEntry.log_timestamp}-${logEntry.is_error ? 1 : 0}-${logEntry.message ?? ""}`;
 
-const JobLogs = ({ jobId, jobStatus, nInputs, failedCount, onFailedCountChange }: JobLogsProps) => {
+const JobLogs = ({
+  jobId,
+  jobStatus,
+  nInputs,
+  failedCount,
+  onStopJob,
+  isStopDisabled,
+  onFailedCountChange,
+}: JobLogsProps) => {
   const {
     getLogs,
     getFailedInputsCount,
@@ -36,6 +48,7 @@ const JobLogs = ({ jobId, jobStatus, nInputs, failedCount, onFailedCountChange }
   const [showFailedOnly, setShowFailedOnly] = useState(false);
   const [showIndexesWithLogsOnly, setShowIndexesWithLogsOnly] = useState(false);
   const [isHasLogsSyncing, setIsHasLogsSyncing] = useState(false);
+  const [indexInputValue, setIndexInputValue] = useState("0");
   const [failedIndexes, setFailedIndexes] = useState<number[]>([]);
   const [failedIndexesReady, setFailedIndexesReady] = useState(false);
   const [logsOnlyIndexes, setLogsOnlyIndexes] = useState<number[]>([]);
@@ -289,6 +302,18 @@ const JobLogs = ({ jobId, jobStatus, nInputs, failedCount, onFailedCountChange }
     setSelectedIndex(navigationIndexList[nextPos]);
   };
 
+  const goToCustomIndex = useCallback(() => {
+    const parsedIndex = Number(indexInputValue.trim());
+    if (!Number.isInteger(parsedIndex) || parsedIndex < 0) {
+      setIndexInputValue(String(selectedIndex));
+      return;
+    }
+    const boundedIndex =
+      maxKnownIndex >= 0 ? Math.min(parsedIndex, maxKnownIndex) : parsedIndex;
+    setSelectedIndex(boundedIndex);
+    setIndexInputValue(String(boundedIndex));
+  }, [indexInputValue, selectedIndex, maxKnownIndex]);
+
   const jumpToFirstFailedInput = useCallback(async () => {
     const requestId = ++failedToggleRequestRef.current;
     setFailedIndexesReady(false);
@@ -303,8 +328,17 @@ const JobLogs = ({ jobId, jobStatus, nInputs, failedCount, onFailedCountChange }
       return;
     }
 
-    setSelectedIndex(nextFailedIndexes[0]);
-  }, [getFailedInputIndexes, jobId]);
+    if (!nextFailedIndexes.includes(selectedIndex)) {
+      const closestFailedIndex = nextFailedIndexes.reduce((closestIndex, candidateIndex) => {
+        const closestDistance = Math.abs(closestIndex - selectedIndex);
+        const candidateDistance = Math.abs(candidateIndex - selectedIndex);
+        if (candidateDistance < closestDistance) return candidateIndex;
+        if (candidateDistance > closestDistance) return closestIndex;
+        return candidateIndex < closestIndex ? candidateIndex : closestIndex;
+      }, nextFailedIndexes[0]);
+      setSelectedIndex(closestFailedIndex);
+    }
+  }, [getFailedInputIndexes, jobId, selectedIndex]);
 
   const jumpToFirstIndexWithLogs = useCallback(async () => {
     const requestId = ++logsOnlyToggleRequestRef.current;
@@ -317,7 +351,16 @@ const JobLogs = ({ jobId, jobStatus, nInputs, failedCount, onFailedCountChange }
       setIsHasLogsSyncing(false);
       return;
     }
-    setSelectedIndex(nextIndexes[0]);
+    if (!nextIndexes.includes(selectedIndex)) {
+      const closestIndexWithLogs = nextIndexes.reduce((closestIndex, candidateIndex) => {
+        const closestDistance = Math.abs(closestIndex - selectedIndex);
+        const candidateDistance = Math.abs(candidateIndex - selectedIndex);
+        if (candidateDistance < closestDistance) return candidateIndex;
+        if (candidateDistance > closestDistance) return closestIndex;
+        return candidateIndex < closestIndex ? candidateIndex : closestIndex;
+      }, nextIndexes[0]);
+      setSelectedIndex(closestIndexWithLogs);
+    }
     if (hasLogsSyncUnlockTimeoutRef.current) {
       window.clearTimeout(hasLogsSyncUnlockTimeoutRef.current);
     }
@@ -325,7 +368,7 @@ const JobLogs = ({ jobId, jobStatus, nInputs, failedCount, onFailedCountChange }
       if (requestId !== logsOnlyToggleRequestRef.current) return;
       setIsHasLogsSyncing(false);
     }, 1000);
-  }, [getIndexesWithLogs, jobId]); 
+  }, [getIndexesWithLogs, jobId, selectedIndex]); 
  
   useEffect(() => {
     let cancelled = false;
@@ -480,6 +523,10 @@ const JobLogs = ({ jobId, jobStatus, nInputs, failedCount, onFailedCountChange }
     const total = totalInputs || (maxKnownIndex >= 0 ? maxKnownIndex + 1 : 0);
     return total.toLocaleString();
   }, [totalInputs, maxKnownIndex]);
+  const totalIndexesCountDigits = useMemo(() => {
+    const totalIndexesCount = Math.max(0, totalInputs || (maxKnownIndex >= 0 ? maxKnownIndex + 1 : 0));
+    return String(totalIndexesCount).length;
+  }, [totalInputs, maxKnownIndex]);
 
   if (windowWidth <= 1000) {
     return (
@@ -487,7 +534,7 @@ const JobLogs = ({ jobId, jobStatus, nInputs, failedCount, onFailedCountChange }
         <div className="flex items-center justify-between mb-3">
           <h2 className="text-lg font-semibold text-primary">Logs</h2>
         </div>
-        <div className="text-gray-500 italic text-sm text-center p-4">
+        <div className="text-[14.5px] text-gray-800 text-center p-4">
           Logs are hidden on small screens.
         </div>
       </div>
@@ -521,23 +568,45 @@ const JobLogs = ({ jobId, jobStatus, nInputs, failedCount, onFailedCountChange }
   ]);
   const failedPillClass =
     !hasLoadedFailedCount
-      ? "border-gray-200 bg-white text-gray-500"
+      ? "border-gray-200 bg-white text-gray-800"
       : effectiveFailedCount === 0
-      ? "border-gray-200 bg-white text-gray-700"
+      ? "border-gray-200 bg-white text-gray-800"
       : stepperDisabled
-      ? "border-red-200 bg-red-50 text-red-400 opacity-60"
-      : "border-red-200 bg-red-50 text-red-700";
+      ? "border-red-200 bg-red-50 text-gray-800"
+      : "border-red-200 bg-red-50 text-gray-800";
+  const isHasLogsLoading = showIndexesWithLogsOnly && stepperDisabled;
+
+  useEffect(() => {
+    setIndexInputValue(String(selectedIndex));
+  }, [selectedIndex]);
 
   return (
-    <div className="mt-4 mb-4 flex flex-col flex-1 min-h-0">
-      <div className="flex items-center justify-between mb-3">
-        <h2 className="text-lg font-semibold text-primary">Logs</h2>
-
-        <div className="flex items-center">
-          <div className="flex items-center gap-2.5 rounded-full border border-gray-200 bg-gray-50 px-3 py-1.5 shadow-sm">
-            <label className="text-sm text-gray-700 tabular-nums whitespace-nowrap flex items-center gap-1.5">
-              <span className="text-gray-500 font-medium">Index</span>
-              <span className="tabular-nums text-gray-900">{selectedIndex.toLocaleString()}</span>
+    <div className="mt-0 mb-0 flex flex-col flex-1 min-h-0 text-[14.5px] font-normal text-gray-800">
+      <div className="flex flex-1 min-h-0 flex-col rounded-lg border border-gray-200 bg-white shadow-sm overflow-hidden">
+        <div className="flex items-center justify-between gap-3 border-b border-gray-200 bg-gray-50 px-3 py-1.5">
+          <div className="flex items-center gap-2.5">
+            <label className="text-[13px] tabular-nums whitespace-nowrap flex items-center gap-1.5">
+              <span>Index</span>
+              <input
+                type="number"
+                min={0}
+                value={indexInputValue}
+                onChange={(event) => {
+                  setIndexInputValue(event.target.value);
+                }}
+                onBlur={() => {
+                  goToCustomIndex();
+                }}
+                onKeyDown={(event) => {
+                  if (event.key !== "Enter") return;
+                  event.preventDefault();
+                  goToCustomIndex();
+                }}
+                className="h-8 rounded-md border border-gray-200 bg-white px-1 text-[14.5px] font-normal tabular-nums text-gray-800 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                style={{ width: `${Math.max(2, totalIndexesCountDigits) + 1}ch` }}
+                aria-label="Current index"
+                disabled={isHasLogsSyncing}
+              />
               <span>of {totalLabel}</span>
             </label>
 
@@ -550,7 +619,7 @@ const JobLogs = ({ jobId, jobStatus, nInputs, failedCount, onFailedCountChange }
                 aria-label="Previous input"
                 title="Previous"
               >
-                <span className="text-sm">{`<`}</span>
+                <span className="text-[14.5px]">{`<`}</span>
               </button>
 
               <button
@@ -563,13 +632,13 @@ const JobLogs = ({ jobId, jobStatus, nInputs, failedCount, onFailedCountChange }
                 aria-label="Next input"
                 title="Next"
               >
-                <span className="text-sm">{`>`}</span>
+                <span className="text-[14.5px]">{`>`}</span>
               </button>
             </div>
 
             <div className="h-6 w-px bg-gray-200" aria-hidden="true" />
 
-            <label className="flex items-center gap-2 text-sm text-gray-700 select-none">
+            <label className="flex items-center gap-2 text-[13px] select-none">
               <Switch
                 checked={showIndexesWithLogsOnly}
                 onCheckedChange={(checked) => {
@@ -580,22 +649,22 @@ const JobLogs = ({ jobId, jobStatus, nInputs, failedCount, onFailedCountChange }
                   }
                   setShowIndexesWithLogsOnly(checked);
                   if (checked) {
+                    setIsHasLogsSyncing(true);
                     void jumpToFirstIndexWithLogs();
                   } else {
                     logsOnlyToggleRequestRef.current += 1;
                     setIsHasLogsSyncing(false);
-                    setSelectedIndex(0);
                   }
                 }}
                 disabled={(logsOnlyIndexes.length === 0 && !showIndexesWithLogsOnly) || showFailedOnly}
                 className="scale-75 origin-left disabled:cursor-default"
               />
-              <span className="whitespace-nowrap text-muted-foreground">Has logs</span>
+              <span className="whitespace-nowrap">Has logs</span>
             </label>
 
             <div className="h-6 w-px bg-gray-200" aria-hidden="true" />
 
-            <label className="flex items-center gap-2 text-sm text-gray-700 select-none">
+            <label className="flex items-center gap-2 text-[13px] select-none">
               <Switch
                 checked={showFailedOnly}
                 onCheckedChange={(checked) => {
@@ -606,15 +675,14 @@ const JobLogs = ({ jobId, jobStatus, nInputs, failedCount, onFailedCountChange }
                     void jumpToFirstFailedInput();
                   } else {
                     setFailedIndexesReady(false);
-                    setSelectedIndex(0);
                   }
                 }}
                 disabled={!hasLoadedFailedCount || effectiveFailedCount === 0 || showIndexesWithLogsOnly}
                 className="scale-75 origin-left disabled:cursor-default"
               />
-              <span className="whitespace-nowrap text-muted-foreground">Failed only</span>
+              <span className="whitespace-nowrap">Failed only</span>
               <span
-                className={`ml-1 inline-flex items-center rounded-full border px-2.5 py-1 text-xs tabular-nums ${failedPillClass}`}
+                className={`ml-1 inline-flex items-center rounded-full border px-2.5 py-1 text-[14.5px] tabular-nums ${failedPillClass}`}
               >
                 {failedProgressLabel}
               </span>
@@ -622,22 +690,45 @@ const JobLogs = ({ jobId, jobStatus, nInputs, failedCount, onFailedCountChange }
 
           </div>
         </div>
-      </div>
+        {onStopJob && (
+          <Button
+            variant="destructive"
+            size="lg"
+            className="h-11 rounded-lg"
+            onClick={onStopJob}
+            disabled={Boolean(isStopDisabled)}
+          >
+            <PowerOff className="mr-2 h-4 w-4" />
+            Stop
+          </Button>
+        )}
 
-      <div className="flex-1 min-h-0 bg-white border border-gray-200 rounded-lg shadow-sm relative">
-        {isPageLoading ? (
-          <div ref={containerRef} className="h-full w-full flex items-center justify-center">
-            <div className="flex flex-col items-center text-gray-500">
+      <div className="flex-1 min-h-0 relative font-mono text-[13px] font-normal text-gray-800 bg-white">
+        {isHasLogsLoading && !isPageLoading && (
+          <div className="absolute inset-0 z-20 flex items-center justify-center bg-white/75">
+            <div className="flex flex-col items-center text-gray-800">
               <div
                 className="h-8 w-8 rounded-full border-2 border-gray-300 border-t-primary animate-spin"
                 role="status"
                 aria-label="Loading logs"
               />
-              <div className="mt-2 text-sm">Loading logs…</div>
+              <div className="mt-2 text-[13px]">Loading logs…</div>
+            </div>
+          </div>
+        )}
+        {isPageLoading ? (
+          <div ref={containerRef} className="h-full w-full flex items-center justify-center">
+            <div className="flex flex-col items-center text-gray-800">
+              <div
+                className="h-8 w-8 rounded-full border-2 border-gray-300 border-t-primary animate-spin"
+                role="status"
+                aria-label="Loading logs"
+              />
+              <div className="mt-2 text-[13px]">Loading logs…</div>
             </div>
           </div>
         ) : (
-          <div ref={containerRef} className="font-mono text-xs text-gray-800 h-full relative">
+          <div ref={containerRef} className="text-[13px] h-full relative">
             {isLoadingOlderLogs && (
               <div className="absolute top-0 left-0 right-0 z-10 flex items-center justify-center gap-2 border-b border-gray-200 bg-white/95 py-2">
                 <div
@@ -645,7 +736,7 @@ const JobLogs = ({ jobId, jobStatus, nInputs, failedCount, onFailedCountChange }
                   role="status"
                   aria-label="Loading older logs"
                 />
-                <span className="text-xs text-gray-600">Loading older logs…</span>
+                <span className="text-[13px] text-gray-800">Loading older logs…</span>
               </div>
             )}
             <List
@@ -691,7 +782,7 @@ const JobLogs = ({ jobId, jobStatus, nInputs, failedCount, onFailedCountChange }
                     >
                       <div className="w-full flex items-center gap-3 select-none">
                         <div className="h-px w-full bg-gray-200" aria-hidden="true" />
-                        <span className="shrink-0 text-center text-xs sm:text-sm text-muted-foreground font-medium tracking-tight">
+                        <span className="shrink-0 text-center text-[13px] font-normal tracking-tight text-gray-800">
                           {row.label}
                         </span>
                         <div className="h-px w-full bg-gray-200" aria-hidden="true" />
@@ -702,7 +793,7 @@ const JobLogs = ({ jobId, jobStatus, nInputs, failedCount, onFailedCountChange }
 
                 if (row.type === "empty") {
                   return (
-                    <div key={row.key} style={style} className="px-4 py-4 text-gray-400 italic">
+                    <div key={row.key} style={style} className="px-4 py-4">
                       {row.label}
                     </div>
                   );
@@ -723,7 +814,7 @@ const JobLogs = ({ jobId, jobStatus, nInputs, failedCount, onFailedCountChange }
                       }}
                       className={`grid grid-cols-[8rem,1fr] gap-2 px-4 py-2 border-t border-gray-200 transition ${background}`}
                     >
-                      <div className="text-gray-500 text-left tabular-nums">
+                      <div className="text-left tabular-nums">
                         {formatTime(row.logTimestamp)}
                       </div>
                       <div className="whitespace-pre-wrap break-words">{row.message}</div>
@@ -734,6 +825,7 @@ const JobLogs = ({ jobId, jobStatus, nInputs, failedCount, onFailedCountChange }
             </List>
           </div>
         )}
+      </div>
       </div>
     </div>
   );

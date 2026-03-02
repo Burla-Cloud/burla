@@ -3,6 +3,7 @@ import json
 import pickle
 import sys
 import traceback
+import base64
 from asyncio import create_task
 from contextlib import AsyncExitStack
 from importlib import metadata
@@ -653,7 +654,8 @@ def remote_parallel_map(
     # ------------------------------------------------
 
     max_parallelism = max_parallelism if max_parallelism else len(inputs)
-    job_id = str(uuid4())
+    uid = base64.urlsafe_b64encode(uuid4().bytes[:9]).decode()
+    job_id = f"{function_.__name__}-{uid}"
     project_id = json.loads(CONFIG_PATH.read_text())["project_id"]
 
     return_queue = Queue()

@@ -21,6 +21,13 @@ import {
   AlertDialogCancel,
 } from "@/components/ui/alert-dialog";
 
+interface QuotaWarningDetails {
+  machineType?: string;
+  region?: string;
+  limit?: number;
+  requested?: number;
+}
+
 const SettingsPage = () => {
   const navigate = useNavigate();
   const location = useLocation();
@@ -36,6 +43,7 @@ const SettingsPage = () => {
   const [error, setError] = useState<string | null>(null);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [showExitDialog, setShowExitDialog] = useState(false);
+  const [quotaWarning, setQuotaWarning] = useState<QuotaWarningDetails | null>(null);
 
   const pendingNavRef = useRef<string | null>(null);
   const settingsFormRef = useRef<{ isRegionValid: () => boolean } | null>(null);
@@ -121,15 +129,34 @@ const SettingsPage = () => {
     }
 
     setSaving(true);
-    const ok = await saveSettings(settings);
-    toast({
-      title: ok ? "Settings saved successfully" : "Failed to save settings",
-      variant: ok ? "default" : "destructive",
-    });
+    const result = await saveSettings(settings);
+    if (result.ok) {
+      toast({
+        title: "Settings saved successfully",
+        variant: "default",
+      });
+    } else if (result.errorCode === "quota_exceeded") {
+      if (typeof result.limit === "number" && Number.isFinite(result.limit) && result.limit >= 1) {
+        setSettings((prev) => ({ ...prev, machineQuantity: Math.floor(result.limit) }));
+        setHasUnsavedChanges(true);
+      }
+      setQuotaWarning({
+        machineType: result.machineType,
+        region: result.region,
+        limit: result.limit,
+        requested: result.requested,
+      });
+    } else {
+      toast({
+        title: "Failed to save settings",
+        description: result.errorMessage,
+        variant: "destructive",
+      });
+    }
     setSaving(false);
 
-    if (ok) setHasUnsavedChanges(false);
-    return ok;
+    if (result.ok) setHasUnsavedChanges(false);
+    return result.ok;
   };
 
   const attemptNavigate = (to: string) => {
@@ -310,6 +337,59 @@ const SettingsPage = () => {
               className="border border-gray-200 bg-gray-50 text-gray-800 hover:bg-gray-100 rounded-md px-5 py-2.5 font-medium min-w-[130px] transition-all focus:outline-none"
             >
               Exit Without Saving
+            </AlertDialogAction>
+          </div>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog
+        open={Boolean(quotaWarning)}
+        onOpenChange={(open) => {
+          if (!open) setQuotaWarning(null);
+        }}
+      >
+        <AlertDialogContent
+          className="max-w-[560px] mx-auto py-7 px-6 rounded-lg shadow-[0_8px_24px_rgba(0,0,0,0.06)] bg-white"
+          onInteractOutside={(e) => e.preventDefault()}
+          onEscapeKeyDown={(e) => e.preventDefault()}
+        >
+          <div className="space-y-3">
+            <AlertDialogTitle className="text-lg font-semibold text-gray-900">
+              <span className="inline-flex items-center gap-2">
+                <AlertTriangle className="h-4 w-4 text-red-500" />
+                Quota warning
+              </span>
+            </AlertDialogTitle>
+            <div className="space-y-1 text-base text-gray-800 leading-relaxed">
+              <p className="whitespace-nowrap">
+                Limit for{" "}
+                <span className="font-semibold">{quotaWarning?.machineType || "this machine type"}</span>{" "}
+                in <span className="font-semibold">{quotaWarning?.region || "this region"}</span> is{" "}
+                <span className="font-semibold">
+                  {typeof quotaWarning?.limit === "number" ? quotaWarning.limit : "the current limit"}
+                </span>
+              </p>
+              <p className="whitespace-nowrap">
+                Requested:{" "}
+                <span className="font-semibold">
+                  {typeof quotaWarning?.requested === "number" ? quotaWarning.requested : "the current quantity"}
+                </span>
+              </p>
+              <p className="whitespace-nowrap">
+                Requesting a <span className="font-semibold">quota increase from GCP</span>, will follow up shortly
+              </p>
+            </div>
+          </div>
+
+          <div className="flex justify-center mt-5">
+            <AlertDialogAction
+              onClick={async () => {
+                setQuotaWarning(null);
+                await handleSave();
+              }}
+              className="border border-gray-200 bg-gray-50 text-gray-800 hover:bg-gray-100 rounded-md px-5 py-2.5 font-medium min-w-[120px] transition-all focus:outline-none"
+            >
+              Ok
             </AlertDialogAction>
           </div>
         </AlertDialogContent>

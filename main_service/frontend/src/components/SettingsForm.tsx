@@ -17,14 +17,14 @@ import { toast } from "@/components/ui/use-toast";
 // Add prop type for SettingsForm
 interface SettingsFormProps {
     isEditing: boolean;
-    onChange?: () => void;
-}
+    onChange?: () => void;  
+} 
 
 export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, SettingsFormProps>(
     ({ isEditing, onChange }, ref) => {
         const { settings, setSettings } = useSettings();
         const users = settings.users ?? [];
-        const [newUser, setNewUser] = useState("");
+        const [newUser, setNewUser] = useState(""); 
 
         const cpuOptions = [
             { label: "2vCPU / 8G RAM", value: "n4-standard-2" },
@@ -33,7 +33,7 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
             { label: "16vCPU / 64G RAM", value: "n4-standard-16" },
             { label: "32vCPU / 128G RAM", value: "n4-standard-32" },
             { label: "64vCPU / 256G RAM", value: "n4-standard-64" },
-            { label: "80vCPU / 320G RAM", value: "n4-standard-80" },
+            { label: "80vCPU / 320G RAM", value: "n4-standard-80" }, 
         ];
 
         const gpuCpuMap = {

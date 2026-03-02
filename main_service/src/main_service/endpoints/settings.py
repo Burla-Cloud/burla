@@ -1,6 +1,6 @@
 import requests
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 
 from main_service import (
     DB,
@@ -13,6 +13,29 @@ from main_service import (
 
 router = APIRouter()
 BURLA_BACKEND_URL = "https://backend.burla.dev"
+
+
+def _safe_int(value, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _get_quota_limit(machine_type: str, gcp_region: str) -> int:
+    quota_doc = DB.collection("cluster_quota").document("cluster_quota").get().to_dict() or {}
+    region_quota = quota_doc.get(gcp_region, {})
+    machine_type_limits = region_quota.get("machine_type_limits", {})
+    return _safe_int(machine_type_limits.get(machine_type), 0)
+
+
+def _quota_exceeded_message(machine_type: str, gcp_region: str, limit: int, requested: int) -> str:
+    return (
+        "Quota exceeded.\n"
+        f"Limit for {machine_type} in {gcp_region} is {limit}.\n"
+        f"Requested: {requested}.\n"
+        "We're requesting a quota increase from GCP and will follow up shortly."
+    )
 
 
 @router.get("/v1/settings")
@@ -53,6 +76,35 @@ async def update_settings(request: Request):
     nodes = config_dict.get("Nodes", [{}])
     node = nodes[0]
     container = node.get("containers", [{}])[0]
+
+    requested_machine_type = request_json.get("machineType", node.get("machine_type"))
+    requested_region = request_json.get("gcpRegion", node.get("gcp_region"))
+    current_quantity = _safe_int(node.get("quantity"), 1)
+    requested_quantity = _safe_int(
+        request_json.get("machineQuantity", node.get("quantity")),
+        current_quantity,
+    )
+
+    quota_limit = _get_quota_limit(requested_machine_type, requested_region)
+    if requested_quantity > quota_limit:
+        message = _quota_exceeded_message(
+            machine_type=requested_machine_type,
+            gcp_region=requested_region,
+            limit=quota_limit,
+            requested=requested_quantity,
+        )
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error_code": "quota_exceeded",
+                "message": message,
+                "machine_type": requested_machine_type,
+                "region": requested_region,
+                "limit": quota_limit,
+                "requested": requested_quantity,
+            },
+        )
+
     container.update(
         {
             "image": request_json.get("containerImage", container.get("image")),
@@ -62,9 +114,9 @@ async def update_settings(request: Request):
     container.pop("python_version", None)
     node.update(
         {
-            "machine_type": request_json.get("machineType", node.get("machine_type")),
-            "gcp_region": request_json.get("gcpRegion", node.get("gcp_region")),
-            "quantity": request_json.get("machineQuantity", node.get("quantity")),
+            "machine_type": requested_machine_type,
+            "gcp_region": requested_region,
+            "quantity": requested_quantity,
             "disk_size_gb": request_json.get("diskSize", node.get("disk_size_gb")),
             "inactivity_shutdown_time_sec": (
                 request_json.get("inactivityTimeout", node.get("inactivity_shutdown_time_sec")) * 60

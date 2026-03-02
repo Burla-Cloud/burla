@@ -10,11 +10,10 @@ import {
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 
 export const JobsList = () => {
   const { jobs, page, setPage, totalPages, isLoading } = useJobs();
-  const navigate = useNavigate();
 
   const [userTimeZone, setUserTimeZone] = useState<string>(() => {
     const stored = typeof window !== "undefined" ? localStorage.getItem("userTimezone") : null;
@@ -158,11 +157,7 @@ export const JobsList = () => {
                       const failedCount = Math.max(0, job.n_failed ?? 0);
                       const successfulCount = Math.max(0, job.n_results - failedCount);
                       return (
-                        <TableRow
-                          key={job.id}
-                          className="cursor-pointer"
-                          onClick={() => navigate(`/jobs/${job.id}`)}
-                        >
+                        <TableRow key={job.id}>
                         <TableCell>
                           <div className="flex items-center space-x-2">
                             <div className={getStatusClass(job.status)} />
@@ -173,12 +168,13 @@ export const JobsList = () => {
                         {/* BIGGEST CULPRIT: long function names. Truncate them. */}
                         <TableCell>
                           <div className="max-w-[360px] truncate">
-                            <span
+                            <Link
+                              to={`/jobs/${job.id}`}
                               title={job.function_name ?? "Unknown"}
-                              className="text-black underline underline-offset-2"
+                              className="text-black underline underline-offset-2 hover:text-[#1a1a1a] transition-all"
                             >
                               {job.function_name ?? "Unknown"}
-                            </span>
+                            </Link>
                           </div>
                         </TableCell>
 

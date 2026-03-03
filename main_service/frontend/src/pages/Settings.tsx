@@ -9,6 +9,7 @@ import UsageSettings from "@/components/UsageSettings";
 import { Button } from "@/components/ui/button";
 import { useSaveSettings } from "@/hooks/useSaveSettings";
 import { toast } from "@/components/ui/use-toast";
+import { getConfigurationLabelForMachineType, getQuotaVmFamily } from "@/types/constants";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -26,6 +27,12 @@ interface QuotaWarningDetails {
   region?: string;
   limit?: number;
   requested?: number;
+}
+
+interface HardwareSnapshot {
+  machineType: string;
+  gcpRegion: string;
+  machineQuantity: number;
 }
 
 const SettingsPage = () => {
@@ -47,6 +54,7 @@ const SettingsPage = () => {
 
   const pendingNavRef = useRef<string | null>(null);
   const settingsFormRef = useRef<{ isRegionValid: () => boolean } | null>(null);
+  const lastSavedHardwareRef = useRef<HardwareSnapshot | null>(null);
 
   const section = useMemo(() => {
     const sp = new URLSearchParams(location.search);
@@ -60,7 +68,15 @@ const SettingsPage = () => {
         const res = await fetch("/v1/settings", { credentials: "include" });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
-        setSettings((prev) => ({ ...prev, ...data }));
+        setSettings((prev) => {
+          const next = { ...prev, ...data };
+          lastSavedHardwareRef.current = {
+            machineType: next.machineType,
+            gcpRegion: next.gcpRegion || "",
+            machineQuantity: Number(next.machineQuantity) || 1,
+          };
+          return next;
+        });
       } catch {
         setError("Could not load settings");
         toast({ title: "Failed to load settings", variant: "destructive" });
@@ -135,10 +151,23 @@ const SettingsPage = () => {
         title: "Settings saved successfully",
         variant: "default",
       });
+      lastSavedHardwareRef.current = {
+        machineType: settings.machineType,
+        gcpRegion: settings.gcpRegion || "",
+        machineQuantity: Number(settings.machineQuantity) || 1,
+      };
     } else if (result.errorCode === "quota_exceeded") {
       if (typeof result.limit === "number" && Number.isFinite(result.limit) && result.limit >= 1) {
         setSettings((prev) => ({ ...prev, machineQuantity: Math.floor(result.limit) }));
         setHasUnsavedChanges(true);
+      } else if (result.limit === 0 && lastSavedHardwareRef.current) {
+        const previousHardware = lastSavedHardwareRef.current;
+        setSettings((prev) => ({
+          ...prev,
+          machineType: previousHardware.machineType,
+          gcpRegion: previousHardware.gcpRegion,
+          machineQuantity: previousHardware.machineQuantity,
+        }));
       }
       setQuotaWarning({
         machineType: result.machineType,
@@ -174,6 +203,15 @@ const SettingsPage = () => {
     const to = `${location.pathname}?${sp.toString()}`;
     attemptNavigate(to);
   };
+
+  const quotaRegion = quotaWarning?.region || settings.gcpRegion || "unknown";
+  const quotaMachineType = quotaWarning?.machineType || settings.machineType || "unknown";
+  const quotaConfiguration = getConfigurationLabelForMachineType(quotaMachineType);
+  const quotaRequested =
+    typeof quotaWarning?.requested === "number" ? String(quotaWarning.requested) : "unknown";
+  const quotaLimit = typeof quotaWarning?.limit === "number" ? String(quotaWarning.limit) : "unknown";
+  const quotaVmFamily = getQuotaVmFamily(quotaMachineType);
+  const isVmUnavailable = quotaWarning?.limit === 0;
 
   const showSaveButton = section === "cluster" && hasUnsavedChanges;
 
@@ -349,7 +387,7 @@ const SettingsPage = () => {
         }}
       >
         <AlertDialogContent
-          className="max-w-[560px] mx-auto py-7 px-6 rounded-lg shadow-[0_8px_24px_rgba(0,0,0,0.06)] bg-white"
+          className="max-w-[692.5px] mx-auto py-7 px-6 rounded-lg shadow-[0_8px_24px_rgba(0,0,0,0.06)] bg-white"
           onInteractOutside={(e) => e.preventDefault()}
           onEscapeKeyDown={(e) => e.preventDefault()}
         >
@@ -357,39 +395,69 @@ const SettingsPage = () => {
             <AlertDialogTitle className="text-lg font-semibold text-gray-900">
               <span className="inline-flex items-center gap-2">
                 <AlertTriangle className="h-4 w-4 text-red-500" />
-                Quota warning
+                GCP Quota Limit Reached
               </span>
             </AlertDialogTitle>
-            <div className="space-y-1 text-base text-gray-800 leading-relaxed">
-              <p className="whitespace-nowrap">
-                Limit for{" "}
-                <span className="font-semibold">{quotaWarning?.machineType || "this machine type"}</span>{" "}
-                in <span className="font-semibold">{quotaWarning?.region || "this region"}</span> is{" "}
-                <span className="font-semibold">
-                  {typeof quotaWarning?.limit === "number" ? quotaWarning.limit : "the current limit"}
-                </span>
+            {isVmUnavailable && (
+              <p className="text-sm font-medium text-red-600">
+                This Virtual Machine is currently not available. Please ask for quota in GCP.
               </p>
-              <p className="whitespace-nowrap">
-                Requested:{" "}
-                <span className="font-semibold">
-                  {typeof quotaWarning?.requested === "number" ? quotaWarning.requested : "the current quantity"}
-                </span>
-              </p>
-              <p className="whitespace-nowrap">
-                Requesting a <span className="font-semibold">quota increase from GCP</span>, will follow up shortly
-              </p>
+            )}
+            <div className="space-y-6 text-base text-gray-800 leading-relaxed">
+              <p>This cluster exceeds your Google Cloud VM quota in this region.</p>
+
+              <div className="space-y-1">
+                <p className="font-semibold text-gray-900">Virtual Machine</p>
+                <p>
+                  Configuration: <span className="font-semibold">{quotaConfiguration}</span>
+                </p>
+                <p>
+                  Region: <span className="font-semibold">{quotaRegion}</span>
+                </p>
+                <p>
+                  Requested: <span className="font-semibold">{quotaRequested}</span> instances
+                </p>
+                <p>
+                  Available quota: <span className="font-semibold">{quotaLimit}</span> instances
+                </p>
+              </div>
+
+              <div className="space-y-1">
+                <p className="font-semibold text-gray-900">
+                  Increase quota in GCP{" "}
+                  <a
+                    href="https://docs.cloud.google.com/docs/quotas/view-manage"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-blue-600 underline hover:text-blue-700"
+                  >
+                    →
+                  </a>
+                </p>
+                <p>
+                  Service: <span className="font-semibold">Compute Engine API</span>
+                </p>
+                <p>
+                  Region: <span className="font-semibold">{quotaRegion}</span>
+                </p>
+                <p>
+                  VM family: <span className="font-semibold">{quotaVmFamily || "unknown"}</span>
+                </p>
+                <p>
+                  Machine type: <span className="font-semibold">{quotaMachineType}</span>
+                </p>
+              </div>
             </div>
           </div>
 
           <div className="flex justify-center mt-5">
             <AlertDialogAction
-              onClick={async () => {
+              onClick={() => {
                 setQuotaWarning(null);
-                await handleSave();
               }}
-              className="border border-gray-200 bg-gray-50 text-gray-800 hover:bg-gray-100 rounded-md px-5 py-2.5 font-medium min-w-[120px] transition-all focus:outline-none"
+              className="bg-gray-700 text-white hover:bg-gray-800 rounded-md px-5 py-2.5 font-medium min-w-[130px] transition-all focus:outline-none"
             >
-              Ok
+              OK
             </AlertDialogAction>
           </div>
         </AlertDialogContent>

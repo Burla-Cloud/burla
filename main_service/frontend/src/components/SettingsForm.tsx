@@ -27,29 +27,29 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
         const [newUser, setNewUser] = useState(""); 
 
         const cpuOptions = [
-            { label: "2vCPU / 8G RAM", value: "n4-standard-2" },
-            { label: "4vCPU / 16G RAM", value: "n4-standard-4" },
-            { label: "8vCPU / 32G RAM", value: "n4-standard-8" },
-            { label: "16vCPU / 64G RAM", value: "n4-standard-16" },
-            { label: "32vCPU / 128G RAM", value: "n4-standard-32" },
-            { label: "64vCPU / 256G RAM", value: "n4-standard-64" },
-            { label: "80vCPU / 320G RAM", value: "n4-standard-80" }, 
+            { label: "2 vCPUs / 8 GB RAM", value: "n4-standard-2" },
+            { label: "4 vCPUs / 16 GB RAM", value: "n4-standard-4" },
+            { label: "8 vCPUs / 32 GB RAM", value: "n4-standard-8" },
+            { label: "16 vCPUs / 64 GB RAM", value: "n4-standard-16" },
+            { label: "32 vCPUs / 128 GB RAM", value: "n4-standard-32" },
+            { label: "64 vCPUs / 256 GB RAM", value: "n4-standard-64" },
+            { label: "80 vCPUs / 320 GB RAM", value: "n4-standard-80" }, 
         ];
 
         const gpuCpuMap = {
-            "1x A100 40G": { label: "12vCPU / 85G RAM", value: "a2-highgpu-1g" },
-            "2x A100 40G": { label: "24vCPU / 170G RAM", value: "a2-highgpu-2g" },
-            "4x A100 40G": { label: "48vCPU / 340G RAM", value: "a2-highgpu-4g" },
-            "8x A100 40G": { label: "96vCPU / 680G RAM", value: "a2-highgpu-8g" },
-            "1x A100 80G": { label: "12vCPU / 170G RAM", value: "a2-ultragpu-1g" },
-            "2x A100 80G": { label: "24vCPU / 340G RAM", value: "a2-ultragpu-2g" },
-            "4x A100 80G": { label: "48vCPU / 680G RAM", value: "a2-ultragpu-4g" },
-            "8x A100 80G": { label: "96vCPU / 1360G RAM", value: "a2-ultragpu-8g" },
-            "1x H100 80G": { label: "26vCPU / 234G RAM", value: "a3-highgpu-1g" },
-            "2x H100 80G": { label: "52vCPU / 468G RAM", value: "a3-highgpu-2g" },
-            "4x H100 80G": { label: "104vCPU / 936G RAM", value: "a3-highgpu-4g" },
-            "8x H100 80G": { label: "208vCPU / 1872G RAM", value: "a3-highgpu-8g" },
-            "8x H200 141G": { label: "224vCPU / 2952G RAM", value: "a3-ultragpu-8g" },
+            "1x A100 40G": { label: "12 vCPUs / 85 GB RAM", value: "a2-highgpu-1g" },
+            "2x A100 40G": { label: "24 vCPUs / 170 GB RAM", value: "a2-highgpu-2g" },
+            "4x A100 40G": { label: "48 vCPUs / 340 GB RAM", value: "a2-highgpu-4g" },
+            "8x A100 40G": { label: "96 vCPUs / 680 GB RAM", value: "a2-highgpu-8g" },
+            "1x A100 80G": { label: "12 vCPUs / 170 GB RAM", value: "a2-ultragpu-1g" },
+            "2x A100 80G": { label: "24 vCPUs / 340 GB RAM", value: "a2-ultragpu-2g" },
+            "4x A100 80G": { label: "48 vCPUs / 680 GB RAM", value: "a2-ultragpu-4g" },
+            "8x A100 80G": { label: "96 vCPUs / 1360 GB RAM", value: "a2-ultragpu-8g" },
+            "1x H100 80G": { label: "26 vCPUs / 234 GB RAM", value: "a3-highgpu-1g" },
+            "2x H100 80G": { label: "52 vCPUs / 468 GB RAM", value: "a3-highgpu-2g" },
+            "4x H100 80G": { label: "104 vCPUs / 936 GB RAM", value: "a3-highgpu-4g" },
+            "8x H100 80G": { label: "208 vCPUs / 1872 GB RAM", value: "a3-highgpu-8g" },
+            "8x H200 141G": { label: "224 vCPUs / 2952 GB RAM", value: "a3-ultragpu-8g" },
         };
 
         // Build variant -> supported counts (e.g., "A100 40G" -> [1,2,4,8,16])
@@ -213,7 +213,7 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
                 { value: "asia-southeast1", label: "asia‑southeast1" },
                 { value: "australia-southeast1", label: "australia‑southeast1" },
             ],
-        };
+        }; 
 
         // Helper to determine which region list to use
         function getRegionOptionsForGpu(gpuVariant) {
@@ -224,7 +224,7 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
             if (gpuVariant.includes("H200 141G")) return REGION_OPTIONS["H200 141G"];
             // fallback to None if unknown
             return REGION_OPTIONS["None"];
-        }
+        } 
 
         const regionOptions = getRegionOptionsForGpu(gpuVariant);
         const isRegionValid = regionOptions.some((r) => r.value === settings.gcpRegion);

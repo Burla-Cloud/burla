@@ -1,5 +1,6 @@
 import datetime
 import queue
+import secrets
 import threading
 import zipfile
 from pathlib import Path
@@ -46,6 +47,9 @@ GCS_BUCKET = gcs_client.bucket(cluster_config["gcs_bucket_name"])
 
 BATCH_DELETE_BACKGROUND_THRESHOLD = 1000
 BATCH_DELETE_CHUNK_SIZE = 1000
+BATCH_DOWNLOAD_TOKEN_TTL_SECONDS = 300
+BATCH_DOWNLOAD_TOKENS: Dict[str, Dict[str, Any]] = {}
+BATCH_DOWNLOAD_TOKENS_LOCK = threading.Lock()
 
 
 def error_response(message: str, code: str = "400") -> Dict[str, Any]:
@@ -681,8 +685,17 @@ def signed_download(object_name: str = Query(...), download_name: Optional[str] 
     return {"url": url}
 
 
-@router.post("/batch-download")
-def batch_download(payload: Dict[str, Any]):
+def prune_expired_batch_download_tokens(now_utc: datetime.datetime) -> None:
+    expired_tokens = [
+        token for token, entry in BATCH_DOWNLOAD_TOKENS.items() if entry["expires_at"] <= now_utc
+    ]
+    for token in expired_tokens:
+        del BATCH_DOWNLOAD_TOKENS[token]
+
+
+def parse_batch_download_payload(
+    payload: Dict[str, Any],
+) -> tuple[List[Dict[str, str]], List[Dict[str, str]], str]:
     raw_items = payload.get("items")
     if not isinstance(raw_items, list) or not raw_items:
         raise HTTPException(status_code=400, detail="No files provided for download")
@@ -735,6 +748,14 @@ def batch_download(payload: Dict[str, Any]):
     if not file_requests and not folder_requests:
         raise HTTPException(status_code=400, detail="No files provided for download")
     archive_name = sanitize_archive_filename(payload.get("archiveName"))
+    return file_requests, folder_requests, archive_name
+
+
+def build_batch_download_response(
+    file_requests: List[Dict[str, str]],
+    folder_requests: List[Dict[str, str]],
+    archive_name: str,
+) -> StreamingResponse:
     stream_done = object()
     stream_queue = queue.Queue(maxsize=32)
     stream_errors: List[BaseException] = []
@@ -863,3 +884,40 @@ def batch_download(payload: Dict[str, Any]):
 
     headers = {"Content-Disposition": f'attachment; filename="{archive_name}"'}
     return StreamingResponse(iterator(), media_type="application/zip", headers=headers)
+
+
+@router.post("/batch-download-ticket")
+def create_batch_download_ticket(payload: Dict[str, Any]):
+    file_requests, folder_requests, archive_name = parse_batch_download_payload(payload)
+    now_utc = datetime.datetime.now(datetime.timezone.utc)
+    token = secrets.token_urlsafe(24)
+    with BATCH_DOWNLOAD_TOKENS_LOCK:
+        prune_expired_batch_download_tokens(now_utc)
+        BATCH_DOWNLOAD_TOKENS[token] = {
+            "file_requests": file_requests,
+            "folder_requests": folder_requests,
+            "archive_name": archive_name,
+            "expires_at": now_utc + datetime.timedelta(seconds=BATCH_DOWNLOAD_TOKEN_TTL_SECONDS),
+        }
+    return {"downloadUrl": f"/batch-download/{token}"}
+
+
+@router.get("/batch-download/{token}")
+def batch_download_by_ticket(token: str):
+    now_utc = datetime.datetime.now(datetime.timezone.utc)
+    with BATCH_DOWNLOAD_TOKENS_LOCK:
+        prune_expired_batch_download_tokens(now_utc)
+        ticket = BATCH_DOWNLOAD_TOKENS.pop(token, None)
+    if ticket is None:
+        raise HTTPException(status_code=404, detail="Download token not found or expired")
+    return build_batch_download_response(
+        file_requests=ticket["file_requests"],
+        folder_requests=ticket["folder_requests"],
+        archive_name=ticket["archive_name"],
+    )
+
+
+@router.post("/batch-download")
+def batch_download(payload: Dict[str, Any]):
+    file_requests, folder_requests, archive_name = parse_batch_download_payload(payload)
+    return build_batch_download_response(file_requests, folder_requests, archive_name)

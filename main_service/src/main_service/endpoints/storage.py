@@ -1,5 +1,6 @@
 import datetime
-import tempfile
+import queue
+import threading
 import zipfile
 from pathlib import Path
 from time import sleep
@@ -734,78 +735,72 @@ def batch_download(payload: Dict[str, Any]):
     if not file_requests and not folder_requests:
         raise HTTPException(status_code=400, detail="No files provided for download")
     archive_name = sanitize_archive_filename(payload.get("archiveName"))
-    temp_file = tempfile.SpooledTemporaryFile(max_size=268_435_456)
-    try:
-        with zipfile.ZipFile(temp_file, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
-            written_entries: set[str] = set()
+    stream_done = object()
+    stream_queue = queue.Queue(maxsize=32)
+    stream_errors: List[BaseException] = []
 
-            def archive_path_for(root: str, relative_path: str) -> str:
-                if not root:
-                    return relative_path
-                if not relative_path:
-                    return root
-                return f"{root}/{relative_path}"
+    class ZipQueueWriter:
+        def write(self, chunk: bytes) -> int:
+            if chunk:
+                stream_queue.put(chunk)
+            return len(chunk)
 
-            def ensure_directory_entry(path: str) -> None:
-                normalized = path.strip("/")
-                if not normalized:
-                    return
-                entry_name = f"{normalized}/"
-                if entry_name in written_entries:
-                    return
-                archive.writestr(entry_name, "")
-                written_entries.add(entry_name)
+        def flush(self) -> None:
+            return None
 
-            def ensure_directory_hierarchy(root: str, directory_path: str) -> None:
-                segments = [segment for segment in directory_path.split("/") if segment]
-                if not segments:
-                    ensure_directory_entry(root)
-                    return
-                accumulated: List[str] = []
-                for segment in segments:
-                    accumulated.append(segment)
-                    ensure_directory_entry(archive_path_for(root, "/".join(accumulated)))
+        def seekable(self) -> bool:
+            return False
 
-            def ensure_parent_directories(root: str, relative_file_path: str) -> None:
-                parents = relative_file_path.split("/")[:-1]
-                if not parents:
-                    return
-                ensure_directory_hierarchy(root, "/".join(parents))
+    def write_archive_to_stream() -> None:
+        try:
+            with zipfile.ZipFile(
+                ZipQueueWriter(), mode="w", compression=zipfile.ZIP_STORED
+            ) as archive:
+                written_entries: set[str] = set()
 
-            for request in file_requests:
-                blob = GCS_BUCKET.get_blob(request["object_name"])
-                if blob is None:
-                    raise HTTPException(
-                        status_code=404, detail=f"File '{request['object_name']}' not found"
-                    )
-                archive_path = request["archive_path"]
-                if archive_path in written_entries:
-                    continue
-                ensure_parent_directories("", archive_path)
-                with blob.open("rb") as source, archive.open(archive_path, "w") as target:
-                    while True:
-                        chunk = source.read(1024 * 1024)
-                        if not chunk:
-                            break
-                        target.write(chunk)
-                written_entries.add(archive_path)
-            for request in folder_requests:
-                prefix = request["prefix"]
-                archive_root = request["archive_root"]
-                ensure_directory_entry(archive_root)
-                added_content = False
-                blobs = GCS_BUCKET.list_blobs(prefix=prefix)
-                for blob in blobs:
-                    if blob.name == prefix:
-                        continue
-                    relative_path = blob.name[len(prefix) :]
+                def archive_path_for(root: str, relative_path: str) -> str:
+                    if not root:
+                        return relative_path
                     if not relative_path:
-                        continue
-                    sanitized_relative = sanitize_archive_item_path(relative_path, relative_path)
-                    archive_path = archive_path_for(archive_root, sanitized_relative)
+                        return root
+                    return f"{root}/{relative_path}"
+
+                def ensure_directory_entry(path: str) -> None:
+                    normalized = path.strip("/")
+                    if not normalized:
+                        return
+                    entry_name = f"{normalized}/"
+                    if entry_name in written_entries:
+                        return
+                    archive.writestr(entry_name, "")
+                    written_entries.add(entry_name)
+
+                def ensure_directory_hierarchy(root: str, directory_path: str) -> None:
+                    segments = [segment for segment in directory_path.split("/") if segment]
+                    if not segments:
+                        ensure_directory_entry(root)
+                        return
+                    accumulated: List[str] = []
+                    for segment in segments:
+                        accumulated.append(segment)
+                        ensure_directory_entry(archive_path_for(root, "/".join(accumulated)))
+
+                def ensure_parent_directories(root: str, relative_file_path: str) -> None:
+                    parents = relative_file_path.split("/")[:-1]
+                    if not parents:
+                        return
+                    ensure_directory_hierarchy(root, "/".join(parents))
+
+                for request in file_requests:
+                    blob = GCS_BUCKET.get_blob(request["object_name"])
+                    if blob is None:
+                        raise HTTPException(
+                            status_code=404, detail=f"File '{request['object_name']}' not found"
+                        )
+                    archive_path = request["archive_path"]
                     if archive_path in written_entries:
                         continue
-                    ensure_parent_directories(archive_root, sanitized_relative)
+                    ensure_parent_directories("", archive_path)
                     with blob.open("rb") as source, archive.open(archive_path, "w") as target:
                         while True:
                             chunk = source.read(1024 * 1024)
@@ -813,36 +808,58 @@ def batch_download(payload: Dict[str, Any]):
                                 break
                             target.write(chunk)
                     written_entries.add(archive_path)
-                    added_content = True
-                if not added_content:
+                for request in folder_requests:
+                    prefix = request["prefix"]
+                    archive_root = request["archive_root"]
                     ensure_directory_entry(archive_root)
-    except HTTPException:
-        temp_file.close()
-        raise
-    except NotFound as error:
-        temp_file.close()
-        raise HTTPException(status_code=404, detail=str(error)) from error
-    except GoogleAPIError as error:
-        temp_file.close()
-        raise HTTPException(status_code=400, detail=str(error)) from error
-    except Exception:
-        temp_file.close()
-        raise
-    temp_file.seek(0, 2)
-    total_size = temp_file.tell()
-    temp_file.seek(0)
+                    added_content = False
+                    blobs = GCS_BUCKET.list_blobs(prefix=prefix)
+                    for blob in blobs:
+                        if blob.name == prefix:
+                            continue
+                        relative_path = blob.name[len(prefix) :]
+                        if not relative_path:
+                            continue
+                        sanitized_relative = sanitize_archive_item_path(
+                            relative_path, relative_path
+                        )
+                        archive_path = archive_path_for(archive_root, sanitized_relative)
+                        if archive_path in written_entries:
+                            continue
+                        ensure_parent_directories(archive_root, sanitized_relative)
+                        with blob.open("rb") as source, archive.open(archive_path, "w") as target:
+                            while True:
+                                chunk = source.read(1024 * 1024)
+                                if not chunk:
+                                    break
+                                target.write(chunk)
+                        written_entries.add(archive_path)
+                        added_content = True
+                    if not added_content:
+                        ensure_directory_entry(archive_root)
+        except BaseException as error:
+            stream_errors.append(error)
+        finally:
+            stream_queue.put(stream_done)
 
     def iterator():
-        try:
-            while True:
-                chunk = temp_file.read(1024 * 1024)
-                if not chunk:
-                    break
-                yield chunk
-        finally:
-            temp_file.close()
+        writer_thread = threading.Thread(target=write_archive_to_stream, daemon=True)
+        writer_thread.start()
+        while True:
+            item = stream_queue.get()
+            if item is stream_done:
+                break
+            yield item
+        writer_thread.join()
+        if stream_errors:
+            error = stream_errors[0]
+            if isinstance(error, HTTPException):
+                raise error
+            if isinstance(error, NotFound):
+                raise HTTPException(status_code=404, detail=str(error)) from error
+            if isinstance(error, GoogleAPIError):
+                raise HTTPException(status_code=400, detail=str(error)) from error
+            raise error
 
     headers = {"Content-Disposition": f'attachment; filename="{archive_name}"'}
-    if total_size:
-        headers["Content-Length"] = str(total_size)
     return StreamingResponse(iterator(), media_type="application/zip", headers=headers)

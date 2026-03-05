@@ -506,6 +506,7 @@ type PreparedUploads = {
     items: QueuedUpload[];
     selectionToken: string;
 };
+type BatchDownloadState = "idle" | "preparing" | "starting";
 
 function relativePathForFile(fileInfo: FileInfo): string {
     const rawFile = fileInfo.rawFile as FileWithPath | undefined;
@@ -532,7 +533,7 @@ export default function Filesystem() {
 
     const maxUploadSizeBytes = 10 * 1024 ** 4;
     const [activeUpload, setActiveUpload] = React.useState<ActiveUploadState | null>(null);
-    const [isPreparingBatchDownload, setIsPreparingBatchDownload] = React.useState(false);
+    const [batchDownloadState, setBatchDownloadState] = React.useState<BatchDownloadState>("idle");
     const abortControllerRef = React.useRef<AbortController | null>(null);
     const batchDownloadAbortControllerRef = React.useRef<AbortController | null>(null);
 
@@ -1618,11 +1619,16 @@ export default function Filesystem() {
         const archiveName =
             singleEntry && singleEntry.name ? `${singleEntry.name}.zip` : "files.zip";
 
-        setIsPreparingBatchDownload(true);
+        setBatchDownloadState("preparing");
+        let downloadStarted = false;
+        const maxOverlayDurationMilliseconds = 8000;
+        const overlayTimeoutId = window.setTimeout(() => {
+            setBatchDownloadState("idle");
+        }, maxOverlayDurationMilliseconds);
         const controller = new AbortController();
         batchDownloadAbortControllerRef.current = controller;
         try {
-            const response = await fetch("/batch-download", {
+            const response = await fetch("/batch-download-ticket", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ items: batchItems, archiveName }),
@@ -1631,10 +1637,16 @@ export default function Filesystem() {
             if (!response.ok) {
                 throw new Error(`Request failed with status ${response.status}`);
             }
-            const blob = await response.blob();
-            const url = URL.createObjectURL(blob);
-            triggerDownload(url, archiveName);
-            window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+            const data = (await response.json()) as { downloadUrl?: string };
+            if (!data.downloadUrl) {
+                throw new Error("Missing download URL");
+            }
+            downloadStarted = true;
+            setBatchDownloadState("starting");
+            triggerDownload(data.downloadUrl, archiveName);
+            window.setTimeout(() => {
+                setBatchDownloadState("idle");
+            }, 600);
         } catch (error) {
             if (isAbortError(error)) {
                 return;
@@ -1642,8 +1654,11 @@ export default function Filesystem() {
             console.error("Download failed", error);
             window.alert("Download failed. Please try again.");
         } finally {
+            window.clearTimeout(overlayTimeoutId);
             batchDownloadAbortControllerRef.current = null;
-            setIsPreparingBatchDownload(false);
+            if (!downloadStarted) {
+                setBatchDownloadState("idle");
+            }
         }
     }, []);
 
@@ -1652,7 +1667,7 @@ export default function Filesystem() {
             batchDownloadAbortControllerRef.current.abort();
             batchDownloadAbortControllerRef.current = null;
         }
-        setIsPreparingBatchDownload(false);
+        setBatchDownloadState("idle");
     }, []);
 
     const [showWelcome, setShowWelcome] = React.useState(true);
@@ -1798,7 +1813,7 @@ export default function Filesystem() {
                             </div>
                         )}
 
-                        {isPreparingBatchDownload && (
+                        {batchDownloadState !== "idle" && (
                             <div className="absolute inset-0 z-30 flex items-center justify-center bg-slate-900/45 backdrop-blur-sm">
                                 <div className="pointer-events-auto relative flex w-full max-w-xl flex-col items-center gap-6 rounded-3xl border border-slate-200 bg-white px-8 py-8 text-slate-800 shadow-xl shadow-slate-900/10">
                                     <button
@@ -1806,6 +1821,7 @@ export default function Filesystem() {
                                         className="absolute right-5 top-5 rounded-full p-2 text-slate-500 transition hover:bg-slate-100 hover:text-slate-800"
                                         aria-label="Cancel download"
                                         onClick={handleCancelBatchDownload}
+                                        disabled={batchDownloadState === "starting"}
                                     >
                                         <X className="h-6 w-6" aria-hidden="true" />
                                     </button>
@@ -1818,7 +1834,9 @@ export default function Filesystem() {
                                         aria-hidden="true"
                                     />
                                     <span className="text-base font-semibold tracking-tight text-slate-700 text-center">
-                                        Compressing files for download …
+                                        {batchDownloadState === "preparing"
+                                            ? "Preparing download ..."
+                                            : "Starting download ..."}
                                     </span>
                                 </div>
                             </div>

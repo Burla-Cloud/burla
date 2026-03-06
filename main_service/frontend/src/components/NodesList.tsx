@@ -90,7 +90,7 @@ remote_parallel_map(my_function, list(range(1000)))`;
         const key = typeof nodeStatus === "string" ? nodeStatus.toUpperCase() : "";
         return cn(
             "w-2 h-2 rounded-full",
-            key ? statusClasses[key] ?? "bg-gray-300" : "bg-gray-300"
+            key ? (statusClasses[key] ?? "bg-gray-300") : "bg-gray-300",
         );
     };
 
@@ -253,7 +253,7 @@ remote_parallel_map(my_function, list(range(1000)))`;
 
     const activeNodes = useMemo(() => {
         const actives = nodes.filter((n) =>
-            ACTIVE_STATUSES.has(String(n.status || "").toUpperCase())
+            ACTIVE_STATUSES.has(String(n.status || "").toUpperCase()),
         );
         actives.sort((a, b) => toMs(b.started_booting_at) - toMs(a.started_booting_at));
         return actives;
@@ -333,7 +333,7 @@ remote_parallel_map(my_function, list(range(1000)))`;
 
                 const res = await fetch(
                     `/v1/cluster/deleted_recent_paginated?offset=${reqOffset}&limit=${reqLimit}`,
-                    { signal: controller.signal }
+                    { signal: controller.signal },
                 );
                 if (!res.ok) throw new Error(`status ${res.status}`);
 
@@ -412,105 +412,65 @@ remote_parallel_map(my_function, list(range(1000)))`;
                         >
                             <X className="h-6 w-6" />
                         </button>
-                        <CardHeader className="pb-4">
-                            <CardTitle className="text-[1.45rem] font-semibold text-primary">
-                                Welcome to Burla!
-                            </CardTitle>
+                        <CardHeader className="pb-2">
+                            <div className="flex items-center justify-start py-1">
+                                <img
+                                    src="/logo.gif"
+                                    alt="Burla Logo"
+                                    className="h-12 w-auto"
+                                    style={{ maxHeight: "51px" }}
+                                />
+                            </div>
                         </CardHeader>
                         <CardContent className="space-y-6">
                             <div className="grid grid-cols-1 gap-4">
                                 <div className="space-y-4">
-                                    <ol className="list-none space-y-3">
-                                        <li>
-                                            🔌 &nbsp;Hit{" "}
-                                            <span className="font-semibold">⏻ Start</span> to boot
-                                            some machines (1-2 min)
-                                        </li>
-                                        <li>
-                                            📦 &nbsp;Run{" "}
-                                            <code className="bg-gray-100 px-1 py-0.5 rounded">
-                                                pip install burla
-                                            </code>
-                                        </li>
-                                        <li>
-                                            🔑 &nbsp;Run{" "}
-                                            <code className="bg-gray-100 px-1 py-0.5 rounded">
-                                                burla login
-                                            </code>
-                                        </li>
-                                        <li>
-                                            🚀 &nbsp;Run some code:
-                                            <br />
-                                            <div className="relative mt-3 inline-block w-fit max-w-full">
-                                                <button
-                                                    type="button"
-                                                    aria-label="Copy code"
-                                                    onClick={async () => {
-                                                        try {
-                                                            await navigator.clipboard.writeText(
-                                                                pythonExampleCode
-                                                            );
-                                                            setCopied(true);
-                                                            window.setTimeout(
-                                                                () => setCopied(false),
-                                                                1400
-                                                            );
-                                                        } catch (e) {
-                                                            console.error("Failed to copy", e);
-                                                        }
+                                    <div className="mb-1 font-medium text-base text-gray-700">
+                                        To get started:
+                                        <ol className="list-decimal pl-6 mt-2 space-y-2">
+                                            <li>
+                                                Hit the{" "}
+                                                <span
+                                                    className="font-semibold text-gray-900"
+                                                    style={{
+                                                        background: "#f6f6f6",
+                                                        borderRadius: "0.36rem",
+                                                        padding: "0.11em 0.44em",
+                                                        display: "inline-block",
                                                     }}
-                                                    className="absolute top-2 right-2 z-10 px-2 py-1 text-xs bg-white/90 hover:bg-white border rounded shadow-sm text-gray-700"
                                                 >
-                                                    <span className="inline-flex items-center gap-1">
-                                                        <Copy className="h-3 w-3" />
-                                                        {copied ? "Copied!" : "Copy"}
+                                                    <span
+                                                        style={{
+                                                            fontWeight: 700,
+                                                            letterSpacing: "-0.04em",
+                                                        }}
+                                                    >
+                                                        ⏻
+                                                    </span>{" "}
+                                                    Start
+                                                </span>{" "}
+                                                button to boot some computers.
+                                            </li>
+                                            <li>
+                                                Run this three-step{" "}
+                                                <a
+                                                    href="https://colab.research.google.com/drive/1bR8Gpa85gqJi7_9uKdcJDX9_WG0tuVmG?usp=sharing"
+                                                    target="_blank"
+                                                    rel="noopener noreferrer"
+                                                    className="inline-flex items-center gap-1 text-[#2563eb] hover:underline font-medium"
+                                                >
+                                                    Google Colab notebook
+                                                    <span
+                                                        role="img"
+                                                        aria-label="link"
+                                                        className="text-lg"
+                                                    >
+                                                        🔗
                                                     </span>
-                                                </button>
-                                                <pre className="bg-gray-50 border rounded p-3 overflow-x-auto text-sm font-mono pr-14 w-fit max-w-full">
-                                                    <code>
-                                                        <span className="text-blue-700">from</span>{" "}
-                                                        burla{" "}
-                                                        <span className="text-blue-700">
-                                                            import
-                                                        </span>{" "}
-                                                        remote_parallel_map
-                                                        <br />
-                                                        <br />
-                                                        <span className="text-blue-700">
-                                                            def
-                                                        </span>{" "}
-                                                        <span className="text-amber-800">
-                                                            my_function
-                                                        </span>
-                                                        (x):
-                                                        <br />
-                                                        {"    "}print(
-                                                        <span className="text-red-700">f</span>
-                                                        <span className="text-red-700">
-                                                            "Running on a remote computer in the
-                                                            cloud! #
-                                                        </span>
-                                                        {"{"}x{"}"}
-                                                        <span className="text-red-700">"</span>)
-                                                        <br />
-                                                        <br />
-                                                        remote_parallel_map(
-                                                        <span className="text-amber-800">
-                                                            my_function
-                                                        </span>
-                                                        ,{" "}
-                                                        <span className="text-blue-700">list</span>(
-                                                        <span className="text-blue-700">range</span>
-                                                        (
-                                                        <span className="text-purple-700">
-                                                            1000
-                                                        </span>
-                                                        )))
-                                                    </code>
-                                                </pre>
-                                            </div>
-                                        </li>
-                                    </ol>
+                                                </a>
+                                            </li>
+                                        </ol>
+                                    </div>
                                 </div>
                             </div>
                         </CardContent>
@@ -606,7 +566,7 @@ remote_parallel_map(my_function, list(range(1000)))`;
                                                             "cursor-pointer",
                                                             didMountRef.current
                                                                 ? ""
-                                                                : "animate-row-in"
+                                                                : "animate-row-in",
                                                         )}
                                                         style={{ animationDelay: `${idx * 50}ms` }}
                                                     >
@@ -618,7 +578,7 @@ remote_parallel_map(my_function, list(range(1000)))`;
                                                                         "rotate-90":
                                                                             expandedNodeId ===
                                                                             node.id,
-                                                                    }
+                                                                    },
                                                                 )}
                                                             />
                                                         </TableCell>
@@ -626,7 +586,7 @@ remote_parallel_map(my_function, list(range(1000)))`;
                                                             <div className="flex items-center space-x-2">
                                                                 <div
                                                                     className={getStatusClass(
-                                                                        node.status
+                                                                        node.status,
                                                                     )}
                                                                 />
                                                                 <span className="text-sm capitalize">
@@ -643,7 +603,7 @@ remote_parallel_map(my_function, list(range(1000)))`;
                                                                 <span>
                                                                     {node.cpus ??
                                                                         extractCpuCount(
-                                                                            node.type
+                                                                            node.type,
                                                                         ) ??
                                                                         "?"}
                                                                 </span>
@@ -713,7 +673,7 @@ remote_parallel_map(my_function, list(range(1000)))`;
                                                 (i) =>
                                                     i !== 0 &&
                                                     i !== totalPages - 1 &&
-                                                    Math.abs(i - page) <= 2
+                                                    Math.abs(i - page) <= 2,
                                             )
                                             .map((i) => (
                                                 <button

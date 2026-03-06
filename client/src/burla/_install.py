@@ -29,6 +29,7 @@ DEFAULT_CLUSTER_CONFIG = {
             "quantity": 13,
             "disk_size_gb": 50,
             "gcp_region": "us-central1",
+            "temp_test": "hi",
         }
     ]
 }
@@ -153,7 +154,7 @@ def _install(spinner):
         f"--to-latest"
     )
 
-    # register dashboard url with backend service
+    # register dashboard url so burla website login page can send user to this instance.
     result = run_command("gcloud run services describe burla-main-service --region us-central1")
     dashboard_url = None
     for line in result.stdout.decode().splitlines():
@@ -525,14 +526,14 @@ def _create_firestore_database(spinner, PROJECT_ID):
 
     try:
         collection = client.collection("cluster_config")
-        collection.document("cluster_config").set(DEFAULT_CLUSTER_CONFIG)
+        collection.document("cluster_config").set(DEFAULT_CLUSTER_CONFIG, merge=True)
     except NotFound as e:
         # retry until db is ready or 30s
         start = time()
         while True:
             try:
                 collection = client.collection("cluster_config")
-                collection.document("cluster_config").set(DEFAULT_CLUSTER_CONFIG)
+                collection.document("cluster_config").set(DEFAULT_CLUSTER_CONFIG, merge=True)
                 break
             except NotFound as e:
                 sleep(1)

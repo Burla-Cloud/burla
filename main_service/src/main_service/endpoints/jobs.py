@@ -49,32 +49,48 @@ def job_stream(jobs_current_page: firestore.CollectionReference):
         start = time()
         last_check = 0
 
-        while True:
-            n_results = await current_num_results(job_id)
-            n_failed = await current_num_failed(job_id)
-            event["n_results"] = n_results
-            event["n_failed"] = n_failed
-            await queue.put(event)
-            await asyncio.sleep(1)
+        try:
+            while True:
+                n_results = await current_num_results(job_id)
+                n_failed = await current_num_failed(job_id)
+                event["n_results"] = n_results
+                event["n_failed"] = n_failed
+                await queue.put(event)
+                await asyncio.sleep(1)
 
-            elapsed = int(time() - start)
-            if elapsed - last_check >= 10:
-                last_check = elapsed
-                filter_ = firestore.FieldFilter("current_job", "==", job_id)
-                nodes = ASYNC_DB.collection("nodes").where(filter=filter_)
-                nodes_working_on_job = await nodes.get()
+                elapsed = int(time() - start)
+                if elapsed - last_check >= 10:
+                    last_check = elapsed
+                    filter_ = firestore.FieldFilter("current_job", "==", job_id)
+                    nodes = ASYNC_DB.collection("nodes").where(filter=filter_)
+                    nodes_working_on_job = await nodes.get()
 
-                if not nodes_working_on_job and elapsed > 300:
-                    msg = "Job failed due to internal cluster error."
-                    timestamp = datetime.now(timezone.utc)
-                    logs = [{"message": msg, "timestamp": timestamp}]
+                    if not nodes_working_on_job and elapsed > 300:
+                        msg = "Job failed due to internal cluster error."
+                        timestamp = datetime.now(timezone.utc)
+                        logs = [{"message": msg, "timestamp": timestamp}]
 
-                    job_doc = ASYNC_DB.collection("jobs").document(job_id)
-                    await job_doc.collection("logs").add({"logs": logs, "timestamp": timestamp})
+                        job_doc = ASYNC_DB.collection("jobs").document(job_id)
+                        job_snapshot = await job_doc.get()
+                        job_data = job_snapshot.to_dict() or {}
+                        n_inputs = int(job_data.get("n_inputs", 0) or 0)
+                        has_all_results = bool(job_data.get("client_has_all_results"))
+                        status = job_data.get("status")
+                        has_processed_all_inputs = n_inputs > 0 and n_results >= n_inputs
+                        should_mark_failed = (
+                            status == "RUNNING"
+                            and not has_all_results
+                            and not has_processed_all_inputs
+                        )
+                        if not should_mark_failed:
+                            return
+                        await job_doc.collection("logs").add({"logs": logs, "timestamp": timestamp})
 
-                    msg2 = 'main_svc: job is "running" but no nodes working on it ???'
-                    await job_doc.update({"status": "FAILED", "fail_reason": ArrayUnion([msg2])})
-                    return
+                        msg2 = 'main_svc: job is "running" but no nodes working on it ???'
+                        await job_doc.update({"status": "FAILED", "fail_reason": ArrayUnion([msg2])})
+                        return
+        except asyncio.CancelledError:
+            raise
 
     def on_changed_job_doc(col_snapshot, changes, read_time):
         for change in changes:

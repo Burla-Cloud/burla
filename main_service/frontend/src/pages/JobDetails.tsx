@@ -107,15 +107,26 @@ const JobDetails = () => {
             day: "numeric",
         });
     };
-    const getStatusClass = (status: string | null) => {
+    const getStatusBadgeClass = (status: string | null) => {
         const statusClasses: Record<string, string> = {
-            PENDING: "bg-gray-400",
-            RUNNING: "bg-yellow-500 animate-pulse",
-            FAILED: "bg-red-500",
-            CANCELED: "bg-red-500",
-            COMPLETED: "bg-green-500",
+            PENDING: "border-slate-300 bg-slate-50 text-slate-700",
+            RUNNING: "border-amber-200 bg-amber-50 text-amber-700",
+            FAILED: "border-rose-200 bg-rose-50 text-rose-600",
+            CANCELED: "border-rose-200 bg-rose-50 text-rose-600",
+            COMPLETED: "border-emerald-200 bg-emerald-50 text-emerald-700",
         };
-        return `w-2 h-2 rounded-full ${status ? statusClasses[status] || "" : ""}`;
+        return status ? statusClasses[status] || "border-slate-300 bg-slate-50 text-slate-700" : "border-slate-300 bg-slate-50 text-slate-700";
+    };
+
+    const getStatusDotClass = (status: string | null) => {
+        const statusDotClasses: Record<string, string> = {
+            PENDING: "bg-slate-500",
+            RUNNING: "bg-amber-500",
+            FAILED: "bg-rose-500",
+            CANCELED: "bg-rose-500",
+            COMPLETED: "bg-emerald-500",
+        };
+        return status ? statusDotClasses[status] || "bg-slate-500" : "bg-slate-500";
     };
 
     const stopJob = async () => {
@@ -242,7 +253,7 @@ const JobDetails = () => {
             <div className="flex-1 flex flex-col items-center justify-center px-12 pt-10">
                 <div className="inline-flex items-center gap-3 text-gray-600">
                     <div
-                        className="h-7 w-7 rounded-full border-2 border-gray-300 border-t-primary animate-spin"
+                        className="h-6 w-6 rounded-full border-2 border-gray-300 border-t-primary animate-spin"
                         role="status"
                         aria-label="Loading job result stats"
                     />
@@ -255,7 +266,9 @@ const JobDetails = () => {
     if (statsLoadError || !stats) {
         return (
             <div className="flex-1 flex flex-col items-center justify-center px-12 pt-10">
-                <h1 className="text-2xl font-semibold text-red-600">Failed to load job result stats</h1>
+                <h1 className="text-2xl font-semibold text-red-600">
+                    Failed to load job result stats
+                </h1>
                 <button
                     onClick={() => window.location.reload()}
                     className="mt-4 text-primary underline underline-offset-2"
@@ -276,88 +289,102 @@ const JobDetails = () => {
     return (
         <div className="flex flex-col flex-1 min-h-0 px-12 pt-0">
             <div className="max-w-6xl mx-auto w-full flex flex-col flex-1 min-h-0">
-                {/* Breadcrumb */}
-                <h1 className="text-3xl font-bold mt-[-4px] mb-3 text-primary">
-                    <button
-                        onClick={() => navigate("/jobs")}
-                        className="hover:underline underline-offset-2 decoration-[0.5px] transition text-inherit"
-                    >
-                        Jobs
-                    </button>
-                    <span className="mx-2 text-inherit">›</span>
-                    <span className="text-inherit">{job.id}</span>
-                </h1>
+                <div className="mb-3 rounded-lg border border-gray-200 bg-white px-4 py-3">
+                    <div className="flex flex-row items-start justify-between mb-2">
+                        <h1 className="text-2xl font-bold mt-[-4px] text-primary">
+                            <button
+                                onClick={() => navigate("/jobs")}
+                                className="hover:underline underline-offset-2 decoration-[0.5px] transition text-inherit"
+                            >
+                                Jobs
+                            </button>
+                            <span className="mx-2 text-inherit">›</span>
+                            <span className="text-inherit">{job.id}</span>
+                        </h1>
+                        <Button
+                            variant="destructive"
+                            size="lg"
+                            className="h-11 rounded-lg"
+                            onClick={stopJob}
+                            disabled={
+                                isStopping || (job?.status !== "RUNNING" && job?.status !== "PENDING")
+                            }
+                        >
+                            <PowerOff className="mr-2 h-4 w-4" />
+                            Stop
+                        </Button>
+                    </div>
 
-                {/* Metadata row with Stop button on the same row */}
-                <div className="flex flex-row items-center justify-between text-sm text-gray-600 mb-3">
-                    <div className="flex items-center space-x-6">
-                        <div className="flex items-center space-x-2">
-                            <div className={getStatusClass(job.status)} />
-                            <span className="text-sm capitalize">
-                                {job.status?.toUpperCase() || "UNKNOWN"}
-                            </span>
-                        </div>
-                        <div className="flex items-baseline">
-                            <strong>Function:</strong>
-                            <span className="ml-2">{job.function_name ?? "Unknown"}</span>
-                        </div>
-                        <div className="flex items-baseline">
-                            <strong>Started At:</strong>
-                            <span className="ml-2 flex items-baseline">
-                                <span className="tabular-nums">
-                                    {formatStartedAtTime(job.started_at)}
+                    <div className="flex flex-row items-center text-[14.5px] text-gray-800">
+                        <div className="flex items-center space-x-6">
+                            <div className="flex items-center space-x-2">
+                                <span
+                                    className={`inline-flex items-center gap-2 rounded-full border px-3 py-0.5 text-[14.5px] font-normal ${getStatusBadgeClass(job.status)}`}
+                                >
+                                    <span className={`h-2.5 w-2.5 rounded-full ${getStatusDotClass(job.status)}`} />
+                                    <span>
+                                    {job.status?.toUpperCase() || "UNKNOWN"}
+                                    </span>
                                 </span>
-                                <span className="ml-1">
-                                    {formatStartedAtWeekday(job.started_at)}
+                            </div>
+                            <div className="flex items-baseline">
+                                <span>Function:</span>
+                                <span className="ml-2">{job.function_name ?? "Unknown"}</span>
+                            </div>
+                            <div className="flex items-baseline">
+                                <span>Started At:</span>
+                                <span className="ml-2 flex items-baseline">
+                                    <span className="tabular-nums">
+                                        {formatStartedAtTime(job.started_at)}
+                                    </span>
+                                    <span className="ml-1">
+                                        {formatStartedAtWeekday(job.started_at)}
+                                    </span>
+                                    <span className="ml-1">
+                                        {formatStartedAtMonthDay(job.started_at)}
+                                    </span>
                                 </span>
-                                <span className="ml-1">
-                                    {formatStartedAtMonthDay(job.started_at)}
-                                </span>
-                            </span>
+                            </div>
                         </div>
                     </div>
-                    <Button
-                        variant="destructive"
-                        size="lg"
-                        className="w-32 -mt-2"
-                        onClick={stopJob}
-                        disabled={
-                            isStopping || (job?.status !== "RUNNING" && job?.status !== "PENDING")
-                        }
-                    >
-                        <PowerOff className="mr-2 h-4 w-4" />
-                        Stop
-                    </Button>
                 </div>
 
-                <div className="mt-4 mb-3 px-1 py-1">
+                <div className="mb-3 rounded-lg border border-gray-200 bg-white px-4 py-3">
                     <div className="flex items-end justify-between gap-6">
                         <div>
-                            <div className="text-[11px] font-semibold tracking-[0.08em] uppercase text-slate-500">
-                                Results
-                            </div>
-                            <div className="mt-0.5 text-lg font-semibold tabular-nums text-slate-700">
+                            <div className="mt-0.5 text-[14.5px] tabular-nums text-gray-800">
                                 {succeededCount.toLocaleString()}
-                                <span className="mx-1.5 text-slate-300">/</span>
-                                <span className="text-slate-500">{stats.n_inputs.toLocaleString()}</span>
+                                <span className="mx-1.5">/</span>
+                                <span>
+                                    {stats.n_inputs.toLocaleString()}
+                                </span>
+                                <span className="ml-2">
+                                    Function calls complete.
+                                </span>
                             </div>
                         </div>
 
-                        <div className="flex flex-wrap items-center justify-end gap-5 text-sm">
-                            <span className="inline-flex items-center gap-1.5 text-slate-700">
+                        <div className="flex flex-wrap items-center justify-end gap-5 text-[14.5px] text-gray-800">
+                            <span className="inline-flex items-center gap-1.5">
                                 <span className="h-2 w-2 rounded-full bg-emerald-500" />
-                                <span className="text-slate-500">Success</span>
-                                <strong className="tabular-nums">{succeededCount.toLocaleString()}</strong>
+                                <span>Success</span>
+                                <span className="tabular-nums">
+                                    {succeededCount.toLocaleString()}
+                                </span>
                             </span>
-                            <span className="inline-flex items-center gap-1.5 text-slate-700">
+                            <span className="inline-flex items-center gap-1.5">
                                 <span className="h-2 w-2 rounded-full bg-rose-500" />
-                                <span className="text-slate-500">Failed</span>
-                                <strong className="tabular-nums">{safeFailedCount.toLocaleString()}</strong>
+                                <span>Failed</span>
+                                <span className="tabular-nums">
+                                    {safeFailedCount.toLocaleString()}
+                                </span>
                             </span>
-                            <span className="inline-flex items-center gap-1.5 text-slate-700">
+                            <span className="inline-flex items-center gap-1.5">
                                 <span className="h-2 w-2 rounded-full bg-amber-400" />
-                                <span className="text-slate-500">Remaining</span>
-                                <strong className="tabular-nums">{remainingCount.toLocaleString()}</strong>
+                                <span>Remaining</span>
+                                <span className="tabular-nums">
+                                    {remainingCount.toLocaleString()}
+                                </span>
                             </span>
                         </div>
                     </div>

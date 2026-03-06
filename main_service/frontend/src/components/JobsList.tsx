@@ -10,10 +10,11 @@ import {
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 
 export const JobsList = () => {
-  const { jobs, setJobs, page, setPage, totalPages, isLoading } = useJobs();
+  const { jobs, page, setPage, totalPages, isLoading } = useJobs();
+  const navigate = useNavigate();
 
   const [userTimeZone, setUserTimeZone] = useState<string>(() => {
     const stored = typeof window !== "undefined" ? localStorage.getItem("userTimezone") : null;
@@ -102,24 +103,26 @@ export const JobsList = () => {
     });
   };
 
-  const handleCheckboxChange = (id: string) => {
-    setJobs((prev) => prev.map((job) => (job.id === id ? { ...job, checked: !job.checked } : job)));
-  };
-
-  const handleSelectAllChange = () => {
-    const selectAll = !jobs.every((job) => job.checked);
-    setJobs((prev) => prev.map((job) => ({ ...job, checked: selectAll })));
-  };
-
-  const getStatusClass = (status: string | null) => {
-    const statusClasses: Record<string, string> = {
-      PENDING: "bg-gray-400",
-      RUNNING: "bg-yellow-500 animate-pulse",
-      FAILED: "bg-red-500",
-      CANCELED: "bg-red-500",
-      COMPLETED: "bg-green-500",
+  const getStatusDotClass = (status: string | null) => {
+    const statusDotClasses: Record<string, string> = {
+      PENDING: "bg-slate-400",
+      RUNNING: "bg-amber-300",
+      FAILED: "bg-rose-300",
+      CANCELED: "bg-rose-300",
+      COMPLETED: "bg-emerald-300",
     };
-    return cn("w-2 h-2 rounded-full", status ? statusClasses[status] || "" : "");
+    return status ? statusDotClasses[status] || "bg-slate-400" : "bg-slate-400";
+  };
+
+  const getStatusTextClass = (status: string | null) => {
+    const statusTextClasses: Record<string, string> = {
+      PENDING: "text-slate-600",
+      RUNNING: "text-amber-700",
+      FAILED: "text-rose-600",
+      CANCELED: "text-rose-600",
+      COMPLETED: "text-emerald-700",
+    };
+    return status ? statusTextClasses[status] || "text-slate-600" : "text-slate-600";
   };
 
   return (
@@ -141,17 +144,9 @@ export const JobsList = () => {
                 <Table className="w-full min-w-[920px]">
                   <TableHeader>
                     <TableRow>
-                      <TableHead className="w-10">
-                        <input
-                          type="checkbox"
-                          checked={jobs.every((j) => j.checked)}
-                          onChange={handleSelectAllChange}
-                          className="w-4 h-4 border-2 border-gray-400 rounded-none appearance-none checked:bg-primary checked:border-primary cursor-pointer"
-                        />
-                      </TableHead>
                       <TableHead>Status</TableHead>
                       <TableHead>Function</TableHead>
-                      <TableHead>Results</TableHead>
+                      <TableHead className="w-[360px]">Results</TableHead>
                       <TableHead>User</TableHead>
                       <TableHead colSpan={3}>
                         {(() => {
@@ -174,38 +169,40 @@ export const JobsList = () => {
                       const failedCount = Math.max(0, job.n_failed ?? 0);
                       const successfulCount = Math.max(0, job.n_results - failedCount);
                       return (
-                        <TableRow key={job.id}>
+                        <TableRow
+                          key={job.id}
+                          className="cursor-pointer hover:bg-slate-50/60"
+                          onClick={() => navigate(`/jobs/${job.id}`)}
+                          onKeyDown={(event) => {
+                            if (event.key !== "Enter" && event.key !== " ") return;
+                            event.preventDefault();
+                            navigate(`/jobs/${job.id}`);
+                          }}
+                          tabIndex={0}
+                        >
                         <TableCell>
-                          <input
-                            type="checkbox"
-                            checked={job.checked}
-                            onChange={() => handleCheckboxChange(job.id)}
-                            className="w-4 h-4 border-2 border-gray-400 rounded-none appearance-none checked:bg-primary checked:border-primary cursor-pointer"
-                          />
-                        </TableCell>
-
-                        <TableCell>
-                          <div className="flex items-center space-x-2">
-                            <div className={getStatusClass(job.status)} />
-                            <span className="text-sm capitalize">{job.status?.toUpperCase()}</span>
-                          </div>
+                          <span
+                            className={cn("inline-flex items-center gap-2 text-[14px] font-normal", getStatusTextClass(job.status))}
+                          >
+                            <span className={cn("h-2.5 w-2.5 rounded-full", getStatusDotClass(job.status))} />
+                            <span className="capitalize">{job.status?.toLowerCase() || "unknown"}</span>
+                          </span>
                         </TableCell>
 
                         {/* BIGGEST CULPRIT: long function names. Truncate them. */}
                         <TableCell>
                           <div className="max-w-[360px] truncate">
-                            <Link
-                              to={`/jobs/${job.id}`}
+                            <span
                               title={job.function_name ?? "Unknown"}
-                              className="text-black underline underline-offset-2 hover:text-[#1a1a1a] transition-all"
+                              className="text-black underline underline-offset-2"
                             >
                               {job.function_name ?? "Unknown"}
-                            </Link>
+                            </span>
                           </div>
                         </TableCell>
 
-                        <TableCell>
-                          <div className="flex flex-col space-y-1 min-w-[140px]">
+                        <TableCell className="w-[360px]">
+                          <div className="flex flex-col space-y-1 min-w-[320px]">
                             <div>
                               {successfulCount.toLocaleString()} / {job.n_inputs.toLocaleString()}
                             </div>

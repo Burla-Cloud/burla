@@ -260,10 +260,10 @@ const SettingsPage = () => {
     );
   })();
 
-  return ( 
+  return (
     <div className="flex-1 flex flex-col justify-start px-12 pt-6 min-w-0">
       <div className="max-w-6xl mx-auto w-full flex-1 flex flex-col min-w-0">
-        <div className="mt-2 mb-10">
+        <div className="mt-2">
           <div className="flex items-center justify-between gap-6">
             <div className="min-w-0">
               <h1 className="text-2xl font-bold text-primary">Settings</h1>
@@ -299,46 +299,56 @@ const SettingsPage = () => {
             </div>
           </div>
 
-          <div className="mt-8 border-b border-border">
-            <nav className="-mb-px flex items-center gap-8">
+          <div className="mt-6">
+            <nav
+              className="relative inline-grid h-9 grid-cols-2 rounded-xl bg-gray-100/80 p-1"
+              aria-label="Settings sections"
+            >
+              <span
+                aria-hidden="true"
+                className={[
+                  "pointer-events-none absolute bottom-1 left-1 top-1 w-[calc(50%-4px)] rounded-[10px] bg-white",
+                  "border border-gray-200 shadow-[0_1px_2px_rgba(15,23,42,0.06)]",
+                  "transition-transform duration-150 ease-out",
+                  section === "cluster" ? "translate-x-0" : "translate-x-full",
+                ].join(" ")}
+              />
               <button
                 type="button"
                 onClick={() => handleSectionClick("cluster")}
                 className={[
-                  "relative pb-3 text-sm font-medium transition-colors",
-                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-300 focus-visible:ring-offset-2 rounded-sm",
+                  "relative z-10 h-7 min-w-[112px] rounded-[10px] px-3 text-sm font-medium",
+                  "transition-colors duration-150",
+                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-300/80 focus-visible:ring-offset-1 focus-visible:ring-offset-white",
                   section === "cluster"
-                    ? "text-primary"
-                    : "text-gray-500 hover:text-primary",
+                    ? "text-gray-900"
+                    : "text-gray-500 hover:bg-gray-200/60 hover:text-gray-700",
                 ].join(" ")}
+                aria-pressed={section === "cluster"}
               >
                 Cluster
-                {section === "cluster" && (
-                  <span className="absolute left-0 right-0 -bottom-px h-0.5 bg-primary rounded-full" />
-                )}
               </button>
 
               <button
                 type="button"
                 onClick={() => handleSectionClick("usage")}
                 className={[
-                  "relative pb-3 text-sm font-medium transition-colors",
-                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-300 focus-visible:ring-offset-2 rounded-sm",
+                  "relative z-10 h-7 min-w-[112px] rounded-[10px] px-3 text-sm font-medium",
+                  "transition-colors duration-150",
+                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-300/80 focus-visible:ring-offset-1 focus-visible:ring-offset-white",
                   section === "usage"
-                    ? "text-primary"
-                    : "text-gray-500 hover:text-primary",
+                    ? "text-gray-900"
+                    : "text-gray-500 hover:bg-gray-200/60 hover:text-gray-700",
                 ].join(" ")}
+                aria-pressed={section === "usage"}
               >
-                Usage
-                {section === "usage" && (
-                  <span className="absolute left-0 right-0 -bottom-px h-0.5 bg-primary rounded-full" />
-                )}
+                Billing
               </button>
             </nav>
           </div>
         </div>
 
-        <div className="space-y-10 flex-1 min-w-0">{content}</div>
+        <div className="mt-8 space-y-10 flex-1 min-w-0">{content}</div>
 
         <div className="text-center text-sm text-gray-500 mt-10 pb-2">
           Need help? Email me{" "}

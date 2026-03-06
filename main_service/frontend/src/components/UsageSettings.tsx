@@ -507,7 +507,7 @@ const UsageSettings = () => {
     <div className="space-y-6 max-w-6xl mx-auto w-full">
       <Card className="w-full">
         <CardHeader className="flex flex-row items-center justify-between gap-3">
-          <CardTitle className="text-xl font-semibold text-primary">Usage</CardTitle>
+          <CardTitle className="text-xl font-semibold text-primary">Billing</CardTitle>
 
           <select
             className="h-9 rounded-md border border-border bg-background px-3 text-sm"

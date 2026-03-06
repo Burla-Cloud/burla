@@ -9,7 +9,7 @@ import UsageSettings from "@/components/UsageSettings";
 import { Button } from "@/components/ui/button";
 import { useSaveSettings } from "@/hooks/useSaveSettings";
 import { toast } from "@/components/ui/use-toast";
-import { getConfigurationLabelForMachineType, getQuotaVmFamily } from "@/types/constants";
+import { getConfigurationLabelForMachineType } from "@/types/constants";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -207,11 +207,12 @@ const SettingsPage = () => {
   const quotaRegion = quotaWarning?.region || settings.gcpRegion || "unknown";
   const quotaMachineType = quotaWarning?.machineType || settings.machineType || "unknown";
   const quotaConfiguration = getConfigurationLabelForMachineType(quotaMachineType);
+  const quotaConfigurationDisplay = quotaMachineType.startsWith("n4-")
+    ? quotaConfiguration.split("/")[0].trim()
+    : quotaConfiguration;
   const quotaRequested =
     typeof quotaWarning?.requested === "number" ? String(quotaWarning.requested) : "unknown";
   const quotaLimit = typeof quotaWarning?.limit === "number" ? String(quotaWarning.limit) : "unknown";
-  const quotaVmFamily = getQuotaVmFamily(quotaMachineType);
-  const isVmUnavailable = quotaWarning?.limit === 0;
 
   const showSaveButton = section === "cluster" && hasUnsavedChanges;
 
@@ -387,7 +388,7 @@ const SettingsPage = () => {
         }}
       >
         <AlertDialogContent
-          className="max-w-[692.5px] mx-auto py-7 px-6 rounded-lg shadow-[0_8px_24px_rgba(0,0,0,0.06)] bg-white"
+          className="max-w-[670px] mx-auto py-7 px-6 rounded-lg shadow-[0_8px_24px_rgba(0,0,0,0.06)] bg-white"
           onInteractOutside={(e) => e.preventDefault()}
           onEscapeKeyDown={(e) => e.preventDefault()}
         >
@@ -398,53 +399,48 @@ const SettingsPage = () => {
                 GCP Quota Limit Reached
               </span>
             </AlertDialogTitle>
-            {isVmUnavailable && (
-              <p className="text-sm font-medium text-red-600">
-                This Virtual Machine is currently not available. Please ask for quota in GCP.
-              </p>
-            )}
-            <div className="space-y-6 text-base text-gray-800 leading-relaxed">
-              <p>This cluster exceeds your Google Cloud VM quota in this region.</p>
-
-              <div className="space-y-1">
-                <p className="font-semibold text-gray-900">Virtual Machine</p>
+            <div className="space-y-5 text-base text-gray-800 leading-relaxed">
+              <div className="space-y-1.5">
+                <p className="font-semibold text-gray-900">Requested Cluster</p>
                 <p>
-                  Configuration: <span className="font-semibold">{quotaConfiguration}</span>
+                  Machine: <span className="font-semibold">{quotaMachineType}</span>
+                </p>
+                <p>
+                  Configuration: <span className="font-semibold">{quotaConfigurationDisplay}</span>
                 </p>
                 <p>
                   Region: <span className="font-semibold">{quotaRegion}</span>
                 </p>
+              </div>
+
+              <div className="space-y-1.5">
                 <p>
-                  Requested: <span className="font-semibold">{quotaRequested}</span> instances
+                  Requested instances: <span className="font-semibold">{quotaRequested}</span>
                 </p>
                 <p>
-                  Available quota: <span className="font-semibold">{quotaLimit}</span> instances
+                  Available quota: <span className="font-semibold">{quotaLimit}</span>
                 </p>
               </div>
 
-              <div className="space-y-1">
-                <p className="font-semibold text-gray-900">
-                  Increase quota in GCP{" "}
+              <p>
+                Contact{" "}
+                <a href="mailto:jake@burla.dev" className="text-blue-600 underline hover:text-blue-700">
+                  jake@burla.dev
+                </a>{" "}
+                to increase your quota.
+              </p>
+
+              <div className="space-y-1.5">
+                <p>
+                  <span className="font-semibold text-gray-900">Self hosting?</span> Increase quota in{" "}
                   <a
                     href="https://docs.cloud.google.com/docs/quotas/view-manage"
                     target="_blank"
                     rel="noreferrer"
                     className="text-blue-600 underline hover:text-blue-700"
                   >
-                    →
-                  </a>
-                </p>
-                <p>
-                  Service: <span className="font-semibold">Compute Engine API</span>
-                </p>
-                <p>
-                  Region: <span className="font-semibold">{quotaRegion}</span>
-                </p>
-                <p>
-                  VM family: <span className="font-semibold">{quotaVmFamily || "unknown"}</span>
-                </p>
-                <p>
-                  Machine type: <span className="font-semibold">{quotaMachineType}</span>
+                    GCP
+                  </a>{" "}
                 </p>
               </div>
             </div>

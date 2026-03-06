@@ -125,12 +125,9 @@ export function getConfigurationLabelForMachineType(machineType: string): string
 }
 
 export function getQuotaVmFamily(machineType: string): string {
-  const mt = String(machineType || "");
+  const mt = String(machineType || "").toLowerCase();
   if (!mt) return "";
   if (mt.startsWith("n4-")) return "N4";
-
-  const vmCategory = getVmCategory(mt);
-  if (vmCategory) return vmCategory.toUpperCase();
 
   const family = mt.split("-")[0];
   return family.toUpperCase();

@@ -267,10 +267,10 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
                                                 </TooltipTrigger>
                                                 <TooltipContent>
                                                     <p>
-                                                        URI of the Docker image to run your code
+                                                        URI of the Docker image to run your code 
                                                         inside.
                                                         <br />
-                                                        This can be any image, as long as it has
+                                                        This can be any image, as long as it has 
                                                         Python installed.
                                                         <br />
                                                         Private images are pulled using the host
@@ -389,8 +389,8 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
                                 </div>
 
                                 {/* GPUs per VM (hidden when None) */}
-                                {gpuVariant !== "None" ? (
-                                    <div className="flex flex-col space-y-2">
+                                {gpuVariant !== "None" ? ( 
+                                    <div className="flex flex-col space-y-2"> 
                                         <label className={labelClass}>GPUs per VM</label>
                                         <Select
                                             disabled={!isEditing}
@@ -407,12 +407,12 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
                                                     </SelectItem>
                                                 ))}
                                             </SelectContent>
-                                        </Select>
+                                        </Select> 
                                     </div>
                                 ) : (
                                     // placeholder to maintain grid alignment
-                                    <div className="hidden md:block" />
-                                )}
+                                    <div className="hidden md:block" /> 
+                                )} 
                             </div>
 
                             {/* Second row: two equal columns */}

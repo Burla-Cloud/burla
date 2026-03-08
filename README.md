@@ -1,71 +1,61 @@
+# Burla
 
-### Run any Python function on 1000 computers in 1 second.
+### Scale Python across 1,000s of computers using one line of code.
 
-Burla makes it trivial to run Python functions on thousands of computers in the cloud.\
-It's a package that only has **one function**:
+Burla is a Python package with **one function**: `remote_parallel_map`.
 
-<figure><img src="https://raw.githubusercontent.com/Burla-Cloud/.github/refs/heads/main/media/main_demo.gif" alt="" style="width:80%" /><figcaption></figcaption></figure>
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Burla-Cloud/.github/main/media/main_demo.gif" alt="Burla terminal demo showing remote_parallel_map running on 1,000 computers" />
+</p>
 
-This realtime example runs <code>my_function</code> on 1,000 separate computers in one second!
+<p align="center">This realtime example runs <code>my_function</code> on 1,000 separate computers in one second.</p>
 
-### The full power of the cloud, in an easy to use, open platform:
+### Enable anyone to process terabytes of data in minutes, not days.
 
-Burla enables anyone, even total beginners, to harness the full power of the cloud:
+Burla is simple enough for anyone to learn, yet extremely scalable and flexible.
 
-* **Scalable:** See our [demo](examples/process-2.4tb-of-parquet-files-in-76s.md) where we process 2.4TB in 76s using 10,000 CPUs.
-* **Flexible:** Runs any Python function, inside any Docker container, on any hardware.
-* **Simple:** Burla is just one function, with two required arguments.
+- **Scalable:** See our [2.4TB in 76 seconds demo](https://docs.burla.dev/examples/process-2.4tb-of-parquet-files-in-76s), where Burla uses 10,000 CPUs.
+- **Flexible:** Run any code inside any Docker container on any hardware, including GPUs and TPUs.
 
-Easily monitor workloads, and manage infrastructure from our open-source web dashboard:
+Easily monitor long-running workloads and manage compute resources in the dashboard.
 
-<figure><img src="https://raw.githubusercontent.com/Burla-Cloud/.github/refs/heads/main/media/platform_demo.gif" alt="" style="width:80%" /><figcaption></figcaption></figure>
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Burla-Cloud/.github/main/media/platform_demo.gif" alt="Burla dashboard demo" />
+</p>
 
-### **How it works:**
+### How it works
 
-Burla only has one function: `remote_parallel_map`  \
-When called, it runs the given function, on every input in the given list, each on a separate computer.
+With Burla, **running code in the cloud feels the same as coding on your laptop**:
 
 ```python
 from burla import remote_parallel_map
 
-my_inputs = [1, 2, 3]
-
-def my_function(my_input):
-    print("I'm running on my own separate computer in the cloud!")
-    return my_input
-    
 return_values = remote_parallel_map(my_function, my_inputs)
 ```
 
-Running code in the cloud with Burla feels the same as coding locally:
+When functions run with `remote_parallel_map`:
 
-* Anything you print appears in your local terminal.
-* Exceptions thrown in your code are thrown on your local machine.
-* Responses are quick, you run a million function calls in a couple seconds!
+- Anything they print appears locally (and in Burla's dashboard).
+- Exceptions are thrown locally.
+- Packages and local modules are cloned onto remote machines.
+- Code starts running in under one second, even with millions of inputs.
 
-### Features:
+### Features
 
-#### 📦 Automatic Package Sync
+| Feature | Description |
+| --- | --- |
+| **📦 Automatic Package Sync** | Burla quickly clones your Python packages to every remote machine where your code runs. |
+| **🐋 Custom Containers** | Run code in any Docker container. Public or private, paste an image URI in settings and start. |
+| **📂 Network Filesystem** | Burla mounts cloud storage to `./shared` in every container for easy data exchange. |
+| **⚙️ Variable Hardware Per Function** | Use `func_cpu` and `func_ram` to give different functions different hardware sizes. |
 
-Burla clusters automatically (and very quickly) install any missing python packages into all containers in the cluster.
+### Convert any workload into a scalable data pipeline
 
-#### 🐋 Custom Containers
+Have a workload that takes forever to run?
 
-Easily run code in any Docker container. Public or private, just paste an image URI in the settings, then hit start!
+By adding `remote_parallel_map` calls, data scientists, ML engineers, and analysts can process terabytes of data and finish in minutes.
 
-#### 📂 Network Filesystem
-
-Need to get big data into/out of the cluster? Burla automatically mounts a cloud storage bucket to `./shared` in every container.
-
-#### ⚙️ Variable Hardware Per-Function
-
-The `func_cpu` and `func_ram` args make it possible to assign more hardware to some functions, and less to others, unlocking new ways to simplify pipelines and architecture.
-
-
-### Build scalable data-pipelines using plain Python:
-
-Fan code across thousands of machines, then combine results on one big machine.\
-The network filesystem mounted at `./shared` makes it easy to pass big data between steps.
+The filesystem mounted at `./shared` makes it simple to process data stored in cloud storage.
 
 ```python
 from burla import remote_parallel_map
@@ -74,26 +64,22 @@ from burla import remote_parallel_map
 results = remote_parallel_map(process_file, files)
 
 # Combine results on one big machine
-result = remote_parallel_map(combine_results, [results], func_ram=256)
+result = remote_parallel_map(combine_results, [results], func_cpu=64)
 ```
 
-The above example demonstrates a basic map-reduce operation.
+<p align="center">The example above demonstrates a basic map-reduce operation.</p>
 
-### Demo:
+### Burla only takes 2 minutes to try
 
-[https://www.youtube.com/watch?v=9d22y_kWjyE](https://www.youtube.com/watch?v=9d22y_kWjyE)
+[![Try Burla for free](https://img.shields.io/badge/Try%20Burla%20for%20free-111827?style=for-the-badge)](https://login.burla.dev/)
 
-### Try it out today:
+1. Sign in with your Google or Microsoft account.
+2. Click `⏻ Start` to boot some computers.
+3. Scale Python over 1,000 CPUs in [this Google Colab notebook](https://colab.research.google.com/drive/1bR8Gpa85gqJi7_9uKdcJDX9_WG0tuVmG?usp=sharing).
 
-There are two ways to host Burla:
+Quick reminder: Burla is open source and easy to self-host. [Deploy Burla in your cloud](https://docs.burla.dev/get-started#quickstart-self-hosted).
 
-1. **In your cloud.**\
-   Burla is open-source, and can be deployed with one command (currently Google-Cloud only).\
-   [Click here](https://docs.burla.dev/get-started#quickstart-self-hosted) to get started with self-hosted Burla.
-2. **In our cloud.**\
-   First $1,000 in compute spend is free, try it now: [https://burla.dev/signup](https://docs.burla.dev/signup)
+---
 
-***
-
-Questions?\
+Questions?  
 [Schedule a call](http://cal.com/jakez/burla), or email **jake@burla.dev**. We're always happy to talk.

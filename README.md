@@ -5,7 +5,11 @@
 Burla is a Python package with **one function**: `remote_parallel_map`.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Burla-Cloud/.github/main/media/main_demo.gif" alt="Burla terminal demo showing remote_parallel_map running on 1,000 computers" />
+  <img src="https://raw.githubusercontent.com/Burla-Cloud/user-docs/main/.gitbook/assets/CleanShot%202026-01-18%20at%2015.07.24.png" alt="Burla code example" />
+</p>
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Burla-Cloud/user-docs/main/.gitbook/assets/final_terminal_with_header_rounded.gif" alt="Burla terminal demo showing remote_parallel_map running on 1,000 computers" />
 </p>
 
 <p align="center">This realtime example runs <code>my_function</code> on 1,000 separate computers in one second.</p>
@@ -20,7 +24,7 @@ Burla is simple enough for anyone to learn, yet extremely scalable and flexible.
 Easily monitor long-running workloads and manage compute resources in the dashboard.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Burla-Cloud/.github/main/media/platform_demo.gif" alt="Burla dashboard demo" />
+  <img src="https://raw.githubusercontent.com/Burla-Cloud/user-docs/main/.gitbook/assets/new_platform_demo.gif" alt="Burla dashboard demo" />
 </p>
 
 ### How it works

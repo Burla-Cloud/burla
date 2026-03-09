@@ -177,6 +177,9 @@ async def logout(request: Request, response: Response):
 
 @app.get("/v3/login/dashboard")
 def redirect_google_login(request: Request):
+    """This is required to make google not classify us as phishing!
+    (login buttons that go to other websites = bad, same website + redirect = good)
+    """
     query_string = request.url.query
     url = f"{BURLA_BACKEND_URL}/v3/login/dashboard"
     if query_string:
@@ -186,6 +189,9 @@ def redirect_google_login(request: Request):
 
 @app.get("/v1/login/microsoft/dashboard")
 def redirect_microsoft_login(request: Request):
+    """This is required to make google not classify us as phishing!
+    (login buttopns that go to other websites = bad, same website + redirect = good)
+    """
     query_string = request.url.query
     url = f"{BURLA_BACKEND_URL}/v1/login/microsoft/dashboard"
     if query_string:

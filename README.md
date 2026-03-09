@@ -1,4 +1,6 @@
-[![Try Burla Now](https://img.shields.io/badge/Try%20Burla%20Now-22c55e?style=for-the-badge&logo=rocket&logoColor=white&labelColor=22c55e)](https://login.burla.dev/)
+<a href="https://login.burla.dev/">
+  <img src="https://img.shields.io/badge/Try%20Burla%20Now-3C5B65?style=for-the-badge&logo=rocket&logoColor=white&radius=20" width="260">
+</a>
 
 ## Scale Python across 1,000s of computers using one line of code.
 

@@ -5,6 +5,7 @@ import { UsageProvider } from "@/contexts/UsageContext";
 
 import { SettingsForm } from "@/components/SettingsForm";
 import UsageSettings from "@/components/UsageSettings";
+import BillingPortalSettings from "@/components/BillingPortalSettings";
 
 import { Button } from "@/components/ui/button";
 import { useSaveSettings } from "@/hooks/useSaveSettings";
@@ -59,8 +60,14 @@ const SettingsPage = () => {
   const section = useMemo(() => {
     const sp = new URLSearchParams(location.search);
     const raw = sp.get("section");
-    return raw === "usage" ? "usage" : "cluster";
+    if (raw === "usage" || raw === "billing") return raw;
+    return "cluster";
   }, [location.search]);
+
+  const hasBillingTab = useMemo(
+    () => Boolean(settings.hasPaymentMethod) || section === "billing",
+    [settings.hasPaymentMethod, section]
+  );
 
   useEffect(() => {
     const fetchSettings = async () => {
@@ -85,6 +92,15 @@ const SettingsPage = () => {
       }
     };
     fetchSettings();
+  }, [setSettings]);
+
+  useEffect(() => {
+    const onPaymentMethodUpdated = () => {
+      setSettings((prev) => ({ ...prev, hasPaymentMethod: true }));
+    };
+
+    window.addEventListener("burla:payment-method-updated", onPaymentMethodUpdated as EventListener);
+    return () => window.removeEventListener("burla:payment-method-updated", onPaymentMethodUpdated as EventListener);
   }, [setSettings]);
 
   useEffect(() => {
@@ -197,7 +213,7 @@ const SettingsPage = () => {
     setShowExitDialog(true);
   };
 
-  const handleSectionClick = (next: "cluster" | "usage") => {
+  const handleSectionClick = (next: "cluster" | "usage" | "billing") => {
     const sp = new URLSearchParams(location.search);
     sp.set("section", next);
     const to = `${location.pathname}?${sp.toString()}`;
@@ -253,6 +269,10 @@ const SettingsPage = () => {
       );
     }
 
+    if (section === "billing") {
+      return <BillingPortalSettings />;
+    }
+
     return (
       <UsageProvider>
         <UsageSettings />
@@ -300,28 +320,16 @@ const SettingsPage = () => {
           </div>
 
           <div className="mt-6">
-            <nav
-              className="relative inline-grid h-9 grid-cols-2 rounded-xl bg-gray-100/80 p-1"
-              aria-label="Settings sections"
-            >
-              <span
-                aria-hidden="true"
-                className={[
-                  "pointer-events-none absolute bottom-1 left-1 top-1 w-[calc(50%-4px)] rounded-[10px] bg-white",
-                  "border border-gray-200 shadow-[0_1px_2px_rgba(15,23,42,0.06)]",
-                  "transition-transform duration-150 ease-out",
-                  section === "cluster" ? "translate-x-0" : "translate-x-full",
-                ].join(" ")}
-              />
+            <nav className="inline-flex h-9 items-center rounded-xl bg-gray-100/80 p-1 gap-1" aria-label="Settings sections">
               <button
                 type="button"
                 onClick={() => handleSectionClick("cluster")}
                 className={[
-                  "relative z-10 h-7 min-w-[112px] rounded-[10px] px-3 text-sm font-medium",
-                  "transition-colors duration-150",
+                  "h-7 min-w-[112px] rounded-[10px] px-3 text-sm font-medium",
+                  "transition-all duration-150",
                   "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-300/80 focus-visible:ring-offset-1 focus-visible:ring-offset-white",
                   section === "cluster"
-                    ? "text-gray-900"
+                    ? "bg-white text-gray-900 border border-gray-200 shadow-[0_1px_2px_rgba(15,23,42,0.06)]"
                     : "text-gray-500 hover:bg-gray-200/60 hover:text-gray-700",
                 ].join(" ")}
                 aria-pressed={section === "cluster"}
@@ -333,17 +341,35 @@ const SettingsPage = () => {
                 type="button"
                 onClick={() => handleSectionClick("usage")}
                 className={[
-                  "relative z-10 h-7 min-w-[112px] rounded-[10px] px-3 text-sm font-medium",
-                  "transition-colors duration-150",
+                  "h-7 min-w-[112px] rounded-[10px] px-3 text-sm font-medium",
+                  "transition-all duration-150",
                   "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-300/80 focus-visible:ring-offset-1 focus-visible:ring-offset-white",
                   section === "usage"
-                    ? "text-gray-900"
+                    ? "bg-white text-gray-900 border border-gray-200 shadow-[0_1px_2px_rgba(15,23,42,0.06)]"
                     : "text-gray-500 hover:bg-gray-200/60 hover:text-gray-700",
                 ].join(" ")}
                 aria-pressed={section === "usage"}
               >
-                Billing
+                Usage
               </button>
+
+              {hasBillingTab ? (
+                <button
+                  type="button"
+                  onClick={() => handleSectionClick("billing")}
+                  className={[
+                    "h-7 min-w-[112px] rounded-[10px] px-3 text-sm font-medium",
+                    "transition-all duration-150",
+                    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-300/80 focus-visible:ring-offset-1 focus-visible:ring-offset-white",
+                    section === "billing"
+                      ? "bg-white text-gray-900 border border-gray-200 shadow-[0_1px_2px_rgba(15,23,42,0.06)]"
+                      : "text-gray-500 hover:bg-gray-200/60 hover:text-gray-700",
+                  ].join(" ")}
+                  aria-pressed={section === "billing"}
+                >
+                  Billing
+                </button>
+              ) : null}
             </nav>
           </div>
         </div>
@@ -438,7 +464,7 @@ const SettingsPage = () => {
                   jake@burla.dev
                 </a>{" "}
                 to increase your quota.
-              </p>
+              </p> 
 
               <div className="space-y-1.5">
                 <p>
@@ -450,9 +476,9 @@ const SettingsPage = () => {
                     className="text-blue-600 underline hover:text-blue-700"
                   >
                     GCP
-                  </a>{" "}
+                  </a>{" "} 
                 </p>
-              </div>
+              </div> 
             </div>
           </div>
 
@@ -472,4 +498,4 @@ const SettingsPage = () => {
   );
 };
 
-export default SettingsPage;
+export default SettingsPage; 

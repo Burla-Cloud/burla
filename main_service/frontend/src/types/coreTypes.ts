@@ -51,6 +51,7 @@ export interface Settings {
   gcpRegion?: string;
   burlaVersion?: string;
   googleCloudProjectId?: string;
+  hasPaymentMethod?: boolean;
 }
 
 export interface ServiceAccount {

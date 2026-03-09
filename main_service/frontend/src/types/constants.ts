@@ -132,3 +132,5 @@ export function getQuotaVmFamily(machineType: string): string {
   const family = mt.split("-")[0];
   return family.toUpperCase();
 }
+
+

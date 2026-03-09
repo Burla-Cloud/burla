@@ -1,5 +1,5 @@
 <a href="https://login.burla.dev/">
-  <img src="https://img.shields.io/badge/Try%20Burla%20Now-3C5B65?style=for-the-badge&logo=rocket&logoColor=white&radius=20" width="260">
+  <img src="https://img.shields.io/badge/Try%20Burla%20Now-3C5B65?style=for-the-badge&logo=rocket&logoColor=white&radius=20" width="200">
 </a>
 
 ## Scale Python across 1,000s of computers using one line of code.

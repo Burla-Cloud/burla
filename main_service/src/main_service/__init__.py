@@ -175,6 +175,24 @@ async def logout(request: Request, response: Response):
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
+@app.get("/v3/login/dashboard")
+def redirect_google_login(request: Request):
+    query_string = request.url.query
+    url = f"{BURLA_BACKEND_URL}/v3/login/dashboard"
+    if query_string:
+        url = f"{url}?{query_string}"
+    return RedirectResponse(url=url, status_code=307)
+
+
+@app.get("/v1/login/microsoft/dashboard")
+def redirect_microsoft_login(request: Request):
+    query_string = request.url.query
+    url = f"{BURLA_BACKEND_URL}/v1/login/microsoft/dashboard"
+    if query_string:
+        url = f"{url}?{query_string}"
+    return RedirectResponse(url=url, status_code=307)
+
+
 # don't move this! must be declared before static files are mounted to the same path below.
 @app.get("/")
 @app.get("/jobs")
@@ -228,6 +246,8 @@ async def validate_requests(request: Request, call_next):
     # Allow unauthenticated access for storage stub endpoints and resumable signing during development
     # These are non-privileged helpers used by the storage UI.
     if request.url.path.startswith("/api/sf/") or request.url.path == "/signed-resumable":
+        return await call_next(request)
+    if request.url.path in ["/v3/login/dashboard", "/v1/login/microsoft/dashboard"]:
         return await call_next(request)
 
     # Allow Server-Sent Events to pass through without auth to prevent proxy/login HTML from breaking the stream

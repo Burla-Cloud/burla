@@ -2,51 +2,194 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Burla – Sign In</title>
-  <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <link rel="icon" type="image/png" href="/favicon.png"/>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <title>Burla - Sign In</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <link rel="icon" type="image/png" href="/favicon.png" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
   <style>
-    body { margin:0; padding:96px 16px; display:flex; justify-content:center; font-family:'Inter',sans-serif; background:#ffffff; color:#36555c; }
-    .card { width:100%; max-width:380px; background:white; border:1px solid #36555c33; border-radius:12px; box-shadow:0 4px 24px rgba(0,0,0,.06); padding:40px; display:flex; flex-direction:column; align-items:center; }
-    .card img.logo { width:100px; margin-bottom:28px; }
-    h1 { margin:0 0 16px; font-size:24px; font-weight:600; text-align:center; color:#36555c; }
-    p.tagline { margin:0 0 28px; font-size:14px; color:#36555c; text-align:center; }
-    .banner { background:#fdecea; color:#611a15; border:1px solid #f5c2c0; border-radius:6px; padding:12px; font-size:13px; width:100%; text-align:left; margin-bottom:24px; }
-    .banner strong { display:block; margin-bottom:4px; }
-    .login-btn { display:inline-flex; align-items:center; justify-content:center; gap:8px; height:44px; padding:0 20px; font-size:14px; font-weight:500; color:#36555c; background:white; border:1px solid #dadce0; border-radius:6px; text-decoration:none; transition:background .14s, box-shadow .14s; width:100%; }
-    .login-btn:hover { background:#f6f8fa; box-shadow:0 2px 4px rgba(0,0,0,.05); }
-    .login-btn img { width:18px; height:18px; }
-    .login-btn + .login-btn { margin-top:10px; }
-    .switch-account { display:block; margin-top:10px; font-size:12px; color:#36555c; text-decoration:underline; cursor:pointer; text-align:center; }
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Inter", sans-serif;
+      background: #fdfdfd;
+      color: #111111;
+    }
+
+    .corner-logo-link {
+      position: fixed;
+      top: clamp(12px, 1.6vw, 24px);
+      left: clamp(12px, 1.6vw, 24px);
+      width: clamp(34px, 3.5vw, 50px);
+      height: clamp(34px, 3.5vw, 50px);
+      border: 1px solid #d8d8d8;
+      border-radius: 8px;
+      background: #ffffff;
+      box-shadow: 0 2px 7px rgba(0, 0, 0, 0.08);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: transform 0.16s ease, box-shadow 0.16s ease, border-color 0.16s ease;
+    }
+
+    .corner-logo-link:hover {
+      transform: translateY(-1px);
+      border-color: #bfc3c9;
+      box-shadow: 0 6px 14px rgba(0, 0, 0, 0.13);
+    }
+
+    .corner-logo {
+      width: 58%;
+      height: auto;
+      display: block;
+    }
+
+    .privacy-policy-link {
+      position: fixed;
+      left: clamp(12px, 1.6vw, 24px);
+      bottom: clamp(12px, 1.6vw, 24px);
+      color: #6d6d6d;
+      font-size: 12px;
+      font-weight: 400;
+      text-decoration: none;
+    }
+
+    .privacy-policy-link:hover {
+      text-decoration: underline;
+    }
+
+    .page-content {
+      min-height: 100vh;
+      display: flex;
+      align-items: flex-start;
+      justify-content: center;
+      padding: 30vh 16px 24px;
+    }
+
+    .auth-panel {
+      width: 100%;
+      max-width: 380px;
+      text-align: center;
+    }
+
+    .hero-logo {
+      width: min(345.6px, 100%);
+      aspect-ratio: 1636 / 250;
+      height: auto;
+      display: block;
+      margin: 0 auto 8px;
+    }
+
+    .tagline {
+      margin: 0 0 26px;
+      font-size: 15.6px;
+      font-weight: 400;
+      line-height: 1.35;
+      color: #3B5A64;
+      opacity: 0;
+      animation: fade-in 1s ease 3s forwards;
+    }
+
+    @keyframes fade-in {
+      to {
+        opacity: 1;
+      }
+    }
+
+    .banner {
+      margin: 0 0 14px;
+      padding: 10px 12px;
+      border-radius: 6px;
+      border: 1px solid #e9b8b3;
+      background: #fdf0ee;
+      color: #7c261d;
+      text-align: left;
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .banner strong {
+      display: block;
+      margin-bottom: 2px;
+    }
+
+    .login-btn {
+      width: 100%;
+      height: 48px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 9px;
+      padding: 0 18px;
+      border-radius: 7px;
+      border: 1px solid #767676;
+      background: #ffffff;
+      color: #161616;
+      text-decoration: none;
+      font-size: 15px;
+      font-weight: 500;
+      line-height: 1.2;
+      box-shadow: 0 2px 7px rgba(0, 0, 0, 0.08);
+      transition: transform 0.16s ease, box-shadow 0.16s ease, border-color 0.16s ease, background 0.12s ease;
+    }
+
+    .login-btn:hover {
+      transform: translateY(-1px);
+      background: #fbfbfb;
+      border-color: #5f5f5f;
+      box-shadow: 0 6px 14px rgba(0, 0, 0, 0.13);
+    }
+
+    .login-btn + .login-btn {
+      margin-top: 14px;
+    }
+
+    .login-btn img {
+      width: 19px;
+      height: 19px;
+      object-fit: contain;
+    }
+
+    .google-logo {
+      width: 19px;
+      height: 19px;
+      display: block;
+    }
   </style>
 </head>
 <body>
-  <div class="card">
-    <img src="/assets/logo-CrV5d932.svg" alt="Burla Logo" class="logo" />
-    <h1>
-      {% if first_name %}
-        Hi {{ first_name }}, welcome to Burla!
-      {% else %}
-        Welcome to Burla
+  <a href="https://burla.dev" aria-label="Go to burla.dev" class="corner-logo-link">
+    <img src="/logo_small.svg" alt="Burla logo" class="corner-logo" />
+  </a>
+  <a href="https://docs.burla.dev/privacy-policy" class="privacy-policy-link">Privacy Policy</a>
+  <main class="page-content">
+    <div class="auth-panel">
+      <img src="/logo.gif" alt="Burla logo" class="hero-logo" />
+      <p class="tagline">The simplest way to scale Python.</p>
+      {% if user_email %}
+      <div class="banner">
+        <strong>Access denied</strong>
+        {{ user_email }} is not authorized.<br />Contact your admin to request access.
+      </div>
       {% endif %}
-    </h1>
-    <p class="tagline">The simplest way to scale Python.</p>
-    {% if user_email %}
-    <div class="banner">
-      <strong>Access denied</strong>
-      {{ user_email }} is not authorized.<br>Contact your admin to request access.
+      <a id="google-login-btn" href="#" class="login-btn">
+        <svg viewBox="0 0 18 18" aria-hidden="true" class="google-logo">
+          <path d="M17.64 9.2045c0-.638-.0573-1.2518-.1636-1.8409H9v3.4818h4.8436c-.2086 1.125-.8427 2.0782-1.7968 2.7155v2.2573h2.9082c1.7027-1.5664 2.685-3.874 2.685-6.6136z" fill="#4285F4" />
+          <path d="M9 18c2.43 0 4.4673-.8064 5.9564-2.1818l-2.9082-2.2573c-.8063.54-1.8363.8591-3.0482.8591-2.3418 0-4.3241-1.5818-5.0327-3.7091H.9573v2.3309C2.4382 15.9836 5.4818 18 9 18z" fill="#34A853" />
+          <path d="M3.9655 10.7127C3.7855 10.1727 3.6836 9.5955 3.6836 9s.1018-1.1727.2818-1.7127V4.9564H.9573C.3477 6.1718 0 7.5436 0 9s.3477 2.8282.9573 4.0436l3.0082-2.3309z" fill="#FBBC05" />
+          <path d="M9 3.5795c1.3214 0 2.5077.4541 3.4405 1.3459l2.5814-2.5814C13.4636.8918 11.4273 0 9 0 5.4818 0 2.4382 2.0164.9573 4.9564l3.0082 2.3309C4.6759 5.1609 6.6582 3.5795 9 3.5795z" fill="#EA4335" />
+        </svg>
+        <span>Continue with Google</span>
+      </a>
+      <a id="microsoft-login-btn" href="#" class="login-btn">
+        <img src="https://upload.wikimedia.org/wikipedia/commons/4/44/Microsoft_logo.svg" alt="Microsoft logo" />
+        <span>Continue with Microsoft</span>
+      </a>
     </div>
-    {% endif %}
-    <a id="google-login-btn" href="#" class="login-btn">
-      <img src="https://developers.google.com/identity/images/g-logo.png" alt="Google logo" />
-      <span>Sign in with Google</span>
-    </a>
-    <a id="microsoft-login-btn" href="#" class="login-btn">
-      <img src="https://upload.wikimedia.org/wikipedia/commons/4/44/Microsoft_logo.svg" alt="Microsoft logo" />
-      <span>Sign in with Microsoft</span>
-    </a>
-  </div>
+  </main>
   <script>
     const redirectLocally = {{ redirect_locally | tojson }};
     const projectId = {{ project_id | tojson }};
@@ -54,14 +197,12 @@
 
     document.getElementById("google-login-btn").addEventListener("click", function (event) {
       event.preventDefault();
-      const baseUrl = `https://backend.burla.dev/v3/login/dashboard`;
-      window.location.href = baseUrl + queryParams;
+      window.location.href = `/v3/login/dashboard${queryParams}`;
     });
 
     document.getElementById("microsoft-login-btn").addEventListener("click", function (event) {
       event.preventDefault();
-      const baseUrl = `https://backend.burla.dev/v1/login/microsoft/dashboard`;
-      window.location.href = baseUrl + queryParams;
+      window.location.href = `/v1/login/microsoft/dashboard${queryParams}`;
     });
   </script>
 </body>

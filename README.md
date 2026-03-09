@@ -7,6 +7,7 @@
 <p align="center">
   <img src="https://img.shields.io/pypi/v/burla?style=for-the-badge">
   <img src="https://img.shields.io/pypi/dm/burla?style=for-the-badge">
+  <img src="https://img.shields.io/badge/docs-gitbook-3C5B65?style=for-the-badge&logo=gitbook&logoColor=white">
   <img src="https://img.shields.io/badge/python-3.10+-3C5B65?style=for-the-badge&logo=python&logoColor=white">
 </p>
 

@@ -86,15 +86,10 @@ result = remote_parallel_map(combine_results, [results], func_cpu=64)
 
 <p align="center">The example above demonstrates a basic map-reduce operation.</p>
 
-### Burla only takes 2 minutes to try
-
-[![Try Burla for free](https://img.shields.io/badge/Try%20Burla%20for%20free-111827?style=for-the-badge)](https://login.burla.dev/)
-
-1. Sign in with your Google or Microsoft account.
-2. Click `⏻ Start` to boot some computers.
-3. Scale Python over 1,000 CPUs in [this Google Colab notebook](https://colab.research.google.com/drive/1bR8Gpa85gqJi7_9uKdcJDX9_WG0tuVmG?usp=sharing).
-
-Quick reminder: Burla is open source and easy to self-host. [Deploy Burla in your cloud](https://docs.burla.dev/get-started#quickstart-self-hosted).
+### Examples:
+- [Process 2.4TB of Parquet Files in 76s](https://docs.burla.dev/examples/process-2.4tb-of-parquet-files-in-76s)
+- [Hyperparameter Tune XGBoost using 1,000 CPUs](https://docs.burla.dev/examples/parallel-hyperparameter-tuning)
+- [Scalable Genomic Alignment Pipeline](https://docs.burla.dev/examples/multi-stage-genomic-pipeline)
 
 ---
 

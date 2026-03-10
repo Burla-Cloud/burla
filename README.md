@@ -87,9 +87,9 @@ result = remote_parallel_map(combine_results, [results], func_cpu=64)
 <p align="center">The example above demonstrates a basic map-reduce operation.</p>
 
 ### Examples:
-- [Process 2.4TB of Parquet Files in 76s](https://docs.burla.dev/examples/process-2.4tb-of-parquet-files-in-76s)
+- [Process 2.4TB of Parquet Files in 76s with 10,000 CPUs](https://docs.burla.dev/examples/process-2.4tb-of-parquet-files-in-76s)
 - [Hyperparameter Tune XGBoost using 1,000 CPUs](https://docs.burla.dev/examples/parallel-hyperparameter-tuning)
-- [Scalable Genomic Alignment Pipeline](https://docs.burla.dev/examples/multi-stage-genomic-pipeline)
+- [Genome Alignments using 1,300 CPUs](https://docs.burla.dev/examples/multi-stage-genomic-pipeline)
 
 ---
 

@@ -139,7 +139,7 @@ def _install(spinner):
         f"--project {PROJECT_ID} "
         f"--region=us-central1 "
         f"--service-account {main_svc_account_email} "
-        f"--min-instances 1 "
+        f"--min-instances 0 "
         f"--max-instances 5 "
         f"--memory 4Gi "
         f"--cpu 1 "

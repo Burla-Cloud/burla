@@ -91,6 +91,8 @@ result = remote_parallel_map(combine_results, [results], func_cpu=64)
 - [Hyperparameter Tune XGBoost using 1,000 CPUs](https://docs.burla.dev/examples/parallel-hyperparameter-tuning)
 - [Genome Alignments using 1,300 CPUs](https://docs.burla.dev/examples/multi-stage-genomic-pipeline)
 
+Learn more at [Burla.dev](https://docs.burla.dev/)
+
 ---
 
 Questions?  

@@ -155,14 +155,25 @@ def _install(spinner):
     )
 
     # register dashboard url so burla website login page can send user to this instance.
-    result = run_command("gcloud run services describe burla-main-service --region us-central1")
-    dashboard_url = None
-    for line in result.stdout.decode().splitlines():
-        if line.startswith("URL:"):
-            dashboard_url = line.split()[1]
-    if not dashboard_url:
-        spinner.fail("✗")
-        raise Exception("Dashboard URL not returned by command: gcloud run services describe ...")
+    result = run_command(
+        f"gcloud beta run domain-mappings list "
+        f"--region=us-central1 "
+        f"--filter='spec.routeName=burla-main-service' "
+        f"--format='value(metadata.name)'"
+    )
+    mapped_domains = result.stdout.decode().splitlines() if result.stdout else []
+    if mapped_domains:
+        dashboard_url = f"https://{mapped_domains[0]}"
+    else:
+        result = run_command("gcloud run services describe burla-main-service --region us-central1")
+        dashboard_url = None
+        for line in result.stdout.decode().splitlines():
+            if line.startswith("URL:"):
+                dashboard_url = line.split()[1]
+        if not dashboard_url:
+            spinner.fail("✗")
+            raise Exception("Dashboard URL not returned by: gcloud run services describe ...")
+
     url = f"{_BURLA_BACKEND_URL}/v1/clusters/{PROJECT_ID}/dashboard_url"
     headers = {"Authorization": f"Bearer {cluster_id_token}"}
     response = requests.post(url, json={"dashboard_url": dashboard_url}, headers=headers)
@@ -186,7 +197,7 @@ def _install(spinner):
     msg = f"\nSuccessfully installed Burla v{__version__}!\n"
     msg += f"Quickstart:\n"
     msg += f"  1. Open your new cluster dashboard: {dashboard_url}\n"
-    msg += f'  2. Hit "⏻ Start" to boot some machines!\n'
+    msg += f'  2. Hit "⏻ Start" to boot some machines.\n'
     msg += f"  3. Run `burla login` to connect your laptop to the cluster.\n"
     msg += f"  4. Import and call `remote_parallel_map`!\n\n"
     msg += f"Don't hesitate to E-Mail jake@burla.dev, thank you for using Burla!"
@@ -526,14 +537,16 @@ def _create_firestore_database(spinner, PROJECT_ID):
 
     try:
         collection = client.collection("cluster_config")
-        collection.document("cluster_config").set(DEFAULT_CLUSTER_CONFIG, merge=True)
+        if not collection.document("cluster_config").get().exists:
+            collection.document("cluster_config").set(DEFAULT_CLUSTER_CONFIG)
     except NotFound as e:
         # retry until db is ready or 30s
         start = time()
         while True:
             try:
                 collection = client.collection("cluster_config")
-                collection.document("cluster_config").set(DEFAULT_CLUSTER_CONFIG, merge=True)
+                if not collection.document("cluster_config").get().exists:
+                    collection.document("cluster_config").set(DEFAULT_CLUSTER_CONFIG)
                 break
             except NotFound as e:
                 sleep(1)

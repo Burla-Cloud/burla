@@ -1,0 +1,10 @@
+---
+alwaysApply: true
+---
+
+HARD RULES. NEVER VIOLATE.
+
+1. Make your code as simple as you can possibly make it.
+2. NEVER write defensive code of any kind. Always guess/assume types. 
+3. ONLY create a comment when it would seem unclear to a person WHY the code is doing what it does.
+4. Do not use variable names that are not words, for example: never use abbreviations.

@@ -5,10 +5,12 @@ import { UsageProvider } from "@/contexts/UsageContext";
 
 import { SettingsForm } from "@/components/SettingsForm";
 import UsageSettings from "@/components/UsageSettings";
+import BillingPortalSettings from "@/components/BillingPortalSettings";
 
 import { Button } from "@/components/ui/button";
 import { useSaveSettings } from "@/hooks/useSaveSettings";
 import { toast } from "@/components/ui/use-toast";
+import { getConfigurationLabelForMachineType } from "@/types/constants";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -20,6 +22,19 @@ import {
   AlertDialogAction,
   AlertDialogCancel,
 } from "@/components/ui/alert-dialog";
+
+interface QuotaWarningDetails {
+  machineType?: string;
+  region?: string;
+  limit?: number;
+  requested?: number;
+}
+
+interface HardwareSnapshot {
+  machineType: string;
+  gcpRegion: string;
+  machineQuantity: number;
+}
 
 const SettingsPage = () => {
   const navigate = useNavigate();
@@ -36,15 +51,23 @@ const SettingsPage = () => {
   const [error, setError] = useState<string | null>(null);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [showExitDialog, setShowExitDialog] = useState(false);
+  const [quotaWarning, setQuotaWarning] = useState<QuotaWarningDetails | null>(null);
 
   const pendingNavRef = useRef<string | null>(null);
   const settingsFormRef = useRef<{ isRegionValid: () => boolean } | null>(null);
+  const lastSavedHardwareRef = useRef<HardwareSnapshot | null>(null);
 
   const section = useMemo(() => {
     const sp = new URLSearchParams(location.search);
     const raw = sp.get("section");
-    return raw === "usage" ? "usage" : "cluster";
+    if (raw === "usage" || raw === "billing") return raw;
+    return "cluster";
   }, [location.search]);
+
+  const hasBillingTab = useMemo(
+    () => Boolean(settings.hasPaymentMethod) || section === "billing",
+    [settings.hasPaymentMethod, section]
+  );
 
   useEffect(() => {
     const fetchSettings = async () => {
@@ -52,7 +75,15 @@ const SettingsPage = () => {
         const res = await fetch("/v1/settings", { credentials: "include" });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
-        setSettings((prev) => ({ ...prev, ...data }));
+        setSettings((prev) => {
+          const next = { ...prev, ...data };
+          lastSavedHardwareRef.current = {
+            machineType: next.machineType,
+            gcpRegion: next.gcpRegion || "",
+            machineQuantity: Number(next.machineQuantity) || 1,
+          };
+          return next;
+        });
       } catch {
         setError("Could not load settings");
         toast({ title: "Failed to load settings", variant: "destructive" });
@@ -61,6 +92,15 @@ const SettingsPage = () => {
       }
     };
     fetchSettings();
+  }, [setSettings]);
+
+  useEffect(() => {
+    const onPaymentMethodUpdated = () => {
+      setSettings((prev) => ({ ...prev, hasPaymentMethod: true }));
+    };
+
+    window.addEventListener("burla:payment-method-updated", onPaymentMethodUpdated as EventListener);
+    return () => window.removeEventListener("burla:payment-method-updated", onPaymentMethodUpdated as EventListener);
   }, [setSettings]);
 
   useEffect(() => {
@@ -121,15 +161,47 @@ const SettingsPage = () => {
     }
 
     setSaving(true);
-    const ok = await saveSettings(settings);
-    toast({
-      title: ok ? "Settings saved successfully" : "Failed to save settings",
-      variant: ok ? "default" : "destructive",
-    });
+    const result = await saveSettings(settings);
+    if (result.ok) {
+      toast({
+        title: "Settings saved successfully",
+        variant: "default",
+      });
+      lastSavedHardwareRef.current = {
+        machineType: settings.machineType,
+        gcpRegion: settings.gcpRegion || "",
+        machineQuantity: Number(settings.machineQuantity) || 1,
+      };
+    } else if (result.errorCode === "quota_exceeded") {
+      if (typeof result.limit === "number" && Number.isFinite(result.limit) && result.limit >= 1) {
+        setSettings((prev) => ({ ...prev, machineQuantity: Math.floor(result.limit) }));
+        setHasUnsavedChanges(true);
+      } else if (result.limit === 0 && lastSavedHardwareRef.current) {
+        const previousHardware = lastSavedHardwareRef.current;
+        setSettings((prev) => ({
+          ...prev,
+          machineType: previousHardware.machineType,
+          gcpRegion: previousHardware.gcpRegion,
+          machineQuantity: previousHardware.machineQuantity,
+        }));
+      }
+      setQuotaWarning({
+        machineType: result.machineType,
+        region: result.region,
+        limit: result.limit,
+        requested: result.requested,
+      });
+    } else {
+      toast({
+        title: "Failed to save settings",
+        description: result.errorMessage,
+        variant: "destructive",
+      });
+    }
     setSaving(false);
 
-    if (ok) setHasUnsavedChanges(false);
-    return ok;
+    if (result.ok) setHasUnsavedChanges(false);
+    return result.ok;
   };
 
   const attemptNavigate = (to: string) => {
@@ -141,12 +213,22 @@ const SettingsPage = () => {
     setShowExitDialog(true);
   };
 
-  const handleSectionClick = (next: "cluster" | "usage") => {
+  const handleSectionClick = (next: "cluster" | "usage" | "billing") => {
     const sp = new URLSearchParams(location.search);
     sp.set("section", next);
     const to = `${location.pathname}?${sp.toString()}`;
     attemptNavigate(to);
   };
+
+  const quotaRegion = quotaWarning?.region || settings.gcpRegion || "unknown";
+  const quotaMachineType = quotaWarning?.machineType || settings.machineType || "unknown";
+  const quotaConfiguration = getConfigurationLabelForMachineType(quotaMachineType);
+  const quotaConfigurationDisplay = quotaMachineType.startsWith("n4-")
+    ? quotaConfiguration.split("/")[0].trim()
+    : quotaConfiguration;
+  const quotaRequested =
+    typeof quotaWarning?.requested === "number" ? String(quotaWarning.requested) : "unknown";
+  const quotaLimit = typeof quotaWarning?.limit === "number" ? String(quotaWarning.limit) : "unknown";
 
   const showSaveButton = section === "cluster" && hasUnsavedChanges;
 
@@ -185,6 +267,10 @@ const SettingsPage = () => {
           onChange={() => setHasUnsavedChanges(true)}
         />
       );
+    }
+
+    if (section === "billing") {
+      return <BillingPortalSettings />;
     }
 
     return (
@@ -234,28 +320,16 @@ const SettingsPage = () => {
           </div>
 
           <div className="mt-6">
-            <nav
-              className="relative inline-grid h-9 grid-cols-2 rounded-xl bg-gray-100/80 p-1"
-              aria-label="Settings sections"
-            >
-              <span
-                aria-hidden="true"
-                className={[
-                  "pointer-events-none absolute bottom-1 left-1 top-1 w-[calc(50%-4px)] rounded-[10px] bg-white",
-                  "border border-gray-200 shadow-[0_1px_2px_rgba(15,23,42,0.06)]",
-                  "transition-transform duration-150 ease-out",
-                  section === "cluster" ? "translate-x-0" : "translate-x-full",
-                ].join(" ")}
-              />
+            <nav className="inline-flex h-9 items-center rounded-xl bg-gray-100/80 p-1 gap-1" aria-label="Settings sections">
               <button
                 type="button"
                 onClick={() => handleSectionClick("cluster")}
                 className={[
-                  "relative z-10 h-7 min-w-[112px] rounded-[10px] px-3 text-sm font-medium",
-                  "transition-colors duration-150",
+                  "h-7 min-w-[112px] rounded-[10px] px-3 text-sm font-medium",
+                  "transition-all duration-150",
                   "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-300/80 focus-visible:ring-offset-1 focus-visible:ring-offset-white",
                   section === "cluster"
-                    ? "text-gray-900"
+                    ? "bg-white text-gray-900 border border-gray-200 shadow-[0_1px_2px_rgba(15,23,42,0.06)]"
                     : "text-gray-500 hover:bg-gray-200/60 hover:text-gray-700",
                 ].join(" ")}
                 aria-pressed={section === "cluster"}
@@ -267,17 +341,35 @@ const SettingsPage = () => {
                 type="button"
                 onClick={() => handleSectionClick("usage")}
                 className={[
-                  "relative z-10 h-7 min-w-[112px] rounded-[10px] px-3 text-sm font-medium",
-                  "transition-colors duration-150",
+                  "h-7 min-w-[112px] rounded-[10px] px-3 text-sm font-medium",
+                  "transition-all duration-150",
                   "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-300/80 focus-visible:ring-offset-1 focus-visible:ring-offset-white",
                   section === "usage"
-                    ? "text-gray-900"
+                    ? "bg-white text-gray-900 border border-gray-200 shadow-[0_1px_2px_rgba(15,23,42,0.06)]"
                     : "text-gray-500 hover:bg-gray-200/60 hover:text-gray-700",
                 ].join(" ")}
                 aria-pressed={section === "usage"}
               >
-                Billing
+                Usage
               </button>
+
+              {hasBillingTab ? (
+                <button
+                  type="button"
+                  onClick={() => handleSectionClick("billing")}
+                  className={[
+                    "h-7 min-w-[112px] rounded-[10px] px-3 text-sm font-medium",
+                    "transition-all duration-150",
+                    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-300/80 focus-visible:ring-offset-1 focus-visible:ring-offset-white",
+                    section === "billing"
+                      ? "bg-white text-gray-900 border border-gray-200 shadow-[0_1px_2px_rgba(15,23,42,0.06)]"
+                      : "text-gray-500 hover:bg-gray-200/60 hover:text-gray-700",
+                  ].join(" ")}
+                  aria-pressed={section === "billing"}
+                >
+                  Billing
+                </button>
+              ) : null}
             </nav>
           </div>
         </div>
@@ -324,8 +416,86 @@ const SettingsPage = () => {
           </div>
         </AlertDialogContent>
       </AlertDialog>
+
+      <AlertDialog
+        open={Boolean(quotaWarning)}
+        onOpenChange={(open) => {
+          if (!open) setQuotaWarning(null);
+        }}
+      >
+        <AlertDialogContent
+          className="max-w-[670px] mx-auto py-7 px-6 rounded-lg shadow-[0_8px_24px_rgba(0,0,0,0.06)] bg-white"
+          onInteractOutside={(e) => e.preventDefault()}
+          onEscapeKeyDown={(e) => e.preventDefault()}
+        >
+          <div className="space-y-3">
+            <AlertDialogTitle className="text-lg font-semibold text-gray-900">
+              <span className="inline-flex items-center gap-2">
+                <AlertTriangle className="h-4 w-4 text-red-500" />
+                GCP Quota Limit Reached
+              </span>
+            </AlertDialogTitle>
+            <div className="space-y-5 text-base text-gray-800 leading-relaxed">
+              <div className="space-y-1.5">
+                <p className="font-semibold text-gray-900">Requested Cluster</p>
+                <p>
+                  Machine: <span className="font-semibold">{quotaMachineType}</span>
+                </p>
+                <p>
+                  Configuration: <span className="font-semibold">{quotaConfigurationDisplay}</span>
+                </p>
+                <p>
+                  Region: <span className="font-semibold">{quotaRegion}</span>
+                </p>
+              </div>
+
+              <div className="space-y-1.5">
+                <p>
+                  Requested instances: <span className="font-semibold">{quotaRequested}</span>
+                </p>
+                <p>
+                  Available quota: <span className="font-semibold">{quotaLimit}</span>
+                </p>
+              </div>
+
+              <p>
+                Contact{" "}
+                <a href="mailto:jake@burla.dev" className="text-blue-600 underline hover:text-blue-700">
+                  jake@burla.dev
+                </a>{" "}
+                to increase your quota.
+              </p> 
+
+              <div className="space-y-1.5">
+                <p>
+                  <span className="font-semibold text-gray-900">Self hosting?</span> Increase quota in{" "}
+                  <a
+                    href="https://docs.cloud.google.com/docs/quotas/view-manage"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-blue-600 underline hover:text-blue-700"
+                  >
+                    GCP
+                  </a>{" "} 
+                </p>
+              </div> 
+            </div>
+          </div>
+
+          <div className="flex justify-center mt-5">
+            <AlertDialogAction
+              onClick={() => {
+                setQuotaWarning(null);
+              }}
+              className="bg-gray-700 text-white hover:bg-gray-800 rounded-md px-5 py-2.5 font-medium min-w-[130px] transition-all focus:outline-none"
+            >
+              OK
+            </AlertDialogAction>
+          </div>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 };
 
-export default SettingsPage;
+export default SettingsPage; 

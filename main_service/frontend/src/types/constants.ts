@@ -71,6 +71,30 @@ export const GCP_MACHINE_PRICING_MAPPING: Record<
   "n4-standard-80": { type: "CPU", on_demand_price: 3.628 },
 };
 
+// Keep these labels in sync with the labels shown in SettingsForm.
+export const MACHINE_TYPE_CONFIGURATION_LABELS: Record<string, string> = {
+  "n4-standard-2": "2 vCPUs / 8 GB RAM",
+  "n4-standard-4": "4 vCPUs / 16 GB RAM",
+  "n4-standard-8": "8 vCPUs / 32 GB RAM",
+  "n4-standard-16": "16 vCPUs / 64 GB RAM",
+  "n4-standard-32": "32 vCPUs / 128 GB RAM",
+  "n4-standard-64": "64 vCPUs / 256 GB RAM",
+  "n4-standard-80": "80 vCPUs / 320 GB RAM",
+  "a2-highgpu-1g": "12 vCPUs / 85 GB RAM",
+  "a2-highgpu-2g": "24 vCPUs / 170 GB RAM",
+  "a2-highgpu-4g": "48 vCPUs / 340 GB RAM",
+  "a2-highgpu-8g": "96 vCPUs / 680 GB RAM",
+  "a2-ultragpu-1g": "12 vCPUs / 170 GB RAM",
+  "a2-ultragpu-2g": "24 vCPUs / 340 GB RAM",
+  "a2-ultragpu-4g": "48 vCPUs / 680 GB RAM",
+  "a2-ultragpu-8g": "96 vCPUs / 1360 GB RAM",
+  "a3-highgpu-1g": "26 vCPUs / 234 GB RAM",
+  "a3-highgpu-2g": "52 vCPUs / 468 GB RAM",
+  "a3-highgpu-4g": "104 vCPUs / 936 GB RAM",
+  "a3-highgpu-8g": "208 vCPUs / 1872 GB RAM",
+  "a3-ultragpu-8g": "224 vCPUs / 2952 GB RAM",
+};
+
 export function getVmCategory(machineType: string): VmType | null {
   const mt = String(machineType || "");
   const mapped = GCP_MACHINE_MAPPING[mt];
@@ -87,3 +111,26 @@ export function getOnDemandHourlyUsdForMachine(machineType: string): number | nu
   const price = GCP_MACHINE_PRICING_MAPPING[mt]?.on_demand_price;
   return typeof price === "number" ? price : null;
 }
+
+export function getConfigurationLabelForMachineType(machineType: string): string {
+  const mt = String(machineType || "");
+
+  // For GPU machine types, show the GPU configuration label in quota messaging.
+  if (mt.startsWith("a2-highgpu-")) return "A100 40G";
+  if (mt.startsWith("a2-ultragpu-")) return "A100 80G";
+  if (mt.startsWith("a3-highgpu-")) return "H100 80G";
+  if (mt.startsWith("a3-ultragpu-")) return "H200 141G";
+
+  return MACHINE_TYPE_CONFIGURATION_LABELS[mt] ?? mt;
+}
+
+export function getQuotaVmFamily(machineType: string): string {
+  const mt = String(machineType || "").toLowerCase();
+  if (!mt) return "";
+  if (mt.startsWith("n4-")) return "N4";
+
+  const family = mt.split("-")[0];
+  return family.toUpperCase();
+}
+
+

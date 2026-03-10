@@ -14,6 +14,13 @@ export type DailyHoursResponse = {
 
   total_node_hours: number;
   total_compute_hours: number;
+  monthly_usage_hours: number;
+  monthly_spend_dollars: number;
+  credits: boolean;
+  has_payment_method: boolean;
+  credits_usd: number;
+  credits_used_usd: number;
+  remaining_free_credit_usd: number;
 
   days: Array<{
     date: string;
@@ -108,6 +115,11 @@ function qs(params: Record<string, string | number | boolean | null | undefined>
   return s ? `?${s}` : "";
 }
 
+function normalizeFiniteNumber(value: unknown, fallback = 0) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
 export function UsageProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -156,7 +168,30 @@ export function UsageProvider({ children }: { children: React.ReactNode }) {
       }
 
       const d = await dailyPromise;
-      setDaily(d);
+      const creditsUsd = Math.max(normalizeFiniteNumber(d?.credits_usd, 0), 0);
+      const creditsUsedUsd = Math.max(normalizeFiniteNumber(d?.credits_used_usd, 0), 0);
+      const remainingFreeCreditUsd = Math.max(
+        normalizeFiniteNumber(d?.remaining_free_credit_usd, Math.max(creditsUsd - creditsUsedUsd, 0)),
+        0
+      );
+      const monthlyUsageHours = Math.max(
+        normalizeFiniteNumber(d?.monthly_usage_hours, normalizeFiniteNumber(d?.total_compute_hours, 0)),
+        0
+      );
+      const monthlySpendDollars = Math.max(normalizeFiniteNumber(d?.monthly_spend_dollars, 0), 0);
+      const creditsEnabled = typeof d?.credits === "boolean" ? d.credits : false;
+      const hasPaymentMethod = typeof d?.has_payment_method === "boolean" ? d.has_payment_method : false;
+
+      setDaily({
+        ...d,
+        monthly_usage_hours: monthlyUsageHours,
+        monthly_spend_dollars: monthlySpendDollars,
+        credits: creditsEnabled,
+        has_payment_method: hasPaymentMethod,
+        credits_usd: creditsUsd,
+        credits_used_usd: creditsUsedUsd,
+        remaining_free_credit_usd: remainingFreeCreditUsd,
+      });
     } catch (e: any) {
       setError(e?.message || "Failed to load usage");
       setDaily(null);

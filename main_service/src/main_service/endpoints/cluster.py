@@ -919,6 +919,7 @@ from main_service import (
     DEFAULT_CONFIG,
     PROJECT_ID,
     BURLA_BACKEND_URL,
+    CLUSTER_ID_TOKEN,
     get_logger,
     get_add_background_task_function,
 )
@@ -926,6 +927,30 @@ from main_service.node import Container, Node
 from main_service.helpers import Logger
 
 router = APIRouter()
+
+
+ON_DEMAND_HOURLY_USD_BY_MACHINE_TYPE = {
+    "a2-highgpu-1g": 3.673385,
+    "a2-highgpu-2g": 7.34677,
+    "a2-highgpu-4g": 14.69354,
+    "a2-highgpu-8g": 29.38708,
+    "a2-ultragpu-1g": 5.06879789,
+    "a2-ultragpu-2g": 10.137595781,
+    "a2-ultragpu-4g": 20.275191562,
+    "a2-ultragpu-8g": 40.550383123,
+    "a3-highgpu-1g": 11.0612,
+    "a3-highgpu-2g": 22.1225,
+    "a3-highgpu-4g": 44.245,
+    "a3-highgpu-8g": 88.490000119,
+    "a3-ultragpu-8g": 84.806908493,
+    "n4-standard-2": 0.0907,
+    "n4-standard-4": 0.1814,
+    "n4-standard-8": 0.3628,
+    "n4-standard-16": 0.7256,
+    "n4-standard-32": 1.4512,
+    "n4-standard-64": 2.9024,
+    "n4-standard-80": 3.628,
+}
 
 
 # ============================
@@ -956,10 +981,25 @@ def _as_utc_datetime(ts) -> Optional[datetime]:
         dt = ts
     elif isinstance(ts, (int, float)):
         v = float(ts)
-        if v > 2_000_000_000_000:
-            dt = datetime.fromtimestamp(v / 1000.0, tz=timezone.utc)
-        else:
+        abs_v = abs(v)
+
+        # Handle epoch values provided in seconds, milliseconds, microseconds, or nanoseconds.
+        if abs_v >= 1_000_000_000_000_000_000:
+            v = v / 1_000_000_000.0  # ns -> s
+        elif abs_v >= 1_000_000_000_000_000:
+            v = v / 1_000_000.0  # us -> s
+        elif abs_v >= 100_000_000_000:
+            v = v / 1_000.0  # ms -> s
+
+        try:
             dt = datetime.fromtimestamp(v, tz=timezone.utc)
+        except (OverflowError, OSError, ValueError):
+            return None
+    elif isinstance(ts, str):
+        try:
+            return _as_utc_datetime(float(ts))
+        except (TypeError, ValueError):
+            return None
     else:
         try:
             dt = datetime.fromtimestamp(ts.timestamp(), tz=timezone.utc)
@@ -1028,6 +1068,253 @@ def _quantize_hours(hours: float, decimals: int = 6) -> float:
     if h <= 0:
         return 0.0
     return round(h, decimals)
+
+
+def _safe_float(value, default: float = 0.0) -> float:
+    try:
+        out = float(value)
+        if out != out or out in (float("inf"), float("-inf")):
+            return default
+        return out
+    except (TypeError, ValueError):
+        return default
+
+
+def _safe_bool(value, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "y"}:
+            return True
+        if normalized in {"false", "0", "no", "n"}:
+            return False
+    return default
+
+
+def _get_cluster_credit_config() -> dict:
+    try:
+        config_dict = DB.collection("cluster_config").document("cluster_config").get().to_dict() or {}
+        return {
+            "credits": _safe_bool(config_dict.get("credits"), False),
+            "discount_credit_usd": max(_safe_float(config_dict.get("discount_credit_usd"), 0.0), 0.0),
+            "credits_used_usd": max(_safe_float(config_dict.get("credits_used_usd"), 0.0), 0.0),
+            "credits_remaining_usd": max(_safe_float(config_dict.get("credits_remaining_usd"), 0.0), 0.0),
+        }
+    except Exception:
+        if IN_LOCAL_DEV_MODE and isinstance(LOCAL_DEV_CONFIG, dict):
+            return {
+                "credits": _safe_bool(LOCAL_DEV_CONFIG.get("credits"), False),
+                "discount_credit_usd": max(_safe_float(LOCAL_DEV_CONFIG.get("discount_credit_usd"), 0.0), 0.0),
+                "credits_used_usd": max(_safe_float(LOCAL_DEV_CONFIG.get("credits_used_usd"), 0.0), 0.0),
+                "credits_remaining_usd": max(_safe_float(LOCAL_DEV_CONFIG.get("credits_remaining_usd"), 0.0), 0.0),
+            }
+        return {
+            "credits": False,
+            "discount_credit_usd": 0.0,
+            "credits_used_usd": 0.0,
+            "credits_remaining_usd": 0.0,
+        }
+
+
+def _get_cluster_billing_state() -> dict:
+    try:
+        billing_doc = DB.collection("billing").document("billing").get().to_dict() or {}
+        return {
+            "has_payment_method": _safe_bool(billing_doc.get("has_payment_method"), False),
+        }
+    except Exception:
+        return {"has_payment_method": False}
+
+
+def _is_valid_month_key(value: str) -> bool:
+    return bool(re.match(r"^\d{4}-\d{2}$", str(value or "").strip()))
+
+
+def _sorted_monthly_usage_docs() -> list[dict]:
+    out = []
+    for snapshot in DB.collection("monthly_usage").stream():
+        doc = snapshot.to_dict() or {}
+        month_key = str(doc.get("month") or snapshot.id or "").strip()
+        if not _is_valid_month_key(month_key):
+            continue
+        out.append(
+            {
+                "month": month_key,
+                "spend_dollars": round(max(_safe_float(doc.get("spend_dollars"), 0.0), 0.0), 2),
+                "doc_ref": snapshot.reference,
+                "doc": doc,
+            }
+        )
+    out.sort(key=lambda item: item["month"])
+    return out
+
+
+def _reconcile_monthly_usage_credits_from_scratch() -> dict:
+    config_ref = DB.collection("cluster_config").document("cluster_config")
+    config_dict = config_ref.get().to_dict() or {}
+    discount_credit_usd = round(max(_safe_float(config_dict.get("discount_credit_usd"), 0.0), 0.0), 2)
+    remaining_credits = discount_credit_usd
+    now_iso = datetime.now(timezone.utc).isoformat()
+    existing_credits_flag = _safe_bool(config_dict.get("credits"), False)
+
+    billing_snapshot = DB.collection("billing").document("billing").get()
+    billing_doc = billing_snapshot.to_dict() if billing_snapshot.exists else {}
+    has_payment_method = _safe_bool((billing_doc or {}).get("has_payment_method"), False)
+
+    monthly_docs = _sorted_monthly_usage_docs()
+
+    for item in monthly_docs:
+        spend_dollars = item["spend_dollars"]
+        credits_applied_dollars = round(min(spend_dollars, remaining_credits), 2)
+        billable_spend_dollars = round(max(spend_dollars - credits_applied_dollars, 0.0), 2)
+        remaining_credits = round(max(remaining_credits - credits_applied_dollars, 0.0), 2)
+
+        existing_doc = item["doc"]
+        existing_applied = round(max(_safe_float(existing_doc.get("credits_applied_dollars"), 0.0), 0.0), 2)
+        existing_billable = round(max(_safe_float(existing_doc.get("billable_spend_dollars"), 0.0), 0.0), 2)
+
+        if (
+            existing_applied != credits_applied_dollars
+            or existing_billable != billable_spend_dollars
+            or str(existing_doc.get("month") or "") != item["month"]
+        ):
+            item["doc_ref"].set(
+                {
+                    "month": item["month"],
+                    "credits_applied_dollars": credits_applied_dollars,
+                    "billable_spend_dollars": billable_spend_dollars,
+                    "updated_at": now_iso,
+                },
+                merge=True,
+            )
+
+    credits_used_usd = round(max(discount_credit_usd - remaining_credits, 0.0), 2)
+    credits_remaining_usd = round(max(remaining_credits, 0.0), 2)
+
+    # Keep credits=true after exhaustion until a payment method exists.
+    if credits_remaining_usd > 0:
+        credits_enabled = True
+    else:
+        if has_payment_method:
+            credits_enabled = False
+        elif discount_credit_usd > 0:
+            credits_enabled = True
+        else:
+            credits_enabled = existing_credits_flag
+
+    config_ref.set(
+        {
+            "credits_used_usd": credits_used_usd,
+            "credits_remaining_usd": credits_remaining_usd,
+            "credits": credits_enabled,
+        },
+        merge=True,
+    )
+
+    if IN_LOCAL_DEV_MODE and isinstance(LOCAL_DEV_CONFIG, dict):
+        LOCAL_DEV_CONFIG["credits_used_usd"] = credits_used_usd
+        LOCAL_DEV_CONFIG["credits_remaining_usd"] = credits_remaining_usd
+        LOCAL_DEV_CONFIG["credits"] = credits_enabled
+
+    return {
+        "credits": credits_enabled,
+        "credits_usd": discount_credit_usd,
+        "credits_used_usd": credits_used_usd,
+        "credits_remaining_usd": credits_remaining_usd,
+    }
+
+
+def _fetch_lifetime_spend_usd_from_backend(auth_headers: dict) -> Optional[float]:
+    url = f"{BURLA_BACKEND_URL}/v1/clusters/{PROJECT_ID}/billing"
+    header_candidates = [
+        auth_headers,
+        {"Authorization": f"Bearer {CLUSTER_ID_TOKEN}"},
+    ]
+
+    for headers in header_candidates:
+        try:
+            response = requests.get(url, headers=headers, timeout=5)
+            if response.status_code != 200:
+                continue
+
+            payload = response.json() or {}
+            raw_lifetime_spend = payload.get("lifetime_spend_usd")
+            if raw_lifetime_spend is None:
+                continue
+
+            return max(_safe_float(raw_lifetime_spend, 0.0), 0.0)
+        except Exception:
+            continue
+
+    return None
+
+
+def _compute_lifetime_spend_usd_from_nodes(max_scan: int = 200000) -> float:
+    last_doc = None
+    scanned = 0
+    lifetime_spend_usd = 0.0
+
+    while True:
+        q = DB.collection("nodes").order_by("ended_at", direction=firestore.Query.DESCENDING)
+        if last_doc is not None:
+            q = q.start_after(last_doc)
+
+        docs = list(q.limit(500).stream())
+        if not docs:
+            break
+
+        last_doc = docs[-1]
+        scanned += len(docs)
+
+        for doc in docs:
+            data = doc.to_dict() or {}
+
+            ended_raw = data.get("ended_at")
+            started_raw = data.get("started_at") or data.get("started_booting_at")
+            if ended_raw is None or started_raw is None:
+                continue
+
+            start_dt = _as_utc_datetime(started_raw)
+            end_dt = _as_utc_datetime(ended_raw)
+            if not start_dt or not end_dt or end_dt <= start_dt:
+                continue
+
+            machine_type = str(data.get("machine_type") or "")
+            hourly_rate_usd = ON_DEMAND_HOURLY_USD_BY_MACHINE_TYPE.get(machine_type)
+            if hourly_rate_usd is None:
+                continue
+
+            duration_hours_raw = (end_dt - start_dt).total_seconds() / 3600.0
+            if duration_hours_raw <= 0:
+                continue
+
+            lifetime_spend_usd += duration_hours_raw * hourly_rate_usd
+
+        if scanned >= max_scan:
+            break
+
+    return max(round(lifetime_spend_usd, 2), 0.0)
+
+
+def _get_cluster_billing_summary(auth_headers: dict) -> dict:
+    _ = auth_headers
+    cluster_billing_state = _get_cluster_billing_state()
+    has_payment_method = cluster_billing_state["has_payment_method"]
+
+    summary = _reconcile_monthly_usage_credits_from_scratch()
+    return {
+        "credits": _safe_bool(summary.get("credits"), False),
+        "has_payment_method": has_payment_method,
+        "credits_usd": round(max(_safe_float(summary.get("credits_usd"), 0.0), 0.0), 2),
+        "credits_used_usd": round(max(_safe_float(summary.get("credits_used_usd"), 0.0), 0.0), 2),
+        "remaining_free_credit_usd": round(
+            max(_safe_float(summary.get("credits_remaining_usd"), 0.0), 0.0),
+            2,
+        ),
+    }
 
 
 _N4_RE = re.compile(r"^n4-standard-(\d+)$")
@@ -1171,34 +1458,24 @@ async def shutdown_cluster(request: Request, logger: Logger = Depends(get_logger
 # Usage endpoints
 # ============================
 
-@router.get("/v1/nodes/monthly_hours")
-def nodes_monthly_hours(
-    request: Request,
-    months_back: int = 3,
-    start_month: Optional[str] = None,
-    end_month: Optional[str] = None,  # inclusive
-):
-    _require_auth(request)
 
-    if start_month or end_month:
-        if not (start_month and end_month):
-            raise HTTPException(status_code=400, detail="Provide both start_month and end_month (YYYY-MM)")
-        start_month_dt = _parse_yyyy_mm(start_month)
-        end_month_dt = _parse_yyyy_mm(end_month)
-        if end_month_dt < start_month_dt:
-            raise HTTPException(status_code=400, detail="end_month must be >= start_month")
-        end_boundary = _add_months(end_month_dt, 1)
-    else:
-        if months_back < 1:
-            raise HTTPException(status_code=400, detail="months_back must be >= 1")
-        if months_back > 60:
-            raise HTTPException(status_code=400, detail="months_back too large")
+def _calculate_spend_dollars_from_groups(groups: list[dict]) -> float:
+    spend = 0.0
+    for group in groups or []:
+        machine_type = str(group.get("machine_type") or "")
+        hourly_rate_usd = ON_DEMAND_HOURLY_USD_BY_MACHINE_TYPE.get(machine_type)
+        if hourly_rate_usd is None:
+            continue
+        node_hours = max(_safe_float(group.get("total_node_hours"), 0.0), 0.0)
+        spend += node_hours * hourly_rate_usd
+    return round(spend, 2)
 
-        now = datetime.now(timezone.utc)
-        current_month_start = _month_start(now)
-        start_month_dt = _add_months(current_month_start, -(months_back - 1))
-        end_boundary = _add_months(current_month_start, 1)
 
+def _aggregate_monthly_usage(
+    start_month_dt: datetime,
+    end_boundary: datetime,
+    max_scan: int = 20000,
+) -> dict:
     month_keys: list[str] = []
     cur = start_month_dt
     while cur < end_boundary:
@@ -1208,12 +1485,11 @@ def nodes_monthly_hours(
     cutoff_sec = start_month_dt.timestamp()
     # VM-hours per group per month
     buckets: dict[str, dict[str, float]] = {mk: {} for mk in month_keys}
-    # CPU compute-hours per group per month (only n4-standard-X multiplies)
+    # CPU compute-hours per group per month
     compute_buckets: dict[str, dict[str, float]] = {mk: {} for mk in month_keys}
 
     last_doc = None
     scanned = 0
-    max_scan = 20000
 
     while True:
         q = (
@@ -1286,7 +1562,6 @@ def nodes_monthly_hours(
         month_total_raw = 0.0
         month_total_compute_raw = 0.0
 
-        # iterate groups seen in VM-hours bucket; compute bucket uses same keys
         for group_key, raw in buckets[mk].items():
             machine_type, gcp_region, spot_int = group_key.split("|", 2)
             spot_bool = spot_int == "1"
@@ -1309,7 +1584,6 @@ def nodes_monthly_hours(
             )
 
         groups_out.sort(key=lambda g: g["total_node_hours"], reverse=True)
-
         grand_total_raw += month_total_raw
         grand_total_compute_raw += month_total_compute_raw
 
@@ -1338,12 +1612,199 @@ def nodes_monthly_hours(
     }
 
 
+def _write_monthly_usage_cache(months: list[dict]):
+    now_iso = datetime.now(timezone.utc).isoformat()
+    current_month_key = _month_key(_month_start(datetime.now(timezone.utc)))
+    monthly_usage_collection = DB.collection("monthly_usage")
+
+    for month_data in months or []:
+        month_key = str(month_data.get("month") or "")
+        if not month_key:
+            continue
+
+        spend_dollars = _calculate_spend_dollars_from_groups(month_data.get("groups") or [])
+        usage_hours = round(max(_safe_float(month_data.get("total_compute_hours"), 0.0), 0.0), 2)
+        has_non_zero_usage = spend_dollars > 0 or usage_hours > 0
+
+        doc_ref = monthly_usage_collection.document(month_key)
+        snapshot = doc_ref.get()
+        exists = snapshot.exists
+
+        if month_key == current_month_key:
+            if not exists and not has_non_zero_usage:
+                continue
+            payload = {
+                "month": month_key,
+                "spend_dollars": spend_dollars,
+                "usage_hours": usage_hours,
+                "status": "open",
+                "updated_at": now_iso,
+            }
+            if not exists:
+                payload["created_at"] = now_iso
+            doc_ref.set(payload, merge=True)
+            continue
+
+        if not exists and not has_non_zero_usage:
+            continue
+
+        payload = {
+            "month": month_key,
+            "spend_dollars": spend_dollars,
+            "usage_hours": usage_hours,
+            "status": "closed",
+            "updated_at": now_iso,
+        }
+        if not exists:
+            payload["created_at"] = now_iso
+        doc_ref.set(payload, merge=True)
+
+    _reconcile_monthly_usage_credits_from_scratch()
+
+
+def _get_monthly_usage_cache_doc(month_key: str) -> Optional[dict]:
+    snapshot = DB.collection("monthly_usage").document(month_key).get()
+    if not snapshot.exists:
+        return None
+
+    doc = snapshot.to_dict() or {}
+    spend_dollars = round(max(_safe_float(doc.get("spend_dollars"), 0.0), 0.0), 2)
+    billable_spend_dollars = round(
+        max(_safe_float(doc.get("billable_spend_dollars"), spend_dollars), 0.0),
+        2,
+    )
+    credits_applied_dollars = round(
+        max(_safe_float(doc.get("credits_applied_dollars"), spend_dollars - billable_spend_dollars), 0.0),
+        2,
+    )
+    return {
+        "month": month_key,
+        "spend_dollars": spend_dollars,
+        "billable_spend_dollars": billable_spend_dollars,
+        "credits_applied_dollars": credits_applied_dollars,
+        "usage_hours": round(max(_safe_float(doc.get("usage_hours"), 0.0), 0.0), 2),
+        "status": str(doc.get("status") or ""),
+    }
+
+
+def _ensure_monthly_usage_cache_for_month(month_dt: datetime) -> dict:
+    month_key = _month_key(month_dt)
+    existing = _get_monthly_usage_cache_doc(month_key)
+    if existing:
+        return existing
+
+    month_aggregation = _aggregate_monthly_usage(month_dt, _add_months(month_dt, 1))
+    _write_monthly_usage_cache(month_aggregation.get("months") or [])
+    cached = _get_monthly_usage_cache_doc(month_key)
+    if cached:
+        return cached
+
+    month_row = (month_aggregation.get("months") or [{}])[0]
+    fallback_groups = month_row.get("groups") or []
+    return {
+        "month": month_key,
+        "spend_dollars": _calculate_spend_dollars_from_groups(fallback_groups),
+        "billable_spend_dollars": _calculate_spend_dollars_from_groups(fallback_groups),
+        "credits_applied_dollars": 0.0,
+        "usage_hours": round(max(_safe_float(month_row.get("total_compute_hours"), 0.0), 0.0), 2),
+        "status": "open" if month_key == _month_key(_month_start(datetime.now(timezone.utc))) else "closed",
+    }
+
+
+def _list_invoiceable_months() -> list[dict]:
+    monthly_docs = _sorted_monthly_usage_docs()
+    invoiceable = []
+    seen_months = set()
+
+    for item in monthly_docs:
+        month_key = item["month"]
+        if month_key in seen_months:
+            continue
+
+        doc = item["doc"]
+        status = str(doc.get("status") or "").strip().lower()
+        if status != "closed":
+            continue
+
+        spend_dollars = round(max(_safe_float(doc.get("spend_dollars"), 0.0), 0.0), 2)
+        billable_spend_dollars = round(
+            max(_safe_float(doc.get("billable_spend_dollars"), spend_dollars), 0.0),
+            2,
+        )
+        if billable_spend_dollars <= 0:
+            continue
+
+        credits_applied_dollars = round(
+            max(_safe_float(doc.get("credits_applied_dollars"), spend_dollars - billable_spend_dollars), 0.0),
+            2,
+        )
+
+        invoiceable.append(
+            {
+                "month": month_key,
+                "spend_dollars": spend_dollars,
+                "credits_applied_dollars": credits_applied_dollars,
+                "billable_spend_dollars": billable_spend_dollars,
+            }
+        )
+        seen_months.add(month_key)
+
+    return invoiceable
+
+
+@router.get("/v1/nodes/monthly_hours")
+def nodes_monthly_hours(
+    request: Request,
+    months_back: int = 3,
+    start_month: Optional[str] = None,
+    end_month: Optional[str] = None,  # inclusive
+):
+    _require_auth(request)
+
+    if start_month or end_month:
+        if not (start_month and end_month):
+            raise HTTPException(status_code=400, detail="Provide both start_month and end_month (YYYY-MM)")
+        start_month_dt = _parse_yyyy_mm(start_month)
+        end_month_dt = _parse_yyyy_mm(end_month)
+        if end_month_dt < start_month_dt:
+            raise HTTPException(status_code=400, detail="end_month must be >= start_month")
+        end_boundary = _add_months(end_month_dt, 1)
+    else:
+        if months_back < 1:
+            raise HTTPException(status_code=400, detail="months_back must be >= 1")
+        if months_back > 60:
+            raise HTTPException(status_code=400, detail="months_back too large")
+
+        now = datetime.now(timezone.utc)
+        current_month_start = _month_start(now)
+        start_month_dt = _add_months(current_month_start, -(months_back - 1))
+        end_boundary = _add_months(current_month_start, 1)
+
+    aggregation = _aggregate_monthly_usage(start_month_dt, end_boundary)
+    _write_monthly_usage_cache(aggregation.get("months") or [])
+    return aggregation
+
+
+@router.post("/v1/billing/reconcile-credits")
+def reconcile_monthly_usage_credits(request: Request):
+    _require_auth(request)
+    return _reconcile_monthly_usage_credits_from_scratch()
+
+
+@router.get("/v1/billing/invoiceable-months")
+def get_invoiceable_months(request: Request):
+    _require_auth(request)
+    _reconcile_monthly_usage_credits_from_scratch()
+    return {"months": _list_invoiceable_months()}
+
+
 @router.get("/v1/nodes/daily_hours")
 def nodes_daily_hours(
     request: Request,
     month: Optional[str] = None,  # "YYYY-MM", default current month UTC
 ):
-    _require_auth(request)
+    auth_headers = _require_auth(request)
+    billing_summary = _get_cluster_billing_summary(auth_headers)
 
     now = datetime.now(timezone.utc)
     month_dt = _parse_yyyy_mm(month) if month else _month_start(now)
@@ -1473,11 +1934,24 @@ def nodes_daily_hours(
             }
         )
 
+    monthly_usage_cache = _ensure_monthly_usage_cache_for_month(month_start)
+    monthly_usage_hours = round(
+        max(_safe_float(monthly_usage_cache.get("usage_hours"), _quantize_hours(total_compute_raw)), 0.0),
+        2,
+    )
+    monthly_spend_dollars = round(
+        max(_safe_float(monthly_usage_cache.get("spend_dollars"), 0.0), 0.0),
+        2,
+    )
+
     return {
         "month": _month_key(month_start),
         "days": days_out,
         "total_node_hours": _quantize_hours(total_raw),
         "total_compute_hours": _quantize_hours(total_compute_raw),
+        "monthly_usage_hours": monthly_usage_hours,
+        "monthly_spend_dollars": monthly_spend_dollars,
+        **billing_summary,
         "meta": {
             "hours_precision_decimals": 6,
             "scanned": scanned,

@@ -421,7 +421,7 @@ remote_parallel_map(my_function, list(range(1000)))`;
                                         </h2>
                                         <ol className="list-decimal pl-6 mt-2 space-y-2 text-base font-medium text-gray-700">
                                             <li>
-                                                Boot some computers by hitting{" "}
+                                                Hit the flashing{" "}
                                                 <span
                                                     className="font-semibold text-gray-900"
                                                     style={{
@@ -440,6 +440,10 @@ remote_parallel_map(my_function, list(range(1000)))`;
                                                         ⏻
                                                     </span>{" "}
                                                     Start
+                                                </span>{" "}
+                                                button to boot some computers{" "}
+                                                <span className="inline-block -rotate-45 text-xl">
+                                                    👉
                                                 </span>
                                             </li>
                                             <li>

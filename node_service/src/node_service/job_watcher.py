@@ -66,7 +66,8 @@ async def _job_watcher(
     seconds_neighbor_had_no_inputs = 0
 
     def _on_job_snapshot(doc_snapshot, changes, read_time):
-        nonlocal LAST_CLIENT_PING_TIMESTAMP, JOB_FAILED, JOB_CANCELED
+        global LAST_CLIENT_PING_TIMESTAMP, JOB_FAILED, JOB_CANCELED
+        global BASE_CLIENT_DC_TIMEOUT_SEC, CLIENT_DC_TIMEOUT_SEC
         for change in changes:
             job_dict = change.document.to_dict()
             client_ping_lag = job_dict.get("client_ping_lag") or 0

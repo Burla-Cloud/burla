@@ -403,7 +403,7 @@ remote_parallel_map(my_function, list(range(1000)))`;
     return (
         <div className="space-y-6 [scrollbar-gutter:stable_both-edges]">
             {showWelcome && (
-                <div className="spotlight-surface rounded-xl my-8">
+                <div className="spotlight-surface rounded-xl mt-4 mb-8">
                     <Card className="w-full relative rounded-xl shadow-lg shadow-black/5 bg-white/90 backdrop-blur">
                         <button
                             onClick={handleDismissWelcome}
@@ -412,24 +412,16 @@ remote_parallel_map(my_function, list(range(1000)))`;
                         >
                             <X className="h-6 w-6" />
                         </button>
-                        <CardHeader className="pb-2">
-                            <div className="flex items-center justify-start py-1">
-                                <img
-                                    src="/logo.gif"
-                                    alt="Burla Logo"
-                                    className="h-12 w-auto"
-                                    style={{ maxHeight: "51px" }}
-                                />
-                            </div>
-                        </CardHeader>
-                        <CardContent className="space-y-6">
+                        <CardContent className="space-y-6 pt-6">
                             <div className="grid grid-cols-1 gap-4">
                                 <div className="space-y-4">
-                                    <div className="mb-1 font-medium text-base text-gray-700">
-                                        To get started:
-                                        <ol className="list-decimal pl-6 mt-2 space-y-2">
+                                    <div className="mb-1">
+                                        <h2 className="text-xl font-semibold text-primary">
+                                            Two minute quickstart:
+                                        </h2>
+                                        <ol className="list-decimal pl-6 mt-2 space-y-2 text-base font-medium text-gray-700">
                                             <li>
-                                                Hit the{" "}
+                                                Boot some computers by hitting{" "}
                                                 <span
                                                     className="font-semibold text-gray-900"
                                                     style={{
@@ -448,8 +440,7 @@ remote_parallel_map(my_function, list(range(1000)))`;
                                                         ⏻
                                                     </span>{" "}
                                                     Start
-                                                </span>{" "}
-                                                button to boot some computers.
+                                                </span>
                                             </li>
                                             <li>
                                                 Run this three-step{" "}

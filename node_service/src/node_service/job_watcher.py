@@ -57,7 +57,6 @@ async def _job_watcher(
     await node_doc.set({"current_num_results": 0})
 
     JOB_FAILED = False
-    JOB_FAILED_TWO = False
     JOB_CANCELED = False
     LAST_CLIENT_PING_TIMESTAMP = None
     watcher_start_time = time()
@@ -80,6 +79,7 @@ async def _job_watcher(
 
             LAST_CLIENT_PING_TIMESTAMP = job_dict.get("last_ping_from_client")
             if job_dict["status"] == "FAILED":
+                sleep(2)  # give worker a sec to put error result in result queue
                 JOB_FAILED = True
                 break
             elif job_dict["status"] == "CANCELED":
@@ -197,17 +197,20 @@ async def _job_watcher(
             logger.log(msg)
 
         results_queue_empty = SELF["results_queue"].empty()
-        not_waiting_for_client = results_queue_empty or client_disconnected
+        not_waiting_for_client = results_queue_empty and (client_disconnected or is_background_job)
 
-        if JOB_FAILED and not JOB_FAILED_TWO:
-            # give worker a sec to put error result in result queue
-            # then loop again to clear worker results again
-            sleep(1)
-            JOB_FAILED_TWO = True
+        print("JOB_FAILED", JOB_FAILED)
+        print("JOB_CANCELED", JOB_CANCELED)
+        print("not_waiting_for_client", not_waiting_for_client)
+        print("one", (job_is_done or JOB_FAILED or JOB_CANCELED))
+        print("all", (job_is_done or JOB_FAILED or JOB_CANCELED) and not_waiting_for_client)
+        print("--------------------------------\n")
 
-        elif (job_is_done or JOB_FAILED_TWO or JOB_CANCELED) and not_waiting_for_client:
+        if (job_is_done or JOB_FAILED or JOB_CANCELED) and not_waiting_for_client:
             if JOB_FAILED:
                 logger.log(f"Job has failed! (id={SELF['current_job']})")
+            elif JOB_CANCELED:
+                logger.log(f"Job has been canceled! (id={SELF['current_job']})")
             else:
                 logger.log(f"Job is done! (id={SELF['current_job']})")
             # check again in case `job_is_done` then failed or canceled

@@ -28,9 +28,9 @@ async def get_inputs_from_neighbor(neighboring_node, session, logger, auth_heade
         url = f"{neighboring_node['host']}/jobs/{SELF['current_job']}/inputs"
         # must be close to SHUTTING_DOWN check \/
         async with session.get(url, timeout=2, headers=auth_headers) as response:
-            logger.log("Asked neighboring node for more inputs ...")  # must log after get ^
+            # logger.log("Asked neighboring node for more inputs ...")  # must log after get ^
             if response.status in [204, 404]:
-                logger.log(f"{instance_name} doesn't have any extra inputs to give.")
+                # logger.log(f"{instance_name} doesn't have any extra inputs to give.")
                 return
             elif response.status == 200:
                 return pickle.loads(await response.read())
@@ -192,7 +192,7 @@ async def _job_watcher(
         if client_disconnected and not is_background_job:
             msg = f"Client disconnected! Last ping recieved {seconds_since_last_ping}s ago."
             logger.log(msg)
-        elif client_never_connected:
+        elif client_never_connected and not is_background_job:
             msg = f"No ping from client after {FIRST_PING_TIMEOUT}s!"
             logger.log(msg)
 

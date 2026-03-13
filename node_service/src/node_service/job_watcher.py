@@ -64,7 +64,6 @@ async def _job_watcher(
     neighboring_nodes = []
     neighbor_had_no_inputs_at = None
     seconds_neighbor_had_no_inputs = 0
-    logged_all_inputs_done = False
 
     def _on_job_snapshot(doc_snapshot, changes, read_time):
         global LAST_CLIENT_PING_TIMESTAMP, JOB_FAILED, JOB_CANCELED
@@ -94,6 +93,7 @@ async def _job_watcher(
 
     all_workers_idle = False
     all_workers_empty = False
+    neighbor_had_no_inputs_at = None
     while not SELF["job_watcher_stop_event"].is_set():
         await node_doc.update({"current_num_results": SELF["num_results_received"]})
         if all_workers_empty:
@@ -149,7 +149,6 @@ async def _job_watcher(
 
         # is this node done working ?
         all_local_work_complete = False
-        neighbor_had_no_inputs_at = None
         all_workers_idle_twice = all_workers_idle and SELF["current_parallelism"] == 0
         all_workers_idle = SELF["current_parallelism"] == 0
         all_inputs_sent_to_workers = SELF["all_inputs_uploaded"] and (not SELF["pending_inputs"])
@@ -157,9 +156,6 @@ async def _job_watcher(
         if all_inputs_processed:
             neighboring_nodes = await get_neighboring_nodes(async_db)
             new_inputs = []
-            if neighboring_nodes and not logged_all_inputs_done and not SELF["SHUTTING_DOWN"]:
-                logger.log("Finished all assigned inputs, requesting more from other nodes ...")
-                logged_all_inputs_done = True
             if neighboring_nodes and not SELF["SHUTTING_DOWN"]:
                 args = (neighboring_nodes[0].to_dict(), session, logger, auth_headers)
                 new_inputs = await get_inputs_from_neighbor(*args)
@@ -180,7 +176,7 @@ async def _job_watcher(
                 # this is confusing but correct ^ (despite no +=)
                 not_waiting_on_client = SELF["results_queue"].empty() or client_disconnected
                 all_local_work_complete = all_inputs_processed and not_waiting_on_client
-                if seconds_neighbor_had_no_inputs > EMPTY_NEIGHBOR_TIMEOUT_SEC:
+                if seconds_neighbor_had_no_inputs > 10:  # EMPTY_NEIGHBOR_TIMEOUT_SEC:
                     msg = f"Neighbor had no extra inputs for {EMPTY_NEIGHBOR_TIMEOUT_SEC//60}"
                     logger.log(f"{msg} minutes, done working on job!")
                     await restart_workers(session, logger, async_db)

@@ -193,7 +193,7 @@ def install_signal_handlers(
                 sync_db, _ = get_db_clients()
                 job_doc = sync_db.collection("jobs").document(job_id)
                 if job_doc.get().to_dict()["status"] != "CANCELED":
-                    job_doc.update({"status": "FAILED", "fail_reason": ArrayUnion([fail_reason])})
+                    job_doc.update({"status": "CANCELED", "fail_reason": ArrayUnion([fail_reason])})
             except Exception:
                 pass
 

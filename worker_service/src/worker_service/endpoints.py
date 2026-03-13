@@ -2,7 +2,6 @@ import os
 import pickle
 import asyncio
 import signal
-import aiohttp
 from typing import Optional
 from queue import Empty
 
@@ -90,7 +89,7 @@ async def get_results(job_id: str = Path(...), ejecting: bool = Query(False)):
 
 @router.get("/jobs/{job_id}/inputs")
 async def get_inputs(
-    job_id: str = Path(...), min_reply_size: float = Query(...), ejecting: bool = Query(False)
+    job_id: str = Path(...), target_reply_size: float = Query(...), ejecting: bool = Query(False)
 ):
     if not ejecting:
         _check_udf_executor_thread()
@@ -105,7 +104,7 @@ async def get_inputs(
         SELF["in_progress_input"] = None
         total_bytes += len(input_pkl_with_idx[1])
 
-    while not SELF["inputs_queue"].empty() and (total_bytes < min_reply_size):
+    while not SELF["inputs_queue"].empty() and (total_bytes < target_reply_size):
         try:
             input_pkl_with_idx = SELF["inputs_queue"].get_nowait()
             inputs.append(input_pkl_with_idx)

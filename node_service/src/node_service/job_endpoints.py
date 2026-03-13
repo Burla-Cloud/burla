@@ -32,12 +32,13 @@ async def get_inputs(job_id: str = Path(...), logger: Logger = Depends(get_logge
     elif SELF["SHUTTING_DOWN"]:
         return Response("Node is shutting down, can't give inputs.", status_code=410)
 
-    min_reply_size_bytes = 1_000_000 * 0.5
-    min_reply_size_per_worker = min_reply_size_bytes / len(SELF["workers"])
+    # worker gathers inputs until queue empty or > target_reply_size
+    target_reply_size = 1_000_000 * 0.5
+    target_size_per_worker = target_reply_size / len(SELF["workers"])
 
     async def _get_inputs_from_worker(session, worker):
         try:
-            url = f"{worker.url}/jobs/{job_id}/inputs?min_reply_size={min_reply_size_per_worker}"
+            url = f"{worker.url}/jobs/{job_id}/inputs?target_reply_size={target_size_per_worker}"
             async with session.get(url, timeout=1) as response:
                 response.raise_for_status()
                 if response.status == 200:

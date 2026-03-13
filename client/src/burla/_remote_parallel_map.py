@@ -4,6 +4,7 @@ import pickle
 import sys
 import traceback
 import base64
+from packaging.version import Version
 from asyncio import create_task
 from contextlib import AsyncExitStack
 from importlib import metadata
@@ -176,13 +177,17 @@ async def _select_nodes_to_assign_to_job(
     # it should not be necessary to ignore this in local/remote dev and you shouldn't ignore it
     # because it's easy to accidentially start nodes that are on a prod version when you
     # are in dev mode and think they are on your dev version.
-    main_svc_version = ready_nodes[0]["main_svc_version"]
-    if main_svc_version != __version__:
-        msg = "\n\nIncompatible cluster and client versions!\n"
-        msg += f"Your cluster is on v{main_svc_version}, but your client is on v{__version__}\n"
-        msg += f"To use Burla now please run the command: "
-        msg += f"`pip install burla=={main_svc_version}`"
-        raise VersionMismatch(msg + "\n")
+    upper_v = Version(ready_nodes[0]["main_svc_version"])
+    lower_v = Version(ready_nodes[0]["min_compatible_client_version"])
+    current_v = Version(__version__)
+    if not lower_v <= current_v <= upper_v:
+        msg = f"Incompatible cluster and client versions!\n"
+        msg += f"This cluster supports clients v{lower_v} - v{upper_v}"
+        msg += f", you have v{current_v}.\n"
+        msg += f"To use Burla now, update using this command:\n\n"
+        msg += f"    pip install burla=={upper_v}\n\n"
+        msg += f"-------------------------------------------\n"
+        raise VersionMismatch(msg)
 
     planned_initial_job_parallelism = 0
     nodes_to_assign = []
@@ -229,9 +234,8 @@ async def _execute_job(
     user_function_error: Event,
 ):
     if background and spinner:
-        msg = f"Running {len(inputs)} inputs through `{function_.__name__}` "
-        msg += "with detach mode enabled!\n"
-        msg += "This job will continue running on the cluster if canceled locally, "
+        msg = f"Calling `{function_.__name__}` on {len(inputs)} inputs with detach mode enabled!\n"
+        msg += "This job will continue running if canceled locally, "
         msg += "and inputs have finished uploading.\n-"
         spinner.write(msg)
 

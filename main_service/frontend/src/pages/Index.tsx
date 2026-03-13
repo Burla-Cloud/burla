@@ -5,7 +5,7 @@ import { useClusterControl } from "@/hooks/useClusterControl";
 import { useNodes } from "@/contexts/NodesContext";
 import { useCluster } from "@/contexts/ClusterContext";
 import { useEffect, useMemo, useState } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 
 const ACTIVE_STATUSES = new Set(["BOOTING", "READY", "RUNNING"]);
@@ -189,21 +189,13 @@ const Dashboard = () => {
                     <div className="grid grid-cols-1 gap-8 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
                         <div className="min-w-0">
                             {loading ? (
-                                <Card className="w-full animate-pulse">
-                                    <CardHeader className="pb-2">
-                                        <CardTitle className="text-xl font-semibold text-primary">
-                                            <Skeleton className="h-6 w-40 mb-2" />
-                                        </CardTitle>
-                                    </CardHeader>
-                                    <CardContent className="mt-6">
+                                <Card className="inline-block animate-pulse">
+                                    <CardContent className="p-0 px-7 py-3">
                                         <div className="flex items-center gap-4">
-                                            <Skeleton className="w-6 h-6 rounded-full" />
-                                            <Skeleton className="h-5 w-24" />
-                                            <Skeleton className="h-5 w-16 ml-8" />
-                                        </div>
-                                        <div className="mt-6 flex gap-2">
-                                            <Skeleton className="h-4 w-20" />
-                                            <Skeleton className="h-4 w-10" />
+                                            <div className="flex items-center gap-2">
+                                                <Skeleton className="w-3 h-3 rounded-full" />
+                                                <Skeleton className="h-5 w-10" />
+                                            </div>
                                         </div>
                                     </CardContent>
                                 </Card>
@@ -231,27 +223,47 @@ const Dashboard = () => {
                         </div>
                     </div>
 
-                    {/* loading skeleton for nodes */}
                     {loading ? (
                         <Card className="w-full animate-pulse">
-                            <CardHeader>
-                                <CardTitle className="text-xl font-semibold text-primary">
-                                    <Skeleton className="h-6 w-32" />
-                                </CardTitle>
+                            <CardHeader className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                                <Skeleton className="h-6 w-16" />
+                                <div className="flex items-center gap-2 sm:ml-auto">
+                                    <Skeleton className="h-4 w-32" />
+                                    <Skeleton className="h-5 w-9 rounded-full" />
+                                </div>
                             </CardHeader>
                             <CardContent>
-                                <div className="space-y-2">
-                                    {[...Array(3)].map((_, i) => (
-                                        <div key={i} className="flex items-center gap-4 py-2">
-                                            <Skeleton className="w-4 h-4 rounded-full" />
-                                            <Skeleton className="h-4 w-24" />
-                                            <Skeleton className="h-4 w-16" />
-                                            <Skeleton className="h-4 w-16" />
-                                            <Skeleton className="h-4 w-16" />
-                                            <Skeleton className="h-4 w-8" />
-                                        </div>
-                                    ))}
-                                </div>
+                                <table className="table-auto w-full">
+                                    <thead>
+                                        <tr>
+                                            <th className="w-8 pl-6 pr-4 py-2" />
+                                            <th className="w-24 pl-6 pr-4 py-2 text-left"><Skeleton className="h-3 w-12" /></th>
+                                            <th className="w-48 pl-6 pr-4 py-2 text-left"><Skeleton className="h-3 w-10" /></th>
+                                            <th className="w-24 pl-6 pr-4 py-2 text-left"><Skeleton className="h-3 w-12" /></th>
+                                            <th className="w-24 pl-6 pr-4 py-2 text-left"><Skeleton className="h-3 w-10" /></th>
+                                            <th className="w-24 pl-6 pr-4 py-2 text-left"><Skeleton className="h-3 w-12" /></th>
+                                            <th className="w-8 pl-6 pr-2 py-2" />
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {[...Array(3)].map((_, i) => (
+                                            <tr key={i}>
+                                                <td className="w-8 pl-6 pr-4 py-2"><Skeleton className="h-4 w-4" /></td>
+                                                <td className="w-24 pl-6 pr-4 py-2">
+                                                    <div className="flex items-center gap-2">
+                                                        <Skeleton className="w-2 h-2 rounded-full" />
+                                                        <Skeleton className="h-4 w-14" />
+                                                    </div>
+                                                </td>
+                                                <td className="w-48 pl-6 pr-4 py-2"><Skeleton className="h-4 w-36" /></td>
+                                                <td className="w-24 pl-6 pr-4 py-2"><Skeleton className="h-4 w-8" /></td>
+                                                <td className="w-24 pl-6 pr-4 py-2"><Skeleton className="h-4 w-10" /></td>
+                                                <td className="w-24 pl-6 pr-4 py-2"><Skeleton className="h-4 w-20" /></td>
+                                                <td className="w-8 pl-6 pr-2 py-2" />
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
                             </CardContent>
                         </Card>
                     ) : (

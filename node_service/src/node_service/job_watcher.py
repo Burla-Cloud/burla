@@ -20,6 +20,7 @@ from node_service.lifecycle_endpoints import (
 FIRST_PING_TIMEOUT = 15
 BASE_CLIENT_DC_TIMEOUT_SEC = 10
 CLIENT_DC_TIMEOUT_SEC = BASE_CLIENT_DC_TIMEOUT_SEC
+EMPTY_NEIGHBOR_TIMEOUT_SEC = 5 * 60
 
 
 async def get_inputs_from_neighbor(neighboring_node, session, logger, auth_headers):
@@ -28,9 +29,9 @@ async def get_inputs_from_neighbor(neighboring_node, session, logger, auth_heade
         url = f"{neighboring_node['host']}/jobs/{SELF['current_job']}/inputs"
         # must be close to SHUTTING_DOWN check \/
         async with session.get(url, timeout=2, headers=auth_headers) as response:
-            logger.log("Asked neighboring node for more inputs ...")  # must log after get ^
+            # logger.log("Asked neighboring node for more inputs ...")  # must log after get ^
             if response.status in [204, 404]:
-                logger.log(f"{instance_name} doesn't have any extra inputs to give.")
+                # logger.log(f"{instance_name} doesn't have any extra inputs to give.")
                 return
             elif response.status == 200:
                 return pickle.loads(await response.read())
@@ -57,7 +58,6 @@ async def _job_watcher(
     await node_doc.set({"current_num_results": 0})
 
     JOB_FAILED = False
-    JOB_FAILED_TWO = False
     JOB_CANCELED = False
     LAST_CLIENT_PING_TIMESTAMP = None
     watcher_start_time = time()
@@ -80,6 +80,7 @@ async def _job_watcher(
 
             LAST_CLIENT_PING_TIMESTAMP = job_dict.get("last_ping_from_client")
             if job_dict["status"] == "FAILED":
+                sleep(2)  # give worker a sec to put error result in result queue
                 JOB_FAILED = True
                 break
             elif job_dict["status"] == "CANCELED":
@@ -92,6 +93,7 @@ async def _job_watcher(
 
     all_workers_idle = False
     all_workers_empty = False
+    neighbor_had_no_inputs_at = None
     while not SELF["job_watcher_stop_event"].is_set():
         await node_doc.update({"current_num_results": SELF["num_results_received"]})
         if all_workers_empty:
@@ -101,11 +103,10 @@ async def _job_watcher(
         if SELF["job_watcher_stop_event"].is_set():
             break
 
-        # enqueue results from workers
+        # enqueue results from workers (if there is space in mem)
         threshold = SELF["return_queue_ram_threshold_gb"]
-        result_queue_not_too_big = SELF["results_queue"].size_gb < threshold
-
-        if result_queue_not_too_big:
+        result_queue_full = SELF["results_queue"].size_gb > threshold
+        if not result_queue_full:
             try:
                 tasks = [load_results_from_worker(w, session) for w in SELF["workers"]]
                 await asyncio.gather(*tasks)
@@ -117,7 +118,6 @@ async def _job_watcher(
             SELF["current_parallelism"] = sum(not w.is_idle for w in SELF["workers"])
             SELF["currently_installing_package"] = SELF["workers"][0].currently_installing_package
             all_workers_empty = all(w.is_empty for w in SELF["workers"])
-
         else:
             msg = f"Result queue is too big ({SELF['results_queue'].size_gb:.2f}GB)"
             logger.log(f"{msg}, skipping result check...")
@@ -126,15 +126,34 @@ async def _job_watcher(
         if SELF["pending_inputs"]:
             SELF["pending_inputs"] = await send_inputs_to_workers(session, SELF["pending_inputs"])
 
-        # has this node finished all it's inputs ?
+        # is client connected?
+        client_disconnected = False
+        if LAST_CLIENT_PING_TIMESTAMP:
+            seconds_since_last_ping = time() - LAST_CLIENT_PING_TIMESTAMP
+            if seconds_since_last_ping > CLIENT_DC_TIMEOUT_SEC:
+                # double check synchronously, sometimes the thread just didnt get enough attention:
+                LAST_CLIENT_PING_TIMESTAMP = sync_job_doc.get().to_dict()["last_ping_from_client"]
+                seconds_since_last_ping = time() - LAST_CLIENT_PING_TIMESTAMP
+                client_disconnected = seconds_since_last_ping > CLIENT_DC_TIMEOUT_SEC
+        else:
+            seconds_since_watcher_start = time() - watcher_start_time
+            client_disconnected = seconds_since_watcher_start > FIRST_PING_TIMEOUT
+        client_must_be_connected = is_background_job and not SELF["all_inputs_uploaded"]
+        client_must_be_connected = client_must_be_connected or not is_background_job
+        if client_disconnected and client_must_be_connected:
+            JOB_FAILED = True
+            if LAST_CLIENT_PING_TIMESTAMP:
+                logger.log(f"Client disconnected! Last ping {seconds_since_last_ping}s ago.")
+            else:
+                logger.log(f"First client ping never recieved after {FIRST_PING_TIMEOUT}s!")
+
+        # is this node done working ?
+        all_local_work_complete = False
         all_workers_idle_twice = all_workers_idle and SELF["current_parallelism"] == 0
         all_workers_idle = SELF["current_parallelism"] == 0
-        no_pending_inputs = not SELF["pending_inputs"]
-        finished_all_assigned_inputs = (
-            all_workers_idle_twice and SELF["all_inputs_uploaded"] and no_pending_inputs
-        )
-        if finished_all_assigned_inputs:
-            # logger.log("Finished all inputs.")
+        all_inputs_sent_to_workers = SELF["all_inputs_uploaded"] and (not SELF["pending_inputs"])
+        all_inputs_processed = all_workers_idle_twice and all_inputs_sent_to_workers
+        if all_inputs_processed:
             neighboring_nodes = await get_neighboring_nodes(async_db)
             new_inputs = []
             if neighboring_nodes and not SELF["SHUTTING_DOWN"]:
@@ -142,8 +161,6 @@ async def _job_watcher(
                 new_inputs = await get_inputs_from_neighbor(*args)
             if new_inputs:
                 logger.log(f"Got {len(new_inputs)} more inputs from {neighboring_nodes[0].id}")
-                neighbor_had_no_inputs_at = None
-                seconds_neighbor_had_no_inputs = 0
                 rejected_inputs = await send_inputs_to_workers(session, new_inputs)
                 # rejected = no space to store
                 if rejected_inputs:
@@ -156,100 +173,39 @@ async def _job_watcher(
             else:
                 neighbor_had_no_inputs_at = neighbor_had_no_inputs_at or time()
                 seconds_neighbor_had_no_inputs = time() - neighbor_had_no_inputs_at
+                # this is confusing but correct ^ (despite no +=)
+                not_waiting_on_client = SELF["results_queue"].empty() or client_disconnected
+                all_local_work_complete = all_inputs_processed and not_waiting_on_client
+                if seconds_neighbor_had_no_inputs > 10:  # EMPTY_NEIGHBOR_TIMEOUT_SEC:
+                    msg = f"Neighbor had no extra inputs for {EMPTY_NEIGHBOR_TIMEOUT_SEC//60}"
+                    logger.log(f"{msg} minutes, done working on job!")
+                    await restart_workers(session, logger, async_db)
+                    break
 
-        # job ended ?
-        job_is_done = False
-        node_is_done = SELF["all_inputs_uploaded"] and all_workers_idle_twice
-        node_is_done = node_is_done and (SELF["results_queue"].empty() or is_background_job)
-        neighbor_is_done = (not neighboring_nodes) or (seconds_neighbor_had_no_inputs > 2)
-
-        if node_is_done and neighbor_is_done:
-            query_result = await node_docs_collection.sum("current_num_results").get()
-            total_results = query_result[0][0].value
-            job_snapshot = await job_doc.get()
-            all_inputs_processed = total_results == n_inputs
-            client_has_all_results = job_snapshot.to_dict()["client_has_all_results"]
-            # used to make sure we don't wait for disconnected client to grab results:
-            not_waiting_for_client = client_disconnected and is_background_job
-            job_is_done = all_inputs_processed and (
-                client_has_all_results or not_waiting_for_client
-            )
-
-        # `not_waiting_for_client` used to make sure client has time to grab errors when failed.
-        client_disconnected = False
-        client_never_connected = None
-        if LAST_CLIENT_PING_TIMESTAMP:
-            seconds_since_last_ping = time() - LAST_CLIENT_PING_TIMESTAMP
-            if seconds_since_last_ping > CLIENT_DC_TIMEOUT_SEC:
-                # double check synchronously, sometimes the thread just didnt get enough attention:
-                LAST_CLIENT_PING_TIMESTAMP = sync_job_doc.get().to_dict()["last_ping_from_client"]
-                seconds_since_last_ping = time() - LAST_CLIENT_PING_TIMESTAMP
-                client_disconnected = seconds_since_last_ping > CLIENT_DC_TIMEOUT_SEC
-        else:
-            seconds_since_watcher_start = time() - watcher_start_time
-            client_never_connected = seconds_since_watcher_start > FIRST_PING_TIMEOUT
-
-        if client_disconnected and not is_background_job:
-            msg = f"Client disconnected! Last ping recieved {seconds_since_last_ping}s ago."
-            logger.log(msg)
-        elif client_never_connected:
-            msg = f"No ping from client after {FIRST_PING_TIMEOUT}s!"
-            logger.log(msg)
-
-        results_queue_empty = SELF["results_queue"].empty()
-        not_waiting_for_client = results_queue_empty or client_disconnected
-
-        if JOB_FAILED and not JOB_FAILED_TWO:
-            # give worker a sec to put error result in result queue
-            # then loop again to clear worker results again
-            sleep(1)
-            JOB_FAILED_TWO = True
-
-        elif (job_is_done or JOB_FAILED_TWO or JOB_CANCELED) and not_waiting_for_client:
-            if JOB_FAILED:
-                logger.log(f"Job has failed! (id={SELF['current_job']})")
-            else:
-                logger.log(f"Job is done! (id={SELF['current_job']})")
-            # check again in case `job_is_done` then failed or canceled
-            job_snapshot = await job_doc.get()
-            JOB_FAILED = job_snapshot.to_dict()["status"] == "FAILED"
-            JOB_CANCELED = job_snapshot.to_dict()["status"] == "CANCELED"
-            if not (JOB_FAILED or JOB_CANCELED):
-                try:
-                    doc = {"status": "COMPLETED"}
-                    if SELF["udf_start_latency"]:
-                        doc["udf_start_latency"] = SELF["udf_start_latency"]
-                    if SELF["packages_to_install"]:
-                        doc["packages_to_install"] = SELF["packages_to_install"]
-                    await job_doc.update(doc)
-                except Exception:
-                    # ignore because this can get hit by like 100's of nodes at once
-                    # one of them will succeed and the others will throw errors we can ignore.
-                    pass
-            else:
-                doc = {}
-                if SELF["udf_start_latency"]:
-                    doc["udf_start_latency"] = SELF["udf_start_latency"]
-                if SELF["packages_to_install"]:
-                    doc["packages_to_install"] = SELF["packages_to_install"]
-                if doc:
-                    await job_doc.update(doc)
-            await restart_workers(session, logger, async_db)
-            break
-
-        can_fail_from_client_dc = is_background_job and not SELF["all_inputs_uploaded"]
-        can_fail_from_client_dc = can_fail_from_client_dc or not is_background_job
-
-        # client still listening? (if this is NOT a background job)
-        if (client_disconnected or client_never_connected) and can_fail_from_client_dc:
+        # job over ?
+        job_completed = False
+        if all_local_work_complete and client_disconnected:
+            node_docs = await node_docs_collection.get()
+            job_completed = n_inputs == sum([d.to_dict()["current_num_results"] for d in node_docs])
+        elif all_local_work_complete:
+            job_completed = (await job_doc.get()).to_dict()["client_has_all_results"]
+        if job_completed or JOB_FAILED or JOB_CANCELED:
+            status = sync_job_doc.get().to_dict()["status"]
+            status = status if status in ["FAILED", "CANCELED"] else "COMPLETED"
+            logger.log(f"Job is {status}! (id={SELF['current_job']})")
             try:
-                msg = "client disconnected" if client_disconnected else "client never connected"
-                msg = f"{msg}! ({INSTANCE_NAME})"
-                await job_doc.update({"status": "FAILED", "fail_reason": ArrayUnion([msg])})
+                sync_job_doc.update(
+                    {
+                        "udf_start_latency": SELF.get("udf_start_latency"),
+                        "packages_to_install": SELF.get("packages_to_install"),
+                        "status": status,
+                    }
+                )
             except Exception:
                 # ignore because this can get hit by like 100's of nodes at once
                 # one of them will succeed and the others will throw errors we can ignore.
                 pass
+
             await restart_workers(session, logger, async_db)
             break
 

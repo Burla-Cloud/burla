@@ -160,3 +160,6 @@ deploy-prod:
 	cd ./main_service; \
 	$(MAKE) image; \
 	$(MAKE) publish;
+
+kill-kernels:
+	pkill -f ipykernel

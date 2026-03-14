@@ -67,7 +67,6 @@ def REINIT_SELF(SELF):
     SELF["RUNNING"] = False
     SELF["FAILED"] = False
     SELF["SHUTTING_DOWN"] = False
-    SELF["last_request_timestamp"] = time()
     SELF["current_container_config"] = []
     SELF["job_watcher_stop_event"].set()  # needs to be default set so it definitely dies on reboot
     SELF["all_inputs_uploaded"] = False
@@ -81,7 +80,8 @@ def REINIT_SELF(SELF):
     SELF["udf_start_latency_sent_to_client"] = False
     SELF["packages_to_install"] = None
     SELF["packages_to_install_sent_to_client"] = False
-    SELF["request_in_progress"] = False
+    SELF["active_client_request_count"] = 0
+    SELF["last_request_timestamp"] = time()
 
 
 SELF = {}
@@ -250,11 +250,17 @@ class TrackOpenRequestMiddleware:
         if scope["type"] != "http":
             return await self.app(scope, receive, send)
 
+        request_done = False
+
         def mark_request_done():
-            SELF["request_in_progress"] = False
+            nonlocal request_done
+            if request_done:
+                return
+            request_done = True
+            SELF["active_client_request_count"] -= 1
             SELF["last_request_timestamp"] = time()
 
-        SELF["request_in_progress"] = True
+        SELF["active_client_request_count"] += 1
 
         async def wrapped_receive():
             event = await receive()
@@ -290,6 +296,19 @@ def get_status():
         return {"status": "RUNNING"}
     else:
         return {"status": "READY"}
+
+
+@app.post("/client-heartbeat")
+async def client_heartbeat(request: Request, logger: Logger = Depends(get_logger)):
+    last_ping_received_at = None
+    async for _ in request.stream():
+        now = time()
+        seconds_since_last_ping = now - (last_ping_received_at or now)
+        if seconds_since_last_ping > 0.6:
+            logger.log(f"high heartbeat gap: {seconds_since_last_ping:.3f}s", severity="WARNING")
+        last_ping_received_at = now
+        await asyncio.sleep(0)
+    return Response(status_code=204)
 
 
 @app.middleware("http")

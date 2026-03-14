@@ -1,39 +1,38 @@
 import asyncio
 import aiohttp
 import pickle
-from time import time, sleep
+import requests
+from time import sleep
 from threading import Event
 
 import cloudpickle
-
-from burla._helpers import get_db_clients
 
 
 class InputTooBig(Exception):
     pass
 
 
-def send_alive_pings(job_id: str):
-    """
-    Constantly update `last_ping_from_client` in Firestore to tell nodes client is still listening.
-    This must run in a separate process.
-    Otherwise, at when a lots of stuff (high parallelism, large inputs/outputs, or both) is
-    happening the thread or async task (tried both) are starved, causing Nodes to believe the
-    client disconnected (which it didn't) and restart, causing the job to fail.
-    """
-    sync_db, _ = get_db_clients()
-    job_doc = sync_db.collection("jobs").document(job_id)
-    last_update_time = time()
+def _ping_generator():
     while True:
-        now = time()
-        elapsed_time = now - last_update_time
-        if elapsed_time > 8:
-            msg = f"Failed to send alive pings at required frequency!"
-            raise Exception(f"{msg}\nLast ping was sent {elapsed_time}s ago!")
-        if elapsed_time > 1:
-            job_doc.update({"last_ping_from_client": now, "client_ping_lag": elapsed_time - 1})
-            last_update_time = now
-        sleep(0.1)
+        yield b"."
+        sleep(0.5)
+
+
+def send_alive_pings(nodes: list[dict], auth_headers: dict):
+    """Must run in a separate process so it is not blocked by client CPU spikes."""
+    current_node_index = 0
+    with requests.Session() as session:
+        session.headers.update(auth_headers)
+        while True:
+            try:
+                url = f"{nodes[current_node_index]['host']}/client-heartbeat"
+                with session.post(url, data=_ping_generator(), timeout=(2, None)) as response:
+                    if response.status_code in [404, 410]:
+                        sleep(0.2)
+                        continue
+                    response.raise_for_status()
+            except requests.exceptions.RequestException:
+                current_node_index = (current_node_index + 1) % len(nodes)
 
 
 async def upload_inputs(

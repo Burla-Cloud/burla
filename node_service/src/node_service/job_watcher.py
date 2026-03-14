@@ -63,19 +63,9 @@ async def _job_watcher(
     seconds_neighbor_had_no_inputs = 0
 
     def _on_job_snapshot(doc_snapshot, changes, read_time):
-        global LAST_CLIENT_PING_TIMESTAMP, JOB_FAILED, JOB_CANCELED
-        global BASE_CLIENT_DC_TIMEOUT_SEC, CLIENT_DC_TIMEOUT_SEC
+        global JOB_FAILED, JOB_CANCELED
         for change in changes:
             job_dict = change.document.to_dict()
-            client_ping_lag = job_dict.get("client_ping_lag") or 0
-            if client_ping_lag > 0.5:
-                old_timeout = CLIENT_DC_TIMEOUT_SEC
-                CLIENT_DC_TIMEOUT_SEC = BASE_CLIENT_DC_TIMEOUT_SEC + client_ping_lag
-                msg = f"Client pings lagging by: {client_ping_lag}s! "
-                msg += f"Increasing timeout from {old_timeout}s to {CLIENT_DC_TIMEOUT_SEC}s!"
-                logger.log(msg, severity="WARNING")
-
-            LAST_CLIENT_PING_TIMESTAMP = job_dict.get("last_ping_from_client")
             if job_dict["status"] == "FAILED":
                 sleep(2)  # give worker a sec to put error result in result queue
                 JOB_FAILED = True
@@ -126,7 +116,8 @@ async def _job_watcher(
         # is client connected?
         client_disconnected = False
         sec_since_last_request = time() - SELF["last_request_timestamp"]
-        client_contact_last_1s = sec_since_last_request < 1 or SELF["request_in_progress"]
+        client_contact_last_1s = sec_since_last_request < 1
+        client_contact_last_1s = client_contact_last_1s or SELF["active_client_request_count"] > 0
         if client_contact_last_1s:
             await node_doc.update({"client_contact_last_1s": True})
         else:
@@ -136,6 +127,7 @@ async def _job_watcher(
         must_be_connected = not is_background_job or not SELF["all_inputs_uploaded"]
         if client_disconnected and must_be_connected:
             JOB_FAILED = True
+            await job_doc.update({"status": "FAILED", "fail_reason": ArrayUnion(["Client DC"])})
             logger.log(f"Client disconnected!")
 
         # is this node done working ?

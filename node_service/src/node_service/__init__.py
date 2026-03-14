@@ -249,12 +249,36 @@ class TrackOpenRequestMiddleware:
         self.app = app
 
     async def __call__(self, scope, receive, send):
-        SELF["request_in_progress"] = True
-        try:
-            await self.app(scope, receive, send)
-        finally:
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+
+        request_closed = False
+
+        def close_request():
+            nonlocal request_closed
+            if request_closed:
+                return
+            request_closed = True
             SELF["request_in_progress"] = False
             SELF["last_activity_timestamp"] = time()
+
+        SELF["request_in_progress"] = True
+
+        async def wrapped_receive():
+            event = await receive()
+            if event["type"] == "http.disconnect":
+                close_request()
+            return event
+
+        async def wrapped_send(message):
+            if message["type"] == "http.response.body" and not message.get("more_body", False):
+                close_request()
+            await send(message)
+
+        try:
+            await self.app(scope, wrapped_receive, wrapped_send)
+        finally:
+            close_request()
 
 
 app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None)

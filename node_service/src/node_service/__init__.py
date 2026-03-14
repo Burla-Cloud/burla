@@ -81,6 +81,7 @@ def REINIT_SELF(SELF):
     SELF["udf_start_latency_sent_to_client"] = False
     SELF["packages_to_install"] = None
     SELF["packages_to_install_sent_to_client"] = False
+    SELF["request_in_progress"] = False
 
 
 SELF = {}
@@ -243,7 +244,24 @@ class CallHookOnJobStartMiddleware:
         return await self.app(scope, receive, send)
 
 
+class TrackOpenRequestMiddleware:
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            SELF["request_in_progress"] = True
+            try:
+                await self.app(scope, receive, send)
+            finally:
+                SELF["request_in_progress"] = False
+                SELF["last_activity_timestamp"] = time()
+        else:
+            await self.app(scope, receive, send)
+
+
 app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None)
+app.add_middleware(TrackOpenRequestMiddleware)
 app.add_middleware(CallHookOnJobStartMiddleware)
 app.include_router(job_endpoints_router)
 app.include_router(lifecycle_endpoints_router)

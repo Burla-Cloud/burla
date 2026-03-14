@@ -127,15 +127,16 @@ async def _job_watcher(
             SELF["pending_inputs"] = await send_inputs_to_workers(session, SELF["pending_inputs"])
 
         # is client connected?
-        client_disconnected = False
-        if LAST_CLIENT_PING_TIMESTAMP:
+        client_disconnected = not SELF["request_in_progress"]
+        if client_disconnected and LAST_CLIENT_PING_TIMESTAMP:
             seconds_since_last_ping = time() - LAST_CLIENT_PING_TIMESTAMP
             if seconds_since_last_ping > CLIENT_DC_TIMEOUT_SEC:
                 # double check synchronously, sometimes the thread just didnt get enough attention:
                 LAST_CLIENT_PING_TIMESTAMP = sync_job_doc.get().to_dict()["last_ping_from_client"]
-                seconds_since_last_ping = time() - LAST_CLIENT_PING_TIMESTAMP
-                client_disconnected = seconds_since_last_ping > CLIENT_DC_TIMEOUT_SEC
-        else:
+            last_activity_ts = max(SELF["last_activity_timestamp"], LAST_CLIENT_PING_TIMESTAMP)
+            seconds_since_last_activity = time() - last_activity_ts
+            client_disconnected = seconds_since_last_activity > CLIENT_DC_TIMEOUT_SEC
+        elif client_disconnected:
             seconds_since_watcher_start = time() - watcher_start_time
             client_disconnected = seconds_since_watcher_start > FIRST_PING_TIMEOUT
         client_must_be_connected = is_background_job and not SELF["all_inputs_uploaded"]

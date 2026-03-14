@@ -130,12 +130,12 @@ async def _job_watcher(
         recent_activity = (time() - SELF["last_activity_timestamp"]) > CLIENT_DC_TIMEOUT_SEC
         in_first_ping_window = (time() - watcher_start_time) > FIRST_PING_TIMEOUT
         request_in_progress = not SELF["request_in_progress"]
-        recent_ping = (time() - LAST_CLIENT_PING_TIMESTAMP or 0) < CLIENT_DC_TIMEOUT_SEC
+        recent_ping = (time() - (LAST_CLIENT_PING_TIMESTAMP or 0)) < CLIENT_DC_TIMEOUT_SEC
         connected = request_in_progress or recent_activity or in_first_ping_window or recent_ping
         if not connected and not recent_ping:
             # double check synchronously, sometimes coroutine didnt get enough attention:
             LAST_CLIENT_PING_TIMESTAMP = sync_job_doc.get().to_dict()["last_ping_from_client"]
-            seconds_since_last_ping = time() - LAST_CLIENT_PING_TIMESTAMP or 0
+            seconds_since_last_ping = time() - (LAST_CLIENT_PING_TIMESTAMP or 0)
             connected = seconds_since_last_ping > CLIENT_DC_TIMEOUT_SEC
         client_disconnected = not connected
         must_be_connected = is_background_job and not SELF["all_inputs_uploaded"]

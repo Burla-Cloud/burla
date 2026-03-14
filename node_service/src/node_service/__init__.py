@@ -249,15 +249,12 @@ class TrackOpenRequestMiddleware:
         self.app = app
 
     async def __call__(self, scope, receive, send):
-        if scope["type"] == "http":
-            SELF["request_in_progress"] = True
-            try:
-                await self.app(scope, receive, send)
-            finally:
-                SELF["request_in_progress"] = False
-                SELF["last_activity_timestamp"] = time()
-        else:
+        SELF["request_in_progress"] = True
+        try:
             await self.app(scope, receive, send)
+        finally:
+            SELF["request_in_progress"] = False
+            SELF["last_activity_timestamp"] = time()
 
 
 app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None)

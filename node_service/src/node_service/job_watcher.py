@@ -129,7 +129,7 @@ async def _job_watcher(
         # is client connected?
         recent_activity = (time() - SELF["last_activity_timestamp"]) > CLIENT_DC_TIMEOUT_SEC
         logger.log(f"recent_activity: {recent_activity}")
-        in_first_ping_window = (time() - watcher_start_time) > FIRST_PING_TIMEOUT
+        in_first_ping_window = (time() - watcher_start_time) < FIRST_PING_TIMEOUT
         logger.log(f"in_first_ping_window: {in_first_ping_window}")
         request_in_progress = not SELF["request_in_progress"]
         logger.log(f"request_in_progress: {request_in_progress}")

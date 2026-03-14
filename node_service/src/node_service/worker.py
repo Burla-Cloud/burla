@@ -142,7 +142,7 @@ class Worker:
                     set +e
                 else
                     # try with tarball first because faster
-                    if curl -Ls -o burla.tar.gz https://github.com/Burla-Cloud/burla/archive/refs/tags/{__version__}.tar.gz; then
+                    if curl -fLs -o burla.tar.gz https://github.com/Burla-Cloud/burla/archive/refs/tags/{__version__}.tar.gz; then
                         echo "Installing from tarball ..."
                         tar -xzf burla.tar.gz
                         cd burla-{__version__}/worker_service

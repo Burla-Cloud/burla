@@ -67,7 +67,7 @@ def REINIT_SELF(SELF):
     SELF["RUNNING"] = False
     SELF["FAILED"] = False
     SELF["SHUTTING_DOWN"] = False
-    SELF["last_activity_timestamp"] = time()
+    SELF["last_request_timestamp"] = time()
     SELF["current_container_config"] = []
     SELF["job_watcher_stop_event"].set()  # needs to be default set so it definitely dies on reboot
     SELF["all_inputs_uploaded"] = False
@@ -152,11 +152,9 @@ async def shutdown_if_idle_for_too_long(logger: Logger):
     """WARNING: Errors from this function are completely hidden!"""
 
     time_since_last_activity = 0
-    while time_since_last_activity < INACTIVITY_SHUTDOWN_TIME_SEC:
+    while time_since_last_activity < INACTIVITY_SHUTDOWN_TIME_SEC or SELF["current_job"]:
         await asyncio.sleep(5)
-        time_since_last_activity = time() - SELF["last_activity_timestamp"]
-        if SELF["current_job"]:
-            SELF["last_activity_timestamp"] = time()
+        time_since_last_activity = time() - SELF["last_request_timestamp"]
 
     if not IN_LOCAL_DEV_MODE:
         msg = f"Node has been idle for {INACTIVITY_SHUTDOWN_TIME_SEC // 60} minutes.\n"
@@ -252,33 +250,27 @@ class TrackOpenRequestMiddleware:
         if scope["type"] != "http":
             return await self.app(scope, receive, send)
 
-        request_closed = False
-
-        def close_request():
-            nonlocal request_closed
-            if request_closed:
-                return
-            request_closed = True
+        def mark_request_done():
             SELF["request_in_progress"] = False
-            SELF["last_activity_timestamp"] = time()
+            SELF["last_request_timestamp"] = time()
 
         SELF["request_in_progress"] = True
 
         async def wrapped_receive():
             event = await receive()
             if event["type"] == "http.disconnect":
-                close_request()
+                mark_request_done()
             return event
 
         async def wrapped_send(message):
             if message["type"] == "http.response.body" and not message.get("more_body", False):
-                close_request()
+                mark_request_done()
             await send(message)
 
         try:
             await self.app(scope, wrapped_receive, wrapped_send)
         finally:
-            close_request()
+            mark_request_done()
 
 
 app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None)
@@ -328,7 +320,7 @@ async def handle_errors(request: Request, call_next):
         add_background_task = get_add_background_task_function(response.background, logger=logger)
         add_background_task(reboot_containers, logger=logger)
     if response.status_code == 200:
-        SELF["last_activity_timestamp"] = time()
+        SELF["last_request_timestamp"] = time()
 
     return response
 

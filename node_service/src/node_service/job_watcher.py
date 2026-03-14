@@ -52,15 +52,12 @@ async def _job_watcher(
 ):
     sync_db = firestore.Client(project=PROJECT_ID, database="burla")
     job_doc = async_db.collection("jobs").document(SELF["current_job"])
-    node_doc = async_db.collection("nodes").document(INSTANCE_NAME)
     node_docs_collection = job_doc.collection("assigned_nodes")
     node_doc = node_docs_collection.document(INSTANCE_NAME)
-    await node_doc.set({"current_num_results": 0})
+    await node_doc.set({"current_num_results": 0, "client_contact_last_1s": True})
 
     JOB_FAILED = False
     JOB_CANCELED = False
-    LAST_CLIENT_PING_TIMESTAMP = None
-    watcher_start_time = time()
     neighboring_nodes = []
     neighbor_had_no_inputs_at = None
     seconds_neighbor_had_no_inputs = 0
@@ -127,31 +124,19 @@ async def _job_watcher(
             SELF["pending_inputs"] = await send_inputs_to_workers(session, SELF["pending_inputs"])
 
         # is client connected?
-        recent_activity = (time() - SELF["last_activity_timestamp"]) > CLIENT_DC_TIMEOUT_SEC
-        logger.log(f"recent_activity: {recent_activity}")
-        in_first_ping_window = (time() - watcher_start_time) < FIRST_PING_TIMEOUT
-        logger.log(f"in_first_ping_window: {in_first_ping_window}")
-        request_in_progress = not SELF["request_in_progress"]
-        logger.log(f"request_in_progress: {request_in_progress}")
-        recent_ping = (time() - (LAST_CLIENT_PING_TIMESTAMP or 0)) < CLIENT_DC_TIMEOUT_SEC
-        logger.log(f"recent_ping: {recent_ping}")
-        connected = request_in_progress or recent_activity or in_first_ping_window or recent_ping
-        if not connected and not recent_ping:
-            # double check synchronously, sometimes coroutine didnt get enough attention:
-            LAST_CLIENT_PING_TIMESTAMP = sync_job_doc.get().to_dict().get("last_ping_from_client")
-            seconds_since_last_ping = time() - (LAST_CLIENT_PING_TIMESTAMP or 0)
-            connected = seconds_since_last_ping > CLIENT_DC_TIMEOUT_SEC
-            logger.log(f"connected: {connected}")
-        logger.log(f"-----------------------------")
-        client_disconnected = not connected
-        must_be_connected = is_background_job and not SELF["all_inputs_uploaded"]
-        must_be_connected = must_be_connected or not is_background_job
+        client_disconnected = False
+        sec_since_last_request = time() - SELF["last_request_timestamp"]
+        client_contact_last_1s = sec_since_last_request < 1 or SELF["request_in_progress"]
+        if client_contact_last_1s:
+            await node_doc.update({"client_contact_last_1s": True})
+        else:
+            await node_doc.update({"client_contact_last_1s": False})
+            node_dicts = [d.to_dict() for d in await node_docs_collection.get()]
+            client_disconnected = not any([d["client_contact_last_1s"] for d in node_dicts])
+        must_be_connected = not is_background_job or not SELF["all_inputs_uploaded"]
         if client_disconnected and must_be_connected:
             JOB_FAILED = True
-            if LAST_CLIENT_PING_TIMESTAMP:
-                logger.log(f"Client disconnected! Last ping {seconds_since_last_ping}s ago.")
-            else:
-                logger.log(f"First client ping never recieved after {FIRST_PING_TIMEOUT}s!")
+            logger.log(f"Client disconnected!")
 
         # is this node done working ?
         all_local_work_complete = False
@@ -179,7 +164,6 @@ async def _job_watcher(
             else:
                 neighbor_had_no_inputs_at = neighbor_had_no_inputs_at or time()
                 seconds_neighbor_had_no_inputs = time() - neighbor_had_no_inputs_at
-                # this is confusing but correct ^ (despite no +=)
                 not_waiting_on_client = SELF["results_queue"].empty() or client_disconnected
                 all_local_work_complete = all_inputs_processed and not_waiting_on_client
                 if seconds_neighbor_had_no_inputs > 10:  # EMPTY_NEIGHBOR_TIMEOUT_SEC:

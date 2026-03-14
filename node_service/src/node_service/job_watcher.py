@@ -127,21 +127,20 @@ async def _job_watcher(
             SELF["pending_inputs"] = await send_inputs_to_workers(session, SELF["pending_inputs"])
 
         # is client connected?
-        client_disconnected = not SELF["request_in_progress"]
-        if client_disconnected and LAST_CLIENT_PING_TIMESTAMP:
-            seconds_since_last_ping = time() - LAST_CLIENT_PING_TIMESTAMP
-            if seconds_since_last_ping > CLIENT_DC_TIMEOUT_SEC:
-                # double check synchronously, sometimes the thread just didnt get enough attention:
-                LAST_CLIENT_PING_TIMESTAMP = sync_job_doc.get().to_dict()["last_ping_from_client"]
-            last_activity_ts = max(SELF["last_activity_timestamp"], LAST_CLIENT_PING_TIMESTAMP)
-            seconds_since_last_activity = time() - last_activity_ts
-            client_disconnected = seconds_since_last_activity > CLIENT_DC_TIMEOUT_SEC
-        elif client_disconnected:
-            seconds_since_watcher_start = time() - watcher_start_time
-            client_disconnected = seconds_since_watcher_start > FIRST_PING_TIMEOUT
-        client_must_be_connected = is_background_job and not SELF["all_inputs_uploaded"]
-        client_must_be_connected = client_must_be_connected or not is_background_job
-        if client_disconnected and client_must_be_connected:
+        recent_activity = (time() - SELF["last_activity_timestamp"]) > CLIENT_DC_TIMEOUT_SEC
+        in_first_ping_window = (time() - watcher_start_time) > FIRST_PING_TIMEOUT
+        request_in_progress = not SELF["request_in_progress"]
+        recent_ping = (time() - LAST_CLIENT_PING_TIMESTAMP or 0) < CLIENT_DC_TIMEOUT_SEC
+        connected = request_in_progress or recent_activity or in_first_ping_window or recent_ping
+        if not connected and not recent_ping:
+            # double check synchronously, sometimes coroutine didnt get enough attention:
+            LAST_CLIENT_PING_TIMESTAMP = sync_job_doc.get().to_dict()["last_ping_from_client"]
+            seconds_since_last_ping = time() - LAST_CLIENT_PING_TIMESTAMP or 0
+            connected = seconds_since_last_ping > CLIENT_DC_TIMEOUT_SEC
+        client_disconnected = not connected
+        must_be_connected = is_background_job and not SELF["all_inputs_uploaded"]
+        must_be_connected = must_be_connected or not is_background_job
+        if client_disconnected and must_be_connected:
             JOB_FAILED = True
             if LAST_CLIENT_PING_TIMESTAMP:
                 logger.log(f"Client disconnected! Last ping {seconds_since_last_ping}s ago.")

@@ -17,10 +17,7 @@ from node_service.lifecycle_endpoints import (
     load_results_from_worker,
 )
 
-FIRST_PING_TIMEOUT = 15
-BASE_CLIENT_DC_TIMEOUT_SEC = 10
-CLIENT_DC_TIMEOUT_SEC = BASE_CLIENT_DC_TIMEOUT_SEC
-EMPTY_NEIGHBOR_TIMEOUT_SEC = 5 * 60
+EMPTY_NEIGHBOR_TIMEOUT_SEC = 2 * 60
 
 
 async def get_inputs_from_neighbor(neighboring_node, session, logger, auth_headers):
@@ -158,7 +155,7 @@ async def _job_watcher(
                 seconds_neighbor_had_no_inputs = time() - neighbor_had_no_inputs_at
                 not_waiting_on_client = SELF["results_queue"].empty() or client_disconnected
                 all_local_work_complete = all_inputs_processed and not_waiting_on_client
-                if seconds_neighbor_had_no_inputs > 10:  # EMPTY_NEIGHBOR_TIMEOUT_SEC:
+                if seconds_neighbor_had_no_inputs > EMPTY_NEIGHBOR_TIMEOUT_SEC:
                     msg = f"Neighbor had no extra inputs for {EMPTY_NEIGHBOR_TIMEOUT_SEC//60}"
                     logger.log(f"{msg} minutes, done working on job!")
                     await restart_workers(session, logger, async_db)

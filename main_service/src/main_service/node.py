@@ -471,7 +471,7 @@ class Node:
         export INACTIVITY_SHUTDOWN_TIME_SEC="{self.inactivity_shutdown_time_sec}"
 
         cd /opt/burla
-        git fetch --depth=1 origin "{CURRENT_BURLA_VERSION}" || git fetch --depth=1 origin "tag {CURRENT_BURLA_VERSION}"
+        git fetch --depth=1 origin "refs/tags/{CURRENT_BURLA_VERSION}" || git fetch --depth=1 origin "{CURRENT_BURLA_VERSION}"
         git reset --hard FETCH_HEAD
 
         uv venv --python 3.13 --seed

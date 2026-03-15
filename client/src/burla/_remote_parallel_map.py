@@ -347,9 +347,6 @@ async def _execute_job(
 
         JOB_CANCELED_MSG = ""
         FIRST_LOG_MESSAGE_PRINTED = False
-        # start sending "alive" pings to nodes
-        ping_process = await run_in_subprocess(send_alive_pings, job_id)
-        stack.callback(ping_process.kill)
 
         # start stdout/stderr stream
         def _on_new_logs_doc(col_snapshot, changes, read_time):
@@ -389,6 +386,10 @@ async def _execute_job(
         nodes = [node for node in await asyncio.gather(*assign_node_tasks) if node]
         if not nodes:
             raise Exception("Job refused by all available Nodes!")
+
+        # start sending "alive" pings to nodes
+        ping_process = await run_in_subprocess(send_alive_pings, nodes, auth_headers)
+        stack.callback(ping_process.kill)
 
         # start uploading inputs
         upload_inputs_args = (job_id, nodes, inputs, session, auth_headers, job_canceled_event)

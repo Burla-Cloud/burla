@@ -30,7 +30,7 @@ from starlette.requests import ClientDisconnect
 from starlette.datastructures import UploadFile
 
 
-__version__ = "1.4.4"
+__version__ = "1.4.5"
 CREDENTIALS, PROJECT_ID = google.auth.default()
 BURLA_BACKEND_URL = "https://backend.burla.dev"
 
@@ -67,7 +67,6 @@ def REINIT_SELF(SELF):
     SELF["RUNNING"] = False
     SELF["FAILED"] = False
     SELF["SHUTTING_DOWN"] = False
-    SELF["last_activity_timestamp"] = time()
     SELF["current_container_config"] = []
     SELF["job_watcher_stop_event"].set()  # needs to be default set so it definitely dies on reboot
     SELF["all_inputs_uploaded"] = False
@@ -81,6 +80,8 @@ def REINIT_SELF(SELF):
     SELF["udf_start_latency_sent_to_client"] = False
     SELF["packages_to_install"] = None
     SELF["packages_to_install_sent_to_client"] = False
+    SELF["active_client_request_count"] = 0
+    SELF["last_request_timestamp"] = time()
 
 
 SELF = {}
@@ -151,11 +152,9 @@ async def shutdown_if_idle_for_too_long(logger: Logger):
     """WARNING: Errors from this function are completely hidden!"""
 
     time_since_last_activity = 0
-    while time_since_last_activity < INACTIVITY_SHUTDOWN_TIME_SEC:
+    while time_since_last_activity < INACTIVITY_SHUTDOWN_TIME_SEC or SELF["current_job"]:
         await asyncio.sleep(5)
-        time_since_last_activity = time() - SELF["last_activity_timestamp"]
-        if SELF["current_job"]:
-            SELF["last_activity_timestamp"] = time()
+        time_since_last_activity = time() - SELF["last_request_timestamp"]
 
     if not IN_LOCAL_DEV_MODE:
         msg = f"Node has been idle for {INACTIVITY_SHUTDOWN_TIME_SEC // 60} minutes.\n"
@@ -243,7 +242,45 @@ class CallHookOnJobStartMiddleware:
         return await self.app(scope, receive, send)
 
 
+class TrackOpenRequestMiddleware:
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+
+        request_done = False
+
+        def mark_request_done():
+            nonlocal request_done
+            if request_done:
+                return
+            request_done = True
+            SELF["active_client_request_count"] -= 1
+            SELF["last_request_timestamp"] = time()
+
+        SELF["active_client_request_count"] += 1
+
+        async def wrapped_receive():
+            event = await receive()
+            if event["type"] == "http.disconnect":
+                mark_request_done()
+            return event
+
+        async def wrapped_send(message):
+            if message["type"] == "http.response.body" and not message.get("more_body", False):
+                mark_request_done()
+            await send(message)
+
+        try:
+            await self.app(scope, wrapped_receive, wrapped_send)
+        finally:
+            mark_request_done()
+
+
 app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None)
+app.add_middleware(TrackOpenRequestMiddleware)
 app.add_middleware(CallHookOnJobStartMiddleware)
 app.include_router(job_endpoints_router)
 app.include_router(lifecycle_endpoints_router)
@@ -259,6 +296,19 @@ def get_status():
         return {"status": "RUNNING"}
     else:
         return {"status": "READY"}
+
+
+@app.post("/client-heartbeat")
+async def client_heartbeat(request: Request, logger: Logger = Depends(get_logger)):
+    last_ping_received_at = None
+    async for _ in request.stream():
+        now = time()
+        seconds_since_last_ping = now - (last_ping_received_at or now)
+        if seconds_since_last_ping > 0.6:
+            logger.log(f"high heartbeat gap: {seconds_since_last_ping:.3f}s", severity="WARNING")
+        last_ping_received_at = now
+        await asyncio.sleep(0)
+    return Response(status_code=204)
 
 
 @app.middleware("http")
@@ -289,7 +339,7 @@ async def handle_errors(request: Request, call_next):
         add_background_task = get_add_background_task_function(response.background, logger=logger)
         add_background_task(reboot_containers, logger=logger)
     if response.status_code == 200:
-        SELF["last_activity_timestamp"] = time()
+        SELF["last_request_timestamp"] = time()
 
     return response
 

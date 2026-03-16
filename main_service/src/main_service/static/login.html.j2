@@ -76,8 +76,7 @@
     }
 
     .hero-logo {
-      width: min(345.6px, 100%);
-      aspect-ratio: 1636 / 250;
+      width: min(100%, 360px);
       height: auto;
       display: block;
       margin: 0 auto 8px;
@@ -89,14 +88,6 @@
       font-weight: 400;
       line-height: 1.35;
       color: #3B5A64;
-      opacity: 0;
-      animation: fade-in 1s ease 3s forwards;
-    }
-
-    @keyframes fade-in {
-      to {
-        opacity: 1;
-      }
     }
 
     .banner {
@@ -167,33 +158,45 @@
   <a href="https://docs.burla.dev/privacy-policy" class="privacy-policy-link">Privacy Policy</a>
   <main class="page-content">
     <div class="auth-panel">
-      <img src="/logo.gif" alt="Burla logo" class="hero-logo" />
-      <p class="tagline">The simplest way to scale Python.</p>
-      {% if user_email %}
-      <div class="banner">
-        <strong>Access denied</strong>
-        {{ user_email }} is not authorized.<br />Contact your admin to request access.
+      <img id="welcome-logo" src="/welcome.png" srcset="/welcome@2x.png 2x" width="360" height="55" alt="Burla logo" class="hero-logo" />
+      <div id="deferred-auth-content" hidden>
+        <p class="tagline">The simplest way to scale Python.</p>
+        {% if user_email %}
+        <div class="banner">
+          <strong>Access denied</strong>
+          {{ user_email }} is not authorized.<br />Contact your admin to request access.
+        </div>
+        {% endif %}
+        <a id="google-login-btn" href="#" class="login-btn">
+          <svg viewBox="0 0 18 18" aria-hidden="true" class="google-logo">
+            <path d="M17.64 9.2045c0-.638-.0573-1.2518-.1636-1.8409H9v3.4818h4.8436c-.2086 1.125-.8427 2.0782-1.7968 2.7155v2.2573h2.9082c1.7027-1.5664 2.685-3.874 2.685-6.6136z" fill="#4285F4" />
+            <path d="M9 18c2.43 0 4.4673-.8064 5.9564-2.1818l-2.9082-2.2573c-.8063.54-1.8363.8591-3.0482.8591-2.3418 0-4.3241-1.5818-5.0327-3.7091H.9573v2.3309C2.4382 15.9836 5.4818 18 9 18z" fill="#34A853" />
+            <path d="M3.9655 10.7127C3.7855 10.1727 3.6836 9.5955 3.6836 9s.1018-1.1727.2818-1.7127V4.9564H.9573C.3477 6.1718 0 7.5436 0 9s.3477 2.8282.9573 4.0436l3.0082-2.3309z" fill="#FBBC05" />
+            <path d="M9 3.5795c1.3214 0 2.5077.4541 3.4405 1.3459l2.5814-2.5814C13.4636.8918 11.4273 0 9 0 5.4818 0 2.4382 2.0164.9573 4.9564l3.0082 2.3309C4.6759 5.1609 6.6582 3.5795 9 3.5795z" fill="#EA4335" />
+          </svg>
+          <span>Continue with Google</span>
+        </a>
+        <a id="microsoft-login-btn" href="#" class="login-btn">
+          <img src="https://upload.wikimedia.org/wikipedia/commons/4/44/Microsoft_logo.svg" alt="Microsoft logo" />
+          <span>Continue with Microsoft</span>
+        </a>
       </div>
-      {% endif %}
-      <a id="google-login-btn" href="#" class="login-btn">
-        <svg viewBox="0 0 18 18" aria-hidden="true" class="google-logo">
-          <path d="M17.64 9.2045c0-.638-.0573-1.2518-.1636-1.8409H9v3.4818h4.8436c-.2086 1.125-.8427 2.0782-1.7968 2.7155v2.2573h2.9082c1.7027-1.5664 2.685-3.874 2.685-6.6136z" fill="#4285F4" />
-          <path d="M9 18c2.43 0 4.4673-.8064 5.9564-2.1818l-2.9082-2.2573c-.8063.54-1.8363.8591-3.0482.8591-2.3418 0-4.3241-1.5818-5.0327-3.7091H.9573v2.3309C2.4382 15.9836 5.4818 18 9 18z" fill="#34A853" />
-          <path d="M3.9655 10.7127C3.7855 10.1727 3.6836 9.5955 3.6836 9s.1018-1.1727.2818-1.7127V4.9564H.9573C.3477 6.1718 0 7.5436 0 9s.3477 2.8282.9573 4.0436l3.0082-2.3309z" fill="#FBBC05" />
-          <path d="M9 3.5795c1.3214 0 2.5077.4541 3.4405 1.3459l2.5814-2.5814C13.4636.8918 11.4273 0 9 0 5.4818 0 2.4382 2.0164.9573 4.9564l3.0082 2.3309C4.6759 5.1609 6.6582 3.5795 9 3.5795z" fill="#EA4335" />
-        </svg>
-        <span>Continue with Google</span>
-      </a>
-      <a id="microsoft-login-btn" href="#" class="login-btn">
-        <img src="https://upload.wikimedia.org/wikipedia/commons/4/44/Microsoft_logo.svg" alt="Microsoft logo" />
-        <span>Continue with Microsoft</span>
-      </a>
     </div>
   </main>
   <script>
+    const welcomeLogo = document.getElementById("welcome-logo");
+    const deferredAuthContent = document.getElementById("deferred-auth-content");
     const redirectLocally = {{ redirect_locally | tojson }};
     const projectId = {{ project_id | tojson }};
     const queryParams = `?redirect_locally=${redirectLocally}&project_id=${projectId}`;
+
+    welcomeLogo.addEventListener("load", function () {
+      deferredAuthContent.hidden = false;
+    });
+
+    if (welcomeLogo.complete) {
+      deferredAuthContent.hidden = false;
+    }
 
     document.getElementById("google-login-btn").addEventListener("click", function (event) {
       event.preventDefault();

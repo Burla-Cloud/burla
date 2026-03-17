@@ -1,6 +1,6 @@
 <p align="center">
   <a href="https://login.burla.dev/">
-    <img src="https://img.shields.io/badge/Try%20Burla%20Now-3C5B65?style=for-the-badge&logo=rocket&logoColor=white&radius=20" width="190">
+    <img src="https://img.shields.io/badge/Try%20Burla%20in%20under%202%20min.-3C5B65?style=for-the-badge&logo=rocket&logoColor=white&radius=20" height="42">
   </a>
 </p>
 
@@ -13,17 +13,23 @@
 
 ## Scale Python across 1,000 computers in 1 second, using one line of code:
 
-Burla is a Python package with **one function**: `remote_parallel_map`.  Here's an example:  
+Burla is a package with only **one function**: `remote_parallel_map`.  Here's a simple example:  
 
-<p align="center">
-  <img src="https://raw.githubusercontent.com/Burla-Cloud/user-docs/main/.gitbook/assets/CleanShot%202026-01-18%20at%2015.07.24.png" alt="Burla code example" />
-</p>
+**demo.py**
+```python
+from burla import remote_parallel_map
 
+my_inputs = list(range(1000))
+
+def my_function(x):
+    print(f"I'm running on my own separate computer in the cloud! #{x}")
+
+remote_parallel_map(my_function, my_inputs)  # <- run `my_function` on every item in `my_inputs` at the same time
+```
+**Runs `my_function` on 1,000 vm's in the cloud:**
 <p align="center">
   <img src="https://raw.githubusercontent.com/Burla-Cloud/user-docs/main/.gitbook/assets/final_terminal_with_header_rounded.gif" alt="Burla terminal demo showing remote_parallel_map running on 1,000 computers" />
 </p>
-
-<p align="center">This realtime example runs <code>my_function</code> on 1,000 VM's in under a second.</p>
 
 ### Enable anyone to process terabytes of data in minutes, not days.
 

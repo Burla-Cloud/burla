@@ -1,12 +1,3 @@
-
-<p align="center">
-  <img src="https://img.shields.io/pypi/v/burla?style=for-the-badge" height="24">
-  <img src="https://img.shields.io/pypi/dm/burla?style=for-the-badge" height="24">
-  <img src="https://img.shields.io/github/stars/Burla-Cloud/burla?style=for-the-badge&logo=github&logoColor=white" height="24">
-  <img src="https://img.shields.io/badge/docs-gitbook-3C5B65?style=for-the-badge&logo=gitbook&logoColor=white&radius=20" height="24">
-  <img src="https://img.shields.io/badge/python-3.11+-3C5B65?style=for-the-badge&logo=python&logoColor=white&radius=20" height="24">
-</p>
-
 ## Scale Python across 1,000 computers in 1 second, using one line of code:
 
 Burla is a package with only **one function**. &nbsp;Here's how it works:  

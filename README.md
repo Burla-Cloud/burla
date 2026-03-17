@@ -31,7 +31,7 @@ remote_parallel_map(my_function, my_inputs)
   <img src="https://raw.githubusercontent.com/Burla-Cloud/user-docs/main/.gitbook/assets/final_terminal_with_header_rounded.gif" alt="Burla terminal demo showing remote_parallel_map running on 1,000 computers" />
 </p>
 
-### Scale code up to 10,000 CPU's, &nbsp;in any Docker container, &nbsp;with any GPU: H100, A100 ...
+### Scale up to 10,000 CPU's, &nbsp;in any Docker container, &nbsp;with any GPU: H100, A100 ...
 
 Burla is simple enough for anyone to learn, yet extremely scalable and flexible.
 

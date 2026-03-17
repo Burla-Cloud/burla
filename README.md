@@ -23,7 +23,7 @@ Burla is a Python package with **one function**: `remote_parallel_map`.  Here's 
   <img src="https://raw.githubusercontent.com/Burla-Cloud/user-docs/main/.gitbook/assets/final_terminal_with_header_rounded.gif" alt="Burla terminal demo showing remote_parallel_map running on 1,000 computers" />
 </p>
 
-<p align="center">This realtime example runs <code>my_function</code> on 1,000 separate computers in one second.</p>
+<p align="center">This realtime example runs <code>my_function</code> on 1,000 VM's in under a second.</p>
 
 ### Enable anyone to process terabytes of data in minutes, not days.
 

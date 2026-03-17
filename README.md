@@ -27,7 +27,7 @@ def my_function(x):
 
 remote_parallel_map(my_function, my_inputs)
 ```
-**This runs `my_function` on 1,000 vm's in the cloud, in 1 second.**
+**This runs `my_function` on 1000 vm's in the cloud, in 1 second.**
 <p align="center">
   <img src="https://raw.githubusercontent.com/Burla-Cloud/user-docs/main/.gitbook/assets/final_terminal_with_header_rounded.gif" alt="Burla terminal demo showing remote_parallel_map running on 1,000 computers" />
 </p>

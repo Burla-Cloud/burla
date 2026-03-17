@@ -74,7 +74,7 @@ When functions run with `remote_parallel_map`:
 
 Have a workload that takes forever to run?
 
-By adding `remote_parallel_map` calls, data scientists, ML engineers, and analysts can process terabytes of data and finish in minutes.
+By adding `remote_parallel_map` calls, data scientists, ML engineers, and analysts can build pipelines that process terabytes of data in minutes.
 
 The filesystem mounted at `./shared` makes it simple to process data stored in cloud storage.
 

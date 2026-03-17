@@ -1,6 +1,6 @@
 <p align="center">
   <a href="https://login.burla.dev/">
-    <img src="https://img.shields.io/badge/Try%20Burla%20Now-3C5B65?style=flat&logo=rocket&logoColor=white" width="160">
+    <img src="https://img.shields.io/badge/Try%20Burla%20Now-3C5B65?style=for-the-badge&logo=rocket&logoColor=white" width="160">
   </a>
 </p>
 <p align="center">

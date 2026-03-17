@@ -35,7 +35,7 @@ remote_parallel_map(my_function, my_inputs)
 
 Burla is simple enough for anyone to learn, yet extremely flexible and scalable.
 
-- **Scalable:** See the demo where we process [2.4TB in just 76 seconds](https://docs.burla.dev/examples/process-2.4tb-of-parquet-files-in-76s) using 10,000 CPUs.
+- **Scalable:** See our demo! Processing [2.4TB in 76 seconds](https://docs.burla.dev/examples/process-2.4tb-of-parquet-files-in-76s) using 10,000 CPUs.
 - **Flexible:** Easily run code on large VM's: `remote_parallel_map(..., func_cpu=64)`, with GPU's, or custom containers.
 
 Burla comes with a dashboard to monitor long-running workloads and manage resources:

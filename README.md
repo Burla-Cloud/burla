@@ -16,7 +16,7 @@
 Burla is a package with only **one function**: `remote_parallel_map`.  Here's a simple example:  
 
 **demo.py**
-```python
+``` python
 from burla import remote_parallel_map
 
 my_inputs = list(range(1000))

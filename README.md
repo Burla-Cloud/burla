@@ -1,8 +1,9 @@
 <p align="center">
   <a href="https://login.burla.dev/">
-    <img src="https://img.shields.io/badge/Try%20Burla%20Now-3C5B65?style=for-the-badge&logo=rocket&logoColor=white" width="120">
+    <img src="https://img.shields.io/badge/Try%20Burla%20Now-3C5B65?style=for-the-badge&logo=rocket&logoColor=white&radius=20" width="200">
   </a>
 </p>
+
 <p align="center">
   <img src="https://img.shields.io/pypi/v/burla?style=for-the-badge">
   <img src="https://img.shields.io/pypi/dm/burla?style=for-the-badge">

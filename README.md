@@ -1,6 +1,6 @@
 <p align="center">
   <a href="https://login.burla.dev/">
-    <img src="https://img.shields.io/badge/Try%20Burla%20in%20under%202%20min.-3C5B65?style=for-the-badge&logo=rocket&logoColor=white&radius=20" height="42">
+    <img src="https://img.shields.io/badge/Try%20Burla%20on%20us.-3C5B65?style=for-the-badge&logo=rocket&logoColor=white&radius=20" height="42">
   </a>
 </p>
 
@@ -24,9 +24,9 @@ my_inputs = list(range(1000))
 def my_function(x):
     print(f"I'm running on my own separate computer in the cloud! #{x}")
 
-remote_parallel_map(my_function, my_inputs)  # <- run `my_function` on every item in `my_inputs` at the same time
+remote_parallel_map(my_function, my_inputs)
 ```
-**Runs `my_function` on 1,000 vm's in the cloud:**
+**Runs `my_function` on 1,000 vm's in the cloud, in 1 second.**
 <p align="center">
   <img src="https://raw.githubusercontent.com/Burla-Cloud/user-docs/main/.gitbook/assets/final_terminal_with_header_rounded.gif" alt="Burla terminal demo showing remote_parallel_map running on 1,000 computers" />
 </p>

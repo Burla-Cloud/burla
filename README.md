@@ -11,11 +11,10 @@
   <img src="https://img.shields.io/badge/python-3.10+-3C5B65?style=for-the-badge&logo=python&logoColor=white">
 </p>
 
----
 
 ## Scale Python across 1,000 computers in 1 second, using one line of code.
 
-Burla is a Python package with **one function**: `remote_parallel_map`. Here's an example:
+Burla is a Python package with **one function**: `remote_parallel_map`. Here's an example:  
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/Burla-Cloud/user-docs/main/.gitbook/assets/CleanShot%202026-01-18%20at%2015.07.24.png" alt="Burla code example" />

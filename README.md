@@ -1,6 +1,6 @@
 <p align="center">
   <a href="https://login.burla.dev/">
-    <img src="https://img.shields.io/badge/Try%20Burla%20Now.-3C5B65?style=for-the-badge&logo=rocket&logoColor=white&radius=20" width="180">
+    <img src="https://img.shields.io/badge/Try%20Burla%20Now.-4A6C7A?style=for-the-badge&logo=rocket&logoColor=white&radius=20" width="180">
   </a>
 </p>
 
@@ -30,6 +30,9 @@ remote_parallel_map(my_function, my_inputs)
 <p align="center">
   <img src="https://raw.githubusercontent.com/Burla-Cloud/user-docs/main/.gitbook/assets/final_terminal_with_header_rounded.gif" alt="Burla terminal demo showing remote_parallel_map running on 1,000 computers" />
 </p>
+<a href="https://colab.research.google.com/drive/1bR8Gpa85gqJi7_9uKdcJDX9_WG0tuVmG?usp=sharing">
+  <img src="https://github.com/user-attachments/assets/8fe6b381-7482-48c2-bac7-855f6d24ac9a" />
+</a>
 
 ### Scales up to 10,000 CPU's, &nbsp;with any Docker container, &nbsp;and any GPU: H100, A100 ...
 

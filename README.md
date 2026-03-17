@@ -1,14 +1,14 @@
 <p align="center">
   <a href="https://login.burla.dev/">
-    <img src="https://img.shields.io/badge/Try%20Burla%20on%20us.-3C5B65?style=for-the-badge&logo=rocket&logoColor=white&radius=20" height="42">
+    <img src="https://img.shields.io/badge/Try%20Burla%20Now.-3C5B65?style=for-the-badge&logo=rocket&logoColor=white&radius=20" height="42">
   </a>
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/pypi/v/burla?style=for-the-badge" height="22">
-  <img src="https://img.shields.io/pypi/dm/burla?style=for-the-badge" height="22">
-  <img src="https://img.shields.io/badge/docs-gitbook-3C5B65?style=for-the-badge&logo=gitbook&logoColor=white&radius=20" height="22">
-  <img src="https://img.shields.io/badge/python-3.10+-3C5B65?style=for-the-badge&logo=python&logoColor=white&radius=20" height="22">
+  <img src="https://img.shields.io/pypi/v/burla?style=for-the-badge" height="24">
+  <img src="https://img.shields.io/pypi/dm/burla?style=for-the-badge" height="24">
+  <img src="https://img.shields.io/badge/docs-gitbook-3C5B65?style=for-the-badge&logo=gitbook&logoColor=white&radius=20" height="24">
+  <img src="https://img.shields.io/badge/python-3.10+-3C5B65?style=for-the-badge&logo=python&logoColor=white&radius=20" height="24">
 </p>
 
 ## Scale Python across 1,000 computers in 1 second, using one line of code:
@@ -31,14 +31,14 @@ remote_parallel_map(my_function, my_inputs)
   <img src="https://raw.githubusercontent.com/Burla-Cloud/user-docs/main/.gitbook/assets/final_terminal_with_header_rounded.gif" alt="Burla terminal demo showing remote_parallel_map running on 1,000 computers" />
 </p>
 
-### Enable anyone to process terabytes of data in minutes, not days.
+### Scale code up to 10,000 CPU's, &nbsp;in any Docker container, &nbsp;with any GPU: H100, A100 ..
 
 Burla is simple enough for anyone to learn, yet extremely scalable and flexible.
 
-- **Scalable:** See our [2.4TB in 76 seconds demo](https://docs.burla.dev/examples/process-2.4tb-of-parquet-files-in-76s), where Burla uses 10,000 CPUs.
-- **Flexible:** Run any code inside any Docker container on any hardware, including GPUs and TPUs.
+- **Scalable:** See the demo where we process [2.4TB in just 76 seconds](https://docs.burla.dev/examples/process-2.4tb-of-parquet-files-in-76s) using 10,000 CPUs.
+- **Flexible:** Easily run code on large VM's: `remote_parallel_map(..., func_cpu=64)`, with GPU's, or custom containers.
 
-Easily monitor long-running workloads and manage compute resources in the dashboard.
+Burla comes with a dashboard to monitor long-running workloads and manage resources:
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/Burla-Cloud/user-docs/main/.gitbook/assets/new_platform_demo.gif" alt="Burla dashboard demo" />

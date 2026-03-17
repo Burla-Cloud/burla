@@ -31,7 +31,7 @@ remote_parallel_map(my_function, my_inputs)
   <img src="https://raw.githubusercontent.com/Burla-Cloud/user-docs/main/.gitbook/assets/final_terminal_with_header_rounded.gif" alt="Burla terminal demo showing remote_parallel_map running on 1,000 computers" />
 </p>
 <a href="https://colab.research.google.com/drive/1bR8Gpa85gqJi7_9uKdcJDX9_WG0tuVmG?usp=sharing">
-  <img src="https://github.com/user-attachments/assets/8fe6b381-7482-48c2-bac7-855f6d24ac9a" />
+  <img src="https://github.com/user-attachments/assets/e4665337-cb9d-4a85-8bbc-b330a3b2fb8a" />
 </a>
 
 ### Scales up to 10,000 CPU's, &nbsp;with any Docker container, &nbsp;and any GPU: H100, A100 ...

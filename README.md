@@ -1,6 +1,8 @@
 <br>
 <p align="center">
-  <img src="https://backend.burla.dev/static/logo.svg" width="300">
+  <a href="https://burla.dev">
+    <img src="https://backend.burla.dev/static/logo.svg" width="300">
+  </a>
 </p>
 <br>
 <p align="center">

@@ -1,14 +1,14 @@
 <p align="center">
   <a href="https://login.burla.dev/">
-    <img src="https://img.shields.io/badge/Try%20Burla%20Now-3C5B65?style=for-the-badge&logo=rocket&logoColor=white&radius=20" height="30">
+    <img src="https://img.shields.io/badge/Try%20Burla%20Now-3C5B65?style=for-the-badge&logo=rocket&logoColor=white&radius=20" width="190">
   </a>
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/pypi/v/burla?style=for-the-badge" height="26">
-  <img src="https://img.shields.io/pypi/dm/burla?style=for-the-badge" height="26">
-  <img src="https://img.shields.io/badge/docs-gitbook-3C5B65?style=for-the-badge&logo=gitbook&logoColor=white&radius=20" height="26">
-  <img src="https://img.shields.io/badge/python-3.10+-3C5B65?style=for-the-badge&logo=python&logoColor=white&radius=20" height="26">
+  <img src="https://img.shields.io/pypi/v/burla?style=for-the-badge" height="22">
+  <img src="https://img.shields.io/pypi/dm/burla?style=for-the-badge" height="22">
+  <img src="https://img.shields.io/badge/docs-gitbook-3C5B65?style=for-the-badge&logo=gitbook&logoColor=white&radius=20" height="22">
+  <img src="https://img.shields.io/badge/python-3.10+-3C5B65?style=for-the-badge&logo=python&logoColor=white&radius=20" height="22">
 </p>
 
 ## Scale Python across 1,000 computers in 1 second, using one line of code:

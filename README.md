@@ -1,4 +1,4 @@
-## Scale Python across 1,000 computers in 1 second, using one line of code:
+## Scale Python across 1000 computers in 1 second, using one line of code.
 
 Burla is a package with only **one function**. &nbsp;Here's how it works:  
 

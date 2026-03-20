@@ -67,6 +67,16 @@ DEFAULT_CONFIG = {  # <- config used only when config is missing from firestore
 from main_service.helpers import Logger, format_traceback
 
 
+# Converts null-byte probe paths into 404s instead of 500s.
+# Eg: GET /phpbb/%00phpinfo.php raised 500 (because %00 is null byte) but should be 404
+class SafeStaticFiles(StaticFiles):
+    def lookup_path(self, path):
+        try:
+            return super().lookup_path(path)
+        except ValueError:
+            return "", None
+
+
 async def get_request_json(request: Request):
     try:
         return await request.json()
@@ -223,7 +233,7 @@ def favicon():
 
 
 # must be mounted after the above endpoint (`/`) is declared, or this will overwrite that endpoint.
-app.mount("/", StaticFiles(directory="src/main_service/static"), name="static")
+app.mount("/", SafeStaticFiles(directory="src/main_service/static"), name="static")
 
 
 @app.middleware("http")

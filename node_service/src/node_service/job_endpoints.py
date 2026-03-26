@@ -225,6 +225,8 @@ async def execute(
                 "start_time": request_json["start_time"],
                 "packages": request_json["packages"],
                 "io_queues_ram_limit_gb": worker_io_ram_limit_gb,
+                "worker_urls": [worker.url for worker in workers_to_assign],
+                "worker_url": worker.url,
             }
         )
         data.add_field("function_pkl", request_files["function_pkl"])

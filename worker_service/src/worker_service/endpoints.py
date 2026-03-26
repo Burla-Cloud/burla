@@ -164,6 +164,8 @@ async def start_job(
     request_json: dict = Depends(get_request_json),
 ):
     SELF["logs"].append(f"Assigned to job {job_id}.")
+    SELF["worker_urls"] = request_json["worker_urls"]
+    SELF["self_url"] = request_json["self_url"]
     args = (
         job_id,
         request_files["function_pkl"],

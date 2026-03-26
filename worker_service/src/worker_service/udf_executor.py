@@ -262,6 +262,28 @@ def _install_packages(packages: dict):
         SELF["CURRENTLY_INSTALLING_PACKAGE"] = None
 
 
+def _steal_inputs_from_neighboring_workers(job_id: str):
+    sorted_worker_urls = sorted(SELF["worker_urls"])
+    self_url_index = sorted_worker_urls.index(SELF["self_url"])
+    ordered_worker_urls = sorted_worker_urls[self_url_index + 1 :]
+
+    for neighbor_url in ordered_worker_urls:
+        url = f"{neighbor_url}/jobs/{job_id}/inputs"
+        params = {"target_reply_size": 1_000_000 * 0.1}  # 1mb
+        try:
+            response = requests.get(url, params=params, timeout=2)
+            response.raise_for_status()
+        except Exception:
+            continue
+
+        input_pkl_with_indexes = pickle.loads(response.content)
+        if input_pkl_with_indexes:
+            for input_pkl_with_index in input_pkl_with_indexes:
+                SELF["inputs_queue"].put(input_pkl_with_index, len(input_pkl_with_index[1]))
+            return len(input_pkl_with_indexes)
+    return 0
+
+
 def install_pkgs_and_execute_job(
     job_id: str, function_pkl: bytes, packages: dict, start_time: float
 ):
@@ -295,8 +317,8 @@ def install_pkgs_and_execute_job(
 
     firestore_stdout = _FirestoreStdout(job_id)
     user_defined_function = None
-    logged_idle = False
     udf_start_latency_logged = False
+    logged_empty = False
     while not SELF["STOP_PROCESSING_EVENT"].is_set():
 
         # sometimes users change this and it shouldnt affect the next function call
@@ -308,11 +330,15 @@ def install_pkgs_and_execute_job(
             SELF["IDLE"] = False
             # SELF["logs"].append(f"Popped input #{input_index} from queue.")
         except Empty:
-            SELF["IDLE"] = True
-            if not logged_idle:
-                # SELF["logs"].append("Input queue empty, waiting for more inputs ...")
-                logged_idle = True
-            sleep(0.01)
+            n_stolen_inputs = _steal_inputs_from_neighboring_workers(job_id)
+            SELF["IDLE"] = bool(n_stolen_inputs)
+            if n_stolen_inputs > 0:
+                SELF["logs"].append(f"Stolen {n_stolen_inputs} inputs from neighboring worker!")
+                logged_empty = False
+            elif not logged_empty:
+                SELF["logs"].append("Input queue empty.")
+                logged_empty = True
+            sleep(1)
             continue
 
         is_error = False

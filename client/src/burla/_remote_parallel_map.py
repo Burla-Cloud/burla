@@ -536,9 +536,11 @@ async def _execute_job(
                 raise Exception(f"Ping process exited with code: {exit_code}\n{stderr}")
 
             if spinner and all_packages_installed:
+                # (len(inputs) - n_results) < total_parallelism is possible happen due to lag
+                # it's overwritten here because it's confusing to users.
                 spinner.text = (
                     f"Calling `{function_.__name__}`: {n_results}/{len(inputs)} completed, "
-                    f"{total_parallelism} running."
+                    f"{min(total_parallelism, len(inputs) - n_results)} running."
                 )
 
             if len(nodes) == 0 and return_queue.empty():  # nodes removed in _check_single_node
@@ -725,9 +727,7 @@ def remote_parallel_map(
                 n_results += 1
 
         if spinner:
-            msg = f"Done calling `{function_.__name__}`! "
-            msg += f"{len(inputs)}/{len(inputs)} completed."
-            spinner.text = msg
+            spinner.text = f"Done! {len(inputs)} `{function_.__name__}` calls completed."
             spinner.ok("✔")
 
         return _output_generator() if generator else list(_output_generator())

@@ -72,12 +72,7 @@ async def load_results_from_worker(
     url = f"{worker.url}/jobs/{SELF['current_job']}/results?ejecting={ejecting}"
     async with session.get(url) as http_response:
         if http_response.status == 500:
-            logs = worker.logs() if worker.exists() else "Unable to retrieve container logs"
-            error_title = f"Worker {worker.container_name} returned status 500!"
-            msg = f"{error_title} Logs from container:\n{logs.strip()}"
-            firestore_client = firestore.AsyncClient(project=PROJECT_ID, database="burla")
-            node_ref = firestore_client.collection("nodes").document(INSTANCE_NAME)
-            await node_ref.collection("logs").document().set({"msg": msg, "ts": time()})
+            worker.log_debug_info()
         http_response.raise_for_status()
 
         response_content = await http_response.content.read()

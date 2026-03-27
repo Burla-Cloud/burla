@@ -263,9 +263,9 @@ def _install_packages(packages: dict):
 
 
 def _steal_inputs_from_neighboring_workers(job_id: str):
-    sorted_worker_urls = sorted(SELF["worker_urls"])
-    self_url_index = sorted_worker_urls.index(SELF["self_url"])
-    ordered_worker_urls = sorted_worker_urls[self_url_index + 1 :]
+    sorted_urls = sorted(SELF["worker_urls"])
+    self_index = sorted_urls.index(SELF["self_url"])
+    ordered_worker_urls = sorted_urls[self_index + 1 :] + sorted_urls[:self_index]
 
     for neighbor_url in ordered_worker_urls:
         url = f"{neighbor_url}/jobs/{job_id}/inputs"
@@ -273,14 +273,14 @@ def _steal_inputs_from_neighboring_workers(job_id: str):
         try:
             response = requests.get(url, params=params, timeout=2)
             response.raise_for_status()
-        except Exception:
+        except Exception as e:
+            SELF["logs"].append(f"Error stealing inputs from {neighbor_url}: {e}")
             continue
 
         input_pkl_with_indexes = pickle.loads(response.content)
-        if input_pkl_with_indexes:
-            for input_pkl_with_index in input_pkl_with_indexes:
-                SELF["inputs_queue"].put(input_pkl_with_index, len(input_pkl_with_index[1]))
-            return len(input_pkl_with_indexes)
+        for input_pkl_with_index in input_pkl_with_indexes:
+            SELF["inputs_queue"].put(input_pkl_with_index, len(input_pkl_with_index[1]))
+        return len(input_pkl_with_indexes)
     return 0
 
 
@@ -298,8 +298,6 @@ def install_pkgs_and_execute_job(
         url = f"{DB_BASE_URL}/nodes/{INSTANCE_NAME}/logs"
         data = {"fields": {"msg": {"stringValue": msg}, "ts": {"integerValue": str(int(time()))}}}
         response = request_with_valid_dbheaders("post", url, json=data, timeout=5)
-        # response = requests.post(url, headers=DB_HEADERS, json=data, timeout=5)
-
         _install_packages(packages)
         ENV_IS_READY_PATH.touch()
         SELF["ALL_PACKAGES_INSTALLED"] = True
@@ -318,7 +316,7 @@ def install_pkgs_and_execute_job(
     firestore_stdout = _FirestoreStdout(job_id)
     user_defined_function = None
     udf_start_latency_logged = False
-    logged_empty = False
+    got_first_input = False
     while not SELF["STOP_PROCESSING_EVENT"].is_set():
 
         # sometimes users change this and it shouldnt affect the next function call
@@ -328,60 +326,61 @@ def install_pkgs_and_execute_job(
             SELF["in_progress_input"] = SELF["inputs_queue"].get_nowait()
             input_index, input_pkl = SELF["in_progress_input"]
             SELF["IDLE"] = False
-            # SELF["logs"].append(f"Popped input #{input_index} from queue.")
+            got_first_input = True
+            SELF["logs"].append(f"NOT IDLE: Popped input #{input_index} from queue.")
         except Empty:
-            n_stolen_inputs = _steal_inputs_from_neighboring_workers(job_id)
-            SELF["IDLE"] = bool(n_stolen_inputs)
-            if n_stolen_inputs > 0:
-                SELF["logs"].append(f"Stolen {n_stolen_inputs} inputs from neighboring worker!")
-                logged_empty = False
-            elif not logged_empty:
-                SELF["logs"].append("Input queue empty.")
-                logged_empty = True
-            sleep(1)
+            if got_first_input:  # if this runs before any inputs recieved the job fails.
+                SELF["IDLE"] = True
+                n_stolen_inputs = _steal_inputs_from_neighboring_workers(job_id)
+                if n_stolen_inputs > 0:
+                    SELF["IDLE"] = False
+                    SELF["logs"].append(f"NOT IDLE: Stole {n_stolen_inputs} inputs from worker!")
+                else:
+                    SELF["logs"].append("IDLE: No inputs from neighbor.")
+                    sleep(1)
             continue
 
         is_error = False
         firestore_stdout.input_index = input_index
-        with firestore_stdout:  # <- all stdout sent to firestore (where it's grabbed by client)
+        # with firestore_stdout:  # <- all stdout sent to firestore (where it's grabbed by client)
+        try:
+            if user_defined_function is None:
+                user_defined_function = cloudpickle.loads(function_pkl)
+            input_ = cloudpickle.loads(input_pkl)
+
+            if am_elected_installer_worker and not udf_start_latency_logged:
+                SELF["udf_start_latency"] = time() - start_time
+                udf_start_latency_logged = True
+
+            return_value = user_defined_function(input_)
+            result_pkl = cloudpickle.dumps(return_value)
+            # SELF["logs"].append(f"UDF succeded on input #{input_index}.")
+
+            size_gb = len(result_pkl) / (1024**3)
+            if size_gb > 0.2:
+                function_call_str = f"{user_defined_function.__name__}(inputs[{input_index}])"
+                msg = f"\n\nThe object returned by the function call `{function_call_str}` is too big! ({size_gb:.2f}GB)\n"
+                msg += "Objects return by your function must be less than 0.2GB.\n"
+                msg += "Please upload any large results to cloud storage while inside your function, and return a reference.\n"
+                msg += "We apologize for this temporary limitation! If this is confusing or blocking you, please tell us! (jake@burla.dev)\n\n"
+                raise ValueError(msg)
+
+        except Exception:
+            # SELF["logs"].append(f"UDF raised an exception on input #{input_index}.")
+            is_error = True
+            exc_type, exc_value, exc_tb = sys.exc_info()
+            traceback_str = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
             try:
-                if user_defined_function is None:
-                    user_defined_function = cloudpickle.loads(function_pkl)
-                input_ = cloudpickle.loads(input_pkl)
-
-                if am_elected_installer_worker and not udf_start_latency_logged:
-                    SELF["udf_start_latency"] = time() - start_time
-                    udf_start_latency_logged = True
-
-                return_value = user_defined_function(input_)
-                result_pkl = cloudpickle.dumps(return_value)
-                # SELF["logs"].append(f"UDF succeded on input #{input_index}.")
-
-                size_gb = len(result_pkl) / (1024**3)
-                if size_gb > 0.2:
-                    function_call_str = f"{user_defined_function.__name__}(inputs[{input_index}])"
-                    msg = f"\n\nThe object returned by the function call `{function_call_str}` is too big! ({size_gb:.2f}GB)\n"
-                    msg += "Objects return by your function must be less than 0.2GB.\n"
-                    msg += "Please upload any large results to cloud storage while inside your function, and return a reference.\n"
-                    msg += "We apologize for this temporary limitation! If this is confusing or blocking you, please tell us! (jake@burla.dev)\n\n"
-                    raise ValueError(msg)
-
-            except Exception:
-                # SELF["logs"].append(f"UDF raised an exception on input #{input_index}.")
-                is_error = True
-                exc_type, exc_value, exc_tb = sys.exc_info()
-                traceback_str = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
-                try:
-                    result = dict(
-                        type=exc_type,
-                        exception=exc_value,
-                        traceback_dict=Traceback(exc_tb).to_dict(),
-                        traceback_str=traceback_str,
-                    )
-                    result_pkl = pickle.dumps(result)
-                except:
-                    # SELF["logs"].append(f"Could not pickle exception, sending as string.")
-                    result_pkl = pickle.dumps(dict(traceback_str=traceback_str))
+                result = dict(
+                    type=exc_type,
+                    exception=exc_value,
+                    traceback_dict=Traceback(exc_tb).to_dict(),
+                    traceback_str=traceback_str,
+                )
+                result_pkl = pickle.dumps(result)
+            except:
+                # SELF["logs"].append(f"Could not pickle exception, sending as string.")
+                result_pkl = pickle.dumps(dict(traceback_str=traceback_str))
 
         if is_error:
             # write traceback as log message

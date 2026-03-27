@@ -78,8 +78,8 @@ async def _job_watcher(
     all_workers_idle = False
     all_workers_empty = False
     neighbor_had_no_inputs_at = None
+    start_time = time()
     while not SELF["job_watcher_stop_event"].is_set():
-        await node_doc.update({"current_num_results": SELF["num_results_received"]})
         if all_workers_empty:
             await asyncio.sleep(0.2)
 
@@ -94,8 +94,10 @@ async def _job_watcher(
             try:
                 tasks = [load_results_from_worker(w, session) for w in SELF["workers"]]
                 await asyncio.gather(*tasks)
-            except Exception:
-                logger.log(f"Some workers failed. Rebooting containers...", severity="ERROR")
+                await node_doc.update({"current_num_results": SELF["num_results_received"]})
+            except Exception as e:
+                msg = f"Failed to collect results from workers, rebooting...\n"
+                logger.log(msg + f"{e}\n{traceback.format_exc()}", severity="ERROR")
                 reboot_containers(logger=logger)
                 break
 
@@ -128,38 +130,40 @@ async def _job_watcher(
             logger.log(f"Client disconnected!")
 
         # is this node done working ?
+        # TODO: Should get more inputs from neighbor whenever more than a couple workers dont
+        # have inputs instead of only when none have inputs
         all_local_work_complete = False
-        all_workers_idle_twice = all_workers_idle and SELF["current_parallelism"] == 0
         all_workers_idle = SELF["current_parallelism"] == 0
         all_inputs_sent_to_workers = SELF["all_inputs_uploaded"] and (not SELF["pending_inputs"])
-        all_inputs_processed = all_workers_idle_twice and all_inputs_sent_to_workers
+        all_inputs_processed = all_workers_idle and all_inputs_sent_to_workers
         if all_inputs_processed:
-            neighboring_nodes = await get_neighboring_nodes(async_db)
-            new_inputs = []
-            if neighboring_nodes and not SELF["SHUTTING_DOWN"]:
-                args = (neighboring_nodes[0].to_dict(), session, logger, auth_headers)
-                new_inputs = await get_inputs_from_neighbor(*args)
-            if new_inputs:
-                logger.log(f"Got {len(new_inputs)} more inputs from {neighboring_nodes[0].id}")
-                rejected_inputs = await send_inputs_to_workers(session, new_inputs)
-                # rejected = no space to store
-                if rejected_inputs:
-                    # This is theoretically impossible because all nodes have the same
-                    # IO queue memory limits, and this node's input queues must first be empty
-                    # in order to attempt getting more inputs from another node.
-                    # Therefore this node should always be able to fit 100% of another node's inputs
-                    msg = "Recieved inputs from neighbor that I do not have space to store!"
-                    raise Exception(msg)
-            else:
-                neighbor_had_no_inputs_at = neighbor_had_no_inputs_at or time()
-                seconds_neighbor_had_no_inputs = time() - neighbor_had_no_inputs_at
-                not_waiting_on_client = SELF["results_queue"].empty() or client_disconnected
-                all_local_work_complete = all_inputs_processed and not_waiting_on_client
-                if seconds_neighbor_had_no_inputs > EMPTY_NEIGHBOR_TIMEOUT_SEC:
-                    msg = f"Neighbor had no extra inputs for {EMPTY_NEIGHBOR_TIMEOUT_SEC//60}"
-                    logger.log(f"{msg} minutes, done working on job!")
-                    await restart_workers(session, logger, async_db)
-                    break
+            if time() - start_time > 10:  # allows short jobs to finish faster.
+                new_inputs = []
+                neighboring_nodes = await get_neighboring_nodes(async_db)
+                if neighboring_nodes and not SELF["SHUTTING_DOWN"]:
+                    args = (neighboring_nodes[0].to_dict(), session, logger, auth_headers)
+                    new_inputs = await get_inputs_from_neighbor(*args)
+                if new_inputs:
+                    logger.log(f"Got {len(new_inputs)} more inputs from {neighboring_nodes[0].id}")
+                    rejected_inputs = await send_inputs_to_workers(session, new_inputs)
+                    # rejected = no space to store
+                    if rejected_inputs:
+                        # This is theoretically impossible because all nodes have the same
+                        # IO queue memory limits, and this node's input queues must first be empty
+                        # in order to attempt getting more inputs from another node.
+                        # Therefore this node should always be able to fit 100% of another node's inputs
+                        msg = "Recieved inputs from neighbor that I do not have space to store!"
+                        raise Exception(msg)
+                else:
+                    neighbor_had_no_inputs_at = neighbor_had_no_inputs_at or time()
+                    seconds_neighbor_had_no_inputs = time() - neighbor_had_no_inputs_at
+                    if seconds_neighbor_had_no_inputs > EMPTY_NEIGHBOR_TIMEOUT_SEC:
+                        msg = f"Neighbor had no extra inputs for {EMPTY_NEIGHBOR_TIMEOUT_SEC//60}"
+                        logger.log(f"{msg} minutes, done working on job!")
+                        await restart_workers(session, logger, async_db)
+                        break
+            not_waiting_on_client = SELF["results_queue"].empty() or client_disconnected
+            all_local_work_complete = all_inputs_processed and not_waiting_on_client
 
         # job over ?
         job_completed = False

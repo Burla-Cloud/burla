@@ -328,11 +328,12 @@ class Worker:
         if IN_LOCAL_DEV_MODE:
             self.url = f"http://{self.container_name}:{WORKER_INTERNAL_PORT}"
 
-        if self.elected_installer:
-            self._start_log_streaming()
+        # if self.elected_installer:
+        #     self._start_log_streaming()
 
         ready = False
         start = time()
+        worker_replied_500 = False
         while not ready:
 
             try:
@@ -353,6 +354,12 @@ class Worker:
 
             try:
                 response = requests.get(f"{self.url}/")
+                if response.status_code == 500 and not worker_replied_500:
+                    worker_replied_500 = True
+                    sleep(1)
+                    continue
+                elif response.status_code == 500:
+                    self.log_debug_info()
                 response.raise_for_status()
                 status = response.json()["status"]  # can only be one of: READY, BUSY
                 if status != "READY":

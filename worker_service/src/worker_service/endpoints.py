@@ -112,6 +112,13 @@ async def get_inputs(
         except Empty:
             break
 
+    if inputs:
+        SELF["logs"].append(
+            f"I have {SELF['inputs_queue'].qsize()+1} inputs, sending {len(inputs)} inputs elsewhere!"
+        )
+    else:
+        SELF["logs"].append(f"I have {SELF['inputs_queue'].qsize()+1} inputs, NOT SENDING ANY")
+
     await asyncio.sleep(0)
     data = pickle.dumps(inputs)
     headers = {"Content-Disposition": 'attachment; filename="inputs.pkl"'}

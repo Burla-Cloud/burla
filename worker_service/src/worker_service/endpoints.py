@@ -113,7 +113,7 @@ async def get_inputs(
             break
 
     if inputs:
-        msg = f"I have {SELF['inputs_queue'].qsize()} inputs"
+        msg = f"I have {min(1, SELF['inputs_queue'].qsize())} inputs"
         SELF["logs"].append(f"{msg}, sending {len(inputs)} inputs elsewhere!")
     # else:
     #     SELF["logs"].append(f"I have {SELF['inputs_queue'].qsize()+1} inputs, NOT SENDING ANY")

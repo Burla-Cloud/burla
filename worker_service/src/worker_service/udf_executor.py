@@ -327,16 +327,16 @@ def install_pkgs_and_execute_job(
             input_index, input_pkl = SELF["in_progress_input"]
             SELF["IDLE"] = False
             got_first_input = True
-            SELF["logs"].append(f"NOT IDLE: Popped input #{input_index} from queue.")
+            # SELF["logs"].append(f"NOT IDLE: Popped input #{input_index} from queue.")
         except Empty:
             if got_first_input:  # if this runs before any inputs recieved the job fails.
                 SELF["IDLE"] = True
                 n_stolen_inputs = _steal_inputs_from_neighboring_workers(job_id)
                 if n_stolen_inputs > 0:
                     SELF["IDLE"] = False
-                    SELF["logs"].append(f"NOT IDLE: Stole {n_stolen_inputs} inputs from worker!")
+                    SELF["logs"].append(f"Stole {n_stolen_inputs} inputs from neighboring worker!")
                 else:
-                    SELF["logs"].append("IDLE: No inputs from neighbor.")
+                    # SELF["logs"].append("IDLE: No inputs from neighbor.")
                     sleep(1)
             continue
 

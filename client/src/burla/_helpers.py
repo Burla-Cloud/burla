@@ -29,7 +29,7 @@ SIGNALS_TO_HANDLE = [getattr(signal, s) for s in _signal_names_to_handle]
 logging.getLogger("google.api_core.bidi").setLevel(logging.ERROR)
 # prevent some annoying grpc logs / warnings
 os.environ["GRPC_VERBOSITY"] = "ERROR"  # only log ERROR/FATAL
-os.environ["GLOG_minloglevel"] = "2"  # 0-INFO, 1-WARNING, 2-ERROR, 3-FATAL
+os.environ["GLOG_minloglevel"] = "3"  # 0-INFO, 1-WARNING, 2-ERROR, 3-FATAL
 os.environ["GRPC_ENABLE_FORK_SUPPORT"] = "1"  # avoid fork() handler warnings
 
 # needs to be imported after ^

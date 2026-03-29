@@ -3,6 +3,7 @@ The tests here assume the cluster is running in "local-dev-mode".
 """
 
 from time import sleep, perf_counter
+import signal
 import pytest
 from google.cloud.firestore import FieldFilter
 from burla import remote_parallel_map
@@ -40,6 +41,22 @@ def _wait_for_ready_nodes(sync_db, timeout_seconds):
     return _nodes_are_ready(sync_db)
 
 
+def _run_with_timeout(function_to_run, timeout_seconds):
+    def timeout_handler(signal_number, current_stack_frame):
+        raise TimeoutError
+
+    original_handler = signal.getsignal(signal.SIGALRM)
+    signal.signal(signal.SIGALRM, timeout_handler)
+    signal.setitimer(signal.ITIMER_REAL, timeout_seconds)
+    try:
+        return function_to_run()
+    except TimeoutError:
+        pytest.fail(f"test did not finish within {timeout_seconds}s")
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, original_handler)
+
+
 def test_base():
     sync_db, _ = get_db_clients()
     nodes_are_ready = _wait_for_ready_nodes(sync_db, READY_WAIT_TIMEOUT_SECONDS)
@@ -49,13 +66,9 @@ def test_base():
     def test_function(test_input):
         return test_input
 
-    start_time_seconds = perf_counter()
-    results = remote_parallel_map(test_function, list(range(N_INPUTS)))
-    runtime_seconds = perf_counter() - start_time_seconds
-
-    assert runtime_seconds <= MAX_RUNTIME_SECONDS_WHEN_READY, (
-        f"test_base runtime was {runtime_seconds:.2f}s with ready nodes, "
-        f"which exceeds {MAX_RUNTIME_SECONDS_WHEN_READY}s."
+    _run_with_timeout(
+        lambda: remote_parallel_map(test_function, list(range(N_INPUTS))),
+        MAX_RUNTIME_SECONDS_WHEN_READY,
     )
 
 

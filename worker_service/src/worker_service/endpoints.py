@@ -32,8 +32,7 @@ async def get_pid():
 @router.get("/restart")
 async def restart():
     # Used to cancel running user jobs.
-    # User jobs currently run in a thread (not cancelable)
-    # I don't want to make them run in process (cancelable) because it's slower and annoying.
+    # User jobs run in a subprocess, but a hard restart is still the fastest cancellation path.
     # Here as a hack I just kill the entire worker service, from inside itself, it's automatically
     # restarted by the while loop in the bash script the container was started with.
 

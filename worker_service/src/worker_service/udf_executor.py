@@ -2,6 +2,7 @@ import os
 import sys
 import pty
 import pickle
+import multiprocessing
 import requests
 import traceback
 import subprocess
@@ -41,6 +42,8 @@ DB_HEADERS = {
     "Authorization": f"Bearer {_get_gcp_auth_token()}",
     "Content-Type": "application/json",
 }
+
+SUBPROCESS_CONTEXT = multiprocessing.get_context("spawn")
 
 
 def request_with_valid_dbheaders(method: str, *request_args, **request_kwargs):
@@ -284,6 +287,68 @@ def _steal_inputs_from_neighboring_workers(job_id: str):
     return 0
 
 
+def _user_function_process_loop(
+    function_pkl: bytes, request_queue: multiprocessing.Queue, response_queue: multiprocessing.Queue
+):
+    user_defined_function = cloudpickle.loads(function_pkl)
+    while True:
+        message = request_queue.get()
+        if message is None:
+            break
+        input_index, input_pkl = message
+        try:
+            input_ = cloudpickle.loads(input_pkl)
+            return_value = user_defined_function(input_)
+            result_pkl = cloudpickle.dumps(return_value)
+            response_queue.put((input_index, False, result_pkl, None))
+        except Exception:
+            exc_type, exc_value, exc_tb = sys.exc_info()
+            traceback_str = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+            result = dict(
+                type=exc_type,
+                exception=exc_value,
+                traceback_dict=Traceback(exc_tb).to_dict(),
+                traceback_str=traceback_str,
+            )
+            result_pkl = pickle.dumps(result)
+            response_queue.put((input_index, True, result_pkl, traceback_str))
+
+
+def _start_user_function_process(function_pkl: bytes):
+    request_queue = SUBPROCESS_CONTEXT.Queue()
+    response_queue = SUBPROCESS_CONTEXT.Queue()
+    process = SUBPROCESS_CONTEXT.Process(
+        target=_user_function_process_loop,
+        args=(function_pkl, request_queue, response_queue),
+        daemon=True,
+    )
+    process.start()
+    return process, request_queue, response_queue
+
+
+def _stop_user_function_process(process, request_queue):
+    if process is None:
+        return
+    request_queue.put(None)
+    process.join(timeout=1)
+    if process.is_alive():
+        process.kill()
+        process.join()
+
+
+def _execute_user_function(
+    input_index: int,
+    input_pkl: bytes,
+    request_queue: multiprocessing.Queue,
+    response_queue: multiprocessing.Queue,
+):
+    request_queue.put((input_index, input_pkl))
+    response_input_index, is_error, result_pkl, traceback_str = response_queue.get()
+    if response_input_index != input_index:
+        raise RuntimeError("User workload subprocess returned response for wrong input index.")
+    return is_error, result_pkl, traceback_str
+
+
 def install_pkgs_and_execute_job(
     job_id: str, function_pkl: bytes, packages: dict, start_time: float
 ):
@@ -314,9 +379,11 @@ def install_pkgs_and_execute_job(
         SELF["logs"].append(f"{len(packages)} packages are already installed.")
 
     firestore_stdout = _FirestoreStdout(job_id)
-    user_defined_function = None
     udf_start_latency_logged = False
     got_first_input = False
+    user_function_process, udf_request_queue, udf_response_queue = _start_user_function_process(
+        function_pkl
+    )
     while not SELF["STOP_PROCESSING_EVENT"].is_set():
 
         # sometimes users change this and it shouldnt affect the next function call
@@ -344,26 +411,27 @@ def install_pkgs_and_execute_job(
         firestore_stdout.input_index = input_index
         # with firestore_stdout:  # <- all stdout sent to firestore (where it's grabbed by client)
         try:
-            if user_defined_function is None:
-                user_defined_function = cloudpickle.loads(function_pkl)
-            input_ = cloudpickle.loads(input_pkl)
-
             if am_elected_installer_worker and not udf_start_latency_logged:
                 SELF["udf_start_latency"] = time() - start_time
                 udf_start_latency_logged = True
 
-            return_value = user_defined_function(input_)
-            result_pkl = cloudpickle.dumps(return_value)
+            is_error, result_pkl, traceback_str = _execute_user_function(
+                input_index,
+                input_pkl,
+                udf_request_queue,
+                udf_response_queue,
+            )
             # SELF["logs"].append(f"UDF succeded on input #{input_index}.")
 
-            size_gb = len(result_pkl) / (1024**3)
-            if size_gb > 0.2:
-                function_call_str = f"{user_defined_function.__name__}(inputs[{input_index}])"
-                msg = f"\n\nThe object returned by the function call `{function_call_str}` is too big! ({size_gb:.2f}GB)\n"
-                msg += "Objects return by your function must be less than 0.2GB.\n"
-                msg += "Please upload any large results to cloud storage while inside your function, and return a reference.\n"
-                msg += "We apologize for this temporary limitation! If this is confusing or blocking you, please tell us! (jake@burla.dev)\n\n"
-                raise ValueError(msg)
+            if not is_error:
+                size_gb = len(result_pkl) / (1024**3)
+                if size_gb > 0.2:
+                    function_call_str = f"function(inputs[{input_index}])"
+                    msg = f"\n\nThe object returned by the function call `{function_call_str}` is too big! ({size_gb:.2f}GB)\n"
+                    msg += "Objects return by your function must be less than 0.2GB.\n"
+                    msg += "Please upload any large results to cloud storage while inside your function, and return a reference.\n"
+                    msg += "We apologize for this temporary limitation! If this is confusing or blocking you, please tell us! (jake@burla.dev)\n\n"
+                    raise ValueError(msg)
 
         except Exception:
             # SELF["logs"].append(f"UDF raised an exception on input #{input_index}.")
@@ -384,7 +452,10 @@ def install_pkgs_and_execute_job(
 
         if is_error:
             # write traceback as log message
-            tb_str = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+            if traceback_str:
+                tb_str = traceback_str
+            else:
+                tb_str = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
             timestamp_str = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
             firestore_formatted_log_msg = {
                 "mapValue": {
@@ -440,5 +511,6 @@ def install_pkgs_and_execute_job(
             SELF["results_queue"].put((input_index, is_error, result_pkl), len(result_pkl))
             # SELF["logs"].append(f"Successfully enqueued result for input #{input_index}.")
 
+    _stop_user_function_process(user_function_process, udf_request_queue)
     SELF["logs"].append(f"STOP_PROCESSING_EVENT has been set!")
     firestore_stdout.stop()

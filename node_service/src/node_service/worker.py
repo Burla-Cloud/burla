@@ -131,11 +131,16 @@ class Worker:
                     echo "Installing local dev version ..."
                     mkdir -p /worker_service_python_env
                     mkdir -p /burla/worker_service
-                    # del everything in /worker_service_python_env except `worker_service` (mounted)
-                    find /worker_service_python_env -mindepth 1 -maxdepth 1 ! -name worker_service -exec rm -rf {{}} +
+                    # Installing directly into the live target can fail on this mount while uv writes .dist-info temp files.
+                    # Stage the install on the same volume, then copy into the live target after uv finishes.
+                    export UV_LINK_MODE=copy
+                    export UV_CACHE_DIR=/worker_service_python_env/.uv-cache
+                    STAGING_TARGET=/worker_service_python_env/.staging
+                    rm -rf "$STAGING_TARGET"
+                    mkdir -p "$UV_CACHE_DIR" "$STAGING_TARGET"
                     cd /burla/worker_service
                     set -e
-                    uv pip install --python {python_command} --target /worker_service_python_env . || {{ 
+                    uv pip install --python {python_command} --target "$STAGING_TARGET" . || {{ 
                         echo "ERROR: Failed to install local worker_service with uv. Exiting."; 
                         exit 1;
                     }}
@@ -168,10 +173,22 @@ class Worker:
                 # this saves a sec or two off quickstart runtime.
                 # don't simply add as a worker_svc dependency cause it's hard to make it always use latest pipy version.
                 set -e
-                uv pip install --python {python_command} --target /worker_service_python_env burla=={latest_burla_version} || {{ 
-                    echo "ERROR: Failed to install burla client into worker. Exiting."; 
-                    exit 1; 
-                }}
+                if [ "{IN_LOCAL_DEV_MODE}" = "True" ]; then
+                    uv pip install --python {python_command} --target "$STAGING_TARGET" burla=={latest_burla_version} || {{ 
+                        echo "ERROR: Failed to install burla client into worker with uv. Exiting."; 
+                        exit 1; 
+                    }}
+                    # Keep mounted source code and replace only installed packages from the staged uv result.
+                    find /worker_service_python_env -mindepth 1 -maxdepth 1 ! -name worker_service ! -name .uv-cache ! -name .staging -exec rm -rf {{}} +
+                    rm -rf "$STAGING_TARGET/worker_service"
+                    cp -a "$STAGING_TARGET"/. /worker_service_python_env/
+                    rm -rf "$STAGING_TARGET"
+                else
+                    uv pip install --python {python_command} --target /worker_service_python_env burla=={latest_burla_version} || {{ 
+                        echo "ERROR: Failed to install burla client into worker. Exiting."; 
+                        exit 1; 
+                    }}
+                fi
                 set +e
                 # mark that worker_svc installed in shared dir so other containers can continue
                 touch /worker_service_python_env/.WORKER_SVC_INSTALLED
@@ -216,6 +233,10 @@ class Worker:
         """.strip()
         cmd = ["-c", cmd_script]
         if IN_LOCAL_DEV_MODE:
+            host_worker_python_environment_dir = (
+                f"{os.environ['HOST_PWD']}/_worker_service_python_env/{INSTANCE_NAME}"
+            )
+            Path(host_worker_python_environment_dir).mkdir(parents=True, exist_ok=True)
             host_config = docker_client.create_host_config(
                 port_bindings={WORKER_INTERNAL_PORT: ("127.0.0.1", None)},
                 network_mode="local-burla-cluster",
@@ -224,7 +245,7 @@ class Worker:
                     f"{os.environ['HOST_PWD']}/worker_service": "/burla/worker_service",
                     f"{os.environ['HOST_PWD']}/worker_service/src/worker_service": "/worker_service_python_env/worker_service",
                     f"{os.environ['HOST_PWD']}/_shared_workspace": "/workspace/shared",
-                    f"{os.environ['HOST_PWD']}/_worker_service_python_env": "/worker_service_python_env",
+                    host_worker_python_environment_dir: "/worker_service_python_env",
                     f"{os.environ['HOST_PWD']}/_python_version_marker": "/python_version_marker",
                     f"{os.environ['HOST_PWD']}/.temp_token.txt": "/burla/.temp_token.txt",
                 },

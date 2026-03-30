@@ -161,6 +161,7 @@ async def upload_inputs(
     for input_pkl_with_idx in inputs_pkl_with_idx:
         SELF["inputs_queue"].put(input_pkl_with_idx, len(input_pkl_with_idx[1]))
     SELF["INPUT_UPLOAD_IN_PROGRESS"] = False
+    SELF["FIRST_INPUT_RECEIVED"] = True
 
 
 @router.post("/jobs/{job_id}")

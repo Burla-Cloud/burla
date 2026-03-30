@@ -2,7 +2,7 @@
 name = "burla"
 version = "1.4.8"
 description = "Easy to use cluster-compute software."
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
     "aiohttp>=3.13.2",
     "cloudpickle>=3.1.1",
@@ -37,11 +37,13 @@ dev = [
     "diceware>=1.0.1",
     "duckdb>=1.4.1",
     "fastparquet>=2024.11.0",
+    "geopandas[all]>=1.1.3",
     "google-cloud-firestore>=2.21.0",
     "google-cloud-storage>=3.5.0",
     "ipykernel>=7.1.0",
     "jupyterlab>=4.4.10",
     "kagglehub>=0.3.13",
+    "mapclassify[spatial]>=2.8.1",
     "matplotlib>=3.10.7",
     "nltk>=3.9.3",
     "pandas>=2.3.3",

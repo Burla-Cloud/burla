@@ -658,6 +658,37 @@ def remote_parallel_map(
     # not an official dep
     if packages.get("SQLAlchemy") and "psycopg2-binary" in PKG_MODULE_MAPPING.get("psycopg2", []):
         packages["psycopg2-binary"] = metadata.version("psycopg2-binary")
+
+    # manually check for extras until we can support automatic extra detection.
+    if packages.get("geopandas"):
+        if "geoalchemy2" in PKG_MODULE_MAPPING and not ("geoalchemy2" in packages):
+            packages["geoalchemy2"] = metadata.version("geoalchemy2")
+        if "geopy" in PKG_MODULE_MAPPING and not ("geopy" in packages):
+            packages["geopy"] = metadata.version("geopy")
+        if "matplotlib" in PKG_MODULE_MAPPING and not ("matplotlib" in packages):
+            packages["matplotlib"] = metadata.version("matplotlib")
+        if "mapclassify" in PKG_MODULE_MAPPING and not ("mapclassify" in packages):
+            packages["mapclassify"] = metadata.version("mapclassify")
+        if "xyzservices" in PKG_MODULE_MAPPING and not ("xyzservices" in packages):
+            packages["xyzservices"] = metadata.version("xyzservices")
+        if "folium" in PKG_MODULE_MAPPING and not ("folium" in packages):
+            packages["folium"] = metadata.version("folium")
+        if "pointpats" in PKG_MODULE_MAPPING and not ("pointpats" in packages):
+            packages["pointpats"] = metadata.version("pointpats")
+        if "scipy" in PKG_MODULE_MAPPING and not ("scipy" in packages):
+            packages["scipy"] = metadata.version("scipy")
+        if "pyarrow" in PKG_MODULE_MAPPING and not ("pyarrow" in packages):
+            packages["pyarrow"] = metadata.version("pyarrow")
+        if "SQLAlchemy" in PKG_MODULE_MAPPING and not ("SQLAlchemy" in packages):
+            packages["SQLAlchemy"] = metadata.version("SQLAlchemy")
+
+    if packages.get("mapclassify"):
+        if "libpysal" in PKG_MODULE_MAPPING and not ("libpysal" in packages):
+            packages["libpysal"] = metadata.version("libpysal")
+        if "shapely" in PKG_MODULE_MAPPING and not ("shapely" in packages):
+            packages["shapely"] = metadata.version("shapely")
+        if "matplotlib" in PKG_MODULE_MAPPING and not ("matplotlib" in packages):
+            packages["matplotlib"] = metadata.version("matplotlib")
     # ------------------------------------------------
 
     max_parallelism = max_parallelism if max_parallelism else len(inputs)

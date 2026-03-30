@@ -316,7 +316,6 @@ def install_pkgs_and_execute_job(
     firestore_stdout = _FirestoreStdout(job_id)
     user_defined_function = None
     udf_start_latency_logged = False
-    got_first_input = False
     while not SELF["STOP_PROCESSING_EVENT"].is_set():
 
         # sometimes users change this and it shouldnt affect the next function call
@@ -326,10 +325,10 @@ def install_pkgs_and_execute_job(
             SELF["in_progress_input"] = SELF["inputs_queue"].get_nowait()
             input_index, input_pkl = SELF["in_progress_input"]
             SELF["IDLE"] = False
-            got_first_input = True
             # SELF["logs"].append(f"NOT IDLE: Popped input #{input_index} from queue.")
         except Empty:
-            if got_first_input:  # if this runs before any inputs recieved the job fails.
+            if SELF["FIRST_INPUT_RECEIVED"]:
+                # if this runs before any inputs recieved the job fails.
                 SELF["IDLE"] = True
                 n_stolen_inputs = _steal_inputs_from_neighboring_workers(job_id)
                 if n_stolen_inputs > 0:
@@ -338,6 +337,7 @@ def install_pkgs_and_execute_job(
                 else:
                     # SELF["logs"].append("IDLE: No inputs from neighbor.")
                     sleep(1)
+            sleep(0.001)
             continue
 
         is_error = False

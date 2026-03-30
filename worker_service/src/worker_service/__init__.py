@@ -72,10 +72,16 @@ async def get_request_files(request: Request):
 
 
 from worker_service.endpoints import router as endpoints_router
+from worker_service.udf_executor import initialize_user_function_process
 
 app = FastAPI(docs_url=None, redoc_url=None)
 app.include_router(endpoints_router)
 print(f"Worker {os.environ.get('WORKER_NAME', 'unknown_worker')} has booted.")
+
+
+@app.on_event("startup")
+async def initialize_user_function_process_on_startup():
+    initialize_user_function_process()
 
 
 @app.middleware("http")

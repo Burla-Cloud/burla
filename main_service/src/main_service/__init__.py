@@ -267,6 +267,13 @@ async def validate_requests(request: Request, call_next):
     """
     # Allow unauthenticated access for storage stub endpoints and resumable signing during development
     # These are non-privileged helpers used by the storage UI.
+    if IN_LOCAL_DEV_MODE:
+        request.session["X-User-Email"] = "local-dev@burla.dev"
+        request.session["Authorization"] = "Bearer local-dev-mode"
+        request.session["name"] = "Local Dev"
+        request.session["profile_pic"] = ""
+        return await call_next(request)
+
     if request.url.path.startswith("/api/sf/") or request.url.path == "/signed-resumable":
         return await call_next(request)
     if request.url.path in ["/v3/login/dashboard", "/v1/login/microsoft/dashboard"]:

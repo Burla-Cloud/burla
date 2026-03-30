@@ -1,5 +1,6 @@
 ### How to run the tests
 
+#### Instructions for Humans:
 These steps assume you're already a contributer with a Google Cloud Project prepared with the required resources to run a burla cluster.  
 Email `jake@burla.dev` if you're interested in contributing, or just [put time on my calendar](https://cal.com/jakez/burla?duration=30) :)   
 
@@ -13,3 +14,11 @@ Email `jake@burla.dev` if you're interested in contributing, or just [put time o
 If running in `local-dev-mode` errors will be visible in docker desktop container logs.  
 If running in `remote-dev-mode` errors will be visible in the terminal where the `main_service`
 is running, or google-cloud-logging for errors from the `node_service` or `worker_service`.
+
+#### Instructions for Agents:
+
+1. Before running tests, ensure the cluster is on, ready, and the machine is authorized.
+2. Run `make test`.
+3. After test run, use the browser tool to open the dashboard job details page for the latest test job.
+4. Verify that logs on the job details page show `"hi"` exactly once per input.
+

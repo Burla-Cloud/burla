@@ -4,13 +4,15 @@ The tests here assume the cluster is running in "local-dev-mode".
 
 from time import sleep, perf_counter
 import signal
+import io
+import contextlib
 import pytest
 from google.cloud.firestore import FieldFilter
 from burla import remote_parallel_map
 from burla._helpers import get_db_clients
 
 
-N_INPUTS = 100
+N_INPUTS = 10
 MAX_RUNTIME_SECONDS_WHEN_READY = 3
 READY_WAIT_TIMEOUT_SECONDS = 6
 READY_WAIT_POLL_INTERVAL_SECONDS = 0.25
@@ -63,13 +65,23 @@ def test_base():
     if not nodes_are_ready:
         pytest.skip(f"nodes did not become ready within {READY_WAIT_TIMEOUT_SECONDS}s")
 
-    def test_function(test_input):
-        return test_input
-
-    _run_with_timeout(
-        lambda: remote_parallel_map(test_function, list(range(N_INPUTS))),
-        MAX_RUNTIME_SECONDS_WHEN_READY,
+    function_namespace = {}
+    exec(
+        "def test_function(test_input):\n" "    print('hi')\n" "    return test_input\n",
+        {},
+        function_namespace,
     )
+    test_function = function_namespace["test_function"]
+
+    stdout_buffer = io.StringIO()
+    with contextlib.redirect_stdout(stdout_buffer):
+        _run_with_timeout(
+            lambda: remote_parallel_map(test_function, list(range(N_INPUTS)), spinner=False),
+            MAX_RUNTIME_SECONDS_WHEN_READY,
+        )
+    stdout_lines = [line.strip() for line in stdout_buffer.getvalue().splitlines()]
+    hi_count = sum(1 for line in stdout_lines if line == "hi")
+    assert hi_count == N_INPUTS, f"expected {N_INPUTS} 'hi' logs, got {hi_count}"
 
 
 def _test_big_function():

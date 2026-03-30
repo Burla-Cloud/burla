@@ -69,7 +69,9 @@ async def get_neighboring_nodes(async_db):
 async def load_results_from_worker(
     worker: Worker, session: aiohttp.ClientSession, ejecting: bool = False
 ):
-    url = f"{worker.url}/jobs/{SELF['current_job']}/results?ejecting={ejecting}"
+    all_inputs_sent_to_workers = SELF["all_inputs_uploaded"] and (not SELF["pending_inputs"])
+    url = f"{worker.url}/jobs/{SELF['current_job']}/results?"
+    url += f"ejecting={ejecting}&all_inputs_sent_to_workers={all_inputs_sent_to_workers}"
     async with session.get(url) as http_response:
         if http_response.status == 500:
             worker.log_debug_info()

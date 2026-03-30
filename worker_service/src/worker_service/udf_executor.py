@@ -5,6 +5,7 @@ import pickle
 import requests
 import traceback
 import subprocess
+import random
 from datetime import datetime, timezone
 from queue import Empty
 from time import sleep, time
@@ -274,7 +275,7 @@ def _steal_inputs_from_neighboring_workers(job_id: str):
             response = requests.get(url, params=params, timeout=2)
             response.raise_for_status()
         except Exception as e:
-            SELF["logs"].append(f"Error stealing inputs from {neighbor_url}: {e}")
+            # SELF["logs"].append(f"Error stealing inputs from {neighbor_url}: {e}")
             continue
 
         input_pkl_with_indexes = pickle.loads(response.content)
@@ -316,6 +317,8 @@ def install_pkgs_and_execute_job(
     firestore_stdout = _FirestoreStdout(job_id)
     user_defined_function = None
     udf_start_latency_logged = False
+    got_first_input = False
+    no_stolen_inputs_sleep_time = random.uniform(0.0, 1.0)
     while not SELF["STOP_PROCESSING_EVENT"].is_set():
 
         # sometimes users change this and it shouldnt affect the next function call
@@ -325,18 +328,22 @@ def install_pkgs_and_execute_job(
             SELF["in_progress_input"] = SELF["inputs_queue"].get_nowait()
             input_index, input_pkl = SELF["in_progress_input"]
             SELF["IDLE"] = False
+            got_first_input = True
             # SELF["logs"].append(f"NOT IDLE: Popped input #{input_index} from queue.")
         except Empty:
-            if SELF["FIRST_INPUT_RECEIVED"]:
-                # if this runs before any inputs recieved the job fails.
+            if got_first_input:
+                # if this runs before any inputs recieved the job fails from race condition.
+                # + is slow to react trying to steal from other workers before any have inputs.
                 SELF["IDLE"] = True
                 n_stolen_inputs = _steal_inputs_from_neighboring_workers(job_id)
                 if n_stolen_inputs > 0:
                     SELF["IDLE"] = False
+                    no_stolen_inputs_sleep_time = random.uniform(0.0, 1.0)
                     SELF["logs"].append(f"Stole {n_stolen_inputs} inputs from neighboring worker!")
                 else:
                     # SELF["logs"].append("IDLE: No inputs from neighbor.")
-                    sleep(1)
+                    no_stolen_inputs_sleep_time += 1 + random.uniform(0.0, 1.0)
+                    sleep(no_stolen_inputs_sleep_time)
             sleep(0.001)
             continue
 

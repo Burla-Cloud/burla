@@ -52,9 +52,20 @@ def _check_udf_executor_thread():
 
 
 @router.get("/jobs/{job_id}/results")
-async def get_results(job_id: str = Path(...), ejecting: bool = Query(False)):
+async def get_results(
+    job_id: str = Path(...),
+    ejecting: bool = Query(False),
+    all_inputs_sent_to_workers: bool = Query(False),
+):
     if not ejecting:
         _check_udf_executor_thread()
+
+    no_work = not SELF["in_progress_input"] and SELF["inputs_queue"].empty()
+    no_incoming_work = all_inputs_sent_to_workers and no_work
+    if no_incoming_work and (not SELF["STOP_PROCESSING_EVENT"].is_set() or not SELF["IDLE"]):
+        SELF["STOP_PROCESSING_EVENT"].set()
+        SELF["IDLE"] = True
+        SELF["logs"].append(f"Worker will not receive work, pausing until node forces reboot.")
     if SELF["current_job"] != job_id:
         return Response("job not found", status_code=404)
 
@@ -161,7 +172,6 @@ async def upload_inputs(
     for input_pkl_with_idx in inputs_pkl_with_idx:
         SELF["inputs_queue"].put(input_pkl_with_idx, len(input_pkl_with_idx[1]))
     SELF["INPUT_UPLOAD_IN_PROGRESS"] = False
-    SELF["FIRST_INPUT_RECEIVED"] = True
 
 
 @router.post("/jobs/{job_id}")

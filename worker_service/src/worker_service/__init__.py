@@ -47,7 +47,6 @@ SELF = {
     "packages_to_install": None,
     "worker_urls": [],
     "self_url": None,
-    "FIRST_INPUT_RECEIVED": False,
 }
 
 

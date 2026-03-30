@@ -32,4 +32,15 @@ if (originalNotExist && !Reflect.has(observerPrototype, "__burlaPatchedNotExist"
 // Register Syncfusion license key before any Syncfusion components are used
 registerLicense(import.meta.env.VITE_SYNCFUSION_LICENSE_KEY as string);
 
+let authRedirectInProgress = false;
+const originalFetch = window.fetch.bind(window);
+window.fetch = async (...args) => {
+    const response = await originalFetch(...args);
+    if (response.status === 401 && !authRedirectInProgress) {
+        authRedirectInProgress = true;
+        window.location.assign(window.location.pathname);
+    }
+    return response;
+};
+
 createRoot(document.getElementById("root")!).render(<App />);

@@ -342,45 +342,45 @@ def install_pkgs_and_execute_job(
 
         is_error = False
         firestore_stdout.input_index = input_index
-        # with firestore_stdout:  # <- all stdout sent to firestore (where it's grabbed by client)
-        try:
-            if user_defined_function is None:
-                user_defined_function = cloudpickle.loads(function_pkl)
-            input_ = cloudpickle.loads(input_pkl)
-
-            if am_elected_installer_worker and not udf_start_latency_logged:
-                SELF["udf_start_latency"] = time() - start_time
-                udf_start_latency_logged = True
-
-            return_value = user_defined_function(input_)
-            result_pkl = cloudpickle.dumps(return_value)
-            # SELF["logs"].append(f"UDF succeded on input #{input_index}.")
-
-            size_gb = len(result_pkl) / (1024**3)
-            if size_gb > 0.2:
-                function_call_str = f"{user_defined_function.__name__}(inputs[{input_index}])"
-                msg = f"\n\nThe object returned by the function call `{function_call_str}` is too big! ({size_gb:.2f}GB)\n"
-                msg += "Objects return by your function must be less than 0.2GB.\n"
-                msg += "Please upload any large results to cloud storage while inside your function, and return a reference.\n"
-                msg += "We apologize for this temporary limitation! If this is confusing or blocking you, please tell us! (jake@burla.dev)\n\n"
-                raise ValueError(msg)
-
-        except Exception:
-            # SELF["logs"].append(f"UDF raised an exception on input #{input_index}.")
-            is_error = True
-            exc_type, exc_value, exc_tb = sys.exc_info()
-            traceback_str = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+        with firestore_stdout:  # <- all stdout sent to firestore (where it's grabbed by client)
             try:
-                result = dict(
-                    type=exc_type,
-                    exception=exc_value,
-                    traceback_dict=Traceback(exc_tb).to_dict(),
-                    traceback_str=traceback_str,
-                )
-                result_pkl = pickle.dumps(result)
-            except:
-                # SELF["logs"].append(f"Could not pickle exception, sending as string.")
-                result_pkl = pickle.dumps(dict(traceback_str=traceback_str))
+                if user_defined_function is None:
+                    user_defined_function = cloudpickle.loads(function_pkl)
+                input_ = cloudpickle.loads(input_pkl)
+
+                if am_elected_installer_worker and not udf_start_latency_logged:
+                    SELF["udf_start_latency"] = time() - start_time
+                    udf_start_latency_logged = True
+
+                return_value = user_defined_function(input_)
+                result_pkl = cloudpickle.dumps(return_value)
+                # SELF["logs"].append(f"UDF succeded on input #{input_index}.")
+
+                size_gb = len(result_pkl) / (1024**3)
+                if size_gb > 0.2:
+                    function_call_str = f"{user_defined_function.__name__}(inputs[{input_index}])"
+                    msg = f"\n\nThe object returned by the function call `{function_call_str}` is too big! ({size_gb:.2f}GB)\n"
+                    msg += "Objects return by your function must be less than 0.2GB.\n"
+                    msg += "Please upload any large results to cloud storage while inside your function, and return a reference.\n"
+                    msg += "We apologize for this temporary limitation! If this is confusing or blocking you, please tell us! (jake@burla.dev)\n\n"
+                    raise ValueError(msg)
+
+            except Exception:
+                # SELF["logs"].append(f"UDF raised an exception on input #{input_index}.")
+                is_error = True
+                exc_type, exc_value, exc_tb = sys.exc_info()
+                traceback_str = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+                try:
+                    result = dict(
+                        type=exc_type,
+                        exception=exc_value,
+                        traceback_dict=Traceback(exc_tb).to_dict(),
+                        traceback_str=traceback_str,
+                    )
+                    result_pkl = pickle.dumps(result)
+                except:
+                    # SELF["logs"].append(f"Could not pickle exception, sending as string.")
+                    result_pkl = pickle.dumps(dict(traceback_str=traceback_str))
 
         if is_error:
             # write traceback as log message

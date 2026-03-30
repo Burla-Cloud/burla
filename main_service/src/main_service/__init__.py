@@ -331,7 +331,7 @@ async def validate_requests(request: Request, call_next):
                         user_email=email,
                         first_name=first_name,
                     )
-                    return Response(content=rendered, status_code=401, media_type="text/html")
+                    return Response(content=rendered, status_code=200, media_type="text/html")
 
         rendered = STATIC_FILES_ENV.get_template("login.html.j2").render(
             redirect_locally=REDIRECT_LOCALLY_ON_LOGIN,

@@ -18,7 +18,8 @@ is running, or google-cloud-logging for errors from the `node_service` or `worke
 #### Instructions for Agents:
 
 1. Before running tests, ensure the cluster is on, ready, and the machine is authorized.
-2. Run `make test`.
-3. After test run, use the browser tool to open the dashboard job details page for the latest test job.
-4. Verify that logs on the job details page show `"hi"` exactly once per input.
+2. If the cluster is not running, open the dashboard with the browser tool and press Start to boot it.
+3. Run `make test`.
+4. After test run, use the browser tool to open the dashboard job details page for the latest test job.
+5. Verify that logs on the job details page show `"hi"` exactly once per input.
 

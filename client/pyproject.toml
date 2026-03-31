@@ -1,6 +1,6 @@
 [project]
 name = "burla"
-version = "1.4.10"
+version = "1.4.11"
 description = "Easy to use cluster-compute software."
 requires-python = ">=3.11"
 dependencies = [

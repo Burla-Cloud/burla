@@ -1,6 +1,21 @@
-## Scale Python across 1000 computers in 1 second.
+<br>
+<p align="center">
+  <a href="https://burla.dev">
+    <img src="https://backend.burla.dev/static/logo.svg" width="300">
+  </a>
+</p>
+<br>
+<p align="center">
+  <img src="https://img.shields.io/pypi/v/burla?style=for-the-badge" height="24">
+  <img src="https://img.shields.io/pypi/dm/burla?style=for-the-badge" height="24">
+  <img src="https://img.shields.io/github/stars/Burla-Cloud/burla?style=for-the-badge&logo=github&logoColor=white" height="24">
+  <img src="https://img.shields.io/badge/docs-gitbook-3C5B65?style=for-the-badge&logo=gitbook&logoColor=white&radius=20" height="24">
+  <img src="https://img.shields.io/badge/python-3.10+-3C5B65?style=for-the-badge&logo=python&logoColor=white&radius=20" height="24">
+</p>
 
-Burla is a Python package with only **one function**:
+## Scale Python across 1,000 computers in 1 second.
+
+Burla is an open-source cloud platform for Python developers. It only has one function:
 
 ```py
 from burla import remote_parallel_map
@@ -13,15 +28,15 @@ def my_function(x):
 remote_parallel_map(my_function, my_inputs)
 ```
 
-**This runs `my_function` on 1000 VMs in the cloud in under one second.**
+This runs `my_function` on 1,000 VMs in the cloud, in < 1 second:
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Burla-Cloud/user-docs/main/.gitbook/assets/final_terminal.gif" alt="Burla terminal demo showing remote_parallel_map running on 1,000 computers" />
+  <img src="https://raw.githubusercontent.com/Burla-Cloud/user-docs/main/.gitbook/assets/hell_cut_extended_no-zsh.gif" alt="Burla terminal demo showing remote_parallel_map running on 1,000 computers" />
 </p>
 
-## Burla is the simplest way to scale any data pipeline.
+## The simplest way to build scalable data-pipelines.
 
-Burla scales up to 10,000 CPUs in a single function call and supports GPUs plus custom containers.
+Burla scales up to 10,000 CPUs in a single function call, supports GPUs, and custom containers.  
 Load data in parallel from cloud storage, then write results in parallel from thousands of VMs at once.
 
 ```py
@@ -33,51 +48,51 @@ remote_parallel_map(predict, [...], func_gpu="A100")
 This creates a pipeline like:
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Burla-Cloud/user-docs/main/.gitbook/assets/output-onlinegiftools%20%281%29%20%281%29.gif" alt="Burla data pipeline diagram animation" />
+  <img src="https://raw.githubusercontent.com/Burla-Cloud/user-docs/main/.gitbook/assets/data-pipeline-4%20%281%29.gif" alt="Burla data pipeline animation" />
 </p>
 
-Burla includes a dashboard so you can monitor progress, cancel bad runs, and inspect logs.
+### Monitor progress in the dashboard:
+
+Cancel bad runs, filter logs to watch individual inputs, or monitor output files in the UI.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Burla-Cloud/user-docs/main/.gitbook/assets/area2-rounded-white-r60-exact-size.gif" alt="Burla dashboard demo" />
+  <img src="https://raw.githubusercontent.com/Burla-Cloud/user-docs/main/.gitbook/assets/area2-radius60-247-251-252.gif" alt="Burla dashboard demo" />
 </p>
 
-## How it works
+## How it works:
 
-With Burla, running code in the cloud feels the same as coding on your laptop:
+With Burla, **running code in the cloud feels the same as coding on your laptop:**
 
 ```py
 return_values = remote_parallel_map(my_function, my_inputs)
 ```
 
-When functions run with `remote_parallel_map`:
+When functions are run with `remote_parallel_map`:
 
-- Anything they print appears locally (and in Burla's dashboard).
-- Exceptions are thrown locally.
-- Packages and local modules are cloned onto remote machines.
-- Code starts running in under one second, even with millions of inputs.
+- Anything they print appears locally (and inside Burla's dashboard).
+- Any exceptions are thrown locally.
+- Any packages or local modules they use are (very quickly) cloned on remote machines.
+- Code starts running in under one second, even with millions of inputs or thousands of machines.
 
-## Features
+### Features:
 
-- **Automatic Package Sync**  
-  Burla quickly clones your Python packages to every remote machine where your code runs.
+- **📦  Automatic Package Sync**  
+  Burla automatically (and very quickly) clones your Python packages on every remote machine where code is executed.
 
-- **Custom Containers**  
-  Run code in any Docker container, public or private.
+- **🐋  Custom Containers**  
+  Easily run code in any Docker container. Public or private, just paste an image URI in the settings, then hit start.
 
-- **Network Filesystem**  
-  Burla mounts cloud storage to `./shared` in every container for easy data exchange.
+- **📂  Network Filesystem**  
+  Need to get big data into or out of the cluster? Burla automatically mounts a cloud storage bucket to a folder in every container.
 
-- **Variable Hardware Per Function**  
-  Use `func_cpu` and `func_ram` to give different functions different hardware sizes.
+- **⚙️  Variable Hardware Per-Function**  
+  The `func_cpu` and `func_ram` args make it possible to assign big hardware to some functions, and less to others.
 
-## Try Burla in less than 2 minutes
+### Try Burla for Free, using 1,000 CPUs!
 
-1. Sign in at [login.burla.dev](https://login.burla.dev/).
-2. Follow the 3-step quickstart on the Burla homepage.
-
-Burla is open-source and easy to self-host. See the self-hosted quickstart:
-[docs.burla.dev/get-started#quickstart-self-hosted](https://docs.burla.dev/get-started#quickstart-self-hosted)
+1. [Sign in](https://login.burla.dev/) using your Google or Microsoft account.
+2. Run the quickstart in this Google Colab notebook (takes less than 2 minutes):
+   [Open the quickstart notebook](https://colab.research.google.com/drive/1msf0EWJA2wdH4QG5wPX2BncSEr5uVufv?usp=sharing)
 
 ## Examples
 
@@ -86,8 +101,3 @@ Burla is open-source and easy to self-host. See the self-hosted quickstart:
 - [Genome alignments using 1,300 CPUs](https://docs.burla.dev/examples/multi-stage-genomic-pipeline)
 
 Learn more at [docs.burla.dev](https://docs.burla.dev/).
-
----
-
-Questions?  
-[Schedule a call](http://cal.com/jakez/burla), or email **jake@burla.dev**.

@@ -31,7 +31,7 @@ remote_parallel_map(my_function, my_inputs)
 This runs `my_function` on 1,000 VMs in the cloud, in < 1 second:
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Burla-Cloud/user-docs/main/.gitbook/assets/hell_cut_extended_no-zsh.gif" alt="Burla terminal demo showing remote_parallel_map running on 1,000 computers" />
+  <img src="https://raw.githubusercontent.com/Burla-Cloud/user-docs/main/.gitbook/assets/hell_cut_extended_no-zsh.gif" alt="Burla terminal demo showing remote_parallel_map running on 1,000 computers" width="90%" />
 </p>
 
 ## The simplest way to build scalable data-pipelines.

@@ -1,16 +1,16 @@
 <br>
 <p align="center">
   <a href="https://burla.dev">
-    <img src="https://backend.burla.dev/static/logo.svg" width="300">
+    <img src="https://backend.burla.dev/static/logo.svg" width="240">
   </a>
 </p>
 <br>
 <p align="center">
-  <img src="https://img.shields.io/pypi/v/burla?style=for-the-badge" height="24">
-  <img src="https://img.shields.io/pypi/dm/burla?style=for-the-badge" height="24">
-  <img src="https://img.shields.io/github/stars/Burla-Cloud/burla?style=for-the-badge&logo=github&logoColor=white" height="24">
-  <img src="https://img.shields.io/badge/docs-gitbook-3C5B65?style=for-the-badge&logo=gitbook&logoColor=white&radius=20" height="24">
-  <img src="https://img.shields.io/badge/python-3.10+-3C5B65?style=for-the-badge&logo=python&logoColor=white&radius=20" height="24">
+  <img src="https://img.shields.io/pypi/v/burla?style=for-the-badge" height="19">
+  <img src="https://img.shields.io/pypi/dm/burla?style=for-the-badge" height="19">
+  <img src="https://img.shields.io/github/stars/Burla-Cloud/burla?style=for-the-badge&logo=github&logoColor=white" height="19">
+  <img src="https://img.shields.io/badge/docs-gitbook-3C5B65?style=for-the-badge&logo=gitbook&logoColor=white&radius=20" height="19">
+  <img src="https://img.shields.io/badge/python-3.10+-3C5B65?style=for-the-badge&logo=python&logoColor=white&radius=20" height="19">
 </p>
 
 ## Scale Python across 1,000 computers in 1 second.
@@ -31,7 +31,7 @@ remote_parallel_map(my_function, my_inputs)
 This runs `my_function` on 1,000 VMs in the cloud, in < 1 second:
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Burla-Cloud/user-docs/main/.gitbook/assets/hell_cut_extended_no-zsh.gif" alt="Burla terminal demo showing remote_parallel_map running on 1,000 computers" />
+  <img src="https://raw.githubusercontent.com/Burla-Cloud/user-docs/main/.gitbook/assets/hell_cut_extended_no-zsh.gif" alt="Burla terminal demo showing remote_parallel_map running on 1,000 computers" width="80%" />
 </p>
 
 ## The simplest way to build scalable data-pipelines.
@@ -48,7 +48,7 @@ remote_parallel_map(predict, [...], func_gpu="A100")
 This creates a pipeline like:
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Burla-Cloud/user-docs/main/.gitbook/assets/output-onlinegiftools%20%281%29%20%281%29.gif" alt="Burla data pipeline animation" />
+  <img src="https://raw.githubusercontent.com/Burla-Cloud/user-docs/main/.gitbook/assets/output-onlinegiftools%20%281%29%20%281%29.gif" alt="Burla data pipeline animation" width="80%" />
 </p>
 
 ### Monitor progress in the dashboard:
@@ -56,7 +56,7 @@ This creates a pipeline like:
 Cancel bad runs, filter logs to watch individual inputs, or monitor output files in the UI.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Burla-Cloud/user-docs/main/.gitbook/assets/area2-radius60-247-251-252.gif" alt="Burla dashboard demo" />
+  <img src="https://raw.githubusercontent.com/Burla-Cloud/user-docs/main/.gitbook/assets/area2-radius60-247-251-252.gif" alt="Burla dashboard demo" width="80%" />
 </p>
 
 ## How it works:
@@ -95,7 +95,7 @@ When functions are run with `remote_parallel_map`:
    [Open the quickstart notebook](https://colab.research.google.com/drive/1msf0EWJA2wdH4QG5wPX2BncSEr5uVufv?usp=sharing)
 
 <a href="https://colab.research.google.com/drive/1msf0EWJA2wdH4QG5wPX2BncSEr5uVufv?usp=sharing">
-  <img src="https://github.com/user-attachments/assets/e4665337-cb9d-4a85-8bbc-b330a3b2fb8a" alt="Open Burla quickstart in Google Colab" />
+  <img src="https://github.com/user-attachments/assets/e4665337-cb9d-4a85-8bbc-b330a3b2fb8a" alt="Open Burla quickstart in Google Colab" width="80%" />
 </a>
 
 ### Examples

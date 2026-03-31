@@ -1,16 +1,16 @@
 <br>
 <p align="center">
   <a href="https://burla.dev">
-    <img src="https://backend.burla.dev/static/logo.svg" width="240">
+    <img src="https://backend.burla.dev/static/logo.svg" width="264">
   </a>
 </p>
 <br>
 <p align="center">
-  <img src="https://img.shields.io/pypi/v/burla?style=for-the-badge" height="24">
-  <img src="https://img.shields.io/pypi/dm/burla?style=for-the-badge" height="24">
-  <img src="https://img.shields.io/github/stars/Burla-Cloud/burla?style=for-the-badge&logo=github&logoColor=white" height="24">
-  <img src="https://img.shields.io/badge/docs-gitbook-3C5B65?style=for-the-badge&logo=gitbook&logoColor=white&radius=20" height="24">
-  <img src="https://img.shields.io/badge/python-3.10+-3C5B65?style=for-the-badge&logo=python&logoColor=white&radius=20" height="24">
+  <img src="https://img.shields.io/pypi/v/burla?style=for-the-badge" height="22">
+  <img src="https://img.shields.io/pypi/dm/burla?style=for-the-badge" height="22">
+  <img src="https://img.shields.io/github/stars/Burla-Cloud/burla?style=for-the-badge&logo=github&logoColor=white" height="22">
+  <img src="https://img.shields.io/badge/docs-gitbook-3C5B65?style=for-the-badge&logo=gitbook&logoColor=white&radius=20" height="22">
+  <img src="https://img.shields.io/badge/python-3.10+-3C5B65?style=for-the-badge&logo=python&logoColor=white&radius=20" height="22">
 </p>
 
 ## Scale Python across 1,000 computers in 1 second.
@@ -92,7 +92,6 @@ When functions are run with `remote_parallel_map`:
 
 1. [Sign in](https://login.burla.dev/) using your Google or Microsoft account.
 2. Run the quickstart in this Google Colab notebook (takes less than 2 minutes):
-   [Open the quickstart notebook](https://colab.research.google.com/drive/1msf0EWJA2wdH4QG5wPX2BncSEr5uVufv?usp=sharing)
 
 <a href="https://colab.research.google.com/drive/1msf0EWJA2wdH4QG5wPX2BncSEr5uVufv?usp=sharing">
   <img src="https://github.com/user-attachments/assets/e4665337-cb9d-4a85-8bbc-b330a3b2fb8a" alt="Open Burla quickstart in Google Colab" />

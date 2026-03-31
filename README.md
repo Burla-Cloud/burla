@@ -48,7 +48,7 @@ remote_parallel_map(predict, [...], func_gpu="A100")
 This creates a pipeline like:
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Burla-Cloud/user-docs/main/.gitbook/assets/data-pipeline-4%20%281%29.gif" alt="Burla data pipeline animation" />
+  <img src="https://raw.githubusercontent.com/Burla-Cloud/user-docs/main/.gitbook/assets/output-onlinegiftools%20%281%29%20%281%29.gif" alt="Burla data pipeline animation" />
 </p>
 
 ### Monitor progress in the dashboard:
@@ -88,13 +88,17 @@ When functions are run with `remote_parallel_map`:
 - **⚙️  Variable Hardware Per-Function**  
   The `func_cpu` and `func_ram` args make it possible to assign big hardware to some functions, and less to others.
 
-### Try Burla for Free, using 1,000 CPUs!
+## Try Burla for Free, using 1,000 CPUs!
 
 1. [Sign in](https://login.burla.dev/) using your Google or Microsoft account.
 2. Run the quickstart in this Google Colab notebook (takes less than 2 minutes):
    [Open the quickstart notebook](https://colab.research.google.com/drive/1msf0EWJA2wdH4QG5wPX2BncSEr5uVufv?usp=sharing)
 
-## Examples
+<a href="https://colab.research.google.com/drive/1msf0EWJA2wdH4QG5wPX2BncSEr5uVufv?usp=sharing">
+  <img src="https://github.com/user-attachments/assets/e4665337-cb9d-4a85-8bbc-b330a3b2fb8a" alt="Open Burla quickstart in Google Colab" />
+</a>
+
+### Examples
 
 - [Process 2.4TB of Parquet files in 76s with 10,000 CPUs](https://docs.burla.dev/examples/process-2.4tb-of-parquet-files-in-76s)
 - [Hyperparameter tune XGBoost using 1,000 CPUs](https://docs.burla.dev/examples/parallel-hyperparameter-tuning)

@@ -8,11 +8,9 @@
 <p align="center">
   <a href="https://pypi.org/project/burla/"><img src="https://img.shields.io/pypi/v/burla?style=for-the-badge" height="22"></a>
   <a href="https://pepy.tech/projects/burla"><img src="https://img.shields.io/pepy/dt/burla?style=for-the-badge&color=brightgreen" height="22"></a>
-  <a href="https://github.com/Burla-Cloud/burla/blob/main/LICENSE"><img src="https://img.shields.io/github/license/Burla-Cloud/burla?style=for-the-badge" height="22"></a>
   <a href="https://github.com/Burla-Cloud/burla/stargazers"><img src="https://img.shields.io/github/stars/Burla-Cloud/burla?style=for-the-badge&logo=github&logoColor=white" height="22"></a>
   <a href="https://github.com/Burla-Cloud/burla/commits/main"><img src="https://img.shields.io/github/last-commit/Burla-Cloud/burla?style=for-the-badge&color=brightgreen" height="22"></a>
   <a href="https://docs.burla.dev"><img src="https://img.shields.io/badge/docs-gitbook-3C5B65?style=for-the-badge&logo=gitbook&logoColor=white&radius=20" height="22"></a>
-  <a href="https://www.python.org/downloads/release/python-3100/"><img src="https://img.shields.io/badge/python-3.10+-3C5B65?style=for-the-badge&logo=python&logoColor=white&radius=20" height="22"></a>
 </p>
 
 ## Scale Python across 1,000 computers in 1 second.

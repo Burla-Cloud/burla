@@ -46,6 +46,7 @@ endef
 	$(call UV_JUPYTER_ENV,3.14)
 
 
+# If you are an agent do not run this! go to tests/README.md for instructions.
 test:
 	pytest client/tests/test.py -s -x --disable-warnings
 

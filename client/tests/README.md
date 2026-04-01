@@ -28,12 +28,27 @@ is running, or google-cloud-logging for errors from the `node_service` or `worke
      - password: Google Cloud Secret `JakesCursorAgent-gmail-password`
    - press the Start button in the Burla UI
 4. Readiness gate: if you cannot verify local-dev cluster is on and ready, stop.
-   Do not run tests in that state. Report blocked with the reason.
-5. `make test` is not reliable in fresh shells because `pytest` may not be on `PATH`.
+   Do not run tests in that state. Investigate why cluster boot failed and report
+   a clear diagnosis (what failed, where it failed, and the likely fix).
+   A run only counts as "running the tests" when this readiness gate is passed.
+   Any failure caused by cluster-not-ready state does not count as a test run.
+   - Local-dev recovery: if tests fail with connection errors (for example
+     `Cannot connect to host localhost:8081`) right after containers were killed,
+     nodes may still be marked ready in Firestore while containers are down.
+     Open the cluster dashboard and click **Restart** to recreate containers, then
+     rerun the test command.
+     Treat this as a readiness failure, not a test failure.
+5. If tests fail with auth errors like `invalid_grant`, `Invalid JWT Signature`,
+   or `FirestoreTimeout` during login/DB checks:
+   - run `burla login --no_browser=True`
+   - open the printed login URL in browser automation
+   - complete login and click the Authorize button
+   - then rerun the test command
+6. `make test` is not reliable in fresh shells because `pytest` may not be on `PATH`.
    Always run tests with uv from repo root:
    - `uv sync --project ./client --group dev`
    - `uv run --project ./client --group dev pytest client/tests/test.py -s -x --disable-warnings`
-6. Hard timeout rule: if test output does not advance to pass/fail within 10 seconds after
+7. Hard timeout rule: if test output does not advance to pass/fail within 10 seconds after
    `collected 1 item`, stop the test process and report it as blocked. Never wait longer.
-7. After test run, verify logs for the latest test job show `"hi"` once per input.
+8. After test run, verify logs for the latest test job show `"hi"` once per input.
 

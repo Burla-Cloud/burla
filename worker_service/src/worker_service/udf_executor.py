@@ -6,6 +6,7 @@ import multiprocessing
 import requests
 import traceback
 import subprocess
+import random
 from datetime import datetime, timezone
 from queue import Empty
 from time import sleep, time
@@ -280,7 +281,7 @@ def _steal_inputs_from_neighboring_workers(job_id: str):
             response = requests.get(url, params=params, timeout=2)
             response.raise_for_status()
         except Exception as e:
-            SELF["logs"].append(f"Error stealing inputs from {neighbor_url}: {e}")
+            # SELF["logs"].append(f"Error stealing inputs from {neighbor_url}: {e}")
             continue
 
         input_pkl_with_indexes = pickle.loads(response.content)
@@ -452,6 +453,7 @@ def install_pkgs_and_execute_job(
     udf_start_latency_logged = False
     got_first_input = False
     _load_user_function(function_pkl)
+    no_stolen_inputs_sleep_time = random.uniform(0.0, 1.0)
     while not SELF["STOP_PROCESSING_EVENT"].is_set():
 
         # sometimes users change this and it shouldnt affect the next function call
@@ -464,25 +466,38 @@ def install_pkgs_and_execute_job(
             got_first_input = True
             # SELF["logs"].append(f"NOT IDLE: Popped input #{input_index} from queue.")
         except Empty:
-            if got_first_input:  # if this runs before any inputs recieved the job fails.
+            if got_first_input:
+                # if this runs before any inputs recieved the job fails from race condition.
+                # + is slow to react trying to steal from other workers before any have inputs.
                 SELF["IDLE"] = True
                 n_stolen_inputs = _steal_inputs_from_neighboring_workers(job_id)
                 if n_stolen_inputs > 0:
                     SELF["IDLE"] = False
+                    no_stolen_inputs_sleep_time = random.uniform(0.0, 1.0)
                     SELF["logs"].append(f"Stole {n_stolen_inputs} inputs from neighboring worker!")
                 else:
                     # SELF["logs"].append("IDLE: No inputs from neighbor.")
-                    sleep(1)
+                    no_stolen_inputs_sleep_time += 1 + random.uniform(0.0, 1.0)
+                    sleep(no_stolen_inputs_sleep_time)
+            sleep(0.001)
             continue
 
         is_error = False
         firestore_stdout.input_index = input_index
         with firestore_stdout:  # <- all stdout sent to firestore (where it's grabbed by client)
             try:
+<<<<<<< HEAD
+=======
+                if user_defined_function is None:
+                    user_defined_function = cloudpickle.loads(function_pkl)
+                input_ = cloudpickle.loads(input_pkl)
+
+>>>>>>> main
                 if am_elected_installer_worker and not udf_start_latency_logged:
                     SELF["udf_start_latency"] = time() - start_time
                     udf_start_latency_logged = True
 
+<<<<<<< HEAD
                 is_error, result_pkl, traceback_str = _execute_user_function(
                     input_index,
                     input_pkl,
@@ -499,6 +514,20 @@ def install_pkgs_and_execute_job(
                         msg += "Please upload any large results to cloud storage while inside your function, and return a reference.\n"
                         msg += "We apologize for this temporary limitation! If this is confusing or blocking you, please tell us! (jake@burla.dev)\n\n"
                         raise ValueError(msg)
+=======
+                return_value = user_defined_function(input_)
+                result_pkl = cloudpickle.dumps(return_value)
+                # SELF["logs"].append(f"UDF succeded on input #{input_index}.")
+
+                size_gb = len(result_pkl) / (1024**3)
+                if size_gb > 0.2:
+                    function_call_str = f"{user_defined_function.__name__}(inputs[{input_index}])"
+                    msg = f"\n\nThe object returned by the function call `{function_call_str}` is too big! ({size_gb:.2f}GB)\n"
+                    msg += "Objects return by your function must be less than 0.2GB.\n"
+                    msg += "Please upload any large results to cloud storage while inside your function, and return a reference.\n"
+                    msg += "We apologize for this temporary limitation! If this is confusing or blocking you, please tell us! (jake@burla.dev)\n\n"
+                    raise ValueError(msg)
+>>>>>>> main
 
             except Exception:
                 # SELF["logs"].append(f"UDF raised an exception on input #{input_index}.")

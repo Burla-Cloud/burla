@@ -42,6 +42,7 @@ from burla._helpers import (
 PKG_MODULE_MAPPING = metadata.packages_distributions()
 
 LOGIN_TIMEOUT_SEC = 3
+NODE_SILENCE_TIMEOUT_SECONDS = 10 * 60
 BANNED_PACKAGES = ["ipython", "burla", "google-colab"]
 
 # This is here to remind myself why I SHOULDN'T do it (at least for now):
@@ -95,6 +96,11 @@ class UnPickleableUserFunctionException(Exception):
 
 class InternalClusterError(Exception):
     pass
+
+
+def _node_is_silent_too_long(last_reply_timestamp: float, silence_timeout_seconds: int):
+    seconds_since_last_reply = time() - last_reply_timestamp
+    return seconds_since_last_reply > silence_timeout_seconds
 
 
 async def _num_booting_nodes(db: AsyncClient):
@@ -386,6 +392,7 @@ async def _execute_job(
         nodes = [node for node in await asyncio.gather(*assign_node_tasks) if node]
         if not nodes:
             raise Exception("Job refused by all available Nodes!")
+        node_last_reply_timestamp = {node["instance_name"]: time() for node in nodes}
 
         # start sending "alive" pings to nodes
         ping_process = await run_in_subprocess(send_alive_pings, nodes, auth_headers)
@@ -397,7 +404,12 @@ async def _execute_job(
 
         async def _get_with_retries(url: str, headers: dict, max_retries=5):
             try:
-                return await session.get(url, headers=headers, timeout=ClientTimeout(total=30))
+                return await session.get(url, headers=headers, timeout=ClientTimeout(total=60))
+            except asyncio.TimeoutError:
+                if max_retries <= 1:
+                    raise
+                await asyncio.sleep(1)
+                return await _get_with_retries(url, headers, max_retries=max_retries - 1)
             except (ClientOSError, ClientError, OSError) as e:
                 if max_retries <= 1 or "Protocol wrong type for socket" not in str(e):
                     raise
@@ -407,55 +419,76 @@ async def _execute_job(
         async def _check_single_node(node: dict):
             url = f"{node['host']}/jobs/{job_id}/results"
 
-            async with await _get_with_retries(url, auth_headers) as response:
-                if response.status == 404:
-                    nodes.remove(node)  # <- means node is likely rebooting and failed or is done
-                    return None
-                if response.status != 200:
-                    raise Exception(f"Result-check failed for node: {node['instance_name']}")
+            try:
+                async with await _get_with_retries(url, auth_headers) as response:
+                    if response.status == 404:
+                        nodes.remove(
+                            node
+                        )  # <- means node is likely rebooting and failed or is done
+                        node_last_reply_timestamp.pop(node["instance_name"], None)
+                        return None
+                    if response.status != 200:
+                        raise Exception(f"Result-check failed for node: {node['instance_name']}")
+                    node_last_reply_timestamp[node["instance_name"]] = time()
 
-                try:
-                    node_status = pickle.loads(await response.content.read())
-                except UnpicklingError as e:
-                    if "Memo value not found at index" not in str(e):
-                        raise e
+                    try:
+                        node_status = pickle.loads(await response.content.read())
+                    except UnpicklingError as e:
+                        if "Memo value not found at index" not in str(e):
+                            raise e
 
-                    job_doc = await job_ref.get()
-                    if job_doc.to_dict()["status"] == "CANCELED":
-                        raise JobCanceled("Job canceled from dashboard.")
-                    else:
-                        msg = f"Node {node['instance_name']} disconnected while transmitting results.\n"
-                        raise NodeDisconnected(msg)
+                        job_doc = await job_ref.get()
+                        if job_doc.to_dict()["status"] == "CANCELED":
+                            raise JobCanceled("Job canceled from dashboard.")
+                        else:
+                            msg = f"Node {node['instance_name']} disconnected while transmitting results.\n"
+                            raise NodeDisconnected(msg)
 
-                return_values = []
-                for input_index, is_error, result_pkl in node_status["results"]:
+                    return_values = []
+                    for input_index, is_error, result_pkl in node_status["results"]:
 
-                    if not is_error:
-                        return_values.append(cloudpickle.loads(result_pkl))
-                        continue
+                        if not is_error:
+                            return_values.append(cloudpickle.loads(result_pkl))
+                            continue
 
-                    exc_info = pickle.loads(result_pkl)
-                    if exc_info.get("traceback_dict"):
-                        traceback = Traceback.from_dict(exc_info["traceback_dict"]).as_traceback()
-                        user_function_error.set()
-                        msg = f"Job {job_id} failed due to user function error."
-                        await log_telemetry_async(msg, session, project_id=project_id)
-                        reraise(tp=exc_info["type"], value=exc_info["exception"], tb=traceback)
+                        exc_info = pickle.loads(result_pkl)
+                        if exc_info.get("traceback_dict"):
+                            traceback = Traceback.from_dict(
+                                exc_info["traceback_dict"]
+                            ).as_traceback()
+                            user_function_error.set()
+                            msg = f"Job {job_id} failed due to user function error."
+                            await log_telemetry_async(msg, session, project_id=project_id)
+                            reraise(tp=exc_info["type"], value=exc_info["exception"], tb=traceback)
 
-                    msg = f"\nThis exception had to be sent to your machine as a string:\n\n"
-                    msg += f"{exc_info['traceback_str']}\n"
-                    raise UnPickleableUserFunctionException(msg)
+                        msg = f"\nThis exception had to be sent to your machine as a string:\n\n"
+                        msg += f"{exc_info['traceback_str']}\n"
+                        raise UnPickleableUserFunctionException(msg)
 
-                status = {
-                    "udf_start_latency": node_status.get("udf_start_latency"),
-                    "packages_to_install": node_status.get("packages_to_install"),
-                    "all_packages_installed": node_status.get("all_packages_installed"),
-                    "is_empty": node_status["is_empty"],
-                    "current_parallelism": node_status["current_parallelism"],
-                    "currently_installing_package": node_status["currently_installing_package"],
-                    "return_values": return_values,
+                    status = {
+                        "udf_start_latency": node_status.get("udf_start_latency"),
+                        "packages_to_install": node_status.get("packages_to_install"),
+                        "all_packages_installed": node_status.get("all_packages_installed"),
+                        "is_empty": node_status["is_empty"],
+                        "current_parallelism": node_status["current_parallelism"],
+                        "currently_installing_package": node_status["currently_installing_package"],
+                        "return_values": return_values,
+                    }
+                    return status
+            except asyncio.TimeoutError:
+                last_reply_timestamp = node_last_reply_timestamp[node["instance_name"]]
+                if _node_is_silent_too_long(last_reply_timestamp, NODE_SILENCE_TIMEOUT_SECONDS):
+                    msg = f"Node {node['instance_name']} has not replied for over 10 minutes.\n"
+                    raise NodeDisconnected(msg)
+                return {
+                    "udf_start_latency": None,
+                    "packages_to_install": None,
+                    "all_packages_installed": False,
+                    "is_empty": False,
+                    "current_parallelism": 0,
+                    "currently_installing_package": None,
+                    "return_values": [],
                 }
-                return status
 
         n_results = 0
         result_loop_start = time()
@@ -658,6 +691,37 @@ def remote_parallel_map(
     # not an official dep
     if packages.get("SQLAlchemy") and "psycopg2-binary" in PKG_MODULE_MAPPING.get("psycopg2", []):
         packages["psycopg2-binary"] = metadata.version("psycopg2-binary")
+
+    # manually check for extras until we can support automatic extra detection.
+    if packages.get("geopandas"):
+        if "geoalchemy2" in PKG_MODULE_MAPPING and not ("geoalchemy2" in packages):
+            packages["geoalchemy2"] = metadata.version("geoalchemy2")
+        if "geopy" in PKG_MODULE_MAPPING and not ("geopy" in packages):
+            packages["geopy"] = metadata.version("geopy")
+        if "matplotlib" in PKG_MODULE_MAPPING and not ("matplotlib" in packages):
+            packages["matplotlib"] = metadata.version("matplotlib")
+        if "mapclassify" in PKG_MODULE_MAPPING and not ("mapclassify" in packages):
+            packages["mapclassify"] = metadata.version("mapclassify")
+        if "xyzservices" in PKG_MODULE_MAPPING and not ("xyzservices" in packages):
+            packages["xyzservices"] = metadata.version("xyzservices")
+        if "folium" in PKG_MODULE_MAPPING and not ("folium" in packages):
+            packages["folium"] = metadata.version("folium")
+        if "pointpats" in PKG_MODULE_MAPPING and not ("pointpats" in packages):
+            packages["pointpats"] = metadata.version("pointpats")
+        if "scipy" in PKG_MODULE_MAPPING and not ("scipy" in packages):
+            packages["scipy"] = metadata.version("scipy")
+        if "pyarrow" in PKG_MODULE_MAPPING and not ("pyarrow" in packages):
+            packages["pyarrow"] = metadata.version("pyarrow")
+        if "SQLAlchemy" in PKG_MODULE_MAPPING and not ("SQLAlchemy" in packages):
+            packages["SQLAlchemy"] = metadata.version("SQLAlchemy")
+
+    if packages.get("mapclassify"):
+        if "libpysal" in PKG_MODULE_MAPPING and not ("libpysal" in packages):
+            packages["libpysal"] = metadata.version("libpysal")
+        if "shapely" in PKG_MODULE_MAPPING and not ("shapely" in packages):
+            packages["shapely"] = metadata.version("shapely")
+        if "matplotlib" in PKG_MODULE_MAPPING and not ("matplotlib" in packages):
+            packages["matplotlib"] = metadata.version("matplotlib")
     # ------------------------------------------------
 
     max_parallelism = max_parallelism if max_parallelism else len(inputs)

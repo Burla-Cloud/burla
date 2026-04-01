@@ -94,7 +94,7 @@ When functions are run with `remote_parallel_map`:
 2. Run the quickstart in this Google Colab notebook (takes less than 2 minutes):
 
 <a href="https://colab.research.google.com/drive/1msf0EWJA2wdH4QG5wPX2BncSEr5uVufv?usp=sharing">
-  <img src="assets/colab-button.png" alt="Open Burla quickstart in Google Colab" />
+  <img src="https://raw.githubusercontent.com/Burla-Cloud/.github/main/assets/colab-button.png" alt="Open Burla quickstart in Google Colab" />
 </a>
 
 ### Examples

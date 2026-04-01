@@ -416,7 +416,9 @@ def _execute_user_function(
         if response_type == "result":
             _, response_input_index, is_error, result_pkl, traceback_str = response
             if response_input_index != input_index:
-                raise RuntimeError("User workload subprocess returned response for wrong input index.")
+                raise RuntimeError(
+                    "User workload subprocess returned response for wrong input index."
+                )
             return is_error, result_pkl, traceback_str
 
 
@@ -486,18 +488,10 @@ def install_pkgs_and_execute_job(
         firestore_stdout.input_index = input_index
         with firestore_stdout:  # <- all stdout sent to firestore (where it's grabbed by client)
             try:
-<<<<<<< HEAD
-=======
-                if user_defined_function is None:
-                    user_defined_function = cloudpickle.loads(function_pkl)
-                input_ = cloudpickle.loads(input_pkl)
-
->>>>>>> main
                 if am_elected_installer_worker and not udf_start_latency_logged:
                     SELF["udf_start_latency"] = time() - start_time
                     udf_start_latency_logged = True
 
-<<<<<<< HEAD
                 is_error, result_pkl, traceback_str = _execute_user_function(
                     input_index,
                     input_pkl,
@@ -514,20 +508,6 @@ def install_pkgs_and_execute_job(
                         msg += "Please upload any large results to cloud storage while inside your function, and return a reference.\n"
                         msg += "We apologize for this temporary limitation! If this is confusing or blocking you, please tell us! (jake@burla.dev)\n\n"
                         raise ValueError(msg)
-=======
-                return_value = user_defined_function(input_)
-                result_pkl = cloudpickle.dumps(return_value)
-                # SELF["logs"].append(f"UDF succeded on input #{input_index}.")
-
-                size_gb = len(result_pkl) / (1024**3)
-                if size_gb > 0.2:
-                    function_call_str = f"{user_defined_function.__name__}(inputs[{input_index}])"
-                    msg = f"\n\nThe object returned by the function call `{function_call_str}` is too big! ({size_gb:.2f}GB)\n"
-                    msg += "Objects return by your function must be less than 0.2GB.\n"
-                    msg += "Please upload any large results to cloud storage while inside your function, and return a reference.\n"
-                    msg += "We apologize for this temporary limitation! If this is confusing or blocking you, please tell us! (jake@burla.dev)\n\n"
-                    raise ValueError(msg)
->>>>>>> main
 
             except Exception:
                 # SELF["logs"].append(f"UDF raised an exception on input #{input_index}.")

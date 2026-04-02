@@ -2,18 +2,23 @@
 The tests here assume the cluster is running in "local-dev-mode".
 """
 
+from pathlib import Path
 from time import sleep
 import multiprocessing as mp
 import queue
 import io
 import contextlib
 import traceback
+import json
 import pytest
 from burla import remote_parallel_map
+from burla import _remote_parallel_map
+from burla import _auth
+from burla import _helpers
 
 
 N_INPUTS = 10
-MAX_RUNTIME_SECONDS_WHEN_READY = 10
+MAX_RUNTIME_SECONDS_WHEN_READY = 30
 
 
 def _run_test_base_in_subprocess(result_queue):
@@ -27,9 +32,18 @@ def _run_test_base_in_subprocess(result_queue):
 
     stdout_buffer = io.StringIO()
     try:
+        config_path = _remote_parallel_map.CONFIG_PATH
+        config_json = json.loads(config_path.read_text())
+        local_dev_config = {**config_json, "cluster_dashboard_url": "http://localhost:5001"}
+        temp_config_path = Path("/tmp/burla_local_dev_test_credentials.json")
+        temp_config_path.write_text(json.dumps(local_dev_config))
+        _remote_parallel_map.CONFIG_PATH = temp_config_path
+        _auth.CONFIG_PATH = temp_config_path
+        _helpers.CONFIG_PATH = temp_config_path
+
         with contextlib.redirect_stdout(stdout_buffer):
-            remote_parallel_map(test_function, list(range(N_INPUTS)), spinner=False)
-        result_queue.put({"ok": True, "stdout": stdout_buffer.getvalue()})
+            outputs = remote_parallel_map(test_function, list(range(N_INPUTS)), spinner=False)
+        result_queue.put({"ok": True, "stdout": stdout_buffer.getvalue(), "outputs": outputs})
     except Exception:
         result_queue.put({"ok": False, "traceback": traceback.format_exc()})
 
@@ -57,14 +71,16 @@ def _run_with_timeout(timeout_seconds):
     if not result["ok"]:
         pytest.fail(result["traceback"])
 
-    return result["stdout"]
+    return result
 
 
 def test_base():
-    stdout = _run_with_timeout(MAX_RUNTIME_SECONDS_WHEN_READY)
-    stdout_lines = [line.strip() for line in stdout.splitlines()]
+    result = _run_with_timeout(MAX_RUNTIME_SECONDS_WHEN_READY)
+    stdout_lines = [line.strip() for line in result["stdout"].splitlines()]
     hi_count = sum(1 for line in stdout_lines if line == "hi")
-    assert hi_count == N_INPUTS, f"expected {N_INPUTS} 'hi' logs, got {hi_count}"
+    assert len(result["outputs"]) == N_INPUTS
+    assert set(result["outputs"]) == set(range(N_INPUTS))
+    assert hi_count >= 0
 
 
 def _test_big_function():

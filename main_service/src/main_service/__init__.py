@@ -123,7 +123,9 @@ def get_add_background_task_function(
     return add_logged_background_task
 
 
-from main_service.endpoints.cluster import router as cluster_router
+from main_service.endpoints.cluster_lifecycle import router as cluster_lifecycle_router
+from main_service.endpoints.cluster_views import router as cluster_views_router
+from main_service.endpoints.usage import router as usage_router
 from main_service.endpoints.settings import router as settings_router
 from main_service.endpoints.jobs import router as jobs_router
 from main_service.endpoints.storage import router as storage_router
@@ -154,7 +156,9 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None)
-app.include_router(cluster_router)
+app.include_router(cluster_lifecycle_router)
+app.include_router(cluster_views_router)
+app.include_router(usage_router)
 app.include_router(settings_router)
 app.include_router(jobs_router)
 app.include_router(storage_router)

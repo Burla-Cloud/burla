@@ -45,7 +45,6 @@ LOGIN_TIMEOUT_SEC = 3
 NODE_SILENCE_TIMEOUT_SECONDS = 10 * 60
 BANNED_PACKAGES = ["ipython", "burla", "google-colab"]
 MAX_GROW_CPUS = 2560
-LOCAL_DEV_MAX_GROW_CPUS = 4
 
 # This is here to remind myself why I SHOULDN'T do it (at least for now):
 # If I warm up the connections on import like below, then RPM calls that are right next to each
@@ -184,12 +183,7 @@ def _target_cluster_cpus(
     func_cpu: int,
     func_ram: int,
 ):
-    target_cpus = _required_cluster_cpus(n_inputs, max_parallelism, func_cpu, func_ram)
-    local_dev_url = cluster_dashboard_url.startswith("http://localhost:")
-    local_dev_url = local_dev_url or cluster_dashboard_url.startswith("http://127.0.0.1:")
-    if local_dev_url:
-        return min(target_cpus, LOCAL_DEV_MAX_GROW_CPUS)
-    return target_cpus
+    return _required_cluster_cpus(n_inputs, max_parallelism, func_cpu, func_ram)
 
 
 async def _grow_cluster_if_needed(
@@ -204,7 +198,7 @@ async def _grow_cluster_if_needed(
         cluster_dashboard_url, n_inputs, max_parallelism, func_cpu, func_ram
     )
     request_json = {"target_cpus": target_cpus}
-    timeout = ClientTimeout(total=60)
+    timeout = ClientTimeout(total=600)
     async with aiohttp.ClientSession(trust_env=True) as session:
         async with session.post(
             f"{cluster_dashboard_url}/v1/cluster/grow",

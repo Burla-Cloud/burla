@@ -22,6 +22,7 @@ from main_service.node import Container, Node
 from main_service.helpers import Logger
 
 router = APIRouter()
+LOCAL_DEV_MAX_GROW_CPUS = 4
 
 
 def _require_auth(request: Request) -> dict:
@@ -198,6 +199,8 @@ async def grow_cluster(request: Request, logger: Logger = Depends(get_logger)):
     target_cpus = int(request_json.get("target_cpus", 0))
     if target_cpus <= 0:
         raise HTTPException(status_code=400, detail="target_cpus must be > 0")
+    if IN_LOCAL_DEV_MODE:
+        target_cpus = min(target_cpus, LOCAL_DEV_MAX_GROW_CPUS)
 
     config = _get_cluster_config()
     node_spec = config["Nodes"][0]

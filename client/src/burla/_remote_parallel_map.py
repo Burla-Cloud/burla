@@ -44,7 +44,6 @@ PKG_MODULE_MAPPING = metadata.packages_distributions()
 LOGIN_TIMEOUT_SEC = 3
 NODE_SILENCE_TIMEOUT_SECONDS = 10 * 60
 BANNED_PACKAGES = ["ipython", "burla", "google-colab"]
-MAX_GROW_CPUS = 2560
 
 # This is here to remind myself why I SHOULDN'T do it (at least for now):
 # If I warm up the connections on import like below, then RPM calls that are right next to each
@@ -173,44 +172,29 @@ def _required_cluster_cpus(n_inputs: int, max_parallelism: int, func_cpu: int, f
     required_workers = min(n_inputs, max_parallelism)
     required_cpus_for_ram = (func_ram + 3) // 4
     required_cpus_per_worker = max(func_cpu, required_cpus_for_ram)
-    return min(required_workers * required_cpus_per_worker, MAX_GROW_CPUS)
-
-
-def _target_cluster_cpus(
-    cluster_dashboard_url: str,
-    n_inputs: int,
-    max_parallelism: int,
-    func_cpu: int,
-    func_ram: int,
-):
-    return _required_cluster_cpus(n_inputs, max_parallelism, func_cpu, func_ram)
+    return required_workers * required_cpus_per_worker
 
 
 async def _grow_cluster_if_needed(
-    cluster_dashboard_url: str,
     auth_headers: dict,
     n_inputs: int,
     max_parallelism: int,
     func_cpu: int,
     func_ram: int,
 ):
-    target_cpus = _target_cluster_cpus(
-        cluster_dashboard_url, n_inputs, max_parallelism, func_cpu, func_ram
-    )
+    target_cpus = _required_cluster_cpus(n_inputs, max_parallelism, func_cpu, func_ram)
     request_json = {"target_cpus": target_cpus}
     timeout = ClientTimeout(total=600)
+    main_service_url = json.loads(CONFIG_PATH.read_text())["cluster_dashboard_url"]
+    url = f"{main_service_url}/v1/cluster/grow"
+
     async with aiohttp.ClientSession(trust_env=True) as session:
-        async with session.post(
-            f"{cluster_dashboard_url}/v1/cluster/grow",
-            json=request_json,
-            headers=auth_headers,
-            timeout=timeout,
-        ) as response:
+        request = session.post(url, json=request_json, headers=auth_headers, timeout=timeout)
+        async with await request as response:
             if response.status == 200:
                 return
             if response.status == 401:
                 raise Exception("Unauthorized! Please run `burla login` to authenticate.")
-            raise Exception(f"Failed to grow cluster: {response.status} {await response.text()}")
 
 
 async def _select_nodes_to_assign_to_job(
@@ -293,7 +277,6 @@ async def _execute_job(
 
     auth_headers = get_auth_headers()
     SYNC_DB, ASYNC_DB = get_db_clients()
-    cluster_dashboard_url = json.loads(CONFIG_PATH.read_text())["cluster_dashboard_url"]
 
     spinner_compatible_print = lambda msg: spinner.write(msg) if spinner else print(msg)
     function_pkl = cloudpickle.dumps(function_)
@@ -311,7 +294,6 @@ async def _execute_job(
         spinner.text = "Growing cluster for requested job parallelism ..."
     if grow:
         await _grow_cluster_if_needed(
-            cluster_dashboard_url=cluster_dashboard_url,
             auth_headers=auth_headers,
             n_inputs=len(inputs),
             max_parallelism=max_parallelism,
@@ -657,7 +639,7 @@ def remote_parallel_map(
     generator: bool = False,
     spinner: bool = True,
     max_parallelism: Optional[int] = None,
-    grow: bool = True,
+    grow: bool = False,
 ):
     """
     Run a Python function on many remote computers in parallel.
@@ -692,7 +674,7 @@ def remote_parallel_map(
             Defaults to the number of provided inputs.
         grow (bool, optional):
             If True, request cluster growth before assignment so enough compute is available
-            to process the requested parallelism quickly. Defaults to True.
+            to process the requested parallelism quickly. Defaults to False.
 
     Returns:
         List[Any] or Generator[Any, None, None]:

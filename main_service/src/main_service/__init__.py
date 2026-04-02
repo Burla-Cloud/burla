@@ -101,6 +101,12 @@ def get_logger(request: Request):
     return Logger(request)
 
 
+def get_auth_headers(request: Request):
+    authorization = request.session.get("Authorization") or request.headers.get("Authorization")
+    email = request.session.get("X-User-Email") or request.headers.get("X-User-Email")
+    return {"Authorization": authorization, "X-User-Email": email}
+
+
 def get_add_background_task_function(
     background_tasks: BackgroundTasks, logger: Logger = Depends(get_logger)
 ):

@@ -168,22 +168,10 @@ async def _get_ready_nodes(db: AsyncClient):
     return [d.to_dict() for d in docs]
 
 
-async def _grow_cluster_if_needed(
-    auth_headers: dict,
-    n_inputs: int,
-    max_parallelism: int,
-    func_cpu: int,
-    func_ram: int,
-):
-    request_json = {
-        "n_inputs": n_inputs,
-        "max_parallelism": max_parallelism,
-        "func_cpu": func_cpu,
-        "func_ram": func_ram,
-    }
+async def _grow_cluster(auth_headers: dict, missing_cpus: int):
+    request_json = {"missing_cpus": missing_cpus}
     main_service_url = json.loads(CONFIG_PATH.read_text())["cluster_dashboard_url"]
     url = f"{main_service_url}/v1/cluster/grow"
-
     async with aiohttp.ClientSession(trust_env=True) as session:
         request = session.post(url, json=request_json, headers=auth_headers)
         async with await request as response:
@@ -286,16 +274,25 @@ async def _execute_job(
         msg += "We apologize for this temporary limitation! If this is confusing or blocking you, please tell us! (jake@burla.dev)\n\n"
         raise FunctionTooBig(msg)
 
-    if spinner and grow:
-        spinner.text = "Growing cluster for requested job parallelism ..."
     if grow:
-        await _grow_cluster_if_needed(
-            auth_headers=auth_headers,
-            n_inputs=len(inputs),
-            max_parallelism=max_parallelism,
-            func_cpu=func_cpu,
-            func_ram=func_ram,
-        )
+        try:
+            nodes_to_assign, total_target_parallelism = await _select_nodes_to_assign_to_job(
+                ASYNC_DB, max_parallelism, func_cpu, func_ram, spinner
+            )
+        except (NoNodes, NoCompatibleNodes, AllNodesBusy):
+            nodes_to_assign, total_target_parallelism = [], 0
+
+        required_workers = min(len(inputs), max_parallelism)
+        required_cpus_for_ram = (func_ram + 3) // 4
+        required_cpus_per_worker = max(func_cpu, required_cpus_for_ram)
+        target_cpus = required_workers * required_cpus_per_worker
+        current_cpus = total_target_parallelism * required_cpus_per_worker
+        missing_cpus = max(0, target_cpus - current_cpus)
+
+        if missing_cpus > 0:
+            if spinner:
+                spinner.text = f"Booting additional {missing_cpus} CPUs ..."
+            await _grow_cluster(auth_headers=auth_headers, missing_cpus=missing_cpus)
 
     nodes_to_assign, total_target_parallelism = await _select_nodes_to_assign_to_job(
         ASYNC_DB, max_parallelism, func_cpu, func_ram, spinner

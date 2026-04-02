@@ -177,30 +177,25 @@ async def grow_cluster(
     auth_headers: dict = Depends(get_auth_headers),
 ):
     request_json = await request.json()
-    n_inputs = int(request_json["n_inputs"])
-    max_parallelism = int(request_json["max_parallelism"])
-    func_cpu = int(request_json["func_cpu"])
-    func_ram = int(request_json["func_ram"])
+    requested_missing_cpus = int(request_json["missing_cpus"])
+    requested_missing_cpus = max(0, requested_missing_cpus)
 
-    required_workers = min(n_inputs, max_parallelism)
-    required_cpus_for_ram = (func_ram + 3) // 4
-    required_cpus_per_worker = max(func_cpu, required_cpus_for_ram)
-    target_cpus = required_workers * required_cpus_per_worker
     max_cpu = LOCAL_DEV_MAX_GROW_CPUS if IN_LOCAL_DEV_MODE else MAX_GROW_CPUS
-    target_cpus = min(target_cpus, max_cpu)
+    current_cpus = _active_cluster_cpus()
+    max_additional_cpus = max(0, max_cpu - current_cpus)
+    missing_cpus = min(requested_missing_cpus, max_additional_cpus)
 
     config = _get_cluster_config()
     node_spec = config["Nodes"][0]
     cpu_per_node = _machine_type_cpu_count(node_spec["machine_type"])
-    current_cpus = _active_cluster_cpus()
-    missing_cpus = max(0, target_cpus - current_cpus)
     n_nodes_to_add = math.ceil(missing_cpus / cpu_per_node) if missing_cpus else 0
 
     if n_nodes_to_add > 0:
         _start_nodes(logger, auth_headers, config, n_nodes_to_add=n_nodes_to_add)
 
     return {
-        "target_cpus": target_cpus,
+        "requested_missing_cpus": requested_missing_cpus,
+        "missing_cpus_used": missing_cpus,
         "current_cpus": current_cpus,
         "added_nodes": n_nodes_to_add,
     }

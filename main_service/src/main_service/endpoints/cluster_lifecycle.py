@@ -177,7 +177,15 @@ async def grow_cluster(
     auth_headers: dict = Depends(get_auth_headers),
 ):
     request_json = await request.json()
-    target_cpus = int(request_json.get("target_cpus", 0))
+    n_inputs = int(request_json["n_inputs"])
+    max_parallelism = int(request_json["max_parallelism"])
+    func_cpu = int(request_json["func_cpu"])
+    func_ram = int(request_json["func_ram"])
+
+    required_workers = min(n_inputs, max_parallelism)
+    required_cpus_for_ram = (func_ram + 3) // 4
+    required_cpus_per_worker = max(func_cpu, required_cpus_for_ram)
+    target_cpus = required_workers * required_cpus_per_worker
     max_cpu = LOCAL_DEV_MAX_GROW_CPUS if IN_LOCAL_DEV_MODE else MAX_GROW_CPUS
     target_cpus = min(target_cpus, max_cpu)
 

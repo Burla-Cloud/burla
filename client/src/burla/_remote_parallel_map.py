@@ -168,13 +168,6 @@ async def _get_ready_nodes(db: AsyncClient):
     return [d.to_dict() for d in docs]
 
 
-def _required_cluster_cpus(n_inputs: int, max_parallelism: int, func_cpu: int, func_ram: int):
-    required_workers = min(n_inputs, max_parallelism)
-    required_cpus_for_ram = (func_ram + 3) // 4
-    required_cpus_per_worker = max(func_cpu, required_cpus_for_ram)
-    return required_workers * required_cpus_per_worker
-
-
 async def _grow_cluster_if_needed(
     auth_headers: dict,
     n_inputs: int,
@@ -182,14 +175,17 @@ async def _grow_cluster_if_needed(
     func_cpu: int,
     func_ram: int,
 ):
-    target_cpus = _required_cluster_cpus(n_inputs, max_parallelism, func_cpu, func_ram)
-    request_json = {"target_cpus": target_cpus}
-    timeout = ClientTimeout(total=600)
+    request_json = {
+        "n_inputs": n_inputs,
+        "max_parallelism": max_parallelism,
+        "func_cpu": func_cpu,
+        "func_ram": func_ram,
+    }
     main_service_url = json.loads(CONFIG_PATH.read_text())["cluster_dashboard_url"]
     url = f"{main_service_url}/v1/cluster/grow"
 
     async with aiohttp.ClientSession(trust_env=True) as session:
-        request = session.post(url, json=request_json, headers=auth_headers, timeout=timeout)
+        request = session.post(url, json=request_json, headers=auth_headers)
         async with await request as response:
             if response.status == 200:
                 return

@@ -24,8 +24,6 @@ from burla._helpers import (
     get_db_clients,
     get_modules_required_on_remote,
     install_signal_handlers,
-    log_telemetry,
-    log_telemetry_async,
     restore_signal_handlers,
     run_in_subprocess,
 )
@@ -36,9 +34,11 @@ from burla._node import (
     Node,
     NoCompatibleNodes,
     NoNodes,
+    UnauthorizedError,
     VersionMismatch,
     select_nodes_to_assign_to_job,
 )
+from burla._reporting import RemoteParallelMapReporter
 
 # load on import and reuse because this is very slow in big envs
 PKG_MODULE_MAPPING = metadata.packages_distributions()
@@ -55,11 +55,21 @@ BANNED_PACKAGES = ["ipython", "burla", "google-colab"]
 
 
 class FunctionTooBig(Exception):
-    pass
+    def __init__(self, function_name: str):
+        msg = f"\n\nYour function `{function_name}` is referencing some large objects!\n"
+        msg += "Functions submitted to Burla, including objects they reference that are defined elsewhere, must be less than 0.1GB.\n"
+        msg += "Does your function reference any big numpy arrays, dataframes, or other objects defined elsewhere?\n"
+        msg += "Please pass these as inputs to your function, or download them from the internet once inside the function.\n"
+        msg += "We apologize for this temporary limitation! If this is confusing or blocking you, please tell us! (jake@burla.dev)\n\n"
+        super().__init__(msg)
 
 
 class InternalClusterError(Exception):
-    pass
+    def __init__(self):
+        msg = "\nZero nodes working on job and we have not received all results!\n"
+        msg += "This usually means a worker or node crashed, then restarted itself. \n"
+        msg += "See node logs in the dashboard for details.\n"
+        super().__init__(msg)
 
 
 async def _grow_cluster(auth_headers: dict, current_cpus: int, missing_cpus: int) -> dict:
@@ -73,15 +83,12 @@ async def _grow_cluster(auth_headers: dict, current_cpus: int, missing_cpus: int
                 response_json = await response.json()
                 return response_json.get("added_node_instance_names", [])
             elif response.status == 401:
-                raise Exception("Unauthorized! Please run `burla login` to authenticate.")
+                raise UnauthorizedError()
             else:
                 raise Exception(f"Failed to grow cluster: {response.status}")
 
 
-async def _run_execute_job(*args, **kwargs):
-    auth_headers = get_auth_headers()
-    sync_db, async_db = get_db_clients()
-
+async def _execute_job_wrapped(*args, **kwargs):
     async with AsyncExitStack() as stack:
         connector = aiohttp.TCPConnector(
             limit=500,
@@ -92,15 +99,8 @@ async def _run_execute_job(*args, **kwargs):
         )
         client_session = aiohttp.ClientSession(connector=connector, trust_env=True)
         session = await stack.enter_async_context(client_session)
-        await _execute_job(
-            *args,
-            **kwargs,
-            auth_headers=auth_headers,
-            sync_db=sync_db,
-            async_db=async_db,
-            session=session,
-            session_stack=stack,
-        )
+        reporter = RemoteParallelMapReporter(**kwargs, session=session)
+        await _execute_job(*args, **kwargs, session=session, session_stack=stack, reporter=reporter)
 
 
 async def _execute_job(
@@ -118,32 +118,24 @@ async def _execute_job(
     inputs_done_event: Event,
     start_time: float,
     project_id: str,
-    generator: bool,
     user_function_error: Event,
     grow: bool,
-    auth_headers: dict,
-    sync_db,
-    async_db,
     session: aiohttp.ClientSession,
     session_stack: AsyncExitStack,
+    reporter: RemoteParallelMapReporter,
 ):
-    if background and spinner:
-        msg = f"Calling `{function_.__name__}` on {len(inputs)} inputs with detach mode enabled!\n"
-        msg += "This job will continue running if canceled locally, "
-        msg += "and inputs have finished uploading.\n-"
-        spinner.write(msg)
+    JOB_CANCELED_MSG = None
+    auth_headers = get_auth_headers()
+    sync_db, async_db = get_db_clients()
 
-    spinner_compatible_print = lambda msg: spinner.write(msg) if spinner else print(msg)
+    if background:
+        reporter.print_detach_mode_enabled_message()
+
     function_pkl = cloudpickle.dumps(function_)
-
     function_size_gb = len(function_pkl) / (1024**3)
+    reporter.function_size_gb = function_size_gb
     if function_size_gb > 0.1:
-        msg = f"\n\nYour function `{function_.__name__}` is referencing some large objects!\n"
-        msg += "Functions submitted to Burla, including objects they reference that are defined elsewhere, must be less than 0.1GB.\n"
-        msg += "Does your function reference any big numpy arrays, dataframes, or other objects defined elsewhere?\n"
-        msg += "Please pass these as inputs to your function, or download them from the internet once inside the function.\n"
-        msg += "We apologize for this temporary limitation! If this is confusing or blocking you, please tell us! (jake@burla.dev)\n\n"
-        raise FunctionTooBig(msg)
+        raise FunctionTooBig(function_.__name__)
 
     try:
         nodes_to_assign, target_parallelism = await select_nodes_to_assign_to_job(
@@ -152,53 +144,17 @@ async def _execute_job(
             func_cpu=func_cpu,
             func_ram=func_ram,
             spinner=spinner,
+            session=session,
+            auth_headers=auth_headers,
         )
     except (NoNodes, NoCompatibleNodes, AllNodesBusy):
         nodes_to_assign, target_parallelism = [], 0
         if not grow:
             raise
 
-    if grow:
-        # assuming static 1:4 cpu/ram ratio, how many more cpus do we need?
-        requested_parallelism = min(len(inputs), max_parallelism)
-        required_cpus_for_ram = (func_ram + 3) // 4
-        required_cpus_per_function_call = max(func_cpu, required_cpus_for_ram)
-        target_cpus = requested_parallelism * required_cpus_per_function_call
-        current_cpus = target_parallelism * required_cpus_per_function_call
-        missing_cpus = max(0, target_cpus - current_cpus)
-        if missing_cpus > 0:
-            booting_node_instance_names = await _grow_cluster(
-                auth_headers=auth_headers,
-                current_cpus=current_cpus,  # <- need to pass so we dont cross global max limit
-                missing_cpus=missing_cpus,
-            )
-            if spinner and len(booting_node_instance_names) > 0:
-                spinner.text = f"Booting {len(booting_node_instance_names)} additional nodes ..."
-            if len(nodes_to_assign) == 0 and len(booting_node_instance_names) == 0:
-                msg = "Cluster refused to boot required additional nodes ...\n"
-                msg += f"This isnt supposed to happen! Please email jake@burla.dev for help.\n"
-                raise NoNodes(msg)
-
-    if len(nodes_to_assign) == 0:
-        # wait until at least one boots to start job.
-        start_wait = time()
-        while True:
-            try:
-                nodes_to_assign, target_parallelism = await select_nodes_to_assign_to_job(
-                    db=async_db,
-                    max_parallelism=max_parallelism,
-                    func_cpu=func_cpu,
-                    func_ram=func_ram,
-                    spinner=spinner,
-                )
-                break
-            except NoNodes:
-                if time() - start_wait > 120:
-                    raise
-                await asyncio.sleep(1)
-
-    job_ref = async_db.collection("jobs").document(job_id)
-    await job_ref.set(
+    sync_job_ref = sync_db.collection("jobs").document(job_id)
+    async_job_ref = async_db.collection("jobs").document(job_id)
+    await async_job_ref.set(
         {
             "n_inputs": len(inputs),
             "func_cpu": func_cpu,
@@ -217,63 +173,64 @@ async def _execute_job(
         }
     )
 
-    function_size_str = f" ({function_size_gb:.3f}GB)" if function_size_gb > 0.001 else ""
-    msg = f"Calling function `{function_.__name__}`{function_size_str} on {len(inputs)} "
-    msg += f"inputs with {len(nodes_to_assign)} {nodes_to_assign[0].machine_type} nodes and "
-    msg += f"{func_cpu}vCPUs/{func_ram}GB RAM per function.\n"
-    msg += f"background={background}, generator={generator}, spinner={bool(spinner)}, "
-    msg += f"max_parallelism={max_parallelism}, job_id={job_id}"
-    asyncio.create_task(log_telemetry_async(msg, session, project_id=project_id))
+    if grow:
+        # assuming static 1:4 cpu/ram ratio, how many more cpus do we need?
+        requested_parallelism = min(len(inputs), max_parallelism)
+        required_cpus_for_ram = (func_ram + 3) // 4
+        required_cpus_per_function_call = max(func_cpu, required_cpus_for_ram)
+        target_cpus = requested_parallelism * required_cpus_per_function_call
+        current_cpus = target_parallelism * required_cpus_per_function_call
+        missing_cpus = max(0, target_cpus - current_cpus)
+        if missing_cpus > 0:
+            booting_node_instance_names = await _grow_cluster(
+                auth_headers=auth_headers,
+                current_cpus=current_cpus,  # <- need to pass so we dont cross global max limit
+                missing_cpus=missing_cpus,
+            )
+            if len(booting_node_instance_names) > 0:
+                reporter.set_booting_nodes_message(len(booting_node_instance_names))
+            if len(nodes_to_assign) == 0 and len(booting_node_instance_names) == 0:
+                raise NoNodes("Cluster refused to boot required additional nodes ...")
 
-    JOB_CANCELED_MSG = ""
-    FIRST_LOG_MESSAGE_PRINTED = False
+    # wait until at least one boots to start job.
+    if len(nodes_to_assign) == 0:
+        start_wait = time()
+        while True:
+            try:
+                nodes_to_assign, target_parallelism = await select_nodes_to_assign_to_job(
+                    db=async_db,
+                    max_parallelism=max_parallelism,
+                    func_cpu=func_cpu,
+                    func_ram=func_ram,
+                    spinner=spinner,
+                    session=session,
+                    auth_headers=auth_headers,
+                )
+                break
+            except NoNodes:
+                if time() - start_wait > 120:
+                    raise
+                await asyncio.sleep(1)
+
+    await reporter.log_job_start_telemetry(len(nodes_to_assign), nodes_to_assign[0].machine_type)
 
     # start stdout/stderr stream
     def _on_new_logs_doc(col_snapshot, changes, read_time):
         nonlocal JOB_CANCELED_MSG
-        nonlocal FIRST_LOG_MESSAGE_PRINTED
-        for change in changes:
-            for log in change.document.to_dict()["logs"]:
-                # ignore tb's written as log messages because errors are reraised instead
-                if log.get("is_error"):
-                    job = sync_db.collection("jobs").document(job_id).get().to_dict()
-                    if job["status"] == "CANCELED":
-                        JOB_CANCELED_MSG = log["message"]
+        for log in [log for c in changes for log in c.document.to_dict()["logs"]]:
+            if log.get("is_error") and sync_job_ref.get().to_dict()["status"] == "CANCELED":
+                JOB_CANCELED_MSG = log["message"]
+            else:
+                message = log["message"].rstrip("\r\n")
+                if spinner:
+                    spinner.write(message)
                 else:
-                    msg = log["message"]
-                    if msg.endswith("\r\n"):
-                        msg = msg[:-2]
-                    elif msg.endswith("\n"):
-                        msg = msg[:-1]
-                    spinner_compatible_print(msg)
-                    FIRST_LOG_MESSAGE_PRINTED = True
+                    print(message)
 
-    logs_collection = sync_db.collection("jobs").document(job_id).collection("logs")
-    log_stream = logs_collection.on_snapshot(_on_new_logs_doc)
+    log_stream = sync_job_ref.collection("logs").on_snapshot(_on_new_logs_doc)
     session_stack.callback(log_stream.unsubscribe)
 
-    if spinner:
-        function_size_mb = len(function_pkl) / 1024**2
-        total_data_gb = function_size_gb * len(nodes_to_assign)
-        msg = f"Uploading function `{function_.__name__}` to {len(nodes_to_assign)} nodes ..."
-        if total_data_gb > 0.01:
-            msg = f"Uploading function `{function_.__name__}` ({(function_size_mb):.2f}MB) "
-            msg += f"to {len(nodes_to_assign)} nodes ({total_data_gb:.2f}GB) ..."
-        spinner.text = msg
-
-    nodes_to_assign = [
-        Node(
-            instance_name=node.instance_name,
-            host=node.host,
-            machine_type=node.machine_type,
-            target_parallelism=node.target_parallelism,
-            session=session,
-            auth_headers=auth_headers,
-            async_db=async_db,
-            spinner=spinner,
-        )
-        for node in nodes_to_assign
-    ]
+    reporter.set_uploading_function_message(len(nodes_to_assign))
 
     # assign initial nodes
     nodes = []
@@ -314,9 +271,6 @@ async def _execute_job(
     all_packages_installed = False
     inputs_done_msg_printed = False
     while n_results < len(inputs):
-        if job_canceled_event.is_set():
-            # if this is set a nice user message was already printed.
-            return
 
         if all_nodes_empty:
             elapsed_time = time() - result_loop_start
@@ -339,7 +293,7 @@ async def _execute_job(
                     job_id=job_id,
                     nodes=nodes,
                     node_last_reply_timestamp=node_last_reply_timestamp,
-                    job_ref=job_ref,
+                    job_ref=async_job_ref,
                     user_function_error_event=user_function_error,
                     project_id=project_id,
                 )
@@ -348,14 +302,11 @@ async def _execute_job(
         )
         nodes_status = [status for status in nodes_status if status is not None]
         if not nodes_status:
-            msg = "\nZero nodes working on job and we have not received all results!\n"
-            msg += "This usually means a worker or node crashed, then restarted itself. \n"
-            msg += "See node logs in the dashboard for details.\n"
-            raise InternalClusterError(msg)
+            raise InternalClusterError()
 
         currently_installing_package = nodes_status[0]["currently_installing_package"]
-        if spinner and currently_installing_package:
-            spinner.text = f"Installing package: {currently_installing_package} ..."
+        if currently_installing_package:
+            reporter.set_installing_package_message(currently_installing_package)
 
         if job_canceled_event.is_set():
             # if this is set a nice user message was already printed.
@@ -380,13 +331,8 @@ async def _execute_job(
 
         if uploader_task.done() and uploader_task.exception():
             raise uploader_task.exception()
-        elif uploader_task.done() and spinner and background and not inputs_done_msg_printed:
-            msg = ""
-            if FIRST_LOG_MESSAGE_PRINTED:
-                msg += "-\n"
-            msg += "Done uploading inputs! "
-            msg += "Job will now continue running if canceled locally.\n-"
-            spinner.write(msg)
+        elif uploader_task.done() and background and not inputs_done_msg_printed:
+            reporter.print_inputs_done_message()
             inputs_done_msg_printed = True
 
         exit_code = ping_process.poll()
@@ -394,25 +340,18 @@ async def _execute_job(
             stderr = ping_process.stderr.read().decode("utf-8")
             raise Exception(f"Ping process exited with code: {exit_code}\n{stderr}")
 
-        if spinner and all_packages_installed:
+        if all_packages_installed:
             # (len(inputs) - n_results) < total_parallelism is possible happen due to lag
             # it's overwritten here because it's confusing to users.
-            spinner.text = (
-                f"Calling `{function_.__name__}`: {n_results}/{len(inputs)} completed, "
-                f"{min(total_parallelism, len(inputs) - n_results)} running."
-            )
+            reporter.set_running_progress_message(n_results, total_parallelism)
 
         if len(nodes) == 0 and return_queue.empty():  # nodes removed in Node.get_results
             raise Exception("Zero nodes working on job and we have not received all results!")
 
     total_runtime = time() - start_time
     udf_start_latency = round(udf_start_latency, 2) if udf_start_latency else None
-    msg = f"Job {job_id} completed successfully, udf_start_latency={udf_start_latency}s"
-    msg += f", total_runtime={total_runtime:.2f}s."
-    if packages_to_install:
-        msg += f"\nInstalled packages: {packages_to_install}"
-    asyncio.create_task(log_telemetry_async(msg, session, project_id=project_id))
-    await job_ref.update({"client_has_all_results": True})
+    await reporter.log_job_success_telemetry(udf_start_latency, total_runtime, packages_to_install)
+    await async_job_ref.update({"client_has_all_results": True})
 
 
 def remote_parallel_map(
@@ -561,11 +500,32 @@ def remote_parallel_map(
 
     return_queue = Queue()
     original_signal_handlers = None
+    local_reporter = None
     try:
         if spinner:
             spinner = yaspin(sigmap={})  # <- .start will overwrite my handlers without sigmap={}
             spinner.start()
-            spinner.text = f"Preparing to call `{function_.__name__}` on {len(inputs)} inputs ..."
+        local_reporter = RemoteParallelMapReporter(
+            job_id=job_id,
+            return_queue=return_queue,
+            function_=function_,
+            inputs=inputs,
+            packages=packages,
+            func_cpu=func_cpu,
+            func_ram=func_ram,
+            max_parallelism=max_parallelism,
+            background=background,
+            spinner=spinner,
+            job_canceled_event=None,
+            inputs_done_event=None,
+            start_time=start_time,
+            project_id=project_id,
+            generator=generator,
+            user_function_error=user_function_error,
+            grow=grow,
+            session=None,
+        )
+        local_reporter.set_preparing_message()
         job_canceled_event = Event()
         inputs_done_event = Event()
         original_signal_handlers = install_signal_handlers(
@@ -575,7 +535,7 @@ def remote_parallel_map(
         def execute_job():
             try:
                 asyncio.run(
-                    _run_execute_job(
+                    _execute_job_wrapped(
                         job_id=job_id,
                         return_queue=return_queue,
                         function_=wrapped_function_,
@@ -608,10 +568,7 @@ def remote_parallel_map(
         if job_canceled_event.is_set() and background and inputs_done_event.is_set():
             return
         elif job_canceled_event.is_set() and background and not inputs_done_event.is_set():
-            msg = "\n\nBackground job canceled before all inputs finished uploading to the cluster!"
-            msg += '\nPlease wait until the message "Done uploading inputs!" '
-            msg += "appears before canceling.\n\n-"
-            raise JobCanceled(msg)
+            raise JobCanceled(local_reporter.get_background_cancel_before_upload_message())
         elif job_canceled_event.is_set():
             raise JobCanceled("Job canceled by user.")
 
@@ -621,9 +578,7 @@ def remote_parallel_map(
                 yield return_queue.get()
                 n_results += 1
 
-        if spinner:
-            spinner.text = f"Done! {len(inputs)} `{function_.__name__}` calls completed."
-            spinner.ok("✔")
+        local_reporter.finish_spinner_success()
 
         return _output_generator() if generator else list(_output_generator())
 
@@ -636,31 +591,48 @@ def remote_parallel_map(
         # After a `FirestoreTimeout` further attempts to use firestore will take forever then fail.
         if not (isinstance(e, FirestoreTimeout) or background):
             try:
-                job_doc = SYNC_DB.collection("jobs").document(job_id)
-                if job_doc.get().to_dict()["status"] != "CANCELED":
+                sync_job_ref = SYNC_DB.collection("jobs").document(job_id)
+                if sync_job_ref.get().to_dict()["status"] != "CANCELED":
                     msg = f"client exception: {e}"
-                    job_doc.update({"status": "FAILED", "fail_reason": ArrayUnion([msg])})
+                    sync_job_ref.update({"status": "FAILED", "fail_reason": ArrayUnion([msg])})
             except Exception:
                 pass
 
         # Report errors back to Burla's cloud.
         if not user_function_error.is_set():
             exec_types_to_chill = [NoNodes, AllNodesBusy, NoCompatibleNodes, JobCanceled]
-            exec_types_to_chill.extend([VersionMismatch, FunctionTooBig, FirestoreTimeout])
+            exec_types_to_chill.extend(
+                [VersionMismatch, FunctionTooBig, FirestoreTimeout, UnauthorizedError]
+            )
             chill_exception = any([isinstance(e, e_type) for e_type in exec_types_to_chill])
 
             exc_type, exc_value, exc_traceback = sys.exc_info()
             tb_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
             traceback_str = "".join(tb_details)
-            kwargs = dict(traceback=traceback_str, project_id=project_id, job_id=job_id)
 
             try:
-                if chill_exception:
-                    msg = f"Job {job_id} failed with: {str(e)}"
-                    log_telemetry(msg, severity="INFO", **kwargs)
-                else:
-                    msg = f"Job {job_id} FAILED due to NON-UDF-ERROR:\n```{traceback_str}```"
-                    log_telemetry(msg, severity="ERROR", **kwargs)
+                if local_reporter is None:
+                    local_reporter = RemoteParallelMapReporter(
+                        job_id=job_id,
+                        return_queue=return_queue,
+                        function_=function_,
+                        inputs=inputs,
+                        packages=packages,
+                        func_cpu=func_cpu,
+                        func_ram=func_ram,
+                        max_parallelism=max_parallelism,
+                        background=background,
+                        spinner=spinner,
+                        job_canceled_event=None,
+                        inputs_done_event=None,
+                        start_time=start_time,
+                        project_id=project_id,
+                        generator=generator,
+                        user_function_error=user_function_error,
+                        grow=grow,
+                        session=None,
+                    )
+                local_reporter.log_job_failure_telemetry(e, traceback_str, chill_exception)
             except:
                 pass
 

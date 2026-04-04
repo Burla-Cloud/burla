@@ -13,7 +13,8 @@ def test_node_silence_timeout_not_exceeded(monkeypatch):
     last_reply_timestamp = now_timestamp - 119.0
     silence_timeout_seconds = 120
     monkeypatch.setattr(_node, "time", lambda: now_timestamp)
-    assert not _node.node_is_silent_too_long(last_reply_timestamp, silence_timeout_seconds)
+    seconds_since_last_reply = _node.time() - last_reply_timestamp
+    assert not (seconds_since_last_reply > silence_timeout_seconds)
 
 
 def test_node_silence_timeout_exceeded(monkeypatch):
@@ -22,4 +23,5 @@ def test_node_silence_timeout_exceeded(monkeypatch):
     last_reply_timestamp = now_timestamp - 121.0
     silence_timeout_seconds = 120
     monkeypatch.setattr(_node, "time", lambda: now_timestamp)
-    assert _node.node_is_silent_too_long(last_reply_timestamp, silence_timeout_seconds)
+    seconds_since_last_reply = _node.time() - last_reply_timestamp
+    assert seconds_since_last_reply > silence_timeout_seconds

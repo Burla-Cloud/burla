@@ -9,7 +9,12 @@ import cloudpickle
 
 
 class InputTooBig(Exception):
-    pass
+    def __init__(self, index: int):
+        message = f"\n\nInput at index {index} exceeds maximum size of 0.2GB.\n"
+        message += "Please download large inputs from the internet once inside your function.\n"
+        message += "We apologize for this temporary limitation! "
+        message += "If this is confusing or blocking you, please tell us! (jake@burla.dev)\n\n"
+        super().__init__(message)
 
 
 def _ping_generator():
@@ -85,11 +90,7 @@ async def upload_inputs(
                 total_bytes = 0
 
             if input_size > max_chunk_size:
-                msg = f"\n\nInput at index {index} exceeds maximum size of 0.2GB.\n"
-                msg += "Please download large inputs from the internet once inside your function.\n"
-                msg += "We apologize for this temporary limitation! "
-                msg += "If this is confusing or blocking you, please tell us! (jake@burla.dev)\n\n"
-                raise InputTooBig(msg)
+                raise InputTooBig(index)
 
             next_chunk_too_small = current_chunk_size + input_size < min_chunk_size
             next_chunk_too_big = current_chunk_size + input_size > max_chunk_size

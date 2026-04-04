@@ -3,7 +3,6 @@ import os
 import sys
 import sysconfig
 import signal
-import requests
 import subprocess
 import textwrap
 import logging
@@ -15,7 +14,7 @@ import cloudpickle
 from yaspin import Spinner
 from google.cloud.firestore_v1 import AsyncClient
 
-from burla import _BURLA_BACKEND_URL, CONFIG_PATH
+from burla import CONFIG_PATH
 
 TOKEN_URI = "https://oauth2.googleapis.com/token"
 
@@ -100,29 +99,6 @@ def parallelism_capacity(machine_type: str, func_cpu: int, func_ram: int):
 def restore_signal_handlers(original_signal_handlers):
     for sig, original_handler in original_signal_handlers.items():
         signal.signal(sig, original_handler)
-
-
-def log_telemetry(message, severity="INFO", **kwargs):
-    if not os.environ.get("DISABLE_BURLA_TELEMETRY") == "True":
-        try:
-            json_payload = {"message": message, **kwargs}
-            url = f"{_BURLA_BACKEND_URL}/v1/telemetry/log/{severity}"
-            response = requests.post(url, json=json_payload)
-            response.raise_for_status()
-        except Exception:
-            pass
-
-
-async def log_telemetry_async(message, session, severity="INFO", **kwargs):
-    if not os.environ.get("DISABLE_BURLA_TELEMETRY") == "True":
-        try:
-            json_payload = {"message": message, **kwargs}
-            url = f"{_BURLA_BACKEND_URL}/v1/telemetry/log/{severity}"
-            async with session.post(url, json=json_payload) as response:
-                await response.text()
-                response.raise_for_status()
-        except Exception:
-            pass
 
 
 class VerboseCalledProcessError(Exception):

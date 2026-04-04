@@ -16,11 +16,18 @@ from tblib import Traceback
 from yaspin import Spinner
 
 from burla import CONFIG_PATH, __version__
-from burla._helpers import log_telemetry_async, parallelism_capacity
+from burla._helpers import parallelism_capacity
+from burla._reporting import RemoteParallelMapReporter
+
+
+NODE_SILENCE_TIMEOUT_SECONDS = 10 * 60
+LOGIN_TIMEOUT_SEC = 3
 
 
 class NodeConflict(Exception):
-    pass
+    def __init__(self, instance_name: str, response_text: str):
+        message = f"ERROR from {instance_name}: {response_text}"
+        super().__init__(message)
 
 
 class NoNodes(Exception):
@@ -28,15 +35,21 @@ class NoNodes(Exception):
 
 
 class AllNodesBusy(Exception):
-    pass
+    def __init__(self):
+        super().__init__("All nodes are busy, please try again later.")
 
 
 class NoCompatibleNodes(Exception):
-    pass
+    def __init__(self):
+        message = "No compatible nodes available. Are the machines in your cluster large enough to "
+        message += "support your `func_cpu` and `func_ram` arguments?"
+        super().__init__(message)
 
 
 class FirestoreTimeout(Exception):
-    pass
+    def __init__(self):
+        message = "\nTimeout waiting for DB.\nPlease run `burla login` and try again.\n"
+        super().__init__(message)
 
 
 class NodeDisconnected(Exception):
@@ -44,7 +57,14 @@ class NodeDisconnected(Exception):
 
 
 class VersionMismatch(Exception):
-    pass
+    def __init__(self, lower_version: Version, upper_version: Version, current_version: Version):
+        msg = f"Incompatible cluster and client versions!\n"
+        msg += f"This cluster supports clients v{lower_version} - v{upper_version}"
+        msg += f", you have v{current_version}.\n"
+        msg += f"To use Burla now, update using this command:\n\n"
+        msg += f"    pip install burla=={upper_version}\n\n"
+        msg += f"-------------------------------------------\n"
+        super().__init__(msg)
 
 
 class JobCanceled(Exception):
@@ -52,16 +72,15 @@ class JobCanceled(Exception):
 
 
 class UnPickleableUserFunctionException(Exception):
-    pass
+    def __init__(self, traceback_str: str):
+        message = "\nThis exception had to be sent to your machine as a string:\n\n"
+        message += f"{traceback_str}\n"
+        super().__init__(message)
 
 
-NODE_SILENCE_TIMEOUT_SECONDS = 10 * 60
-LOGIN_TIMEOUT_SEC = 3
-
-
-def node_is_silent_too_long(last_reply_timestamp: float, silence_timeout_seconds: int):
-    seconds_since_last_reply = time() - last_reply_timestamp
-    return seconds_since_last_reply > silence_timeout_seconds
+class UnauthorizedError(Exception):
+    def __init__(self):
+        super().__init__("Unauthorized! Please run `burla login` to authenticate.")
 
 
 async def get_with_retries(session, url: str, headers: dict, max_retries=5):
@@ -91,21 +110,19 @@ async def num_running_nodes(db: AsyncClient):
     return len(nodes_snapshot)
 
 
-async def get_ready_nodes(db: AsyncClient, login_timeout_sec: int) -> list[dict]:
+async def get_ready_nodes(db: AsyncClient) -> list[dict]:
     status_filter = FieldFilter("status", "==", "READY")
     ready_nodes_coroutine = db.collection("nodes").where(filter=status_filter).get()
     try:
-        docs = await asyncio.wait_for(ready_nodes_coroutine, timeout=login_timeout_sec)
+        docs = await asyncio.wait_for(ready_nodes_coroutine, timeout=LOGIN_TIMEOUT_SEC)
     except asyncio.TimeoutError:
-        msg = "\nTimeout waiting for DB.\nPlease run `burla login` and try again.\n"
-        raise FirestoreTimeout(msg)
+        raise FirestoreTimeout()
     return [document.to_dict() for document in docs]
 
 
 async def wait_for_nodes_to_be_ready(
     db: AsyncClient,
     spinner: bool | Spinner,
-    login_timeout_sec: int = LOGIN_TIMEOUT_SEC,
 ) -> list[dict]:
     n_booting_nodes = await num_booting_nodes(db)
     n_running_nodes = await num_running_nodes(db)
@@ -119,26 +136,26 @@ async def wait_for_nodes_to_be_ready(
                 spinner.text = msg + f" (timeout in {4-time_waiting:.1f}s)"
             await asyncio.sleep(0.01)
             n_running_nodes = await num_running_nodes(db)
-            ready_nodes = await get_ready_nodes(db, login_timeout_sec)
+            ready_nodes = await get_ready_nodes(db)
             time_waiting = time() - start_time
             if time_waiting > 4:
-                raise AllNodesBusy("All nodes are busy, please try again later.")
+                raise AllNodesBusy()
     elif n_booting_nodes != 0:
-        ready_nodes = await get_ready_nodes(db, login_timeout_sec)
+        ready_nodes = await get_ready_nodes(db)
         while n_booting_nodes != 0:
             if spinner:
                 msg = f"{len(ready_nodes)} Nodes are ready, waiting for remaining {n_booting_nodes}"
                 spinner.text = msg + " to boot before starting ..."
             await asyncio.sleep(0.1)
             n_booting_nodes = await num_booting_nodes(db)
-            ready_nodes = await get_ready_nodes(db, login_timeout_sec)
+            ready_nodes = await get_ready_nodes(db)
         if not ready_nodes:
             main_service_url = json.loads(CONFIG_PATH.read_text())["cluster_dashboard_url"]
             msg = "\n\nZero nodes are ready after Booting. Did they fail to boot?\n"
             msg += f"Check your clsuter dashboard at: {main_service_url}\n\n"
             raise NoNodes(msg)
 
-    ready_nodes = await get_ready_nodes(db, login_timeout_sec)
+    ready_nodes = await get_ready_nodes(db)
     if n_booting_nodes == 0 and n_running_nodes == 0 and len(ready_nodes) == 0:
         main_service_url = json.loads(CONFIG_PATH.read_text())["cluster_dashboard_url"]
         msg = "\n\nZero nodes are ready. Is your cluster turned on?\n"
@@ -153,27 +170,22 @@ async def select_nodes_to_assign_to_job(
     func_cpu: int,
     func_ram: int,
     spinner: bool | Spinner,
-    login_timeout_sec: int = LOGIN_TIMEOUT_SEC,
+    session,
+    auth_headers: dict,
 ) -> tuple[list["Node"], int]:
-    ready_nodes = await get_ready_nodes(db, login_timeout_sec)
+    ready_nodes = await get_ready_nodes(db)
     if not ready_nodes:
-        ready_nodes = await wait_for_nodes_to_be_ready(
-            db=db,
-            spinner=spinner,
-            login_timeout_sec=login_timeout_sec,
-        )
+        ready_nodes = await wait_for_nodes_to_be_ready(db=db, spinner=spinner)
 
     upper_version = Version(ready_nodes[0]["main_svc_version"])
     lower_version = Version(ready_nodes[0]["min_compatible_client_version"])
     current_version = Version(__version__)
     if not lower_version <= current_version <= upper_version:
-        msg = f"Incompatible cluster and client versions!\n"
-        msg += f"This cluster supports clients v{lower_version} - v{upper_version}"
-        msg += f", you have v{current_version}.\n"
-        msg += f"To use Burla now, update using this command:\n\n"
-        msg += f"    pip install burla=={upper_version}\n\n"
-        msg += f"-------------------------------------------\n"
-        raise VersionMismatch(msg)
+        raise VersionMismatch(
+            lower_version=lower_version,
+            upper_version=upper_version,
+            current_version=current_version,
+        )
 
     planned_initial_job_parallelism = 0
     nodes_to_assign = []
@@ -192,13 +204,15 @@ async def select_nodes_to_assign_to_job(
                 host=host,
                 machine_type=node_data["machine_type"],
                 target_parallelism=node_target_parallelism,
+                session=session,
+                auth_headers=auth_headers,
+                async_db=db,
+                spinner=spinner,
             )
             nodes_to_assign.append(node)
 
     if len(nodes_to_assign) == 0:
-        msg = "No compatible nodes available. Are the machines in your cluster large enough to "
-        msg += "support your `func_cpu` and `func_ram` arguments?"
-        raise NoCompatibleNodes(msg)
+        raise NoCompatibleNodes()
 
     return nodes_to_assign, planned_initial_job_parallelism
 
@@ -257,10 +271,12 @@ class Node:
                 if response.status == 200:
                     return self
                 elif response.status == 401:
-                    raise Exception("Unauthorized! Please run `burla login` to authenticate.")
+                    raise UnauthorizedError()
                 elif response.status == 409:
-                    msg = f"ERROR from {self.instance_name}: {await response.text()}"
-                    raise NodeConflict(msg)
+                    raise NodeConflict(
+                        instance_name=self.instance_name,
+                        response_text=await response.text(),
+                    )
                 else:
                     msg = f"Failed to assign {self.instance_name}! ignoring: {response.status}"
                     self.spinner_compatible_print(msg)
@@ -318,7 +334,8 @@ class Node:
                     raise NodeDisconnected(msg)
         except asyncio.TimeoutError:
             last_reply_timestamp = node_last_reply_timestamp[self.instance_name]
-            if node_is_silent_too_long(last_reply_timestamp, NODE_SILENCE_TIMEOUT_SECONDS):
+            seconds_since_last_reply = time() - last_reply_timestamp
+            if seconds_since_last_reply > NODE_SILENCE_TIMEOUT_SECONDS:
                 msg = f"Node {self.instance_name} has not replied for over 10 minutes!\n"
                 raise NodeDisconnected(msg)
             return None
@@ -344,18 +361,14 @@ class Node:
         return_values = []
         for input_index, is_error, result_pkl in node_status["results"]:
             if is_error:
-                exception_info = pickle.loads(result_pkl)
-                if exception_info.get("traceback_dict"):
-                    traceback = Traceback.from_dict(exception_info["traceback_dict"]).as_traceback()
+                error_info = pickle.loads(result_pkl)
+                if error_info.get("traceback_dict"):
+                    traceback = Traceback.from_dict(error_info["traceback_dict"]).as_traceback()
                     user_function_error_event.set()
-                    msg = f"Job {job_id} failed due to user function error."
-                    await log_telemetry_async(msg, self.session, project_id=project_id)
-                    reraise(
-                        tp=exception_info["type"], value=exception_info["exception"], tb=traceback
-                    )
-                msg = "\nThis exception had to be sent to your machine as a string:\n\n"
-                msg += f"{exception_info['traceback_str']}\n"
-                raise UnPickleableUserFunctionException(msg)
+                    log_error = RemoteParallelMapReporter.log_user_function_error_async
+                    await log_error(job_id, self.session, project_id)
+                    reraise(tp=error_info["type"], value=error_info["exception"], tb=traceback)
+                raise UnPickleableUserFunctionException(error_info["traceback_str"])
             else:
                 return_values.append(cloudpickle.loads(result_pkl))
 

@@ -12,7 +12,8 @@ from google.cloud.firestore import Client
 from google.api_core.exceptions import NotFound
 
 from burla import _BURLA_BACKEND_URL, __version__
-from burla._helpers import log_telemetry, run_command, VerboseCalledProcessError
+from burla._helpers import run_command, VerboseCalledProcessError
+from burla._reporting import log_telemetry
 
 _python_version = f"{sys.version_info.major}.{sys.version_info.minor}"
 DEFAULT_CLUSTER_CONFIG = {
@@ -36,11 +37,21 @@ DEFAULT_CLUSTER_CONFIG = {
 
 
 class InstallError(Exception):
-    pass
+    def __init__(self):
+        message = f"\n\nIf you're not sure what to do, please email jake@burla.dev!\n"
+        message += (
+            f"We take errors very seriously, and would really like to help you get Burla installed!\n-"
+        )
+        super().__init__(message)
 
 
 class AuthError(Exception):
-    pass
+    def __init__(self):
+        message = "Cluster ID secret is missing, but this deployment has already been registered.\n"
+        message += "Because this secret is missing, we cannot verify that you are the owner of this cluster.\n"
+        message += "Please email jake@burla.dev, "
+        message += "or DM @jake__z in our Discord to regain access!"
+        super().__init__(message)
 
 
 def install():
@@ -65,20 +76,19 @@ def install():
         else:
             # Raises error with a super clear message at the end of the traceback.
             # yes this is hacky but I need to make sure users of all skill levels see this message.
-            msg = f"\n\nIf you're not sure what to do, please email jake@burla.dev!\n"
-            msg += f"We take errors very seriously, and would really like to help you get Burla installed!\n-"
+            message = str(InstallError())
             try:
                 exc_cls = e.__class__
                 old_str = exc_cls.__str__
 
                 def new_str(self):
-                    return f"{old_str(self)}\n\n{msg}"
+                    return f"{old_str(self)}\n\n{message}"
 
                 if getattr(exc_cls, "_burla_str_patched", False) is False:
                     exc_cls.__str__ = new_str
                     exc_cls._burla_str_patched = True
             except Exception:
-                raise InstallError(msg) from e
+                raise InstallError() from e
             raise e
 
 
@@ -348,11 +358,7 @@ def _register_cluster_and_save_cluster_id_token(spinner, PROJECT_ID, client_svc_
     response = requests.post(f"{_BURLA_BACKEND_URL}/v1/clusters/{PROJECT_ID}", json=cluster_info)
     if response.status_code == 403:
         spinner.fail("✗")
-        msg = "Cluster ID secret is missing, but this deployment has already been registered.\n"
-        msg += "Because this secret is missing, we cannot verify that you are the owner of this cluster.\n"
-        msg += "Please email jake@burla.dev, "
-        msg += "or DM @jake__z in our Discord to regain access!"
-        raise AuthError(msg)
+        raise AuthError()
     elif response.status_code == 200:
         cluster_id_token = response.json()["token"]
     elif response.status_code != 409:

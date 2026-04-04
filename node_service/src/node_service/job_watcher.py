@@ -180,7 +180,6 @@ async def _job_watcher(
                 sync_job_doc.update(
                     {
                         "udf_start_latency": SELF.get("udf_start_latency"),
-                        "packages_to_install": SELF.get("packages_to_install"),
                         "status": status,
                     }
                 )
@@ -223,7 +222,6 @@ async def reinit_node(assigned_workers: list, async_db: AsyncClient):
 
     # reset per-job fields on preserved workers to avoid leaking prior job state
     for w in SELF["workers"]:
-        w.packages_to_install = None
         w.is_idle = False
         w.is_empty = False
 

@@ -3,7 +3,6 @@ import os
 import sys
 import sysconfig
 import signal
-import requests
 import subprocess
 import textwrap
 import logging
@@ -15,7 +14,7 @@ import cloudpickle
 from yaspin import Spinner
 from google.cloud.firestore_v1 import AsyncClient
 
-from burla import _BURLA_BACKEND_URL, CONFIG_PATH
+from burla import CONFIG_PATH
 
 TOKEN_URI = "https://oauth2.googleapis.com/token"
 
@@ -29,7 +28,7 @@ SIGNALS_TO_HANDLE = [getattr(signal, s) for s in _signal_names_to_handle]
 logging.getLogger("google.api_core.bidi").setLevel(logging.ERROR)
 # prevent some annoying grpc logs / warnings
 os.environ["GRPC_VERBOSITY"] = "ERROR"  # only log ERROR/FATAL
-os.environ["GLOG_minloglevel"] = "2"  # 0-INFO, 1-WARNING, 2-ERROR, 3-FATAL
+os.environ["GLOG_minloglevel"] = "3"  # 0-INFO, 1-WARNING, 2-ERROR, 3-FATAL
 os.environ["GRPC_ENABLE_FORK_SUPPORT"] = "1"  # avoid fork() handler warnings
 
 # needs to be imported after ^
@@ -102,29 +101,6 @@ def restore_signal_handlers(original_signal_handlers):
         signal.signal(sig, original_handler)
 
 
-def log_telemetry(message, severity="INFO", **kwargs):
-    if not os.environ.get("DISABLE_BURLA_TELEMETRY") == "True":
-        try:
-            json_payload = {"message": message, **kwargs}
-            url = f"{_BURLA_BACKEND_URL}/v1/telemetry/log/{severity}"
-            response = requests.post(url, json=json_payload)
-            response.raise_for_status()
-        except Exception:
-            pass
-
-
-async def log_telemetry_async(message, session, severity="INFO", **kwargs):
-    if not os.environ.get("DISABLE_BURLA_TELEMETRY") == "True":
-        try:
-            json_payload = {"message": message, **kwargs}
-            url = f"{_BURLA_BACKEND_URL}/v1/telemetry/log/{severity}"
-            async with session.post(url, json=json_payload) as response:
-                await response.text()
-                response.raise_for_status()
-        except Exception:
-            pass
-
-
 class VerboseCalledProcessError(Exception):
     """This exists to include stderr in the exception message, CalledProcessError does not"""
 
@@ -172,13 +148,13 @@ def install_signal_handlers(
     job_id: str,
     background: bool,
     spinner: Union[Spinner, bool],
-    job_canceled_event: Event,
+    terminal_cancel_event: Event,
     inputs_done_event: Event,
 ):
     def _signal_handler(signum, frame):
-        if job_canceled_event.is_set():
+        if terminal_cancel_event.is_set():
             return
-        job_canceled_event.set()
+        terminal_cancel_event.set()
 
         inputs_still_uploading = not inputs_done_event.is_set()
         job_failed = (background and inputs_still_uploading) or not background

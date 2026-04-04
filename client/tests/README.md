@@ -1,5 +1,6 @@
 ### How to run the tests
 
+#### Instructions for Humans:
 These steps assume you're already a contributer with a Google Cloud Project prepared with the required resources to run a burla cluster.  
 Email `jake@burla.dev` if you're interested in contributing, or just [put time on my calendar](https://cal.com/jakez/burla?duration=30) :)   
 
@@ -13,3 +14,57 @@ Email `jake@burla.dev` if you're interested in contributing, or just [put time o
 If running in `local-dev-mode` errors will be visible in docker desktop container logs.  
 If running in `remote-dev-mode` errors will be visible in the terminal where the `main_service`
 is running, or google-cloud-logging for errors from the `node_service` or `worker_service`.
+
+#### Instructions for Agents:
+
+1. Before running tests, check if local-dev cluster is already running.
+2. Before starting local-dev, verify active gcloud project is `burla-test`.
+   If not, switch with `gcloud config set project burla-test`.
+3. If local-dev is not running:
+   - start it with `make local-dev`
+   - open `http://localhost:5001` in browser automation
+   - if login page appears, login with:
+     - email: `JakesCursorAgent@gmail.com`
+     - password: Google Cloud Secret `JakesCursorAgent-gmail-password`
+   - press the Start button in the Burla UI
+4. Readiness gate: if you cannot verify local-dev cluster is on and ready, stop.
+   Do not run tests in that state. Investigate why cluster boot failed and report
+   a clear diagnosis (what failed, where it failed, and the likely fix).
+   A run only counts as "running the tests" when this readiness gate is passed.
+   Any failure caused by cluster-not-ready state does not count as a test run.
+   - Local-dev recovery: if tests fail with connection errors (for example
+     `Cannot connect to host localhost:8081`) right after containers were killed,
+     nodes may still be marked ready in Firestore while containers are down.
+     Open the cluster dashboard and click **Restart** to recreate containers, then
+     rerun the test command.
+     Treat this as a readiness failure, not a test failure.
+5. If tests fail with auth errors like `invalid_grant`, `Invalid JWT Signature`,
+   or `FirestoreTimeout` during login/DB checks:
+   - run `burla login --no_browser=True`
+   - open the printed login URL in browser automation
+   - complete login and click the Authorize button
+   - then rerun the test command
+6. `make test` is not reliable in fresh shells because `pytest` may not be on `PATH`.
+   Always run tests with uv from repo root:
+   - `uv sync --project ./client --group dev`
+   - `uv run --project ./client --group dev pytest client/tests/test.py -s -x --disable-warnings`
+7. Hard timeout rule: if test output does not advance to pass/fail within 10 seconds after
+   `collected 1 item`, stop the test process and report it as blocked. Never wait longer.
+8. After test run, verify logs for the latest test job show `"hi"` once per input.
+9. Remote-dev test flow (cloud VM validation):
+   - In the dashboard (`http://localhost:5001`), press **Stop** to shut down the local cluster.
+   - Verify no local containers are running, including `main_service`:
+     - `docker ps --format '{{.Names}} {{.Status}}'`
+   - Start remote-dev mode:
+     - `make remote-dev`
+   - In the dashboard, press **Start** to boot cloud nodes.
+   - Wait for readiness gate: at least 13 nodes are `READY` with machine type `n4-standard-80`.
+   - Run remote-dev perf/reliability test:
+     - `uv run --project ./client --group dev pytest client/tests/test_remote_dev_mode.py -s -x --disable-warnings`
+10. When to run remote-dev tests:
+   - Any change to user-function execution boundaries (same-process vs subprocess).
+   - Any change to result polling, timeout/retry, queueing, restart/cancel, or log forwarding paths.
+   - Any change that can affect latency/throughput or reliability under multi-node load.
+   - Always before release when code touched `client/src/burla/_remote_parallel_map.py`,
+     `worker_service/src/worker_service/udf_executor.py`, or worker/node lifecycle endpoints.
+

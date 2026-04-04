@@ -15,15 +15,8 @@ define UV_ZSH_ENV
 	ZDOTDIR=$$tmp_dir uv run --project $(PROJECT_ABS) --group $(2) zsh -i
 endef
 
-
-define UV_JUPYTER_ENV
-	set -e
-	uv python install $(1) >/dev/null 2>&1
-	uv python pin --project $(PROJECT_ABS) $(1) >/dev/null 2>&1
-	rm -rf $(PROJECT_ABS)/.venv
-	uv sync --project $(PROJECT_ABS) --group dev >/dev/null 2>&1
-	cd .. && exec uv run --project $(PROJECT_ABS) --group dev jupyter-lab --NotebookApp.disable_checkpoints=True
-endef
+# make/cluster_dashboard_dev_state.py (save, point, restore, delete_booting_nodes, …)
+BURLA_MAKE_PYTHON := uv run --project ./client python make/cluster_dashboard_dev_state.py
 
 .PHONY: 3.11-dev 3.12-dev 3.13-dev 3.14-dev 3.11-jupyter 3.12-jupyter 3.13-jupyter 3.14-jupyter
 
@@ -35,17 +28,11 @@ endef
 	$(call UV_ZSH_ENV,3.13,dev)
 3.14-dev:
 	$(call UV_ZSH_ENV,3.14,dev)
+	
+kill-jupyter:
+	pkill -f 'ipykernel|jupyter.*kernel'
 
-3.11-jupyter:
-	$(call UV_JUPYTER_ENV,3.11)
-3.12-jupyter:
-	$(call UV_JUPYTER_ENV,3.12)
-3.13-jupyter:
-	$(call UV_JUPYTER_ENV,3.13)
-3.14-jupyter:
-	$(call UV_JUPYTER_ENV,3.14)
-
-
+# If you are an agent do not run this! go to tests/README.md for instructions.
 test:
 	pytest client/tests/test.py -s -x --disable-warnings
 
@@ -54,22 +41,7 @@ stop:
 	set -e; \
 	PROJECT_ID=$$(gcloud config get-value project 2>/dev/null); \
 	export PROJECT_ID=$${PROJECT_ID}; \
-	printf '%s\n' \
-		'import os' \
-		'import json' \
-		'from google.cloud import firestore' \
-		'from google.cloud.firestore_v1 import FieldFilter' \
-		'' \
-		'db = firestore.Client(project=os.environ["PROJECT_ID"], database="burla")' \
-		'booting_filter = FieldFilter("status", "==", "BOOTING")' \
-		'booting_nodes = db.collection("nodes").where(filter=booting_filter).get()' \
-		'if not booting_nodes:' \
-		'    print("No booting nodes found")' \
-		'else:' \
-		'    for document in booting_nodes:' \
-		'        document.reference.delete()' \
-		'        print(f"Deleted node doc: {document.id}")' \
-	| uv run --project ./client python -
+	$(BURLA_MAKE_PYTHON) delete_booting_nodes
 
 
 # start ONLY the main service, in local dev mode
@@ -92,6 +64,9 @@ local-dev:
 	rm -rf ./_shared_workspace; \
 	mkdir -p ./_shared_workspace; \
 	chmod 777 ./_shared_workspace; \
+	$(BURLA_MAKE_PYTHON) save; \
+	$(BURLA_MAKE_PYTHON) point; \
+	trap '$(BURLA_MAKE_PYTHON) restore' EXIT; \
 	echo "Starting local dev"; \
 	docker network create local-burla-cluster 2>/dev/null || true; \
 	gcloud auth print-access-token > .temp_token.txt; \
@@ -124,7 +99,9 @@ remote-dev:
 		"us-docker.pkg.dev/$${PROJECT_ID}/burla-main-service/burla-main-service:latest" \
 	); \
 	$(MAKE) __check-node-service-up-to-date && echo "" || exit 1; \
-	:; \
+	$(BURLA_MAKE_PYTHON) save; \
+	$(BURLA_MAKE_PYTHON) point; \
+	trap '$(BURLA_MAKE_PYTHON) restore' EXIT; \
 	docker run --rm -it \
 		--name main_service \
 		-v $(PWD)/main_service:/burla/main_service \

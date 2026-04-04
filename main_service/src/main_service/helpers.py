@@ -8,6 +8,14 @@ from fastapi import Request
 from main_service import PROJECT_ID, BURLA_BACKEND_URL, GCL_CLIENT
 
 
+def log_telemetry(message, severity="INFO", **kwargs):
+    try:
+        payload = {"project_id": PROJECT_ID, "message": message, **kwargs}
+        requests.post(f"{BURLA_BACKEND_URL}/v1/telemetry/log/{severity}", json=payload, timeout=1)
+    except Exception:
+        pass
+
+
 def format_traceback(traceback_details: list):
     details = ["  ... (detail hidden)\n" if "/pypoetry/" in d else d for d in traceback_details]
     details = [key for key, _ in groupby(details)]  # <- remove consecutive duplicates
@@ -61,11 +69,6 @@ class Logger:
         struct = dict(message=message, request=self.loggable_request, **kw)
         GCL_CLIENT.log_struct(struct, severity=severity)
 
-        # Report errors back to Burla's cloud.
         if severity == "ERROR" or "traceback" in kw:
-            try:
-                tb = kw.get("traceback", "")
-                json = {"project_id": PROJECT_ID, "message": message, "traceback": tb}
-                requests.post(f"{BURLA_BACKEND_URL}/v1/telemetry/log/ERROR", json=json, timeout=1)
-            except Exception:
-                pass
+            tb = kw.get("traceback", "")
+            log_telemetry(message, severity="ERROR", traceback=tb)

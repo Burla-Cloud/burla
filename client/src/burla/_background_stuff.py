@@ -18,14 +18,14 @@ def _ping_generator():
         sleep(0.5)
 
 
-def send_alive_pings(nodes: list[dict], auth_headers: dict):
+def send_alive_pings(nodes: list, auth_headers: dict):
     """Must run in a separate process so it is not blocked by client CPU spikes."""
     current_node_index = 0
     with requests.Session() as session:
         session.headers.update(auth_headers)
         while True:
             try:
-                url = f"{nodes[current_node_index]['host']}/client-heartbeat"
+                url = f"{nodes[current_node_index].host}/client-heartbeat"
                 with session.post(url, data=_ping_generator(), timeout=(2, None)) as response:
                     if response.status_code in [404, 410]:
                         sleep(0.2)
@@ -37,7 +37,7 @@ def send_alive_pings(nodes: list[dict], auth_headers: dict):
 
 async def upload_inputs(
     job_id: str,
-    nodes: list[dict],
+    nodes: list,
     inputs: list,
     session: aiohttp.ClientSession,
     auth_headers: dict,
@@ -45,14 +45,14 @@ async def upload_inputs(
 ):
 
     async def _upload_inputs_single_node(session, node):
-        async for input_chunk in node["input_chunks"]:  # <- actual pickling/chunking happens here
+        async for input_chunk in node.input_chunks:  # <- actual pickling/chunking happens here
             data = aiohttp.FormData()
             inputs_pkl_with_idx = pickle.dumps(input_chunk)
             data.add_field("inputs_pkl_with_idx", inputs_pkl_with_idx)
 
             status = 409
             while status == 409:
-                url = f"{node['host']}/jobs/{job_id}/inputs"
+                url = f"{node.host}/jobs/{job_id}/inputs"
                 async with session.post(url, data=data, headers=auth_headers) as response:
                     if response.status == 409:
                         await asyncio.sleep(0.5)
@@ -60,7 +60,7 @@ async def upload_inputs(
                         response.raise_for_status()
                     status = response.status
 
-        url = f"{node['host']}/jobs/{job_id}/inputs/done"
+        url = f"{node.host}/jobs/{job_id}/inputs/done"
         async with session.post(url, headers=auth_headers) as response:
             response.raise_for_status()
 
@@ -123,7 +123,7 @@ async def upload_inputs(
     for i, node in enumerate(nodes):
         end = start + size + (1 if i < extra else 0)
         inputs_for_node = inputs[start:end]
-        node["input_chunks"] = _chunk_inputs_by_size_generator(inputs_for_node, start_index=start)
+        node.input_chunks = _chunk_inputs_by_size_generator(inputs_for_node, start_index=start)
         start = end
 
     try:

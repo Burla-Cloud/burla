@@ -1,6 +1,7 @@
 import docker
 import math
 from time import time
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Request, HTTPException
 from google.cloud.firestore_v1.base_query import FieldFilter
@@ -75,7 +76,13 @@ def _get_cluster_config():
     return LOCAL_DEV_CONFIG if IN_LOCAL_DEV_MODE else config_doc.to_dict()
 
 
-def _start_nodes(logger: Logger, auth_headers: dict, config: dict, n_nodes_to_add: int = None):
+def _start_nodes(
+    logger: Logger,
+    auth_headers: dict,
+    config: dict,
+    n_nodes_to_add: int = None,
+    node_instance_names: list[str] = None,
+):
     node_service_port = _current_local_dev_max_node_port()
     futures = []
     executor = ThreadPoolExecutor(max_workers=32)
@@ -85,9 +92,10 @@ def _start_nodes(logger: Logger, auth_headers: dict, config: dict, n_nodes_to_ad
 
     for node_spec in config["Nodes"]:
         quantity = node_spec["quantity"] if n_nodes_to_add is None else n_nodes_to_add
-        for _ in range(quantity):
+        for index in range(quantity):
             if IN_LOCAL_DEV_MODE:
                 node_service_port += 1
+            instance_name = None if node_instance_names is None else node_instance_names[index]
             node_start_kwargs = dict(
                 db=DB,
                 logger=logger,
@@ -100,6 +108,7 @@ def _start_nodes(logger: Logger, auth_headers: dict, config: dict, n_nodes_to_ad
                 as_local_container=IN_LOCAL_DEV_MODE,
                 inactivity_shutdown_time_sec=node_spec.get("inactivity_shutdown_time_sec"),
                 disk_size=node_spec.get("disk_size_gb"),
+                instance_name=instance_name,
             )
             futures.append(executor.submit(_add_node_logged, **node_start_kwargs))
         if n_nodes_to_add is not None:
@@ -109,8 +118,8 @@ def _start_nodes(logger: Logger, auth_headers: dict, config: dict, n_nodes_to_ad
     executor.shutdown(wait=True)
     node_instance_names = [result for result in exec_results if result is not None]
 
+    # kill any local containers that shouldn't be running anymore
     if IN_LOCAL_DEV_MODE:
-        # kill local containers that shouldn't be running anymore
         docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
         node_ids = [name[11:] for name in node_instance_names]
         for container in docker_client.containers(all=True):
@@ -119,17 +128,8 @@ def _start_nodes(logger: Logger, auth_headers: dict, config: dict, n_nodes_to_ad
             belongs_to_current_node = any([id_ in name for id_ in node_ids])
             if not (is_main_service or belongs_to_current_node):
                 docker_client.remove_container(container["Id"], force=True)
+
     return node_instance_names
-
-
-def _active_cluster_cpus():
-    total_cpus = 0
-    node_filter = FieldFilter("status", "in", ["READY", "BOOTING", "RUNNING"])
-    active_nodes = list(DB.collection("nodes").where(filter=node_filter).stream())
-    for node_snapshot in active_nodes:
-        machine_type = node_snapshot.to_dict().get("machine_type")
-        total_cpus += _machine_type_cpu_count(machine_type)
-    return total_cpus
 
 
 def _restart_cluster(logger: Logger, auth_headers: dict):
@@ -175,27 +175,30 @@ async def grow_cluster(
     request: Request,
     logger: Logger = Depends(get_logger),
     auth_headers: dict = Depends(get_auth_headers),
+    add_background_task=Depends(get_add_background_task_function),
 ):
     request_json = await request.json()
-    requested_missing_cpus = int(request_json["missing_cpus"])
-    requested_missing_cpus = max(0, requested_missing_cpus)
+    current_cpus = int(request_json["current_cpus"])
+    cpu_deficit = int(request_json["missing_cpus"])
 
     max_cpu = LOCAL_DEV_MAX_GROW_CPUS if IN_LOCAL_DEV_MODE else MAX_GROW_CPUS
-    current_cpus = _active_cluster_cpus()
     max_additional_cpus = max(0, max_cpu - current_cpus)
-    missing_cpus = min(requested_missing_cpus, max_additional_cpus)
+    num_cpus_to_add = min(cpu_deficit, max_additional_cpus)
 
     config = _get_cluster_config()
     node_spec = config["Nodes"][0]
     cpu_per_node = _machine_type_cpu_count(node_spec["machine_type"])
-    n_nodes_to_add = math.ceil(missing_cpus / cpu_per_node) if missing_cpus else 0
+    n_nodes_to_add = math.ceil(num_cpus_to_add / cpu_per_node) if num_cpus_to_add else 0
+    node_instance_names = [f"burla-node-{uuid4().hex[:8]}" for _ in range(n_nodes_to_add)]
 
     if n_nodes_to_add > 0:
-        _start_nodes(logger, auth_headers, config, n_nodes_to_add=n_nodes_to_add)
+        add_background_task(
+            _start_nodes,
+            logger,
+            auth_headers,
+            config,
+            n_nodes_to_add,
+            node_instance_names,
+        )
 
-    return {
-        "requested_missing_cpus": requested_missing_cpus,
-        "missing_cpus_used": missing_cpus,
-        "current_cpus": current_cpus,
-        "added_nodes": n_nodes_to_add,
-    }
+    return {"added_node_instance_names": node_instance_names}

@@ -215,7 +215,7 @@ async def _execute_job(
     log_stream = sync_job_ref.collection("logs").on_snapshot(_on_new_logs_doc)
     session_stack.callback(log_stream.unsubscribe)
 
-    await reporter.log_job_start_telemetry(nodes)
+    await reporter.log_job_start_telemetry(nodes, packages)
     reporter.set_uploading_function_message(nodes)
 
     # assign initial nodes
@@ -235,6 +235,7 @@ async def _execute_job(
     n_results = 0
     result_loop_start = time()
     inputs_done_msg_printed = False
+    udf_start_latency = None
     while n_results < len(inputs):
 
         if dashboard_canceled_message:
@@ -258,6 +259,8 @@ async def _execute_job(
         if all((n.all_packages_installed for n in nodes)):
             total_parallelism = sum((n.current_parallelism for n in nodes))
             reporter.set_running_progress_message(n_results, total_parallelism)
+        if any([n.udf_start_latency for n in nodes]):
+            udf_start_latency = min([n.udf_start_latency for n in nodes if n.udf_start_latency])
 
         if uploader_task.done():
             inputs_done_event.set()
@@ -276,9 +279,7 @@ async def _execute_job(
             raise Exception("Zero nodes working on job and we have not received all results!")
 
     total_runtime = time() - start_time
-    udf_start_latency = min([n.udf_start_latency for n in nodes if n.udf_start_latency])
-    udf_start_latency = round(udf_start_latency, 2) if udf_start_latency else None
-    await reporter.log_job_success_telemetry(udf_start_latency, total_runtime, packages)
+    await reporter.log_job_success_telemetry(udf_start_latency, total_runtime)
     await async_job_ref.update({"client_has_all_results": True})
 
 

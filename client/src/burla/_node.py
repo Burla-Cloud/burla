@@ -238,7 +238,7 @@ class Node:
         self.job_id = None
         self.udf_error_event = None
         self.udf_start_latency = None
-        self.all_packages_installed = False
+        self.all_packages_installed = None
         self.is_empty = False
         self.current_parallelism = 0
         self.currently_installing_package = None
@@ -367,7 +367,7 @@ class Node:
 
         if self.udf_start_latency is None and node_results.get("udf_start_latency"):
             self.udf_start_latency = node_results.get("udf_start_latency")
-        if self.all_packages_installed is None and node_results.get("all_packages_installed"):
+        if node_results.get("all_packages_installed") is not None:
             self.all_packages_installed = node_results.get("all_packages_installed")
         self.is_empty = node_results["is_empty"]
         self.current_parallelism = node_results["current_parallelism"]

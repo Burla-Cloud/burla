@@ -4,6 +4,7 @@ import pickle
 import sys
 from pickle import UnpicklingError
 from time import time
+from typing import Literal
 
 import aiohttp
 import cloudpickle
@@ -16,6 +17,7 @@ from tblib import Traceback
 from yaspin import Spinner
 
 from burla import CONFIG_PATH, __version__
+from burla._auth import get_auth_headers
 from burla._helpers import parallelism_capacity
 from burla._reporting import RemoteParallelMapReporter
 
@@ -171,7 +173,6 @@ async def select_nodes_to_assign_to_job(
     func_ram: int,
     spinner: bool | Spinner,
     session,
-    auth_headers: dict,
 ) -> tuple[list["Node"], int]:
     ready_nodes = await get_ready_nodes(db)
     if not ready_nodes:
@@ -181,11 +182,7 @@ async def select_nodes_to_assign_to_job(
     lower_version = Version(ready_nodes[0]["min_compatible_client_version"])
     current_version = Version(__version__)
     if not lower_version <= current_version <= upper_version:
-        raise VersionMismatch(
-            lower_version=lower_version,
-            upper_version=upper_version,
-            current_version=current_version,
-        )
+        raise VersionMismatch(lower_version, upper_version, current_version)
 
     planned_initial_job_parallelism = 0
     nodes_to_assign = []
@@ -205,7 +202,6 @@ async def select_nodes_to_assign_to_job(
                 machine_type=node_data["machine_type"],
                 target_parallelism=node_target_parallelism,
                 session=session,
-                auth_headers=auth_headers,
                 async_db=db,
                 spinner=spinner,
             )
@@ -221,33 +217,71 @@ class Node:
     def __init__(
         self,
         instance_name: str,
-        host: str,
-        machine_type: str,
-        target_parallelism: int,
+        host: str | None = None,
+        machine_type: str | None = None,
+        target_parallelism: int | None = None,
         session=None,
-        auth_headers: dict | None = None,
         async_db=None,
         spinner: bool | Spinner = False,
+        state: Literal["READY", "BOOTING", "RUNNING", "FAILED", "DONE"] = "READY",
     ):
         self.instance_name = instance_name
         self.host = host
         self.machine_type = machine_type
         self.target_parallelism = target_parallelism
+        self.state = state
         self.session = session
-        self.auth_headers = auth_headers
+        self.auth_headers = get_auth_headers()
         self.async_db = async_db
         self.spinner_compatible_print = lambda msg: spinner.write(msg) if spinner else print(msg)
         self.input_chunks = None
+        self.job_id = None
+        self.udf_error_event = None
+        self.udf_start_latency = None
+        self.all_packages_installed = False
+        self.is_empty = False
+        self.current_parallelism = 0
+        self.currently_installing_package = None
+        self.last_reply_timestamp = time()
+
+    async def update_status(self):
+        node_ref = self.async_db.collection("nodes").document(self.instance_name)
+        node_data = (await node_ref.get()).to_dict()
+        self.state = node_data["status"]
+        if self.state == "READY":
+            host = node_data["host"]
+            if host.startswith("http://node_"):
+                host = f"http://localhost:{host.split(':')[-1]}"
+            self.host = host
+            self.machine_type = node_data["machine_type"]
+
+    async def _fail_and_delete(self, message: str):
+        node_doc = self.async_db.collection("nodes").document(self.instance_name)
+        await node_doc.update({"status": "FAILED", "display_in_dashboard": True})
+        await node_doc.collection("logs").document().set({"msg": message, "ts": time()})
+        main_service_url = json.loads(CONFIG_PATH.read_text())["cluster_dashboard_url"]
+        url = f"{main_service_url}/v1/cluster/{self.instance_name}"
+        url += "?hide_if_failed=false"
+        async with self.session.delete(url, headers=self.auth_headers, timeout=1) as response:
+            if response.status != 200:
+                message = f"Failed to delete node {self.instance_name}."
+                self.spinner_compatible_print(message + f" ignoring: {response.status}")
 
     async def assign(
         self,
         job_id: str,
         background: bool,
         n_inputs: int,
-        packages: list,
+        packages: dict,
         start_time: float,
         function_pkl: bytes,
+        udf_error_event,
     ) -> "Node | None":
+        if self.state != "READY":
+            return None
+        if not self.target_parallelism:
+            return None
+
         request_json = {
             "parallelism": self.target_parallelism,
             "is_background_job": background,
@@ -260,124 +294,82 @@ class Node:
         data.add_field("request_json", json.dumps(request_json))
         data.add_field("function_pkl", function_pkl)
         url = f"{self.host}/jobs/{job_id}"
-        request = self.session.post(
-            url,
-            data=data,
-            headers=self.auth_headers,
-            timeout=aiohttp.ClientTimeout(300),
-        )
+        timeout = aiohttp.ClientTimeout(300)
+        request = self.session.post(url, data=data, headers=self.auth_headers, timeout=timeout)
         try:
             async with request as response:
+                self.last_reply_timestamp = time()
                 if response.status == 200:
+                    self.job_id = job_id
+                    self.udf_error_event = udf_error_event
                     return self
                 elif response.status == 401:
                     raise UnauthorizedError()
                 elif response.status == 409:
-                    raise NodeConflict(
-                        instance_name=self.instance_name,
-                        response_text=await response.text(),
-                    )
+                    raise NodeConflict(self.instance_name, await response.text())
                 else:
                     msg = f"Failed to assign {self.instance_name}! ignoring: {response.status}"
                     self.spinner_compatible_print(msg)
         except asyncio.TimeoutError:
-            msg = f"Timeout assigning {self.instance_name} to job! Failing node ..."
-            self.spinner_compatible_print(msg)
             try:
-                node_doc = self.async_db.collection("nodes").document(self.instance_name)
-                await node_doc.update({"status": "FAILED", "display_in_dashboard": True})
-                msg = f"Failed! This node didn't respond (in<300s) to client request to assign job."
-                await node_doc.collection("logs").document().set({"msg": msg, "ts": time()})
-                main_service_url = json.loads(CONFIG_PATH.read_text())["cluster_dashboard_url"]
-                url = f"{main_service_url}/v1/cluster/{self.instance_name}"
-                url += "?hide_if_failed=false"
-                async with self.session.delete(
-                    url,
-                    headers=self.auth_headers,
-                    timeout=1,
-                ) as response:
-                    if response.status != 200:
-                        msg = f"Failed to delete node {self.instance_name}."
-                        self.spinner_compatible_print(msg + f" ignoring: {response.status}")
+                msg = f"Timeout assigning {self.instance_name} to job! Failing node ..."
+                self.spinner_compatible_print(msg)
+                await self._fail_and_delete(msg)
             except:
                 pass
 
-    async def _get_raw_results(
-        self,
-        job_id: str,
-        nodes: list,
-        node_last_reply_timestamp: dict,
-        job_ref,
-    ):
+    async def gather_results(self):
+        if not self.job_id:
+            raise Exception(f"{self.instance_name} has no assigned job to gather results from.")
+
         try:
-            url = f"{self.host}/jobs/{job_id}/results"
+            url = f"{self.host}/jobs/{self.job_id}/results"
             args = (self.session, url, self.auth_headers)
             async with await get_with_retries(*args) as response:
+                self.last_reply_timestamp = time()
                 if response.status == 404:
-                    if self in nodes:
-                        nodes.remove(self)  # <- node is likely rebooting/failed/done
-                    node_last_reply_timestamp.pop(self.instance_name, None)
-                    return None
+                    self.state = "DONE"
+                    return []
                 if response.status != 200:
                     raise Exception(f"Result-check failed for node: {self.instance_name}")
-                node_last_reply_timestamp[self.instance_name] = time()
                 try:
-                    node_status = pickle.loads(await response.content.read())
-                    node_last_reply_timestamp[self.instance_name] = time()
-                    return node_status
+                    node_results = pickle.loads(await response.content.read())
+                    self.last_reply_timestamp = time()
                 except UnpicklingError as error:
                     if "Memo value not found at index" not in str(error):
                         raise error
+                    job_ref = self.async_db.collection("jobs").document(self.job_id)
                     if (await job_ref.get()).to_dict()["status"] == "CANCELED":
                         raise JobCanceled("Job canceled from dashboard.")
                     msg = f"Node {self.instance_name} disconnected while transmitting results.\n"
                     raise NodeDisconnected(msg)
         except asyncio.TimeoutError:
-            last_reply_timestamp = node_last_reply_timestamp[self.instance_name]
-            seconds_since_last_reply = time() - last_reply_timestamp
+            seconds_since_last_reply = time() - self.last_reply_timestamp
             if seconds_since_last_reply > NODE_SILENCE_TIMEOUT_SECONDS:
                 msg = f"Node {self.instance_name} has not replied for over 10 minutes!\n"
                 raise NodeDisconnected(msg)
-            return None
+            return []
 
-    async def get_results(
-        self,
-        job_id: str,
-        nodes: list,
-        node_last_reply_timestamp: dict,
-        job_ref,
-        user_function_error_event,
-        project_id: str,
-    ):
-        node_status = await self._get_raw_results(
-            job_id=job_id,
-            nodes=nodes,
-            node_last_reply_timestamp=node_last_reply_timestamp,
-            job_ref=job_ref,
-        )
-        if not node_status:
-            return None
-
+        # at this point node_results is guaranteed to exist
         return_values = []
-        for input_index, is_error, result_pkl in node_status["results"]:
+        for input_index, is_error, result_pkl in node_results["results"]:
             if is_error:
                 error_info = pickle.loads(result_pkl)
                 if error_info.get("traceback_dict"):
                     traceback = Traceback.from_dict(error_info["traceback_dict"]).as_traceback()
-                    user_function_error_event.set()
+                    self.udf_error_event.set()
                     log_error = RemoteParallelMapReporter.log_user_function_error_async
-                    await log_error(job_id, self.session, project_id)
+                    await log_error(self.job_id, self.session)
                     reraise(tp=error_info["type"], value=error_info["exception"], tb=traceback)
                 raise UnPickleableUserFunctionException(error_info["traceback_str"])
             else:
                 return_values.append(cloudpickle.loads(result_pkl))
 
-        return {
-            "udf_start_latency": node_status.get("udf_start_latency"),
-            "packages_to_install": node_status.get("packages_to_install"),
-            "all_packages_installed": node_status.get("all_packages_installed"),
-            "is_empty": node_status["is_empty"],
-            "current_parallelism": node_status["current_parallelism"],
-            "currently_installing_package": node_status["currently_installing_package"],
-            "return_values": return_values,
-        }
+        if self.udf_start_latency is None and node_results.get("udf_start_latency"):
+            self.udf_start_latency = node_results.get("udf_start_latency")
+        if self.all_packages_installed is None and node_results.get("all_packages_installed"):
+            self.all_packages_installed = node_results.get("all_packages_installed")
+        self.is_empty = node_results["is_empty"]
+        self.current_parallelism = node_results["current_parallelism"]
+        self.currently_installing_package = node_results["currently_installing_package"]
+        return return_values

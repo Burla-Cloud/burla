@@ -1,8 +1,17 @@
 import os
+import json
 
 import requests
 
-from burla import _BURLA_BACKEND_URL
+from burla import CONFIG_PATH, _BURLA_BACKEND_URL
+
+
+def _get_project_id():
+    try:
+        project_id = json.loads(CONFIG_PATH.read_text()).get("project_id")
+    except Exception:
+        return "unknown"
+    return project_id if project_id else "unknown"
 
 
 def log_telemetry(message: str, severity: str = "INFO", **kwargs):
@@ -15,6 +24,22 @@ def log_telemetry(message: str, severity: str = "INFO", **kwargs):
         response.raise_for_status()
     except Exception:
         pass
+
+
+def log_job_failure_telemetry(
+    job_id: str,
+    exception: Exception,
+    traceback_str: str,
+    chill_exception: bool,
+):
+    project_id = _get_project_id()
+    telemetry_kwargs = dict(traceback=traceback_str, project_id=project_id, job_id=job_id)
+    if chill_exception:
+        message = f"Job {job_id} failed with: {str(exception)}"
+        log_telemetry(message, severity="INFO", **telemetry_kwargs)
+    else:
+        message = f"Job {job_id} FAILED due to NON-UDF-ERROR:\n```{traceback_str}```"
+        log_telemetry(message, severity="ERROR", **telemetry_kwargs)
 
 
 class RemoteParallelMapReporter:
@@ -43,7 +68,7 @@ class RemoteParallelMapReporter:
         self.max_parallelism = kwargs["max_parallelism"]
         self.job_id = kwargs["job_id"]
         self.session = kwargs["session"]
-        self.project_id = kwargs["project_id"]
+        self.project_id = _get_project_id()
         self.spinner_enabled = bool(self.spinner)
 
     def print_detach_mode_enabled_message(self):
@@ -60,7 +85,10 @@ class RemoteParallelMapReporter:
             return
         self.spinner.text = f"Booting {number_of_booting_nodes} additional nodes ..."
 
-    async def log_job_start_telemetry(self, number_of_nodes: int, machine_type: str):
+    async def log_job_start_telemetry(self, nodes: list):
+        ready_nodes = [node for node in nodes if node.state == "READY"]
+        number_of_nodes = len(ready_nodes)
+        machine_type = ready_nodes[0].machine_type
         function_size_str = (
             f" ({self.function_size_gb:.3f}GB)" if self.function_size_gb > 0.001 else ""
         )
@@ -76,9 +104,10 @@ class RemoteParallelMapReporter:
         message += f"max_parallelism={self.max_parallelism}, job_id={self.job_id}"
         await self._log_telemetry_async(message, self.session, project_id=self.project_id)
 
-    def set_uploading_function_message(self, number_of_nodes: int):
+    def set_uploading_function_message(self, nodes: list):
         if not self.spinner:
             return
+        number_of_nodes = len([node for node in nodes if node.state == "READY"])
         function_size_megabytes = self.function_size_gb * 1024
         total_data_gb = self.function_size_gb * number_of_nodes
         message = f"Uploading function `{self.function_name}` to {number_of_nodes} nodes ..."
@@ -107,6 +136,7 @@ class RemoteParallelMapReporter:
     def set_running_progress_message(self, completed_inputs: int, total_parallelism: int):
         if not self.spinner:
             return
+        # Due to status lag, remaining inputs can briefly be lower than reported parallelism.
         running_inputs = min(total_parallelism, self.input_count - completed_inputs)
         self.spinner.text = (
             f"Calling `{self.function_name}`: {completed_inputs}/{self.input_count} completed, "
@@ -114,14 +144,14 @@ class RemoteParallelMapReporter:
         )
 
     async def log_job_success_telemetry(
-        self, udf_start_latency: float | None, total_runtime: float, packages_to_install
+        self, udf_start_latency: float | None, total_runtime: float, packages: dict
     ):
         message = (
             f"Job {self.job_id} completed successfully, udf_start_latency={udf_start_latency}s"
         )
         message += f", total_runtime={total_runtime:.2f}s."
-        if packages_to_install:
-            message += f"\nInstalled packages: {packages_to_install}"
+        if packages:
+            message += f"\nRequested packages: {packages}"
         await self._log_telemetry_async(message, self.session, project_id=self.project_id)
 
     def set_preparing_message(self):
@@ -149,17 +179,14 @@ class RemoteParallelMapReporter:
         traceback_str: str,
         chill_exception: bool,
     ):
-        telemetry_kwargs = dict(
-            traceback=traceback_str, project_id=self.project_id, job_id=self.job_id
+        log_job_failure_telemetry(
+            job_id=self.job_id,
+            exception=exception,
+            traceback_str=traceback_str,
+            chill_exception=chill_exception,
         )
-        if chill_exception:
-            message = f"Job {self.job_id} failed with: {str(exception)}"
-            log_telemetry(message, severity="INFO", **telemetry_kwargs)
-        else:
-            message = f"Job {self.job_id} FAILED due to NON-UDF-ERROR:\n```{traceback_str}```"
-            log_telemetry(message, severity="ERROR", **telemetry_kwargs)
 
     @classmethod
-    async def log_user_function_error_async(cls, job_id: str, session, project_id: str):
+    async def log_user_function_error_async(cls, job_id: str, session):
         message = f"Job {job_id} failed due to user function error."
-        await cls._log_telemetry_async(message, session, project_id=project_id)
+        await cls._log_telemetry_async(message, session, project_id=_get_project_id())

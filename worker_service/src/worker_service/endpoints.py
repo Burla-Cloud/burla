@@ -87,8 +87,6 @@ async def get_results(
     }
     if SELF["udf_start_latency"]:
         response_json["udf_start_latency"] = SELF["udf_start_latency"]
-    if SELF["packages_to_install"]:
-        response_json["packages_to_install"] = SELF["packages_to_install"]
     if SELF["ALL_PACKAGES_INSTALLED"]:
         response_json["all_packages_installed"] = SELF["ALL_PACKAGES_INSTALLED"]
     data = pickle.dumps(response_json)

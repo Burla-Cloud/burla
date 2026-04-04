@@ -148,13 +148,13 @@ def install_signal_handlers(
     job_id: str,
     background: bool,
     spinner: Union[Spinner, bool],
-    job_canceled_event: Event,
+    terminal_cancel_event: Event,
     inputs_done_event: Event,
 ):
     def _signal_handler(signum, frame):
-        if job_canceled_event.is_set():
+        if terminal_cancel_event.is_set():
             return
-        job_canceled_event.set()
+        terminal_cancel_event.set()
 
         inputs_still_uploading = not inputs_done_event.is_set()
         job_failed = (background and inputs_still_uploading) or not background

@@ -1,13 +1,11 @@
 import pickle
 import json
 import psutil
-from time import time
 from queue import Empty
 from typing import Optional
 
 import asyncio
 import aiohttp
-from google.cloud import firestore
 from google.cloud.firestore_v1.async_client import AsyncClient
 from fastapi import APIRouter, Path, Depends, Response, Request
 
@@ -130,9 +128,6 @@ async def get_results(job_id: str = Path(...)):
     if SELF["udf_start_latency"] and not SELF["udf_start_latency_sent_to_client"]:
         response_json["udf_start_latency"] = SELF["udf_start_latency"]
         SELF["udf_start_latency_sent_to_client"] = True
-    if SELF["packages_to_install"] and not SELF["packages_to_install_sent_to_client"]:
-        response_json["packages_to_install"] = SELF["packages_to_install"]
-        SELF["packages_to_install_sent_to_client"] = True
     if SELF["all_packages_installed"] and not SELF["all_packages_installed_sent_to_client"]:
         response_json["all_packages_installed"] = SELF["all_packages_installed"]
         SELF["all_packages_installed_sent_to_client"] = True

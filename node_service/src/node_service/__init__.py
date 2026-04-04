@@ -78,8 +78,6 @@ def REINIT_SELF(SELF):
     SELF["all_packages_installed_sent_to_client"] = False
     SELF["udf_start_latency"] = None
     SELF["udf_start_latency_sent_to_client"] = False
-    SELF["packages_to_install"] = None
-    SELF["packages_to_install_sent_to_client"] = False
     SELF["active_client_request_count"] = 0
     SELF["last_request_timestamp"] = time()
 

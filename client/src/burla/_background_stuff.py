@@ -7,6 +7,8 @@ from threading import Event
 
 import cloudpickle
 
+from burla._auth import get_auth_headers
+
 
 class InputTooBig(Exception):
     def __init__(self, index: int):
@@ -23,9 +25,10 @@ def _ping_generator():
         sleep(0.5)
 
 
-def send_alive_pings(nodes: list, auth_headers: dict):
+def send_alive_pings(nodes: list):
     """Must run in a separate process so it is not blocked by client CPU spikes."""
     current_node_index = 0
+    auth_headers = get_auth_headers()
     with requests.Session() as session:
         session.headers.update(auth_headers)
         while True:
@@ -45,9 +48,9 @@ async def upload_inputs(
     nodes: list,
     inputs: list,
     session: aiohttp.ClientSession,
-    auth_headers: dict,
-    job_canceled_event: Event,
+    terminal_cancel_event: Event,
 ):
+    auth_headers = get_auth_headers()
 
     async def _upload_inputs_single_node(session, node):
         async for input_chunk in node.input_chunks:  # <- actual pickling/chunking happens here
@@ -130,5 +133,5 @@ async def upload_inputs(
     try:
         await asyncio.gather(*[_upload_inputs_single_node(session, node) for node in nodes])
     except aiohttp.client_exceptions.ServerDisconnectedError as e:
-        if not job_canceled_event.is_set():
+        if not terminal_cancel_event.is_set():
             raise e

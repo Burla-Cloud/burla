@@ -44,7 +44,6 @@ class Worker:
         self.elected_installer = elected_installer
         self.is_idle = False
         self.is_empty = False
-        self.packages_to_install = None
         self.container = None
         self.container_id = None
         if IN_LOCAL_DEV_MODE:

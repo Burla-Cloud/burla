@@ -254,7 +254,6 @@ def _packages_are_importable(packages: dict):
 
 
 def _install_packages(packages: dict):
-    SELF["packages_to_install"] = packages
     cmd = ["uv", "pip", "install", "--python", "python", "--target", "/worker_service_python_env"]
     for package, version in packages.items():
         cmd.append(f"{package}=={version}")

@@ -85,8 +85,6 @@ async def load_results_from_worker(
 
         if response.get("udf_start_latency"):
             SELF["udf_start_latency"] = response["udf_start_latency"]
-        if response.get("packages_to_install"):
-            SELF["packages_to_install"] = response["packages_to_install"]
         if response.get("all_packages_installed"):
             SELF["all_packages_installed"] = response["all_packages_installed"]
 

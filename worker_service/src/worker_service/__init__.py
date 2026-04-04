@@ -44,7 +44,6 @@ SELF = {
     "ALL_PACKAGES_INSTALLED": False,
     "io_queues_ram_limit_gb": None,
     "udf_start_latency": None,
-    "packages_to_install": None,
     "worker_urls": [],
     "self_url": None,
 }

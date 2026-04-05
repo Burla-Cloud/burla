@@ -19,7 +19,7 @@ from yaspin import Spinner, yaspin
 
 from burla import CONFIG_PATH, __version__
 from burla._auth import get_auth_headers
-from burla._background_stuff import send_alive_pings, upload_inputs
+from burla._background_stuff import send_alive_pings, upload_inputs_for_node
 from burla._helpers import (
     get_db_clients,
     get_modules_required_on_remote,
@@ -68,19 +68,25 @@ async def _grow_cluster(current_cpus: int, missing_cpus: int, session, async_db)
     request_json = {"current_cpus": current_cpus, "missing_cpus": missing_cpus}
     auth_headers = get_auth_headers()
     main_service_url = json.loads(CONFIG_PATH.read_text())["cluster_dashboard_url"]
-    url = f"{main_service_url}/v1/cluster/grow"
+    local_main_service_url = "http://localhost:5001"
+    grow_urls = [f"{main_service_url}/v1/cluster/grow"]
+    if main_service_url != local_main_service_url:
+        grow_urls.append(f"{local_main_service_url}/v1/cluster/grow")
+
     async with aiohttp.ClientSession(trust_env=True) as request_session:
-        request = request_session.post(url, json=request_json, headers=auth_headers)
-        async with await request as response:
-            if response.status == 200:
-                response_json = await response.json()
-                node_kw = dict(session=session, async_db=async_db, state="BOOTING")
-                names = response_json["added_node_instance_names"]
-                return [Node(name, **node_kw) for name in names]
-            elif response.status == 401:
-                raise UnauthorizedError()
-            else:
-                raise Exception(f"Failed to grow cluster: {response.status}")
+        for index, url in enumerate(grow_urls):
+            request = request_session.post(url, json=request_json, headers=auth_headers)
+            async with await request as response:
+                if response.status == 200:
+                    response_json = await response.json()
+                    node_kw = dict(session=session, async_db=async_db, state="BOOTING")
+                    names = response_json["added_node_instance_names"]
+                    return [Node(name, **node_kw) for name in names]
+                if response.status == 401:
+                    raise UnauthorizedError()
+                used_last_url = index == len(grow_urls) - 1
+                if response.status != 405 or used_last_url:
+                    raise Exception(f"Failed to grow cluster: {response.status}")
 
 
 async def _execute_job_wrapped(*args, **kwargs):
@@ -191,17 +197,6 @@ async def _execute_job(
         }
     )
 
-    # wait until at least one is ready to start job.
-    if not any([node.state == "READY" for node in nodes]):
-        start_wait = time()
-        while time() - start_wait < 120:
-            await asyncio.sleep(1)
-            [await node.update_status() for node in nodes]
-            if any([node.state == "READY" for node in nodes]):
-                break
-        else:
-            raise NoNodes()
-
     # start stdout/stderr stream
     def _on_new_logs_doc(col_snapshot, changes, read_time):
         nonlocal dashboard_canceled_message
@@ -218,25 +213,72 @@ async def _execute_job(
     await reporter.log_job_start_telemetry(nodes, packages)
     reporter.set_uploading_function_message(nodes)
 
-    # assign initial nodes
-    args = (job_id, background, len(inputs), packages, start_time, function_pkl, udf_error_event)
-    ready_nodes = [node for node in nodes if node.state == "READY"]
-    assign_tasks = [node.assign(*args) for node in ready_nodes]
-    await asyncio.gather(*assign_tasks)
-
-    # start sending "alive" pings to initial nodes
-    ping_process = await run_in_subprocess(send_alive_pings, nodes)
+    # start sending "alive" pings
+    node_hosts = [node.host for node in nodes]
+    ping_process = await run_in_subprocess(send_alive_pings, node_hosts)
     session_stack.callback(ping_process.kill)
 
-    # start uploading inputs
-    upload_inputs_args = (job_id, nodes, inputs, session, terminal_cancel_event)
-    uploader_task = create_task(upload_inputs(*upload_inputs_args))
+    # split inputs across all nodes immediately, including nodes that are still booting
+    node_input_assignments = []
+    per_node_input_count = len(inputs) // len(nodes)
+    extra_inputs = len(inputs) % len(nodes)
+    start_index = 0
+    for index, node in enumerate(nodes):
+        end_index = start_index + per_node_input_count + (1 if index < extra_inputs else 0)
+        node_input_assignments.append((node, inputs[start_index:end_index], start_index))
+        start_index = end_index
 
-    n_results = 0
+    result_counter = [0]
+
+    async def _run_node_lifecycle(node: Node, node_inputs: list, node_start_index: int):
+        if node.state != "READY":
+            await node.wait_until_ready(poll_seconds=2)
+        if not node.target_parallelism:
+            node.target_parallelism = 1
+
+        args = (
+            job_id,
+            background,
+            len(inputs),
+            packages,
+            start_time,
+            function_pkl,
+            udf_error_event,
+        )
+        assigned_node = await node.assign(*args)
+        if not assigned_node:
+            return
+
+        await upload_inputs_for_node(
+            job_id=job_id,
+            node=node,
+            inputs=node_inputs,
+            start_index=node_start_index,
+            session=session,
+            terminal_cancel_event=terminal_cancel_event,
+        )
+        node.inputs_uploaded = True
+
+        while True:
+            if terminal_cancel_event.is_set():
+                return
+            return_values = await node.gather_results()
+            for return_value in return_values:
+                return_queue.put_nowait(return_value)
+                result_counter[0] += 1
+            if node.state == "DONE":
+                return
+            await asyncio.sleep(0)
+
+    node_tasks = [
+        create_task(_run_node_lifecycle(node, node_inputs, node_start_index))
+        for node, node_inputs, node_start_index in node_input_assignments
+    ]
+
     result_loop_start = time()
     inputs_done_msg_printed = False
     udf_start_latency = None
-    while n_results < len(inputs):
+    while result_counter[0] < len(inputs):
 
         if dashboard_canceled_message:
             raise JobCanceled(f"\n\n{dashboard_canceled_message}\n")
@@ -246,26 +288,25 @@ async def _execute_job(
             iteration_took_over_3s = (time() - result_loop_start) > 3
             await asyncio.sleep(0.3 if iteration_took_over_3s else 0)
 
-        return_values_per_node = await asyncio.gather(*[n.gather_results() for n in nodes])
-        nodes = [n for n in nodes if n.state != "DONE"]  # done nodes never return results
-        for return_values in return_values_per_node:
-            for return_value in return_values:
-                return_queue.put_nowait(return_value)
-                n_results += 1
+        for task in node_tasks:
+            if task.done() and task.exception():
+                raise task.exception()
 
-        if any([n.currently_installing_package for n in nodes]):
-            pkg = next(filter(None, (n.currently_installing_package for n in nodes)), None)
+        assigned_nodes = [node for node in nodes if node.job_id]
+
+        if any([n.currently_installing_package for n in assigned_nodes]):
+            pkg = next(filter(None, (n.currently_installing_package for n in assigned_nodes)), None)
             reporter.set_installing_package_message(pkg)
-        if all((n.all_packages_installed for n in nodes)):
-            total_parallelism = sum((n.current_parallelism for n in nodes))
-            reporter.set_running_progress_message(n_results, total_parallelism)
-        if any([n.udf_start_latency for n in nodes]):
-            udf_start_latency = min([n.udf_start_latency for n in nodes if n.udf_start_latency])
+        if assigned_nodes and all((n.all_packages_installed for n in assigned_nodes)):
+            total_parallelism = sum((n.current_parallelism for n in assigned_nodes))
+            reporter.set_running_progress_message(result_counter[0], total_parallelism)
+        if any([n.udf_start_latency for n in assigned_nodes]):
+            udf_start_latency = min(
+                [n.udf_start_latency for n in assigned_nodes if n.udf_start_latency]
+            )
 
-        if uploader_task.done():
+        if assigned_nodes and all((getattr(n, "inputs_uploaded", False) for n in assigned_nodes)):
             inputs_done_event.set()
-            if uploader_task.exception():
-                raise uploader_task.exception()
             if background and not inputs_done_msg_printed:
                 reporter.print_inputs_done_message()
                 inputs_done_msg_printed = True
@@ -275,8 +316,9 @@ async def _execute_job(
             stderr = ping_process.stderr.read().decode("utf-8")
             raise Exception(f"Ping process exited with code: {exit_code}\n{stderr}")
 
-        if len(nodes) == 0 and return_queue.empty():
+        if all((task.done() for task in node_tasks)) and result_counter[0] < len(inputs):
             raise Exception("Zero nodes working on job and we have not received all results!")
+        await asyncio.sleep(0.1)
 
     total_runtime = time() - start_time
     await reporter.log_job_success_telemetry(udf_start_latency, total_runtime)

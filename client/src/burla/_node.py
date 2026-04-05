@@ -255,6 +255,13 @@ class Node:
             self.host = host
             self.machine_type = node_data["machine_type"]
 
+    async def wait_until_ready(self, poll_seconds: int = 2):
+        while self.state != "READY":
+            await self.update_status()
+            if self.state == "READY":
+                break
+            await asyncio.sleep(poll_seconds)
+
     async def _fail_and_delete(self, message: str):
         node_doc = self.async_db.collection("nodes").document(self.instance_name)
         await node_doc.update({"status": "FAILED", "display_in_dashboard": True})

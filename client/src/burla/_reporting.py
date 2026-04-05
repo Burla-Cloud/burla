@@ -87,8 +87,8 @@ class RemoteParallelMapReporter:
 
     async def log_job_start_telemetry(self, nodes: list, packages: dict):
         ready_nodes = [node for node in nodes if node.state == "READY"]
-        number_of_nodes = len(ready_nodes)
-        machine_type = ready_nodes[0].machine_type
+        number_of_nodes = len(ready_nodes) if ready_nodes else len(nodes)
+        machine_type = ready_nodes[0].machine_type if ready_nodes else "unknown-machine"
         function_size_str = (
             f" ({self.function_size_gb:.3f}GB)" if self.function_size_gb > 0.001 else ""
         )

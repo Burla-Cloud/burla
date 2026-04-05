@@ -25,7 +25,7 @@ def _ping_generator():
         sleep(0.5)
 
 
-def send_alive_pings(nodes: list):
+def send_alive_pings(node_hosts: list[str]):
     """Must run in a separate process so it is not blocked by client CPU spikes."""
     current_node_index = 0
     auth_headers = get_auth_headers()
@@ -33,14 +33,14 @@ def send_alive_pings(nodes: list):
         session.headers.update(auth_headers)
         while True:
             try:
-                url = f"{nodes[current_node_index].host}/client-heartbeat"
+                url = f"{node_hosts[current_node_index]}/client-heartbeat"
                 with session.post(url, data=_ping_generator(), timeout=(2, None)) as response:
                     if response.status_code in [404, 410]:
                         sleep(0.2)
                         continue
                     response.raise_for_status()
             except requests.exceptions.RequestException:
-                current_node_index = (current_node_index + 1) % len(nodes)
+                current_node_index = (current_node_index + 1) % len(node_hosts)
 
 
 async def upload_inputs(
@@ -135,3 +135,80 @@ async def upload_inputs(
     except aiohttp.client_exceptions.ServerDisconnectedError as e:
         if not terminal_cancel_event.is_set():
             raise e
+
+
+async def upload_inputs_for_node(
+    job_id: str,
+    node,
+    inputs: list,
+    start_index: int,
+    session: aiohttp.ClientSession,
+    terminal_cancel_event: Event,
+):
+    auth_headers = get_auth_headers()
+
+    async def _chunk_inputs_by_size_generator(
+        inputs: list,
+        start_index: int,
+        min_chunk_size: int = 1_000_000 * 6,  # 6MB
+        max_chunk_size: int = 1_000_000 * 200,  # 200MB
+    ):
+        current_chunk = []
+        current_chunk_size = 0
+        total_bytes = 0
+
+        for index_within_chunk, input in enumerate(inputs):
+            index = start_index + index_within_chunk
+            input_pkl_with_idx = (index, cloudpickle.dumps(input))
+            input_size = len(input_pkl_with_idx[1])
+
+            total_bytes += input_size
+            if total_bytes > 1000:
+                await asyncio.sleep(0)
+                total_bytes = 0
+
+            if input_size > max_chunk_size:
+                raise InputTooBig(index)
+
+            next_chunk_too_small = current_chunk_size + input_size < min_chunk_size
+            next_chunk_too_big = current_chunk_size + input_size > max_chunk_size
+            next_chunk_size_is_acceptable = not next_chunk_too_small and not next_chunk_too_big
+
+            if next_chunk_too_small:
+                current_chunk.append(input_pkl_with_idx)
+                current_chunk_size += input_size
+            elif next_chunk_size_is_acceptable:
+                current_chunk.append(input_pkl_with_idx)
+                yield current_chunk
+                current_chunk = []
+                current_chunk_size = 0
+            elif next_chunk_too_big:
+                yield current_chunk
+                current_chunk = [input_pkl_with_idx]
+                current_chunk_size = input_size
+
+        if current_chunk:
+            yield current_chunk
+
+    try:
+        async for input_chunk in _chunk_inputs_by_size_generator(inputs, start_index):
+            data = aiohttp.FormData()
+            inputs_pkl_with_idx = pickle.dumps(input_chunk)
+            data.add_field("inputs_pkl_with_idx", inputs_pkl_with_idx)
+
+            status = 409
+            while status == 409:
+                url = f"{node.host}/jobs/{job_id}/inputs"
+                async with session.post(url, data=data, headers=auth_headers) as response:
+                    if response.status == 409:
+                        await asyncio.sleep(0.5)
+                    else:
+                        response.raise_for_status()
+                    status = response.status
+
+        url = f"{node.host}/jobs/{job_id}/inputs/done"
+        async with session.post(url, headers=auth_headers) as response:
+            response.raise_for_status()
+    except aiohttp.client_exceptions.ServerDisconnectedError as error:
+        if not terminal_cancel_event.is_set():
+            raise error

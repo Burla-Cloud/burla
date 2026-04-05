@@ -278,51 +278,60 @@ async def _execute_job(
     result_loop_start = time()
     inputs_done_msg_printed = False
     udf_start_latency = None
-    while result_counter[0] < len(inputs):
+    try:
+        while result_counter[0] < len(inputs):
 
-        if dashboard_canceled_message:
-            raise JobCanceled(f"\n\n{dashboard_canceled_message}\n")
-        elif terminal_cancel_event.is_set():
-            return
-        elif all((n.is_empty for n in nodes)):
-            iteration_took_over_3s = (time() - result_loop_start) > 3
-            await asyncio.sleep(0.3 if iteration_took_over_3s else 0)
+            if dashboard_canceled_message:
+                raise JobCanceled(f"\n\n{dashboard_canceled_message}\n")
+            elif terminal_cancel_event.is_set():
+                return
+            elif all((n.is_empty for n in nodes)):
+                iteration_took_over_3s = (time() - result_loop_start) > 3
+                await asyncio.sleep(0.3 if iteration_took_over_3s else 0)
 
+            for task in node_tasks:
+                if task.done() and task.exception():
+                    raise task.exception()
+
+            assigned_nodes = [node for node in nodes if node.job_id]
+            booting_nodes = [node for node in nodes if node.state == "BOOTING"]
+
+            if any([n.currently_installing_package for n in assigned_nodes]):
+                pkg = next(filter(None, (n.currently_installing_package for n in assigned_nodes)), None)
+                reporter.set_installing_package_message(pkg)
+            if assigned_nodes and all((n.all_packages_installed for n in assigned_nodes)):
+                total_parallelism = sum((n.current_parallelism for n in assigned_nodes))
+                reporter.set_running_progress_message(result_counter[0], total_parallelism)
+            if any([n.udf_start_latency for n in assigned_nodes]):
+                udf_start_latency = min(
+                    [n.udf_start_latency for n in assigned_nodes if n.udf_start_latency]
+                )
+            if booting_nodes:
+                reporter.set_booting_nodes_message(len(booting_nodes))
+
+            if assigned_nodes and all((getattr(n, "inputs_uploaded", False) for n in assigned_nodes)):
+                inputs_done_event.set()
+                if background and not inputs_done_msg_printed:
+                    reporter.print_inputs_done_message()
+                    inputs_done_msg_printed = True
+
+            exit_code = ping_process.poll()
+            if exit_code:
+                stderr = ping_process.stderr.read().decode("utf-8")
+                raise Exception(f"Ping process exited with code: {exit_code}\n{stderr}")
+
+            if all((task.done() for task in node_tasks)) and result_counter[0] < len(inputs):
+                raise Exception("Zero nodes working on job and we have not received all results!")
+            await asyncio.sleep(0.1)
+
+        total_runtime = time() - start_time
+        await reporter.log_job_success_telemetry(udf_start_latency, total_runtime)
+        await async_job_ref.update({"client_has_all_results": True})
+    finally:
         for task in node_tasks:
-            if task.done() and task.exception():
-                raise task.exception()
-
-        assigned_nodes = [node for node in nodes if node.job_id]
-
-        if any([n.currently_installing_package for n in assigned_nodes]):
-            pkg = next(filter(None, (n.currently_installing_package for n in assigned_nodes)), None)
-            reporter.set_installing_package_message(pkg)
-        if assigned_nodes and all((n.all_packages_installed for n in assigned_nodes)):
-            total_parallelism = sum((n.current_parallelism for n in assigned_nodes))
-            reporter.set_running_progress_message(result_counter[0], total_parallelism)
-        if any([n.udf_start_latency for n in assigned_nodes]):
-            udf_start_latency = min(
-                [n.udf_start_latency for n in assigned_nodes if n.udf_start_latency]
-            )
-
-        if assigned_nodes and all((getattr(n, "inputs_uploaded", False) for n in assigned_nodes)):
-            inputs_done_event.set()
-            if background and not inputs_done_msg_printed:
-                reporter.print_inputs_done_message()
-                inputs_done_msg_printed = True
-
-        exit_code = ping_process.poll()
-        if exit_code:
-            stderr = ping_process.stderr.read().decode("utf-8")
-            raise Exception(f"Ping process exited with code: {exit_code}\n{stderr}")
-
-        if all((task.done() for task in node_tasks)) and result_counter[0] < len(inputs):
-            raise Exception("Zero nodes working on job and we have not received all results!")
-        await asyncio.sleep(0.1)
-
-    total_runtime = time() - start_time
-    await reporter.log_job_success_telemetry(udf_start_latency, total_runtime)
-    await async_job_ref.update({"client_has_all_results": True})
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*node_tasks, return_exceptions=True)
 
 
 def remote_parallel_map(

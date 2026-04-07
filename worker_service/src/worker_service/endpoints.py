@@ -32,8 +32,7 @@ async def get_pid():
 @router.get("/restart")
 async def restart():
     # Used to cancel running user jobs.
-    # User jobs currently run in a thread (not cancelable)
-    # I don't want to make them run in process (cancelable) because it's slower and annoying.
+    # User jobs run in a subprocess, but a hard restart is still the fastest cancellation path.
     # Here as a hack I just kill the entire worker service, from inside itself, it's automatically
     # restarted by the while loop in the bash script the container was started with.
 
@@ -62,10 +61,9 @@ async def get_results(
 
     no_work = not SELF["in_progress_input"] and SELF["inputs_queue"].empty()
     no_incoming_work = all_inputs_sent_to_workers and no_work
-    if no_incoming_work and (not SELF["STOP_PROCESSING_EVENT"].is_set() or not SELF["IDLE"]):
-        SELF["STOP_PROCESSING_EVENT"].set()
+    if no_incoming_work and not SELF["IDLE"]:
         SELF["IDLE"] = True
-        SELF["logs"].append(f"Worker will not receive work, pausing until node forces reboot.")
+        SELF["logs"].append("Worker has no incoming work, entering idle mode.")
     if SELF["current_job"] != job_id:
         return Response("job not found", status_code=404)
 
@@ -79,7 +77,6 @@ async def get_results(
         except Empty:
             break
 
-    await asyncio.sleep(0)
     response_json = {
         "results": results,
         "is_idle": SELF["IDLE"],  # <- used to determine if job is done
@@ -88,12 +85,9 @@ async def get_results(
     }
     if SELF["udf_start_latency"]:
         response_json["udf_start_latency"] = SELF["udf_start_latency"]
-    if SELF["packages_to_install"]:
-        response_json["packages_to_install"] = SELF["packages_to_install"]
     if SELF["ALL_PACKAGES_INSTALLED"]:
         response_json["all_packages_installed"] = SELF["ALL_PACKAGES_INSTALLED"]
     data = pickle.dumps(response_json)
-    await asyncio.sleep(0)
     headers = {"Content-Disposition": 'attachment; filename="results.pkl"'}
     return Response(content=data, media_type="application/octet-stream", headers=headers)
 
@@ -109,13 +103,20 @@ async def get_inputs(
 
     inputs = []
     total_bytes = 0
+    max_inputs_to_send = None
+    if not ejecting:
+        max_inputs_to_send = SELF["inputs_queue"].qsize() // 2
 
     if ejecting and SELF["in_progress_input"]:
         inputs.append(SELF["in_progress_input"])
         SELF["in_progress_input"] = None
         total_bytes += len(input_pkl_with_idx[1])
 
-    while not SELF["inputs_queue"].empty() and (total_bytes < target_reply_size):
+    while (
+        not SELF["inputs_queue"].empty()
+        and (total_bytes < target_reply_size)
+        and (max_inputs_to_send is None or len(inputs) < max_inputs_to_send)
+    ):
         try:
             input_pkl_with_idx = SELF["inputs_queue"].get_nowait()
             inputs.append(input_pkl_with_idx)
@@ -123,9 +124,9 @@ async def get_inputs(
         except Empty:
             break
 
-    if inputs:
-        msg = f"I have {min(1, SELF['inputs_queue'].qsize())} inputs"
-        SELF["logs"].append(f"{msg}, sending {len(inputs)} inputs elsewhere!")
+    # if inputs:
+    #     msg = f"I have {min(1, SELF['inputs_queue'].qsize())} inputs"
+    #     SELF["logs"].append(f"{msg}, sending {len(inputs)} inputs elsewhere!")
     # else:
     #     SELF["logs"].append(f"I have {SELF['inputs_queue'].qsize()+1} inputs, NOT SENDING ANY")
 

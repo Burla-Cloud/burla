@@ -124,6 +124,7 @@ class Node:
         instance_client: Optional[InstancesClient] = None,
         inactivity_shutdown_time_sec: Optional[int] = None,
         disk_size: Optional[int] = None,
+        instance_name: Optional[str] = None,
     ):
         self = cls.__new__(cls)
         self.db = db
@@ -139,7 +140,7 @@ class Node:
         self.disk_size = disk_size if disk_size else 20  # minimum is 10 due to disk image
         self.instance_client = instance_client if instance_client else InstancesClient()
 
-        self.instance_name = f"burla-node-{uuid4().hex[:8]}"
+        self.instance_name = instance_name if instance_name else f"burla-node-{uuid4().hex[:8]}"
         self.started_booting_at = time()
         self.is_booting = True
         self.host = None

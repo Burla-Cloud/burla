@@ -22,8 +22,8 @@ from jinja2 import Environment, FileSystemLoader
 os.environ["GRPC_VERBOSITY"] = "ERROR"
 os.environ["GLOG_minloglevel"] = "2"
 
-CURRENT_BURLA_VERSION = "1.4.11"
-MIN_COMPATIBLE_CLIENT_VERSION = "1.4.4"
+CURRENT_BURLA_VERSION = "1.4.12"
+MIN_COMPATIBLE_CLIENT_VERSION = "1.4.12"
 
 # In this mode EVERYTHING runs locally in docker containers.
 # possible modes: local-dev-mode (everything local), remote-dev-mode (only main-service local), prod
@@ -101,6 +101,12 @@ def get_logger(request: Request):
     return Logger(request)
 
 
+def get_auth_headers(request: Request):
+    authorization = request.session.get("Authorization") or request.headers.get("Authorization")
+    email = request.session.get("X-User-Email") or request.headers.get("X-User-Email")
+    return {"Authorization": authorization, "X-User-Email": email}
+
+
 def get_add_background_task_function(
     background_tasks: BackgroundTasks, logger: Logger = Depends(get_logger)
 ):
@@ -123,7 +129,9 @@ def get_add_background_task_function(
     return add_logged_background_task
 
 
-from main_service.endpoints.cluster import router as cluster_router
+from main_service.endpoints.cluster_lifecycle import router as cluster_lifecycle_router
+from main_service.endpoints.cluster_views import router as cluster_views_router
+from main_service.endpoints.usage import router as usage_router
 from main_service.endpoints.settings import router as settings_router
 from main_service.endpoints.jobs import router as jobs_router
 from main_service.endpoints.storage import router as storage_router
@@ -154,7 +162,9 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None)
-app.include_router(cluster_router)
+app.include_router(cluster_lifecycle_router)
+app.include_router(cluster_views_router)
+app.include_router(usage_router)
 app.include_router(settings_router)
 app.include_router(jobs_router)
 app.include_router(storage_router)
@@ -331,7 +341,7 @@ async def validate_requests(request: Request, call_next):
                         user_email=email,
                         first_name=first_name,
                     )
-                    return Response(content=rendered, status_code=401, media_type="text/html")
+                    return Response(content=rendered, status_code=200, media_type="text/html")
 
         rendered = STATIC_FILES_ENV.get_template("login.html.j2").render(
             redirect_locally=REDIRECT_LOCALLY_ON_LOGIN,

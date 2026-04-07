@@ -1,15 +1,13 @@
 import pickle
 import json
 import psutil
-from time import time
 from queue import Empty
 from typing import Optional
 
 import asyncio
 import aiohttp
-from google.cloud import firestore
 from google.cloud.firestore_v1.async_client import AsyncClient
-from fastapi import APIRouter, Path, Depends, Response, Request
+from fastapi import APIRouter, Path, Depends, Response, Request, Query
 
 from node_service import (
     SELF,
@@ -26,14 +24,16 @@ router = APIRouter()
 
 
 @router.get("/jobs/{job_id}/inputs")
-async def get_inputs(job_id: str = Path(...), logger: Logger = Depends(get_logger)):
+async def get_inputs(
+    job_id: str = Path(...),
+    target_reply_size: int = Query(int(1_000_000 * 0.5)),
+    logger: Logger = Depends(get_logger),
+):
     if job_id != SELF["current_job"]:
         return Response("job not found", status_code=404)
     elif SELF["SHUTTING_DOWN"]:
         return Response("Node is shutting down, can't give inputs.", status_code=410)
 
-    # worker gathers inputs until queue empty or > target_reply_size
-    target_reply_size = 1_000_000 * 0.5
     target_size_per_worker = target_reply_size / len(SELF["workers"])
 
     async def _get_inputs_from_worker(session, worker):
@@ -62,18 +62,6 @@ async def get_inputs(job_id: str = Path(...), logger: Logger = Depends(get_logge
         await asyncio.sleep(0)
         headers = {"Content-Disposition": 'attachment; filename="inputs.pkl"'}
         return Response(content=data, media_type="application/octet-stream", headers=headers)
-
-
-@router.post("/jobs/{job_id}/inputs/done")
-async def input_upload_done(job_id: str = Path(...)):
-    """
-    This simply allows the node to conclude that is is done (in job_watcher).
-    Unless it explicitly hears that no more inputs are coming after getting some, it won't
-    consider itself done.
-    """
-    if job_id != SELF["current_job"]:
-        return Response("job not found", status_code=404)
-    SELF["all_inputs_uploaded"] = True
 
 
 @router.post("/jobs/{job_id}/inputs")
@@ -111,7 +99,7 @@ async def get_results(job_id: str = Path(...)):
 
     results = []
     total_bytes = 0
-    while (not SELF["results_queue"].empty()) and (total_bytes < (1_000_000 * 0.5)):
+    while (not SELF["results_queue"].empty()) and (total_bytes < (1_000_000 * 1)):
         try:
             result = SELF["results_queue"].get_nowait()
             results.append(result)
@@ -119,7 +107,6 @@ async def get_results(job_id: str = Path(...)):
         except Empty:
             break
 
-    await asyncio.sleep(0)
     response_json = {
         "results": results,
         "current_parallelism": SELF["current_parallelism"],
@@ -127,18 +114,11 @@ async def get_results(job_id: str = Path(...)):
         "currently_installing_package": SELF["currently_installing_package"],
     }
 
-    if SELF["udf_start_latency"] and not SELF["udf_start_latency_sent_to_client"]:
-        response_json["udf_start_latency"] = SELF["udf_start_latency"]
-        SELF["udf_start_latency_sent_to_client"] = True
-    if SELF["packages_to_install"] and not SELF["packages_to_install_sent_to_client"]:
-        response_json["packages_to_install"] = SELF["packages_to_install"]
-        SELF["packages_to_install_sent_to_client"] = True
     if SELF["all_packages_installed"] and not SELF["all_packages_installed_sent_to_client"]:
         response_json["all_packages_installed"] = SELF["all_packages_installed"]
         SELF["all_packages_installed_sent_to_client"] = True
 
     data = pickle.dumps(response_json)
-    await asyncio.sleep(0)
     headers = {"Content-Disposition": 'attachment; filename="results.pkl"'}
     return Response(content=data, media_type="application/octet-stream", headers=headers)
 
@@ -255,6 +235,6 @@ async def execute(
 
     SELF["job_watcher_stop_event"].clear()  # is initalized as set by default
     job_watcher_coroutine = job_watcher_logged(
-        request_json["n_inputs"], is_background_job, request.headers
+        request_json["n_inputs"], is_background_job, request_json["start_time"], request.headers
     )
     SELF["job_watcher_task"] = asyncio.create_task(job_watcher_coroutine)

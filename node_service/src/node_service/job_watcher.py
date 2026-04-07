@@ -18,12 +18,17 @@ from node_service.lifecycle_endpoints import (
 )
 
 EMPTY_NEIGHBOR_TIMEOUT_SEC = 2 * 60
+BYTES_PER_GB = 1024**3
+CLIENT_CONTACT_TIMEOUT_SEC = 5
 
 
-async def get_inputs_from_neighbor(neighboring_node, session, logger, auth_headers):
+async def get_inputs_from_neighbor(
+    neighboring_node, target_reply_size, session, logger, auth_headers
+):
     instance_name = neighboring_node["instance_name"]
     try:
         url = f"{neighboring_node['host']}/jobs/{SELF['current_job']}/inputs"
+        url += f"?target_reply_size={target_reply_size}"
         # must be close to SHUTTING_DOWN check \/
         async with session.get(url, timeout=2, headers=auth_headers) as response:
             # logger.log("Asked neighboring node for more inputs ...")  # must log after get ^
@@ -42,6 +47,7 @@ async def get_inputs_from_neighbor(neighboring_node, session, logger, auth_heade
 async def _job_watcher(
     n_inputs: int,
     is_background_job: bool,
+    job_started_at: float,
     logger: Logger,
     auth_headers: dict,
     async_db: AsyncClient,
@@ -63,6 +69,8 @@ async def _job_watcher(
         global JOB_FAILED, JOB_CANCELED
         for change in changes:
             job_dict = change.document.to_dict()
+            if job_dict["all_inputs_uploaded"] == True:
+                SELF["all_inputs_uploaded"] = True
             if job_dict["status"] == "FAILED":
                 sleep(2)  # give worker a sec to put error result in result queue
                 JOB_FAILED = True
@@ -78,10 +86,15 @@ async def _job_watcher(
     all_workers_idle = False
     all_workers_empty = False
     neighbor_had_no_inputs_at = None
-    start_time = time()
+    last_results_update_time = time()
+    last_reported_result_count = 0
+    last_reported_client_contact_last_1s = True
     while not SELF["job_watcher_stop_event"].is_set():
         if all_workers_empty:
-            await asyncio.sleep(0.2)
+            if (time() - job_started_at) < 7:
+                await asyncio.sleep(0.02)
+            else:
+                await asyncio.sleep(0.2)
 
         # avoid race condition:
         if SELF["job_watcher_stop_event"].is_set():
@@ -94,7 +107,6 @@ async def _job_watcher(
             try:
                 tasks = [load_results_from_worker(w, session) for w in SELF["workers"]]
                 await asyncio.gather(*tasks)
-                await node_doc.update({"current_num_results": SELF["num_results_received"]})
             except Exception as e:
                 msg = f"Failed to collect results from workers, rebooting...\n"
                 logger.log(msg + f"{e}\n{traceback.format_exc()}", severity="ERROR")
@@ -112,15 +124,28 @@ async def _job_watcher(
         if SELF["pending_inputs"]:
             SELF["pending_inputs"] = await send_inputs_to_workers(session, SELF["pending_inputs"])
 
+        input_queue_empty = not SELF["pending_inputs"]
+        current_num_results = SELF["num_results_received"]
+        results_changed = current_num_results != last_reported_result_count
+        seconds_since_results_update = time() - last_results_update_time
+        if input_queue_empty and results_changed:
+            await node_doc.update({"current_num_results": current_num_results})
+            last_results_update_time = time()
+            last_reported_result_count = current_num_results
+        elif (not input_queue_empty) and seconds_since_results_update > 2:
+            await node_doc.update({"current_num_results": current_num_results})
+            last_results_update_time = time()
+            last_reported_result_count = current_num_results
+
         # is client connected?
         client_disconnected = False
         sec_since_last_request = time() - SELF["last_request_timestamp"]
-        client_contact_last_1s = sec_since_last_request < 1
+        client_contact_last_1s = sec_since_last_request < CLIENT_CONTACT_TIMEOUT_SEC
         client_contact_last_1s = client_contact_last_1s or SELF["active_client_request_count"] > 0
-        if client_contact_last_1s:
-            await node_doc.update({"client_contact_last_1s": True})
-        else:
-            await node_doc.update({"client_contact_last_1s": False})
+        if client_contact_last_1s != last_reported_client_contact_last_1s:
+            await node_doc.update({"client_contact_last_1s": client_contact_last_1s})
+            last_reported_client_contact_last_1s = client_contact_last_1s
+        if not client_contact_last_1s:
             node_dicts = [d.to_dict() for d in await node_docs_collection.get()]
             client_disconnected = not any([d["client_contact_last_1s"] for d in node_dicts])
         must_be_connected = not is_background_job or not SELF["all_inputs_uploaded"]
@@ -136,34 +161,52 @@ async def _job_watcher(
         all_workers_idle = SELF["current_parallelism"] == 0
         all_inputs_sent_to_workers = SELF["all_inputs_uploaded"] and (not SELF["pending_inputs"])
         all_inputs_processed = all_workers_idle and all_inputs_sent_to_workers
+        node_results_queue_empty = SELF["results_queue"].empty()
+        workers_results_queues_empty = all(w.is_empty for w in SELF["workers"])
+        no_buffered_results = node_results_queue_empty and workers_results_queues_empty
         if all_inputs_processed:
-            if time() - start_time > 10:  # allows short jobs to finish faster.
+            if time() - job_started_at > 10:  # allows short jobs to finish faster.
                 new_inputs = []
                 neighboring_nodes = await get_neighboring_nodes(async_db)
                 if neighboring_nodes and not SELF["SHUTTING_DOWN"]:
-                    args = (neighboring_nodes[0].to_dict(), session, logger, auth_headers)
+                    worker_input_queue_size_limit_gb = SELF["return_queue_ram_threshold_gb"] / 4
+                    worker_input_queue_size_limit_bytes = (
+                        worker_input_queue_size_limit_gb * BYTES_PER_GB
+                    )
+                    total_free_input_space = worker_input_queue_size_limit_bytes * len(
+                        SELF["workers"]
+                    )
+                    args = (
+                        neighboring_nodes[0].to_dict(),
+                        int(total_free_input_space),
+                        session,
+                        logger,
+                        auth_headers,
+                    )
                     new_inputs = await get_inputs_from_neighbor(*args)
                 if new_inputs:
                     logger.log(f"Got {len(new_inputs)} more inputs from {neighboring_nodes[0].id}")
+                    neighbor_had_no_inputs_at = None
+                    seconds_neighbor_had_no_inputs = 0
                     rejected_inputs = await send_inputs_to_workers(session, new_inputs)
-                    # rejected = no space to store
                     if rejected_inputs:
-                        # This is theoretically impossible because all nodes have the same
-                        # IO queue memory limits, and this node's input queues must first be empty
-                        # in order to attempt getting more inputs from another node.
-                        # Therefore this node should always be able to fit 100% of another node's inputs
-                        msg = "Recieved inputs from neighbor that I do not have space to store!"
-                        raise Exception(msg)
+                        SELF["pending_inputs"] = rejected_inputs + SELF["pending_inputs"]
+                        msg = f"Queued {len(rejected_inputs)} borrowed inputs for retry."
+                        logger.log(msg, severity="WARNING")
                 else:
                     neighbor_had_no_inputs_at = neighbor_had_no_inputs_at or time()
                     seconds_neighbor_had_no_inputs = time() - neighbor_had_no_inputs_at
                     if seconds_neighbor_had_no_inputs > EMPTY_NEIGHBOR_TIMEOUT_SEC:
-                        msg = f"Neighbor had no extra inputs for {EMPTY_NEIGHBOR_TIMEOUT_SEC//60}"
-                        logger.log(f"{msg} minutes, done working on job!")
-                        await restart_workers(session, logger, async_db)
-                        break
+                        if no_buffered_results:
+                            msg = f"Neighbor had no extra inputs for {EMPTY_NEIGHBOR_TIMEOUT_SEC//60}"
+                            logger.log(f"{msg} minutes, done working on job!")
+                            await restart_workers(session, logger, async_db)
+                            break
+                        logger.log(
+                            "Neighbor timeout reached but waiting for buffered results to drain."
+                        )
             not_waiting_on_client = SELF["results_queue"].empty() or client_disconnected
-            all_local_work_complete = all_inputs_processed and not_waiting_on_client
+            all_local_work_complete = all_inputs_processed and no_buffered_results and not_waiting_on_client
 
         # job over ?
         job_completed = False
@@ -180,7 +223,6 @@ async def _job_watcher(
                 sync_job_doc.update(
                     {
                         "udf_start_latency": SELF.get("udf_start_latency"),
-                        "packages_to_install": SELF.get("packages_to_install"),
                         "status": status,
                     }
                 )
@@ -195,13 +237,17 @@ async def _job_watcher(
     job_watch.unsubscribe()
 
 
-async def job_watcher_logged(n_inputs: int, is_background_job: bool, auth_headers: dict):
+async def job_watcher_logged(
+    n_inputs: int, is_background_job: bool, job_started_at: float, auth_headers: dict
+):
     logger = Logger()  # new logger has no request attached like the one in execute job did.
 
     async with aiohttp.ClientSession() as session:
         try:
             async_db = AsyncClient(project=PROJECT_ID, database="burla")
-            await _job_watcher(n_inputs, is_background_job, logger, auth_headers, async_db, session)
+            await _job_watcher(
+                n_inputs, is_background_job, job_started_at, logger, auth_headers, async_db, session
+            )
         except Exception as e:
             exc_type, exc_value, exc_traceback = sys.exc_info()
             tb_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
@@ -223,7 +269,6 @@ async def reinit_node(assigned_workers: list, async_db: AsyncClient):
 
     # reset per-job fields on preserved workers to avoid leaking prior job state
     for w in SELF["workers"]:
-        w.packages_to_install = None
         w.is_idle = False
         w.is_empty = False
 
@@ -239,6 +284,10 @@ async def reinit_node(assigned_workers: list, async_db: AsyncClient):
 
 
 async def restart_workers(session: aiohttp.ClientSession, logger: Logger, async_db: AsyncClient):
+    restart_wait_seconds = 20
+    restart_poll_interval_seconds = 0.5
+    max_restart_attempts = int(restart_wait_seconds / restart_poll_interval_seconds)
+
     async def _restart_single_worker(worker):
         # checks that PID's change to prevent scenario where:
         # /restart called
@@ -266,11 +315,13 @@ async def restart_workers(session: aiohttp.ClientSession, logger: Logger, async_
 
             if PID_AFTER_RESTART != PID_BEFORE_RESTART:
                 return worker
-            elif attempt > 20:
+            elif attempt > max_restart_attempts:
                 worker.log_debug_info()
-                raise Exception(f"Worker {worker.container_name} not ready after 10s")
+                raise Exception(
+                    f"Worker {worker.container_name} not ready after {restart_wait_seconds}s"
+                )
             else:
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(restart_poll_interval_seconds)
                 return await _wait_til_worker_ready(attempt + 1)
 
         return await _wait_til_worker_ready()

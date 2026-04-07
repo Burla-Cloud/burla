@@ -2,6 +2,7 @@ import os
 import json
 import webbrowser
 import requests
+from functools import cache
 from time import sleep
 from uuid import uuid4
 from typing import Tuple
@@ -27,15 +28,20 @@ class AuthException(Exception):
         )
 
 
-def get_auth_headers() -> Tuple[str, str]:
+@cache
+def _get_auth_info() -> tuple[str, str]:
     if not CONFIG_PATH.exists():
         raise AuthException()
-    else:
-        auth_info = json.loads(CONFIG_PATH.read_text())
-        return {
-            "X-User-Email": auth_info["email"],
-            "Authorization": f"Bearer {auth_info['auth_token']}",
-        }
+    auth_info = json.loads(CONFIG_PATH.read_text())
+    return auth_info["email"], auth_info["auth_token"]
+
+
+def get_auth_headers() -> dict[str, str]:
+    email, auth_token = _get_auth_info()
+    return {
+        "X-User-Email": email,
+        "Authorization": f"Bearer {auth_token}",
+    }
 
 
 def _get_login_response(client_id, spinner, attempt=0):
@@ -74,7 +80,7 @@ def _get_login_response(client_id, spinner, attempt=0):
         )
 
 
-def login():
+def login(no_browser: bool = False):
     # for dev: if main service is running locally, redirect to it instead of deployed cloud run
     main_svc_image_name = "us-docker.pkg.dev/burla-test/burla-main-service/burla-main-service"
     cmd = f"docker container list --filter ancestor={main_svc_image_name}"
@@ -84,9 +90,10 @@ def login():
     client_id = uuid4().hex
     login_url = f"{_BURLA_BACKEND_URL}/v2/login/client/{client_id}"
     login_url += f"?redirect_locally={redirect_locally}"
-    if IN_COLAB:
+    if IN_COLAB or no_browser:
         print(f"Please navigate to the following URL to login:\n\n    {login_url}\n")
-        print(f"(We are unable to automatically open this from a Google Colab notebook)")
+        if IN_COLAB:
+            print(f"(We are unable to automatically open this from a Google Colab notebook)")
     else:
         print(f"Your browser has been opened to visit:\n\n    {login_url}\n")
         webbrowser.open(login_url)
@@ -110,3 +117,4 @@ def login():
         "client_svc_account_key": client_svc_account_key,
     }
     CONFIG_PATH.write_text(json.dumps(config))
+    _get_auth_info.cache_clear()

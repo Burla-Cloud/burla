@@ -30,7 +30,7 @@ from starlette.requests import ClientDisconnect
 from starlette.datastructures import UploadFile
 
 
-__version__ = "1.4.11"
+__version__ = "1.4.12"
 CREDENTIALS, PROJECT_ID = google.auth.default()
 BURLA_BACKEND_URL = "https://backend.burla.dev"
 
@@ -77,9 +77,6 @@ def REINIT_SELF(SELF):
     SELF["all_packages_installed"] = False
     SELF["all_packages_installed_sent_to_client"] = False
     SELF["udf_start_latency"] = None
-    SELF["udf_start_latency_sent_to_client"] = False
-    SELF["packages_to_install"] = None
-    SELF["packages_to_install_sent_to_client"] = False
     SELF["active_client_request_count"] = 0
     SELF["last_request_timestamp"] = time()
 

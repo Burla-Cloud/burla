@@ -221,9 +221,11 @@ async def _execute_job(
         for log in [log for c in changes for log in c.document.to_dict()["logs"]]:
             if log.get("is_error") and sync_job_ref.get().to_dict()["status"] == "CANCELED":
                 dashboard_canceled_message = log["message"]
-            else:
-                message = log["message"].rstrip("\r\n")
-                spinner.write(message) if spinner else print(message)
+                continue
+            if log.get("is_error"):
+                continue
+            message = log["message"].rstrip("\r\n")
+            spinner.write(message) if spinner else print(message)
 
     log_stream = sync_job_ref.collection("logs").on_snapshot(_on_new_logs_doc)
     session_stack.callback(log_stream.unsubscribe)

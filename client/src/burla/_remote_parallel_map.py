@@ -218,14 +218,20 @@ async def _execute_job(
     # start stdout/stderr stream
     def _on_new_logs_doc(col_snapshot, changes, read_time):
         nonlocal dashboard_canceled_message
-        for log in [log for c in changes for log in c.document.to_dict()["logs"]]:
-            if log.get("is_error") and sync_job_ref.get().to_dict()["status"] == "CANCELED":
-                dashboard_canceled_message = log["message"]
+        for change in changes:
+            log_doc = change.document.to_dict()
+            logs = log_doc.get("logs", [])
+            is_error_doc = bool(log_doc.get("is_error"))
+
+            if is_error_doc and sync_job_ref.get().to_dict()["status"] == "CANCELED" and logs:
+                dashboard_canceled_message = logs[-1]["message"]
                 continue
-            if log.get("is_error"):
+            if is_error_doc or udf_error_event.is_set():
                 continue
-            message = log["message"].rstrip("\r\n")
-            spinner.write(message) if spinner else print(message)
+
+            for log in logs:
+                message = log["message"].rstrip("\r\n")
+                spinner.write(message) if spinner else print(message)
 
     log_stream = sync_job_ref.collection("logs").on_snapshot(_on_new_logs_doc)
     session_stack.callback(log_stream.unsubscribe)

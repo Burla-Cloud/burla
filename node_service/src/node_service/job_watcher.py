@@ -19,8 +19,6 @@ from node_service.lifecycle_endpoints import (
 
 EMPTY_NEIGHBOR_TIMEOUT_SEC = 2 * 60
 BYTES_PER_GB = 1024**3
-ALL_INPUTS_UPLOADED_FORCE_POLL_WINDOW_SECONDS = 5
-ALL_INPUTS_UPLOADED_FORCE_POLL_INTERVAL_SECONDS = 0.2
 CLIENT_CONTACT_TIMEOUT_SEC = 5
 
 
@@ -66,13 +64,12 @@ async def _job_watcher(
     neighboring_nodes = []
     neighbor_had_no_inputs_at = None
     seconds_neighbor_had_no_inputs = 0
-    last_all_inputs_uploaded_force_poll_time = 0.0
 
     def _on_job_snapshot(doc_snapshot, changes, read_time):
         global JOB_FAILED, JOB_CANCELED
         for change in changes:
             job_dict = change.document.to_dict()
-            if job_dict.get("all_inputs_uploaded") == True:
+            if job_dict["all_inputs_uploaded"] == True:
                 SELF["all_inputs_uploaded"] = True
             if job_dict["status"] == "FAILED":
                 sleep(2)  # give worker a sec to put error result in result queue
@@ -102,21 +99,6 @@ async def _job_watcher(
         # avoid race condition:
         if SELF["job_watcher_stop_event"].is_set():
             break
-
-        # Firestore watch delivery can lag very early in the job; force a direct read briefly so
-        # the watcher never stalls waiting for `all_inputs_uploaded` to arrive via watch callback.
-        current_time = time()
-        still_in_force_poll_window = (
-            current_time - job_started_at
-        ) < ALL_INPUTS_UPLOADED_FORCE_POLL_WINDOW_SECONDS
-        poll_interval_elapsed = (
-            current_time - last_all_inputs_uploaded_force_poll_time
-        ) >= ALL_INPUTS_UPLOADED_FORCE_POLL_INTERVAL_SECONDS
-        if (not SELF["all_inputs_uploaded"]) and still_in_force_poll_window and poll_interval_elapsed:
-            job_data = (await job_doc.get()).to_dict() or {}
-            if job_data.get("all_inputs_uploaded") == True:
-                SELF["all_inputs_uploaded"] = True
-            last_all_inputs_uploaded_force_poll_time = current_time
 
         # enqueue results from workers (if there is space in mem)
         threshold = SELF["return_queue_ram_threshold_gb"]

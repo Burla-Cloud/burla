@@ -65,7 +65,7 @@ class FunctionTooBig(Exception):
         super().__init__(msg)
 
 
-async def _grow_cluster(current_cpus: int, missing_cpus: int, session, async_db) -> list[Node]:
+async def _grow_cluster(current_cpus: int, missing_cpus: int, session, async_db, spinner) -> list[Node]:
     request_json = {"current_cpus": current_cpus, "missing_cpus": missing_cpus}
     auth_headers = get_auth_headers()
     main_service_url = json.loads(CONFIG_PATH.read_text())["cluster_dashboard_url"]
@@ -80,8 +80,16 @@ async def _grow_cluster(current_cpus: int, missing_cpus: int, session, async_db)
             async with await request as response:
                 if response.status == 200:
                     response_json = await response.json()
-                    node_kw = dict(session=session, async_db=async_db)
                     names = response_json["added_node_instance_names"]
+                    if len(names) == 0:
+                        return []
+                    target_parallelism_per_node = max(1, missing_cpus // len(names))
+                    node_kw = dict(
+                        target_parallelism=target_parallelism_per_node,
+                        session=session,
+                        async_db=async_db,
+                        spinner=spinner,
+                    )
                     return [Node.from_booting(name, **node_kw) for name in names]
                 if response.status == 401:
                     raise UnauthorizedError()
@@ -169,7 +177,13 @@ async def _execute_job(
         current_cpus = target_parallelism * required_cpus_per_function_call
         missing_cpus = max(0, target_cpus - current_cpus)
         if missing_cpus > 0:
-            booting_nodes = await _grow_cluster(current_cpus, missing_cpus, session, async_db)
+            booting_nodes = await _grow_cluster(
+                current_cpus,
+                missing_cpus,
+                session,
+                async_db,
+                spinner,
+            )
             nodes.extend(booting_nodes)
             if len(booting_nodes) > 0:
                 reporter.set_booting_nodes_message(len(booting_nodes))
@@ -269,7 +283,10 @@ async def _execute_job(
                     reporter.set_installing_package_message(nodes[0].currently_installing_package)
                 else:
                     total_parallelism = sum((n.current_parallelism for n in nodes))
-                    reporter.set_running_progress_message(total_result_count, total_parallelism)
+                    booting_nodes = sum(n.state == "BOOTING" for n in nodes)
+                    reporter.set_running_progress_message(
+                        total_result_count, total_parallelism, booting_nodes
+                    )
                 last_status_message_update_time = current_time
 
             if len(inputs_with_indicies) == 0 and not inputs_done_event.is_set():

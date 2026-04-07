@@ -275,13 +275,20 @@ class Node:
         return self
 
     @classmethod
-    def from_booting(cls, instance_name: str, session, async_db, spinner: bool | Spinner):
+    def from_booting(
+        cls,
+        instance_name: str,
+        target_parallelism: int,
+        session,
+        async_db,
+        spinner: bool | Spinner,
+    ):
         self = cls(Node.__init_token, spinner, async_db, session)
         self.state = "BOOTING"
         self.instance_name = instance_name
         self.host = None
         self.machine_type = None
-        self.target_parallelism = None
+        self.target_parallelism = target_parallelism
         return self
 
     async def _update_status(self):

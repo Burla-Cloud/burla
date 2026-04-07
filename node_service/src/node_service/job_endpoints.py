@@ -7,7 +7,7 @@ from typing import Optional
 import asyncio
 import aiohttp
 from google.cloud.firestore_v1.async_client import AsyncClient
-from fastapi import APIRouter, Path, Depends, Response, Request
+from fastapi import APIRouter, Path, Depends, Response, Request, Query
 
 from node_service import (
     SELF,
@@ -24,14 +24,16 @@ router = APIRouter()
 
 
 @router.get("/jobs/{job_id}/inputs")
-async def get_inputs(job_id: str = Path(...), logger: Logger = Depends(get_logger)):
+async def get_inputs(
+    job_id: str = Path(...),
+    target_reply_size: int = Query(int(1_000_000 * 0.5)),
+    logger: Logger = Depends(get_logger),
+):
     if job_id != SELF["current_job"]:
         return Response("job not found", status_code=404)
     elif SELF["SHUTTING_DOWN"]:
         return Response("Node is shutting down, can't give inputs.", status_code=410)
 
-    # worker gathers inputs until queue empty or > target_reply_size
-    target_reply_size = 1_000_000 * 0.5
     target_size_per_worker = target_reply_size / len(SELF["workers"])
 
     async def _get_inputs_from_worker(session, worker):

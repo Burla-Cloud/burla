@@ -61,10 +61,9 @@ async def get_results(
 
     no_work = not SELF["in_progress_input"] and SELF["inputs_queue"].empty()
     no_incoming_work = all_inputs_sent_to_workers and no_work
-    if no_incoming_work and (not SELF["STOP_PROCESSING_EVENT"].is_set() or not SELF["IDLE"]):
-        SELF["STOP_PROCESSING_EVENT"].set()
+    if no_incoming_work and not SELF["IDLE"]:
         SELF["IDLE"] = True
-        SELF["logs"].append(f"Worker will not receive work, pausing until node forces reboot.")
+        SELF["logs"].append("Worker has no incoming work, entering idle mode.")
     if SELF["current_job"] != job_id:
         return Response("job not found", status_code=404)
 
@@ -104,13 +103,20 @@ async def get_inputs(
 
     inputs = []
     total_bytes = 0
+    max_inputs_to_send = None
+    if not ejecting:
+        max_inputs_to_send = SELF["inputs_queue"].qsize() // 2
 
     if ejecting and SELF["in_progress_input"]:
         inputs.append(SELF["in_progress_input"])
         SELF["in_progress_input"] = None
         total_bytes += len(input_pkl_with_idx[1])
 
-    while not SELF["inputs_queue"].empty() and (total_bytes < target_reply_size):
+    while (
+        not SELF["inputs_queue"].empty()
+        and (total_bytes < target_reply_size)
+        and (max_inputs_to_send is None or len(inputs) < max_inputs_to_send)
+    ):
         try:
             input_pkl_with_idx = SELF["inputs_queue"].get_nowait()
             inputs.append(input_pkl_with_idx)
@@ -118,9 +124,9 @@ async def get_inputs(
         except Empty:
             break
 
-    if inputs:
-        msg = f"I have {min(1, SELF['inputs_queue'].qsize())} inputs"
-        SELF["logs"].append(f"{msg}, sending {len(inputs)} inputs elsewhere!")
+    # if inputs:
+    #     msg = f"I have {min(1, SELF['inputs_queue'].qsize())} inputs"
+    #     SELF["logs"].append(f"{msg}, sending {len(inputs)} inputs elsewhere!")
     # else:
     #     SELF["logs"].append(f"I have {SELF['inputs_queue'].qsize()+1} inputs, NOT SENDING ANY")
 

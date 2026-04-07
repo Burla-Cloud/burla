@@ -135,15 +135,20 @@ class RemoteParallelMapReporter:
         else:
             print(message)
 
-    def set_running_progress_message(self, completed_inputs: int, total_parallelism: int):
+    def set_running_progress_message(
+        self, completed_inputs: int, total_parallelism: int, booting_nodes: int = 0
+    ):
         if not self.spinner:
             return
         # Due to status lag, remaining inputs can briefly be lower than reported parallelism.
         running_inputs = min(total_parallelism, self.input_count - completed_inputs)
-        self.spinner.text = (
+        message = (
             f"Calling `{self.function_name}`: {completed_inputs}/{self.input_count} completed, "
             f"{running_inputs} running."
         )
+        if booting_nodes > 0:
+            message += f" Booting {booting_nodes} nodes ..."
+        self.spinner.text = message
 
     async def log_job_success_telemetry(self, total_runtime: float):
         message = f"Job {self.job_id} completed successfully, total_runtime={total_runtime:.2f}s."

@@ -119,7 +119,7 @@ def _start_nodes(
     node_instance_names = [result for result in exec_results if result is not None]
 
     # kill any local containers that shouldn't be running anymore
-    if IN_LOCAL_DEV_MODE:
+    if IN_LOCAL_DEV_MODE and n_nodes_to_add is None:
         docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
         node_ids = [name[11:] for name in node_instance_names]
         for container in docker_client.containers(all=True):

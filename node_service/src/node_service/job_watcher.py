@@ -18,12 +18,16 @@ from node_service.lifecycle_endpoints import (
 )
 
 EMPTY_NEIGHBOR_TIMEOUT_SEC = 2 * 60
+BYTES_PER_GB = 1024**3
 
 
-async def get_inputs_from_neighbor(neighboring_node, session, logger, auth_headers):
+async def get_inputs_from_neighbor(
+    neighboring_node, target_reply_size, session, logger, auth_headers
+):
     instance_name = neighboring_node["instance_name"]
     try:
         url = f"{neighboring_node['host']}/jobs/{SELF['current_job']}/inputs"
+        url += f"?target_reply_size={target_reply_size}"
         # must be close to SHUTTING_DOWN check \/
         async with session.get(url, timeout=2, headers=auth_headers) as response:
             # logger.log("Asked neighboring node for more inputs ...")  # must log after get ^
@@ -161,19 +165,30 @@ async def _job_watcher(
                 new_inputs = []
                 neighboring_nodes = await get_neighboring_nodes(async_db)
                 if neighboring_nodes and not SELF["SHUTTING_DOWN"]:
-                    args = (neighboring_nodes[0].to_dict(), session, logger, auth_headers)
+                    worker_input_queue_size_limit_gb = SELF["return_queue_ram_threshold_gb"] / 4
+                    worker_input_queue_size_limit_bytes = (
+                        worker_input_queue_size_limit_gb * BYTES_PER_GB
+                    )
+                    total_free_input_space = worker_input_queue_size_limit_bytes * len(
+                        SELF["workers"]
+                    )
+                    args = (
+                        neighboring_nodes[0].to_dict(),
+                        int(total_free_input_space),
+                        session,
+                        logger,
+                        auth_headers,
+                    )
                     new_inputs = await get_inputs_from_neighbor(*args)
                 if new_inputs:
                     logger.log(f"Got {len(new_inputs)} more inputs from {neighboring_nodes[0].id}")
+                    neighbor_had_no_inputs_at = None
+                    seconds_neighbor_had_no_inputs = 0
                     rejected_inputs = await send_inputs_to_workers(session, new_inputs)
-                    # rejected = no space to store
                     if rejected_inputs:
-                        # This is theoretically impossible because all nodes have the same
-                        # IO queue memory limits, and this node's input queues must first be empty
-                        # in order to attempt getting more inputs from another node.
-                        # Therefore this node should always be able to fit 100% of another node's inputs
-                        msg = "Recieved inputs from neighbor that I do not have space to store!"
-                        raise Exception(msg)
+                        SELF["pending_inputs"] = rejected_inputs + SELF["pending_inputs"]
+                        msg = f"Queued {len(rejected_inputs)} borrowed inputs for retry."
+                        logger.log(msg, severity="WARNING")
                 else:
                     neighbor_had_no_inputs_at = neighbor_had_no_inputs_at or time()
                     seconds_neighbor_had_no_inputs = time() - neighbor_had_no_inputs_at
@@ -261,6 +276,10 @@ async def reinit_node(assigned_workers: list, async_db: AsyncClient):
 
 
 async def restart_workers(session: aiohttp.ClientSession, logger: Logger, async_db: AsyncClient):
+    restart_wait_seconds = 20
+    restart_poll_interval_seconds = 0.5
+    max_restart_attempts = int(restart_wait_seconds / restart_poll_interval_seconds)
+
     async def _restart_single_worker(worker):
         # checks that PID's change to prevent scenario where:
         # /restart called
@@ -288,11 +307,13 @@ async def restart_workers(session: aiohttp.ClientSession, logger: Logger, async_
 
             if PID_AFTER_RESTART != PID_BEFORE_RESTART:
                 return worker
-            elif attempt > 20:
+            elif attempt > max_restart_attempts:
                 worker.log_debug_info()
-                raise Exception(f"Worker {worker.container_name} not ready after 10s")
+                raise Exception(
+                    f"Worker {worker.container_name} not ready after {restart_wait_seconds}s"
+                )
             else:
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(restart_poll_interval_seconds)
                 return await _wait_til_worker_ready(attempt + 1)
 
         return await _wait_til_worker_ready()

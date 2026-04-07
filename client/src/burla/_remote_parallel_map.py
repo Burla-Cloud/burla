@@ -211,13 +211,13 @@ async def _execute_job(
     log_stream = sync_job_ref.collection("logs").on_snapshot(_on_new_logs_doc)
     session_stack.callback(log_stream.unsubscribe)
 
-    await reporter.log_job_start_telemetry(nodes, packages)
+    job_start_telemetry_task = create_task(reporter.log_job_start_telemetry(nodes, packages))
+    session_stack.callback(job_start_telemetry_task.cancel)
     reporter.set_uploading_function_message(nodes)
 
-    # start sending "alive" pings
+    # start sending "alive" pings for longer jobs only
     node_hosts = [node.host for node in nodes]
-    ping_process = await run_in_subprocess(send_alive_pings, node_hosts)
-    session_stack.callback(ping_process.kill)
+    ping_process = None
 
     node_tasks = []
     n_inputs = len(inputs)  # <- inputs will be popped from so len(inputs) will start changing
@@ -243,9 +243,14 @@ async def _execute_job(
         )
 
     try:
+        # start sending "alive" pings for longer jobs only
+        last_status_message_update_time = 0.0
         total_result_count = sum(node.result_count for node in nodes)
         while total_result_count < n_inputs:
-            await asyncio.sleep(0.1)
+            if (time() - start_time) < 5:
+                await asyncio.sleep(0.0005)
+            else:
+                await asyncio.sleep(0.1)
 
             if dashboard_canceled_message:
                 raise JobCanceled(f"\n\n{dashboard_canceled_message}\n")
@@ -256,13 +261,16 @@ async def _execute_job(
                 if task.done() and task.exception():
                     raise task.exception()
 
-            if all([n.state == "BOOTING" for n in nodes]):
-                reporter.set_booting_nodes_message(len(nodes))
-            elif all([n.currently_installing_package for n in nodes]):
-                reporter.set_installing_package_message(nodes[0].currently_installing_package)
-            else:
-                total_parallelism = sum((n.current_parallelism for n in nodes))
-                reporter.set_running_progress_message(total_result_count, total_parallelism)
+            current_time = time()
+            if (current_time - last_status_message_update_time) > 0.05:
+                if all([n.state == "BOOTING" for n in nodes]):
+                    reporter.set_booting_nodes_message(len(nodes))
+                elif all([n.currently_installing_package for n in nodes]):
+                    reporter.set_installing_package_message(nodes[0].currently_installing_package)
+                else:
+                    total_parallelism = sum((n.current_parallelism for n in nodes))
+                    reporter.set_running_progress_message(total_result_count, total_parallelism)
+                last_status_message_update_time = current_time
 
             if len(inputs_with_indicies) == 0 and not inputs_done_event.is_set():
                 inputs_done_event.set()
@@ -270,7 +278,12 @@ async def _execute_job(
                 if background:
                     reporter.print_inputs_done_message()
 
-            if ping_process.poll():
+            if ping_process is None and (time() - start_time) >= 3:
+                node_hosts = [node.host for node in nodes]
+                ping_process = await run_in_subprocess(send_alive_pings, node_hosts)
+                session_stack.callback(ping_process.kill)
+
+            if ping_process and ping_process.poll():
                 stderr = ping_process.stderr.read().decode("utf-8")
                 raise Exception(f"Heartbeat process failed!\n{stderr}")
 
@@ -278,7 +291,10 @@ async def _execute_job(
             if all([task.done() for task in node_tasks]) and total_result_count < n_inputs:
                 raise Exception("Zero nodes working on job and we have not received all results!")
 
-        await reporter.log_job_success_telemetry(time() - start_time)
+        job_success_telemetry_task = create_task(
+            reporter.log_job_success_telemetry(time() - start_time)
+        )
+        session_stack.callback(job_success_telemetry_task.cancel)
         await async_job_ref.update({"client_has_all_results": True})
     finally:
         [task.cancel() for task in node_tasks]

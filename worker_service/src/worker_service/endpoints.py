@@ -78,7 +78,6 @@ async def get_results(
         except Empty:
             break
 
-    await asyncio.sleep(0)
     response_json = {
         "results": results,
         "is_idle": SELF["IDLE"],  # <- used to determine if job is done
@@ -90,7 +89,6 @@ async def get_results(
     if SELF["ALL_PACKAGES_INSTALLED"]:
         response_json["all_packages_installed"] = SELF["ALL_PACKAGES_INSTALLED"]
     data = pickle.dumps(response_json)
-    await asyncio.sleep(0)
     headers = {"Content-Disposition": 'attachment; filename="results.pkl"'}
     return Response(content=data, media_type="application/octet-stream", headers=headers)
 

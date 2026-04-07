@@ -470,12 +470,10 @@ class Node:
         await self._assign_job(
             job_id, background, n_inputs, packages, start_time, function_pkl, udf_error_event
         )
-        await asyncio.sleep(0)
 
         chunk_generator = self._input_chunk_generator(inputs_with_indicies, max_inputs_per_chunk)
         async for input_chunk in chunk_generator:
             await self._upload_input_chunk(input_chunk)
-            await asyncio.sleep(0)
 
         while True:
             node_results = await self._gather_results()
@@ -504,4 +502,3 @@ class Node:
                 self.result_count += 1
             if self.state == "DONE":
                 return
-            await asyncio.sleep(0)

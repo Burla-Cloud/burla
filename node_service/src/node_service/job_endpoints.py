@@ -105,7 +105,6 @@ async def get_results(job_id: str = Path(...)):
         except Empty:
             break
 
-    await asyncio.sleep(0)
     response_json = {
         "results": results,
         "current_parallelism": SELF["current_parallelism"],
@@ -118,7 +117,6 @@ async def get_results(job_id: str = Path(...)):
         SELF["all_packages_installed_sent_to_client"] = True
 
     data = pickle.dumps(response_json)
-    await asyncio.sleep(0)
     headers = {"Content-Disposition": 'attachment; filename="results.pkl"'}
     return Response(content=data, media_type="application/octet-stream", headers=headers)
 
@@ -235,6 +233,6 @@ async def execute(
 
     SELF["job_watcher_stop_event"].clear()  # is initalized as set by default
     job_watcher_coroutine = job_watcher_logged(
-        request_json["n_inputs"], is_background_job, request.headers
+        request_json["n_inputs"], is_background_job, request_json["start_time"], request.headers
     )
     SELF["job_watcher_task"] = asyncio.create_task(job_watcher_coroutine)

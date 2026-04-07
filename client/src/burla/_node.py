@@ -1,11 +1,12 @@
 import asyncio
 import json
 import pickle
+import random
 import sys
+from queue import Queue
+from threading import Event
 from pickle import UnpicklingError
 from time import time
-from typing import Literal
-
 import aiohttp
 import cloudpickle
 from aiohttp import ClientError, ClientOSError, ClientTimeout
@@ -24,6 +25,16 @@ from burla._reporting import RemoteParallelMapReporter
 
 NODE_SILENCE_TIMEOUT_SECONDS = 10 * 60
 LOGIN_TIMEOUT_SEC = 3
+MAX_INPUT_SIZE_BYTES = 1_000_000 * 200  # 200MB
+
+
+class InputTooBig(Exception):
+    def __init__(self, index: int):
+        message = f"\n\nInput at index {index} exceeds maximum size of 0.2GB.\n"
+        message += "Please download large inputs from the internet once inside your function.\n"
+        message += "We apologize for this temporary limitation! "
+        message += "If this is confusing or blocking you, please tell us! (jake@burla.dev)\n\n"
+        super().__init__(message)
 
 
 class NodeConflict(Exception):
@@ -85,7 +96,7 @@ class UnauthorizedError(Exception):
         super().__init__("Unauthorized! Please run `burla login` to authenticate.")
 
 
-async def get_with_retries(session, url: str, headers: dict, max_retries=5):
+async def get_with_retries(session, url, headers, max_retries=5):
     try:
         return await session.get(url, headers=headers, timeout=ClientTimeout(total=60))
     except asyncio.TimeoutError:
@@ -98,6 +109,17 @@ async def get_with_retries(session, url: str, headers: dict, max_retries=5):
             raise
         await asyncio.sleep(1)
         return await get_with_retries(session, url, headers, max_retries=max_retries - 1)
+
+
+async def _post_with_retries(session, url, headers, data, max_retries=5):
+    for attempt_index in range(max_retries):
+        try:
+            async with session.post(url, data=data, headers=headers) as response:
+                return response.status, await response.text()
+        except aiohttp.client_exceptions.ServerDisconnectedError:
+            if attempt_index == max_retries - 1:
+                raise
+            await asyncio.sleep(0.5)
 
 
 async def num_booting_nodes(db: AsyncClient):
@@ -196,7 +218,7 @@ async def select_nodes_to_assign_to_job(
             host = node_data["host"]
             if host.startswith("http://node_"):
                 host = f"http://localhost:{host.split(':')[-1]}"
-            node = Node(
+            node = Node.from_ready(
                 instance_name=node_data["instance_name"],
                 host=host,
                 machine_type=node_data["machine_type"],
@@ -214,37 +236,55 @@ async def select_nodes_to_assign_to_job(
 
 
 class Node:
-    def __init__(
-        self,
-        instance_name: str,
-        host: str | None = None,
-        machine_type: str | None = None,
-        target_parallelism: int | None = None,
-        session=None,
-        async_db=None,
-        spinner: bool | Spinner = False,
-        state: Literal["READY", "BOOTING", "RUNNING", "FAILED", "DONE"] = "READY",
-    ):
-        self.instance_name = instance_name
-        self.host = host
-        self.machine_type = machine_type
-        self.target_parallelism = target_parallelism
-        self.state = state
-        self.session = session
-        self.auth_headers = get_auth_headers()
+    __init_token = object()
+
+    def __init__(self, init_token, spinner, async_db, session):
+        if init_token is not Node.__init_token:
+            raise RuntimeError("Use classmethods `from_ready` or `from_booting` to construct.")
         self.async_db = async_db
-        self.spinner_compatible_print = lambda msg: spinner.write(msg) if spinner else print(msg)
+        self.session = session
         self.input_chunks = None
         self.job_id = None
         self.udf_error_event = None
-        self.udf_start_latency = None
         self.all_packages_installed = None
         self.is_empty = False
         self.current_parallelism = 0
         self.currently_installing_package = None
+        self.result_count = 0
         self.last_reply_timestamp = time()
+        self.auth_headers = get_auth_headers()
+        self.spinner_compatible_print = lambda msg: spinner.write(msg) if spinner else print(msg)
 
-    async def update_status(self):
+    @classmethod
+    def from_ready(
+        cls,
+        instance_name: str,
+        host: str,
+        machine_type: str,
+        target_parallelism: int,
+        session,
+        async_db,
+        spinner: bool | Spinner,
+    ):
+        self = cls(Node.__init_token, spinner, async_db, session)
+        self.state = "READY"
+        self.instance_name = instance_name
+        self.host = host
+        self.machine_type = machine_type
+        self.target_parallelism = target_parallelism
+        return self
+
+    @classmethod
+    def from_booting(cls, instance_name: str, session, async_db, spinner: bool | Spinner):
+        self = cls(Node.__init_token, spinner, async_db, session)
+        self.state = "BOOTING"
+        self.instance_name = instance_name
+        self.host = None
+        self.machine_type = None
+        self.target_parallelism = None
+        return self
+
+    async def _update_status(self):
         node_ref = self.async_db.collection("nodes").document(self.instance_name)
         node_data = (await node_ref.get()).to_dict()
         self.state = node_data["status"]
@@ -254,13 +294,6 @@ class Node:
                 host = f"http://localhost:{host.split(':')[-1]}"
             self.host = host
             self.machine_type = node_data["machine_type"]
-
-    async def wait_until_ready(self, poll_seconds: int = 2):
-        while self.state != "READY":
-            await self.update_status()
-            if self.state == "READY":
-                break
-            await asyncio.sleep(poll_seconds)
 
     async def _fail_and_delete(self, message: str):
         node_doc = self.async_db.collection("nodes").document(self.instance_name)
@@ -274,7 +307,7 @@ class Node:
                 message = f"Failed to delete node {self.instance_name}."
                 self.spinner_compatible_print(message + f" ignoring: {response.status}")
 
-    async def assign(
+    async def _assign_job(
         self,
         job_id: str,
         background: bool,
@@ -282,13 +315,8 @@ class Node:
         packages: dict,
         start_time: float,
         function_pkl: bytes,
-        udf_error_event,
-    ) -> "Node | None":
-        if self.state != "READY":
-            return None
-        if not self.target_parallelism:
-            return None
-
+        udf_error_event: Event,
+    ):
         request_json = {
             "parallelism": self.target_parallelism,
             "is_background_job": background,
@@ -309,26 +337,24 @@ class Node:
                 if response.status == 200:
                     self.job_id = job_id
                     self.udf_error_event = udf_error_event
+                    self.state = "RUNNING"
                     return self
                 elif response.status == 401:
                     raise UnauthorizedError()
                 elif response.status == 409:
                     raise NodeConflict(self.instance_name, await response.text())
                 else:
-                    msg = f"Failed to assign {self.instance_name}! ignoring: {response.status}"
-                    self.spinner_compatible_print(msg)
+                    raise Exception(f"Failed to assign {self.instance_name}: {response.status}")
         except asyncio.TimeoutError:
+            msg = f"Timeout assigning {self.instance_name} to job! Failing node ..."
             try:
-                msg = f"Timeout assigning {self.instance_name} to job! Failing node ..."
                 self.spinner_compatible_print(msg)
                 await self._fail_and_delete(msg)
             except:
                 pass
+            raise Exception(msg)
 
-    async def gather_results(self):
-        if not self.job_id:
-            raise Exception(f"{self.instance_name} has no assigned job to gather results from.")
-
+    async def _gather_results(self):
         try:
             url = f"{self.host}/jobs/{self.job_id}/results"
             args = (self.session, url, self.auth_headers)
@@ -336,7 +362,12 @@ class Node:
                 self.last_reply_timestamp = time()
                 if response.status == 404:
                     self.state = "DONE"
-                    return []
+                    return {
+                        "results": [],
+                        "is_empty": True,
+                        "current_parallelism": 0,
+                        "currently_installing_package": None,
+                    }
                 if response.status != 200:
                     raise Exception(f"Result-check failed for node: {self.instance_name}")
                 try:
@@ -355,28 +386,122 @@ class Node:
             if seconds_since_last_reply > NODE_SILENCE_TIMEOUT_SECONDS:
                 msg = f"Node {self.instance_name} has not replied for over 10 minutes!\n"
                 raise NodeDisconnected(msg)
-            return []
+            return {
+                "results": [],
+                "is_empty": False,
+                "current_parallelism": self.current_parallelism,
+                "currently_installing_package": self.currently_installing_package,
+            }
 
-        # at this point node_results is guaranteed to exist
-        return_values = []
-        for input_index, is_error, result_pkl in node_results["results"]:
-            if is_error:
-                error_info = pickle.loads(result_pkl)
-                if error_info.get("traceback_dict"):
-                    traceback = Traceback.from_dict(error_info["traceback_dict"]).as_traceback()
-                    self.udf_error_event.set()
-                    log_error = RemoteParallelMapReporter.log_user_function_error_async
-                    await log_error(self.job_id, self.session)
-                    reraise(tp=error_info["type"], value=error_info["exception"], tb=traceback)
-                raise UnPickleableUserFunctionException(error_info["traceback_str"])
+        return node_results
+
+    async def _upload_input_chunk(self, input_chunk: list):
+        data = aiohttp.FormData()
+        data.add_field("inputs_pkl_with_idx", pickle.dumps(input_chunk))
+        status = 409
+        retry_count = 0
+        while status in [404, 409]:
+            url = f"{self.host}/jobs/{self.job_id}/inputs"
+            status, response_text = await _post_with_retries(
+                session=self.session,
+                url=url,
+                headers=self.auth_headers,
+                data=data,
+            )
+            if status in [404, 409]:
+                retry_count += 1
+                if retry_count > 60:
+                    raise Exception(response_text)
+                await asyncio.sleep(0.5)
+            elif status >= 400:
+                raise Exception(response_text)
+
+    async def _input_chunk_generator(self, inputs_with_indicies: list, max_inputs_per_chunk: int):
+        chunk_size_limit = 200_000
+        max_chunk_size_limit = 10_000_000
+        input_chunk = []
+        chunk_size_bytes = 0
+        while len(inputs_with_indicies):
+            input_index, input_ = inputs_with_indicies.pop()
+            input_pkl = cloudpickle.dumps(input_)
+            if len(input_pkl) > MAX_INPUT_SIZE_BYTES:
+                raise InputTooBig(input_index)
+
+            future_chunk_size = chunk_size_bytes + len(input_pkl)
+            will_make_chunk_too_big = future_chunk_size >= chunk_size_limit
+            will_make_chunk_too_long = len(input_chunk) >= max_inputs_per_chunk
+            if will_make_chunk_too_big or will_make_chunk_too_long:
+                if input_chunk:
+                    yield input_chunk
+                    chunk_size_limit = min(max_chunk_size_limit, chunk_size_limit + 500_000)
+                    chunk_size_bytes = len(input_pkl)
+                    input_chunk = [(input_index, input_pkl)]
+                else:
+                    chunk_size_bytes += len(input_pkl)
+                    input_chunk.append((input_index, input_pkl))
             else:
-                return_values.append(cloudpickle.loads(result_pkl))
+                chunk_size_bytes += len(input_pkl)
+                input_chunk.append((input_index, input_pkl))
+        if input_chunk:
+            yield input_chunk
 
-        if self.udf_start_latency is None and node_results.get("udf_start_latency"):
-            self.udf_start_latency = node_results.get("udf_start_latency")
-        if node_results.get("all_packages_installed") is not None:
-            self.all_packages_installed = node_results.get("all_packages_installed")
-        self.is_empty = node_results["is_empty"]
-        self.current_parallelism = node_results["current_parallelism"]
-        self.currently_installing_package = node_results["currently_installing_package"]
-        return return_values
+    async def execute_job(
+        self,
+        job_id: str,
+        background: bool,
+        n_inputs: int,
+        packages: dict,
+        start_time: float,
+        function_pkl: bytes,
+        udf_error_event: Event,
+        max_inputs_per_chunk: int,
+        inputs_with_indicies: list,
+        return_queue: Queue,
+    ):
+        # wait until ready
+        if self.state != "READY":
+            await asyncio.sleep(max(0, 30 - (time() - start_time)))
+            while self.state != "READY":
+                await self._update_status()
+                if self.state == "READY":
+                    break
+                await asyncio.sleep(random.uniform(2, 6))
+
+        await self._assign_job(
+            job_id, background, n_inputs, packages, start_time, function_pkl, udf_error_event
+        )
+        await asyncio.sleep(0)
+
+        chunk_generator = self._input_chunk_generator(inputs_with_indicies, max_inputs_per_chunk)
+        async for input_chunk in chunk_generator:
+            await self._upload_input_chunk(input_chunk)
+            await asyncio.sleep(0)
+
+        while True:
+            node_results = await self._gather_results()
+            return_values = []
+            for input_index, is_error, result_pkl in node_results["results"]:
+                if is_error:
+                    error_info = pickle.loads(result_pkl)
+                    if error_info.get("traceback_dict"):
+                        traceback = Traceback.from_dict(error_info["traceback_dict"]).as_traceback()
+                        self.udf_error_event.set()
+                        log_error = RemoteParallelMapReporter.log_user_function_error_async
+                        await log_error(self.job_id, self.session)
+                        reraise(tp=error_info["type"], value=error_info["exception"], tb=traceback)
+                    raise UnPickleableUserFunctionException(error_info["traceback_str"])
+                else:
+                    return_values.append(cloudpickle.loads(result_pkl))
+
+            if node_results.get("all_packages_installed") is not None:
+                self.all_packages_installed = node_results.get("all_packages_installed")
+            self.is_empty = node_results["is_empty"]
+            self.current_parallelism = node_results["current_parallelism"]
+            self.currently_installing_package = node_results["currently_installing_package"]
+
+            for return_value in return_values:
+                return_queue.put_nowait(return_value)
+                self.result_count += 1
+            if self.state == "DONE":
+                return
+            await asyncio.sleep(0)

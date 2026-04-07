@@ -63,6 +63,8 @@ async def _job_watcher(
         global JOB_FAILED, JOB_CANCELED
         for change in changes:
             job_dict = change.document.to_dict()
+            if job_dict["all_inputs_uploaded"] == True:
+                SELF["all_inputs_uploaded"] = True
             if job_dict["status"] == "FAILED":
                 sleep(2)  # give worker a sec to put error result in result queue
                 JOB_FAILED = True

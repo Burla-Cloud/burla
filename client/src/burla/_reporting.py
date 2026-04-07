@@ -145,12 +145,8 @@ class RemoteParallelMapReporter:
             f"{running_inputs} running."
         )
 
-    async def log_job_success_telemetry(self, udf_start_latency: float | None, total_runtime: float):
-        udf_start_latency = round(udf_start_latency, 2) if udf_start_latency else None
-        message = (
-            f"Job {self.job_id} completed successfully, udf_start_latency={udf_start_latency}s"
-        )
-        message += f", total_runtime={total_runtime:.2f}s."
+    async def log_job_success_telemetry(self, total_runtime: float):
+        message = f"Job {self.job_id} completed successfully, total_runtime={total_runtime:.2f}s."
         await self._log_telemetry_async(message, self.session, project_id=self.project_id)
 
     def set_preparing_message(self):

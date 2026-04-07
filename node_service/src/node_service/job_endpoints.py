@@ -62,18 +62,6 @@ async def get_inputs(job_id: str = Path(...), logger: Logger = Depends(get_logge
         return Response(content=data, media_type="application/octet-stream", headers=headers)
 
 
-@router.post("/jobs/{job_id}/inputs/done")
-async def input_upload_done(job_id: str = Path(...)):
-    """
-    This simply allows the node to conclude that is is done (in job_watcher).
-    Unless it explicitly hears that no more inputs are coming after getting some, it won't
-    consider itself done.
-    """
-    if job_id != SELF["current_job"]:
-        return Response("job not found", status_code=404)
-    SELF["all_inputs_uploaded"] = True
-
-
 @router.post("/jobs/{job_id}/inputs")
 async def upload_inputs(
     job_id: str = Path(...),
@@ -109,7 +97,7 @@ async def get_results(job_id: str = Path(...)):
 
     results = []
     total_bytes = 0
-    while (not SELF["results_queue"].empty()) and (total_bytes < (1_000_000 * 0.5)):
+    while (not SELF["results_queue"].empty()) and (total_bytes < (1_000_000 * 1)):
         try:
             result = SELF["results_queue"].get_nowait()
             results.append(result)
@@ -125,9 +113,6 @@ async def get_results(job_id: str = Path(...)):
         "currently_installing_package": SELF["currently_installing_package"],
     }
 
-    if SELF["udf_start_latency"] and not SELF["udf_start_latency_sent_to_client"]:
-        response_json["udf_start_latency"] = SELF["udf_start_latency"]
-        SELF["udf_start_latency_sent_to_client"] = True
     if SELF["all_packages_installed"] and not SELF["all_packages_installed_sent_to_client"]:
         response_json["all_packages_installed"] = SELF["all_packages_installed"]
         SELF["all_packages_installed_sent_to_client"] = True

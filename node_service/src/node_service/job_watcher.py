@@ -19,6 +19,7 @@ from node_service.lifecycle_endpoints import (
 
 EMPTY_NEIGHBOR_TIMEOUT_SEC = 2 * 60
 BYTES_PER_GB = 1024**3
+CLIENT_CONTACT_TIMEOUT_SEC = 5
 
 
 async def get_inputs_from_neighbor(
@@ -139,7 +140,7 @@ async def _job_watcher(
         # is client connected?
         client_disconnected = False
         sec_since_last_request = time() - SELF["last_request_timestamp"]
-        client_contact_last_1s = sec_since_last_request < 1
+        client_contact_last_1s = sec_since_last_request < CLIENT_CONTACT_TIMEOUT_SEC
         client_contact_last_1s = client_contact_last_1s or SELF["active_client_request_count"] > 0
         if client_contact_last_1s != last_reported_client_contact_last_1s:
             await node_doc.update({"client_contact_last_1s": client_contact_last_1s})
@@ -160,6 +161,9 @@ async def _job_watcher(
         all_workers_idle = SELF["current_parallelism"] == 0
         all_inputs_sent_to_workers = SELF["all_inputs_uploaded"] and (not SELF["pending_inputs"])
         all_inputs_processed = all_workers_idle and all_inputs_sent_to_workers
+        node_results_queue_empty = SELF["results_queue"].empty()
+        workers_results_queues_empty = all(w.is_empty for w in SELF["workers"])
+        no_buffered_results = node_results_queue_empty and workers_results_queues_empty
         if all_inputs_processed:
             if time() - job_started_at > 10:  # allows short jobs to finish faster.
                 new_inputs = []
@@ -193,12 +197,16 @@ async def _job_watcher(
                     neighbor_had_no_inputs_at = neighbor_had_no_inputs_at or time()
                     seconds_neighbor_had_no_inputs = time() - neighbor_had_no_inputs_at
                     if seconds_neighbor_had_no_inputs > EMPTY_NEIGHBOR_TIMEOUT_SEC:
-                        msg = f"Neighbor had no extra inputs for {EMPTY_NEIGHBOR_TIMEOUT_SEC//60}"
-                        logger.log(f"{msg} minutes, done working on job!")
-                        await restart_workers(session, logger, async_db)
-                        break
+                        if no_buffered_results:
+                            msg = f"Neighbor had no extra inputs for {EMPTY_NEIGHBOR_TIMEOUT_SEC//60}"
+                            logger.log(f"{msg} minutes, done working on job!")
+                            await restart_workers(session, logger, async_db)
+                            break
+                        logger.log(
+                            "Neighbor timeout reached but waiting for buffered results to drain."
+                        )
             not_waiting_on_client = SELF["results_queue"].empty() or client_disconnected
-            all_local_work_complete = all_inputs_processed and not_waiting_on_client
+            all_local_work_complete = all_inputs_processed and no_buffered_results and not_waiting_on_client
 
         # job over ?
         job_completed = False

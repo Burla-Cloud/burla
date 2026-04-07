@@ -65,7 +65,9 @@ class FunctionTooBig(Exception):
         super().__init__(msg)
 
 
-async def _grow_cluster(current_cpus: int, missing_cpus: int, session, async_db, spinner) -> list[Node]:
+async def _grow_cluster(
+    current_cpus: int, missing_cpus: int, session, async_db, spinner
+) -> list[Node]:
     request_json = {"current_cpus": current_cpus, "missing_cpus": missing_cpus}
     auth_headers = get_auth_headers()
     main_service_url = json.loads(CONFIG_PATH.read_text())["cluster_dashboard_url"]
@@ -230,10 +232,6 @@ async def _execute_job(
     session_stack.callback(job_start_telemetry_task.cancel)
     reporter.set_uploading_function_message(nodes)
 
-    # start sending "alive" pings for longer jobs only
-    node_hosts = [node.host for node in nodes]
-    ping_process = None
-
     node_tasks = []
     n_inputs = len(inputs)  # <- inputs will be popped from so len(inputs) will start changing
     inputs_with_indicies = list(enumerate(inputs))
@@ -258,7 +256,7 @@ async def _execute_job(
         )
 
     try:
-        # start sending "alive" pings for longer jobs only
+        ping_process = None
         last_status_message_update_time = 0.0
         total_result_count = sum(node.result_count for node in nodes)
         while total_result_count < n_inputs:
@@ -296,7 +294,7 @@ async def _execute_job(
                 if background:
                     reporter.print_inputs_done_message()
 
-            if ping_process is None and (time() - start_time) >= 3:
+            if ping_process is None and (time() - start_time) >= 5:
                 node_hosts = [node.host for node in nodes]
                 ping_process = await run_in_subprocess(send_alive_pings, node_hosts)
                 session_stack.callback(ping_process.kill)
@@ -361,8 +359,8 @@ def remote_parallel_map(
             The maximum number of `function_` instances allowed to be running at the same time.
             Defaults to the number of provided inputs.
         grow (bool, optional):
-            If True, request cluster growth before assignment so enough compute is available
-            to process the requested parallelism quickly. Defaults to False.
+            If True, adds nodes to the cluster (grows) to complete the job as quickly
+            as possible. Adds up to 2560 cpus.
 
     Returns:
         List[Any] or Generator[Any, None, None]:

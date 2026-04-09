@@ -15,6 +15,7 @@ class VerboseList(list):
     logger = python_logging.getLogger()
     logger.setLevel(python_logging.INFO)
     logger.addHandler(python_logging.StreamHandler(sys.stdout))
+    max_messages = 1000
 
     def __init__(self, *a, print_on_append=False, **kw):
         self.start_time = None
@@ -28,6 +29,8 @@ class VerboseList(list):
         msg = f"T+{time_since_start:.2f}s: {item}"
         if self.print_on_append:
             self.logger.info(msg)
+        if len(self) >= self.max_messages:
+            super().pop(0)
         super().append(item)
 
 

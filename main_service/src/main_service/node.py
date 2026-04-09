@@ -314,11 +314,19 @@ class Node:
         access_config = AccessConfig(name="External NAT", type="ONE_TO_ONE_NAT")
         network_interface = NetworkInterface(name=network_name, access_configs=[access_config])
 
+        can_live_migrate = (not self.spot) and self.num_gpus == 0
+
         if self.spot:
             scheduling = Scheduling(
                 provisioning_model="SPOT",
                 instance_termination_action="DELETE",
                 on_host_maintenance="TERMINATE",
+                automatic_restart=False,
+            )
+        elif can_live_migrate:
+            scheduling = Scheduling(
+                provisioning_model="STANDARD",
+                on_host_maintenance="MIGRATE",
                 automatic_restart=False,
             )
         else:

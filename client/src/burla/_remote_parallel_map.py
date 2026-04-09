@@ -81,6 +81,7 @@ EXEC_TYPES_TO_NOT_ALERT = [
     KeyboardInterrupt,
 ]
 
+
 async def _grow_cluster(
     current_cpus: int, missing_cpus: int, session, async_db, spinner
 ) -> list[Node]:
@@ -171,7 +172,9 @@ async def _execute_job(
     function_pkl = cloudpickle.dumps(function_)
     function_size_gb = len(function_pkl) / (1024**3)
     reporter.function_size_gb = function_size_gb
-    reporter.print_timing_event("function_pickled", function_size_mb=round(function_size_gb * 1024, 6))
+    reporter.print_timing_event(
+        "function_pickled", function_size_mb=round(function_size_gb * 1024, 6)
+    )
     if function_size_gb > 0.1:
         raise FunctionTooBig(function_.__name__)
 
@@ -345,7 +348,9 @@ async def _execute_job(
             total_result_count = sum(node.result_count for node in nodes)
             if total_result_count > 0 and not first_result_received:
                 first_result_received = True
-                reporter.print_timing_event("first_result_received", result_count=total_result_count)
+                reporter.print_timing_event(
+                    "first_result_received", result_count=total_result_count
+                )
             if all([task.done() for task in node_tasks]) and total_result_count < n_inputs:
                 raise Exception("Zero nodes working on job and we have not received all results!")
 

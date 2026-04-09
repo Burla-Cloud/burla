@@ -30,7 +30,7 @@ from starlette.requests import ClientDisconnect
 from starlette.datastructures import UploadFile
 
 
-__version__ = "1.5.0"
+__version__ = "1.5.1"
 CREDENTIALS, PROJECT_ID = google.auth.default()
 BURLA_BACKEND_URL = "https://backend.burla.dev"
 
@@ -301,7 +301,7 @@ async def client_heartbeat(request: Request, logger: Logger = Depends(get_logger
     async for _ in request.stream():
         now = time()
         seconds_since_last_ping = now - (last_ping_received_at or now)
-        if seconds_since_last_ping > 0.6:
+        if seconds_since_last_ping > 2:
             logger.log(f"high heartbeat gap: {seconds_since_last_ping:.3f}s", severity="WARNING")
         last_ping_received_at = now
         await asyncio.sleep(0)

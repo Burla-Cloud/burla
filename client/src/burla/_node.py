@@ -31,6 +31,15 @@ from burla._reporting import (
 NODE_SILENCE_TIMEOUT_SECONDS = 10 * 60
 LOGIN_TIMEOUT_SEC = 3
 MAX_INPUT_SIZE_BYTES = 1_000_000 * 200  # 200MB
+NETWORK_RETRY_ATTEMPTS = 5
+NETWORK_RETRY_DELAY_SECONDS = 1
+NETWORK_ERROR_TYPES = (
+    asyncio.TimeoutError,
+    ClientConnectorError,
+    ClientOSError,
+    ClientError,
+    OSError,
+)
 
 
 def _print_timing_event(phase_name: str, **fields):
@@ -108,21 +117,6 @@ class UnauthorizedError(Exception):
         super().__init__("Unauthorized! Please run `burla login` to authenticate.")
 
 
-async def get_with_retries(session, url, headers, max_retries=5):
-    try:
-        return await session.get(url, headers=headers, timeout=ClientTimeout(total=60))
-    except asyncio.TimeoutError:
-        if max_retries <= 1:
-            raise
-        await asyncio.sleep(1)
-        return await get_with_retries(session, url, headers, max_retries=max_retries - 1)
-    except (ClientOSError, ClientError, OSError) as error:
-        if max_retries <= 1 or "Protocol wrong type for socket" not in str(error):
-            raise
-        await asyncio.sleep(1)
-        return await get_with_retries(session, url, headers, max_retries=max_retries - 1)
-
-
 async def _post_with_retries(session, url, headers, data, max_retries=5):
     for attempt_index in range(max_retries):
         try:
@@ -132,6 +126,18 @@ async def _post_with_retries(session, url, headers, data, max_retries=5):
             if attempt_index == max_retries - 1:
                 raise
             await asyncio.sleep(0.5)
+
+
+async def _run_network_request_with_retries(request_function):
+    last_error = None
+    for attempt_index in range(NETWORK_RETRY_ATTEMPTS):
+        try:
+            return await request_function()
+        except NETWORK_ERROR_TYPES as error:
+            last_error = error
+            if attempt_index == NETWORK_RETRY_ATTEMPTS - 1:
+                raise last_error
+            await asyncio.sleep(NETWORK_RETRY_DELAY_SECONDS)
 
 
 async def num_booting_nodes(db: AsyncClient):
@@ -373,6 +379,23 @@ class Node:
         if not write_timing_debug_line(message):
             self.spinner_compatible_print(message)
 
+    def _seconds_since_last_reply(self):
+        return time() - self.last_reply_timestamp
+
+    def _node_silence_timeout_exceeded(self):
+        return self._seconds_since_last_reply() > NODE_SILENCE_TIMEOUT_SECONDS
+
+    def _node_silence_timeout_message(self, action: str):
+        return f"Node {self.instance_name} has not replied for over 10 minutes while {action}.\n"
+
+    def _empty_node_results(self):
+        return {
+            "results": [],
+            "is_empty": False,
+            "current_parallelism": self.current_parallelism,
+            "currently_installing_package": self.currently_installing_package,
+        }
+
     @classmethod
     def from_ready(
         cls,
@@ -457,55 +480,53 @@ class Node:
         }
         url = f"{self.host}/jobs/{job_id}"
         timeout = aiohttp.ClientTimeout(300)
-        retry_deadline = time() + 30
-        network_error = None
-        try:
-            while True:
-                data = aiohttp.FormData()
-                data.add_field("request_json", json.dumps(request_json))
-                data.add_field("function_pkl", function_pkl)
-                try:
-                    async with self.session.post(
-                        url,
-                        data=data,
-                        headers=self.auth_headers,
-                        timeout=timeout,
-                    ) as response:
-                        self.last_reply_timestamp = time()
-                        if response.status == 200:
-                            self.job_id = job_id
-                            self.udf_error_event = udf_error_event
-                            self.state = "RUNNING"
-                            return self
-                        elif response.status == 401:
-                            raise UnauthorizedError()
-                        elif response.status == 409:
-                            raise NodeConflict(self.instance_name, await response.text())
-                        else:
-                            msg = f"Failed to assign {self.instance_name}: {response.status}"
-                            raise Exception(msg)
-                except (ClientConnectorError, ClientOSError, ClientError, OSError) as error:
-                    network_error = error
-                    if time() < retry_deadline:
-                        await asyncio.sleep(1)
-                        continue
-                    break
-            raise network_error
-        except ClientConnectorError:
-            msg = f"Could not connect to Node at {self.host} after 30s of retries."
-            await self._fail_and_delete(msg)
-        except (ClientOSError, ClientError, OSError):
-            msg = f"Network error assigning {self.instance_name} after 30s of retries."
-            await self._fail_and_delete(msg)
-        except asyncio.TimeoutError:
-            await self._fail_and_delete(f"Timeout assigning {self.instance_name} to job!")
-        return
+        self.last_reply_timestamp = time()
+
+        async def request_function():
+            data = aiohttp.FormData()
+            data.add_field("request_json", json.dumps(request_json))
+            data.add_field("function_pkl", function_pkl)
+            async with self.session.post(
+                url,
+                data=data,
+                headers=self.auth_headers,
+                timeout=timeout,
+            ) as response:
+                self.last_reply_timestamp = time()
+                if response.status == 200:
+                    self.job_id = job_id
+                    self.udf_error_event = udf_error_event
+                    self.state = "RUNNING"
+                    return self
+                elif response.status == 401:
+                    raise UnauthorizedError()
+                elif response.status == 409:
+                    raise NodeConflict(self.instance_name, await response.text())
+                else:
+                    msg = f"Failed to assign {self.instance_name}: {response.status}"
+                    raise Exception(msg)
+
+        while True:
+            try:
+                return await _run_network_request_with_retries(request_function)
+            except NETWORK_ERROR_TYPES:
+                if self._node_silence_timeout_exceeded():
+                    await self._fail_and_delete(self._node_silence_timeout_message("assigning job"))
+                    return
 
     async def _gather_results(self):
+        url = f"{self.host}/jobs/{self.job_id}/results"
+
+        async def request_function():
+            return await self.session.get(
+                url,
+                headers=self.auth_headers,
+                timeout=ClientTimeout(total=60),
+            )
+
         try:
-            url = f"{self.host}/jobs/{self.job_id}/results"
-            args = (self.session, url, self.auth_headers)
-            async with await get_with_retries(*args) as response:
+            response = await _run_network_request_with_retries(request_function)
+            async with response:
                 self.last_reply_timestamp = time()
                 if response.status == 404:
                     self.state = "DONE"
@@ -528,17 +549,10 @@ class Node:
                         raise JobCanceled("Job canceled from dashboard.")
                     msg = f"Node {self.instance_name} disconnected while transmitting results.\n"
                     raise NodeDisconnected(msg)
-        except asyncio.TimeoutError:
-            seconds_since_last_reply = time() - self.last_reply_timestamp
-            if seconds_since_last_reply > NODE_SILENCE_TIMEOUT_SECONDS:
-                msg = f"Node {self.instance_name} has not replied for over 10 minutes!\n"
-                raise NodeDisconnected(msg)
-            return {
-                "results": [],
-                "is_empty": False,
-                "current_parallelism": self.current_parallelism,
-                "currently_installing_package": self.currently_installing_package,
-            }
+        except NETWORK_ERROR_TYPES:
+            if self._node_silence_timeout_exceeded():
+                raise NodeDisconnected(self._node_silence_timeout_message("returning results"))
+            return self._empty_node_results()
 
         return node_results
 

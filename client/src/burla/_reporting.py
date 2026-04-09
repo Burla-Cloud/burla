@@ -97,6 +97,7 @@ class RemoteParallelMapReporter:
         self.function_ram = kwargs["func_ram"]
         self.background = kwargs["background"]
         self.generator = kwargs["generator"]
+        self.grow = kwargs["grow"]
         self.max_parallelism = kwargs["max_parallelism"]
         self.job_id = kwargs["job_id"]
         self.session = kwargs["session"]
@@ -129,17 +130,17 @@ class RemoteParallelMapReporter:
             f" ({self.function_size_gb:.3f}GB)" if self.function_size_gb > 0.001 else ""
         )
         message = (
-            f"Calling function `{self.function_name}`{function_size_str} on {self.input_count} "
+            f"\nCalling function `{self.function_name}`{function_size_str} on {self.input_count} "
         )
         message += f"inputs with {number_of_nodes} {machine_type} nodes and "
         message += f"{self.function_cpu}vCPUs/{self.function_ram}GB RAM per function.\n"
         message += (
             f"background={self.background}, generator={self.generator}, "
-            f"spinner={self.spinner_enabled}, "
+            f"spinner={self.spinner_enabled}, grow={self.grow}, "
         )
         message += f"max_parallelism={self.max_parallelism}, job_id={self.job_id}"
         if packages:
-            message += f"\nRequested packages: {packages}"
+            message += f"\n---\nRequested packages: {packages}"
         await self._log_telemetry_async(message, self.session, project_id=self.project_id)
 
     def set_uploading_function_message(self, nodes: list):

@@ -20,6 +20,7 @@ from worker_service import SELF, PROJECT_ID, IN_LOCAL_DEV_MODE, INSTANCE_NAME
 
 FIRESTORE_URL = "https://firestore.googleapis.com"
 DB_BASE_URL = f"{FIRESTORE_URL}/v1/projects/{PROJECT_ID}/databases/burla/documents"
+STEAL_INPUTS_DELAY_SECONDS = 6
 
 
 def _get_gcp_auth_token():
@@ -471,15 +472,19 @@ def install_pkgs_and_execute_job(
                 # if this runs before any inputs recieved the job fails from race condition.
                 # + is slow to react trying to steal from other workers before any have inputs.
                 SELF["IDLE"] = True
-                n_stolen_inputs = _steal_inputs_from_neighboring_workers(job_id)
-                if n_stolen_inputs > 0:
-                    SELF["IDLE"] = False
-                    no_stolen_inputs_sleep_time = random.uniform(0.0, 1.0)
-                    SELF["logs"].append(f"Stole {n_stolen_inputs} inputs from neighboring worker!")
-                else:
-                    # SELF["logs"].append("IDLE: No inputs from neighbor.")
-                    no_stolen_inputs_sleep_time += 1 + random.uniform(0.0, 1.0)
-                    sleep(no_stolen_inputs_sleep_time)
+                job_age_seconds = time() - start_time
+                if job_age_seconds > STEAL_INPUTS_DELAY_SECONDS:
+                    n_stolen_inputs = _steal_inputs_from_neighboring_workers(job_id)
+                    if n_stolen_inputs > 0:
+                        SELF["IDLE"] = False
+                        no_stolen_inputs_sleep_time = random.uniform(0.0, 1.0)
+                        SELF["logs"].append(
+                            f"Stole {n_stolen_inputs} inputs from neighboring worker!"
+                        )
+                    else:
+                        # SELF["logs"].append("IDLE: No inputs from neighbor.")
+                        no_stolen_inputs_sleep_time += 1 + random.uniform(0.0, 1.0)
+                        sleep(no_stolen_inputs_sleep_time)
             sleep(0.001)
             continue
 

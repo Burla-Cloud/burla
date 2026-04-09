@@ -9,7 +9,7 @@ from pickle import UnpicklingError
 from time import time
 import aiohttp
 import cloudpickle
-from aiohttp import ClientError, ClientOSError, ClientTimeout
+from aiohttp import ClientConnectorError, ClientError, ClientOSError, ClientTimeout
 from google.cloud.firestore import FieldFilter
 from google.cloud.firestore_v1.async_client import AsyncClient
 from packaging.version import Version
@@ -20,12 +20,33 @@ from yaspin import Spinner
 from burla import CONFIG_PATH, __version__
 from burla._auth import get_auth_headers
 from burla._helpers import parallelism_capacity
-from burla._reporting import RemoteParallelMapReporter
+from burla._reporting import (
+    RemoteParallelMapReporter,
+    format_timing_event,
+    timing_debug_enabled,
+    write_timing_debug_line,
+)
 
 
 NODE_SILENCE_TIMEOUT_SECONDS = 10 * 60
 LOGIN_TIMEOUT_SEC = 3
 MAX_INPUT_SIZE_BYTES = 1_000_000 * 200  # 200MB
+NETWORK_RETRY_ATTEMPTS = 5
+NETWORK_RETRY_DELAY_SECONDS = 1
+NETWORK_ERROR_TYPES = (
+    asyncio.TimeoutError,
+    ClientConnectorError,
+    ClientOSError,
+    ClientError,
+    OSError,
+)
+
+
+def _print_timing_event(phase_name: str, **fields):
+    if not timing_debug_enabled():
+        return
+    message = format_timing_event(time(), phase_name, **fields)
+    write_timing_debug_line(message)
 
 
 class InputTooBig(Exception):
@@ -96,21 +117,6 @@ class UnauthorizedError(Exception):
         super().__init__("Unauthorized! Please run `burla login` to authenticate.")
 
 
-async def get_with_retries(session, url, headers, max_retries=5):
-    try:
-        return await session.get(url, headers=headers, timeout=ClientTimeout(total=60))
-    except asyncio.TimeoutError:
-        if max_retries <= 1:
-            raise
-        await asyncio.sleep(1)
-        return await get_with_retries(session, url, headers, max_retries=max_retries - 1)
-    except (ClientOSError, ClientError, OSError) as error:
-        if max_retries <= 1 or "Protocol wrong type for socket" not in str(error):
-            raise
-        await asyncio.sleep(1)
-        return await get_with_retries(session, url, headers, max_retries=max_retries - 1)
-
-
 async def _post_with_retries(session, url, headers, data, max_retries=5):
     for attempt_index in range(max_retries):
         try:
@@ -122,57 +128,133 @@ async def _post_with_retries(session, url, headers, data, max_retries=5):
             await asyncio.sleep(0.5)
 
 
+async def _run_network_request_with_retries(request_function):
+    last_error = None
+    for attempt_index in range(NETWORK_RETRY_ATTEMPTS):
+        try:
+            return await request_function()
+        except NETWORK_ERROR_TYPES as error:
+            last_error = error
+            if attempt_index == NETWORK_RETRY_ATTEMPTS - 1:
+                raise last_error
+            await asyncio.sleep(NETWORK_RETRY_DELAY_SECONDS)
+
+
 async def num_booting_nodes(db: AsyncClient):
+    start_time = time()
     filter_ = FieldFilter("status", "==", "BOOTING")
     nodes_snapshot = await db.collection("nodes").where(filter=filter_).get()
-    return len(nodes_snapshot)
+    count = len(nodes_snapshot)
+    _print_timing_event(
+        "node_selection_db_query",
+        source="client",
+        query="booting_nodes",
+        duration_ms=round((time() - start_time) * 1000, 3),
+        count=count,
+    )
+    return count
 
 
 async def num_running_nodes(db: AsyncClient):
+    start_time = time()
     filter_ = FieldFilter("status", "==", "RUNNING")
     nodes_snapshot = await db.collection("nodes").where(filter=filter_).get()
-    return len(nodes_snapshot)
+    count = len(nodes_snapshot)
+    _print_timing_event(
+        "node_selection_db_query",
+        source="client",
+        query="running_nodes",
+        duration_ms=round((time() - start_time) * 1000, 3),
+        count=count,
+    )
+    return count
 
 
 async def get_ready_nodes(db: AsyncClient) -> list[dict]:
+    start_time = time()
     status_filter = FieldFilter("status", "==", "READY")
     ready_nodes_coroutine = db.collection("nodes").where(filter=status_filter).get()
     try:
         docs = await asyncio.wait_for(ready_nodes_coroutine, timeout=LOGIN_TIMEOUT_SEC)
     except asyncio.TimeoutError:
         raise FirestoreTimeout()
-    return [document.to_dict() for document in docs]
+    ready_nodes = [document.to_dict() for document in docs]
+    _print_timing_event(
+        "node_selection_db_query",
+        source="client",
+        query="ready_nodes",
+        duration_ms=round((time() - start_time) * 1000, 3),
+        count=len(ready_nodes),
+    )
+    return ready_nodes
 
 
 async def wait_for_nodes_to_be_ready(
     db: AsyncClient,
     spinner: bool | Spinner,
 ) -> list[dict]:
+    wait_start_time = time()
     n_booting_nodes = await num_booting_nodes(db)
     n_running_nodes = await num_running_nodes(db)
+    _print_timing_event(
+        "node_selection_wait_state",
+        source="client",
+        booting_nodes=n_booting_nodes,
+        running_nodes=n_running_nodes,
+    )
 
     if n_running_nodes != 0:
         start_time = time()
         time_waiting = 0
+        poll_count = 0
+        _print_timing_event(
+            "node_selection_wait_for_running_nodes_started",
+            source="client",
+            running_nodes=n_running_nodes,
+        )
         while n_running_nodes != 0:
             if spinner:
                 msg = f"Waiting for {n_running_nodes} running nodes to become ready..."
                 spinner.text = msg + f" (timeout in {4-time_waiting:.1f}s)"
             await asyncio.sleep(0.01)
+            poll_count += 1
             n_running_nodes = await num_running_nodes(db)
             ready_nodes = await get_ready_nodes(db)
             time_waiting = time() - start_time
             if time_waiting > 4:
                 raise AllNodesBusy()
+        _print_timing_event(
+            "node_selection_wait_for_running_nodes_done",
+            source="client",
+            duration_ms=round((time() - start_time) * 1000, 3),
+            polls=poll_count,
+            ready_count=len(ready_nodes),
+        )
     elif n_booting_nodes != 0:
         ready_nodes = await get_ready_nodes(db)
+        start_time = time()
+        poll_count = 0
+        _print_timing_event(
+            "node_selection_wait_for_booting_nodes_started",
+            source="client",
+            booting_nodes=n_booting_nodes,
+            ready_count=len(ready_nodes),
+        )
         while n_booting_nodes != 0:
             if spinner:
                 msg = f"{len(ready_nodes)} Nodes are ready, waiting for remaining {n_booting_nodes}"
                 spinner.text = msg + " to boot before starting ..."
             await asyncio.sleep(0.1)
+            poll_count += 1
             n_booting_nodes = await num_booting_nodes(db)
             ready_nodes = await get_ready_nodes(db)
+        _print_timing_event(
+            "node_selection_wait_for_booting_nodes_done",
+            source="client",
+            duration_ms=round((time() - start_time) * 1000, 3),
+            polls=poll_count,
+            ready_count=len(ready_nodes),
+        )
         if not ready_nodes:
             main_service_url = json.loads(CONFIG_PATH.read_text())["cluster_dashboard_url"]
             msg = "\n\nZero nodes are ready after Booting. Did they fail to boot?\n"
@@ -180,6 +262,14 @@ async def wait_for_nodes_to_be_ready(
             raise NoNodes(msg)
 
     ready_nodes = await get_ready_nodes(db)
+    _print_timing_event(
+        "node_selection_wait_done",
+        source="client",
+        duration_ms=round((time() - wait_start_time) * 1000, 3),
+        ready_count=len(ready_nodes),
+        booting_nodes=n_booting_nodes,
+        running_nodes=n_running_nodes,
+    )
     if n_booting_nodes == 0 and n_running_nodes == 0 and len(ready_nodes) == 0:
         main_service_url = json.loads(CONFIG_PATH.read_text())["cluster_dashboard_url"]
         msg = "\n\nZero nodes are ready. Is your cluster turned on?\n"
@@ -196,15 +286,34 @@ async def select_nodes_to_assign_to_job(
     spinner: bool | Spinner,
     session,
 ) -> tuple[list["Node"], int]:
+    selection_start_time = time()
     ready_nodes = await get_ready_nodes(db)
+    _print_timing_event(
+        "node_selection_initial_ready_nodes",
+        source="client",
+        ready_count=len(ready_nodes),
+    )
+
     if not ready_nodes:
+        wait_start_time = time()
         ready_nodes = await wait_for_nodes_to_be_ready(db=db, spinner=spinner)
+        _print_timing_event(
+            "node_selection_wait_path_done",
+            source="client",
+            duration_ms=round((time() - wait_start_time) * 1000, 3),
+            ready_count=len(ready_nodes),
+        )
 
     upper_version = Version(ready_nodes[0]["main_svc_version"])
     lower_version = Version(ready_nodes[0]["min_compatible_client_version"])
     current_version = Version(__version__)
     if not lower_version <= current_version <= upper_version:
         raise VersionMismatch(lower_version, upper_version, current_version)
+    _print_timing_event(
+        "node_selection_version_check_done",
+        source="client",
+        ready_count=len(ready_nodes),
+    )
 
     planned_initial_job_parallelism = 0
     nodes_to_assign = []
@@ -232,6 +341,14 @@ async def select_nodes_to_assign_to_job(
     if len(nodes_to_assign) == 0:
         raise NoCompatibleNodes()
 
+    _print_timing_event(
+        "node_selection_completed",
+        source="client",
+        duration_ms=round((time() - selection_start_time) * 1000, 3),
+        ready_count=len(ready_nodes),
+        selected_count=len(nodes_to_assign),
+        target_parallelism=planned_initial_job_parallelism,
+    )
     return nodes_to_assign, planned_initial_job_parallelism
 
 
@@ -243,7 +360,6 @@ class Node:
             raise RuntimeError("Use classmethods `from_ready` or `from_booting` to construct.")
         self.async_db = async_db
         self.session = session
-        self.input_chunks = None
         self.job_id = None
         self.udf_error_event = None
         self.all_packages_installed = None
@@ -254,6 +370,31 @@ class Node:
         self.last_reply_timestamp = time()
         self.auth_headers = get_auth_headers()
         self.spinner_compatible_print = lambda msg: spinner.write(msg) if spinner else print(msg)
+        self.debug_timing_enabled = timing_debug_enabled()
+
+    def _print_timing_event(self, phase_name: str, **fields):
+        if not self.debug_timing_enabled:
+            return
+        message = format_timing_event(time(), phase_name, **fields)
+        if not write_timing_debug_line(message):
+            self.spinner_compatible_print(message)
+
+    def _seconds_since_last_reply(self):
+        return time() - self.last_reply_timestamp
+
+    def _node_silence_timeout_exceeded(self):
+        return self._seconds_since_last_reply() > NODE_SILENCE_TIMEOUT_SECONDS
+
+    def _node_silence_timeout_message(self, action: str):
+        return f"Node {self.instance_name} has not replied for over 10 minutes while {action}.\n"
+
+    def _empty_node_results(self):
+        return {
+            "results": [],
+            "is_empty": False,
+            "current_parallelism": self.current_parallelism,
+            "currently_installing_package": self.currently_installing_package,
+        }
 
     @classmethod
     def from_ready(
@@ -303,16 +444,21 @@ class Node:
             self.machine_type = node_data["machine_type"]
 
     async def _fail_and_delete(self, message: str):
-        node_doc = self.async_db.collection("nodes").document(self.instance_name)
-        await node_doc.update({"status": "FAILED", "display_in_dashboard": True})
-        await node_doc.collection("logs").document().set({"msg": message, "ts": time()})
-        main_service_url = json.loads(CONFIG_PATH.read_text())["cluster_dashboard_url"]
-        url = f"{main_service_url}/v1/cluster/{self.instance_name}"
-        url += "?hide_if_failed=false"
-        async with self.session.delete(url, headers=self.auth_headers, timeout=1) as response:
-            if response.status != 200:
-                message = f"Failed to delete node {self.instance_name}."
-                self.spinner_compatible_print(message + f" ignoring: {response.status}")
+        try:
+            self.state = "FAILED"
+            self.spinner_compatible_print(f"Marking Node {self.instance_name} as FAILED: {message}")
+            node_doc = self.async_db.collection("nodes").document(self.instance_name)
+            await node_doc.update({"status": "FAILED", "display_in_dashboard": True})
+            await node_doc.collection("logs").document().set({"msg": message, "ts": time()})
+            main_service_url = json.loads(CONFIG_PATH.read_text())["cluster_dashboard_url"]
+            url = f"{main_service_url}/v1/cluster/{self.instance_name}"
+            url += "?hide_if_failed=false"
+            async with self.session.delete(url, headers=self.auth_headers, timeout=1) as response:
+                if response.status != 200:
+                    msg = f"Failed to delete node {self.instance_name}."
+                    self.spinner_compatible_print(msg + f" ignoring: {response.status}")
+        except Exception:
+            pass
 
     async def _assign_job(
         self,
@@ -332,14 +478,20 @@ class Node:
             "packages": packages,
             "start_time": start_time,
         }
-        data = aiohttp.FormData()
-        data.add_field("request_json", json.dumps(request_json))
-        data.add_field("function_pkl", function_pkl)
         url = f"{self.host}/jobs/{job_id}"
         timeout = aiohttp.ClientTimeout(300)
-        request = self.session.post(url, data=data, headers=self.auth_headers, timeout=timeout)
-        try:
-            async with request as response:
+        self.last_reply_timestamp = time()
+
+        async def request_function():
+            data = aiohttp.FormData()
+            data.add_field("request_json", json.dumps(request_json))
+            data.add_field("function_pkl", function_pkl)
+            async with self.session.post(
+                url,
+                data=data,
+                headers=self.auth_headers,
+                timeout=timeout,
+            ) as response:
                 self.last_reply_timestamp = time()
                 if response.status == 200:
                     self.job_id = job_id
@@ -351,21 +503,30 @@ class Node:
                 elif response.status == 409:
                     raise NodeConflict(self.instance_name, await response.text())
                 else:
-                    raise Exception(f"Failed to assign {self.instance_name}: {response.status}")
-        except asyncio.TimeoutError:
-            msg = f"Timeout assigning {self.instance_name} to job! Failing node ..."
+                    msg = f"Failed to assign {self.instance_name}: {response.status}"
+                    raise Exception(msg)
+
+        while True:
             try:
-                self.spinner_compatible_print(msg)
-                await self._fail_and_delete(msg)
-            except:
-                pass
-            raise Exception(msg)
+                return await _run_network_request_with_retries(request_function)
+            except NETWORK_ERROR_TYPES:
+                if self._node_silence_timeout_exceeded():
+                    await self._fail_and_delete(self._node_silence_timeout_message("assigning job"))
+                    return
 
     async def _gather_results(self):
+        url = f"{self.host}/jobs/{self.job_id}/results"
+
+        async def request_function():
+            return await self.session.get(
+                url,
+                headers=self.auth_headers,
+                timeout=ClientTimeout(total=60),
+            )
+
         try:
-            url = f"{self.host}/jobs/{self.job_id}/results"
-            args = (self.session, url, self.auth_headers)
-            async with await get_with_retries(*args) as response:
+            response = await _run_network_request_with_retries(request_function)
+            async with response:
                 self.last_reply_timestamp = time()
                 if response.status == 404:
                     self.state = "DONE"
@@ -388,17 +549,10 @@ class Node:
                         raise JobCanceled("Job canceled from dashboard.")
                     msg = f"Node {self.instance_name} disconnected while transmitting results.\n"
                     raise NodeDisconnected(msg)
-        except asyncio.TimeoutError:
-            seconds_since_last_reply = time() - self.last_reply_timestamp
-            if seconds_since_last_reply > NODE_SILENCE_TIMEOUT_SECONDS:
-                msg = f"Node {self.instance_name} has not replied for over 10 minutes!\n"
-                raise NodeDisconnected(msg)
-            return {
-                "results": [],
-                "is_empty": False,
-                "current_parallelism": self.current_parallelism,
-                "currently_installing_package": self.currently_installing_package,
-            }
+        except NETWORK_ERROR_TYPES:
+            if self._node_silence_timeout_exceeded():
+                raise NodeDisconnected(self._node_silence_timeout_message("returning results"))
+            return self._empty_node_results()
 
         return node_results
 
@@ -429,7 +583,7 @@ class Node:
         input_chunk = []
         chunk_size_bytes = 0
         while len(inputs_with_indicies):
-            input_index, input_ = inputs_with_indicies.pop()
+            input_index, input_ = inputs_with_indicies[-1]
             input_pkl = cloudpickle.dumps(input_)
             if len(input_pkl) > MAX_INPUT_SIZE_BYTES:
                 raise InputTooBig(input_index)
@@ -441,12 +595,15 @@ class Node:
                 if input_chunk:
                     yield input_chunk
                     chunk_size_limit = min(max_chunk_size_limit, chunk_size_limit + 500_000)
-                    chunk_size_bytes = len(input_pkl)
-                    input_chunk = [(input_index, input_pkl)]
+                    chunk_size_bytes = 0
+                    input_chunk = []
+                    continue
                 else:
+                    inputs_with_indicies.pop()
                     chunk_size_bytes += len(input_pkl)
                     input_chunk.append((input_index, input_pkl))
             else:
+                inputs_with_indicies.pop()
                 chunk_size_bytes += len(input_pkl)
                 input_chunk.append((input_index, input_pkl))
         if input_chunk:
@@ -461,7 +618,7 @@ class Node:
         start_time: float,
         function_pkl: bytes,
         udf_error_event: Event,
-        max_inputs_per_chunk: int,
+        num_ready_nodes: int,
         inputs_with_indicies: list,
         return_queue: Queue,
     ):
@@ -474,15 +631,47 @@ class Node:
                     break
                 await asyncio.sleep(random.uniform(2, 6))
 
+        self._print_timing_event(
+            "node_assign_started",
+            source="client_node",
+            instance=self.instance_name,
+            target_parallelism=self.target_parallelism,
+        )
         await self._assign_job(
             job_id, background, n_inputs, packages, start_time, function_pkl, udf_error_event
         )
+        if self.state == "FAILED":
+            return
+        self._print_timing_event(
+            "node_assign_done",
+            source="client_node",
+            instance=self.instance_name,
+            target_parallelism=self.target_parallelism,
+        )
 
+        max_inputs_per_chunk = max(1, round(n_inputs / num_ready_nodes))
         chunk_generator = self._input_chunk_generator(inputs_with_indicies, max_inputs_per_chunk)
-        async for input_chunk in chunk_generator:
-            await self._upload_input_chunk(input_chunk)
 
+        iteration = 0
+        first_result_received = False
+        first_upload_completed = False
         while True:
+
+            iteration += 1
+
+            input_chunk = await anext(chunk_generator, None)
+            if input_chunk:
+                await self._upload_input_chunk(input_chunk)
+                if not first_upload_completed:
+                    first_upload_completed = True
+                    self._print_timing_event(
+                        "node_first_upload_done",
+                        source="client_node",
+                        instance=self.instance_name,
+                        upload_count=len(input_chunk),
+                    )
+                await asyncio.sleep(0)
+
             node_results = await self._gather_results()
             return_values = []
             for input_index, is_error, result_pkl in node_results["results"]:
@@ -503,9 +692,32 @@ class Node:
             self.is_empty = node_results["is_empty"]
             self.current_parallelism = node_results["current_parallelism"]
             self.currently_installing_package = node_results["currently_installing_package"]
+            if return_values and not first_result_received:
+                first_result_received = True
+                self._print_timing_event(
+                    "node_first_result_received",
+                    source="client_node",
+                    instance=self.instance_name,
+                    result_count=len(return_values),
+                )
+            message = "time:\t{time:.2f}\tnode:\t{instance}\ti:\t{iteration}\tuploaded:\t{uploaded}\tresults:\t{results}".format(
+                time=time(),
+                instance=self.instance_name,
+                iteration=iteration,
+                uploaded=len(input_chunk) if input_chunk else 0,
+                results=len(return_values),
+            )
+            if self.debug_timing_enabled:
+                write_timing_debug_line(message)
 
             for return_value in return_values:
                 return_queue.put_nowait(return_value)
                 self.result_count += 1
             if self.state == "DONE":
+                self._print_timing_event(
+                    "node_done",
+                    source="client_node",
+                    instance=self.instance_name,
+                    total_results=self.result_count,
+                )
                 return

@@ -1,9 +1,14 @@
 import os
 import json
+from pathlib import Path
+from time import time
 
 import requests
 
 from burla import CONFIG_PATH, _BURLA_BACKEND_URL
+
+DEBUG_TIMING_ENABLED = os.environ.get("BURLA_DEBUG_TIMING") == "True"
+DEBUG_TIMING_PATH = os.environ.get("BURLA_DEBUG_TIMING_PATH", "./RPM_performance_debug.log")
 
 
 def _get_project_id():
@@ -42,6 +47,33 @@ def log_job_failure_telemetry(
         log_telemetry(message, severity="ERROR", **telemetry_kwargs)
 
 
+def timing_debug_enabled():
+    return DEBUG_TIMING_ENABLED
+
+
+def write_timing_debug_line(message: str):
+    file_path = Path(DEBUG_TIMING_PATH)
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    with file_path.open("a") as file:
+        file.write(f"{message}\n")
+    return True
+
+
+def format_timing_event(event_time: float, phase_name: str, **fields):
+    parts = [f"time:\t{event_time:.6f}", f"phase:\t{phase_name}"]
+    for field_name, field_value in fields.items():
+        parts.append(f"{field_name}:\t{field_value}")
+    return "\t".join(parts)
+
+
+def print_timing_event(phase_name: str, **fields):
+    if not timing_debug_enabled():
+        return
+    message = format_timing_event(time(), phase_name, **fields)
+    if not write_timing_debug_line(message):
+        print(message)
+
+
 class RemoteParallelMapReporter:
     @classmethod
     async def _log_telemetry_async(cls, message: str, session, severity: str = "INFO", **kwargs):
@@ -65,20 +97,25 @@ class RemoteParallelMapReporter:
         self.function_ram = kwargs["func_ram"]
         self.background = kwargs["background"]
         self.generator = kwargs["generator"]
+        self.grow = kwargs["grow"]
         self.max_parallelism = kwargs["max_parallelism"]
         self.job_id = kwargs["job_id"]
         self.session = kwargs["session"]
         self.project_id = _get_project_id()
         self.spinner_enabled = bool(self.spinner)
+        self.debug_timing_enabled = timing_debug_enabled()
+
+    def _write_message(self, message: str):
+        if self.spinner:
+            self.spinner.write(message)
+        else:
+            print(message)
 
     def print_detach_mode_enabled_message(self):
         message = f"Calling `{self.function_name}` on {self.input_count} inputs with detach mode enabled!\n"
         message += "This job will continue running if canceled locally, "
         message += "and inputs have finished uploading.\n-"
-        if self.spinner:
-            self.spinner.write(message)
-        else:
-            print(message)
+        self._write_message(message)
 
     def set_booting_nodes_message(self, number_of_booting_nodes: int):
         if not self.spinner:
@@ -93,17 +130,17 @@ class RemoteParallelMapReporter:
             f" ({self.function_size_gb:.3f}GB)" if self.function_size_gb > 0.001 else ""
         )
         message = (
-            f"Calling function `{self.function_name}`{function_size_str} on {self.input_count} "
+            f"\nCalling function `{self.function_name}`{function_size_str} on {self.input_count} "
         )
         message += f"inputs with {number_of_nodes} {machine_type} nodes and "
         message += f"{self.function_cpu}vCPUs/{self.function_ram}GB RAM per function.\n"
         message += (
             f"background={self.background}, generator={self.generator}, "
-            f"spinner={self.spinner_enabled}, "
+            f"spinner={self.spinner_enabled}, grow={self.grow}, "
         )
         message += f"max_parallelism={self.max_parallelism}, job_id={self.job_id}"
         if packages:
-            message += f"\nRequested packages: {packages}"
+            message += f"\n---\nRequested packages: {packages}"
         await self._log_telemetry_async(message, self.session, project_id=self.project_id)
 
     def set_uploading_function_message(self, nodes: list):
@@ -130,10 +167,16 @@ class RemoteParallelMapReporter:
         message += "Done uploading inputs!\n"
         message += "Job will now continue running if canceled locally.\n"
         message += "------------------------------"
-        if self.spinner:
-            self.spinner.write(message)
-        else:
-            print(message)
+        self._write_message(message)
+
+    def print_timing_event(self, phase_name: str, **fields):
+        if not self.debug_timing_enabled:
+            return
+        if "source" not in fields:
+            fields["source"] = "client"
+        message = format_timing_event(time(), phase_name, **fields)
+        if not write_timing_debug_line(message):
+            self._write_message(message)
 
     def set_running_progress_message(
         self, completed_inputs: int, total_parallelism: int, booting_nodes: int = 0

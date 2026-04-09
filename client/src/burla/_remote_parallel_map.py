@@ -39,7 +39,11 @@ from burla._node import (
     VersionMismatch,
     select_nodes_to_assign_to_job,
 )
-from burla._reporting import RemoteParallelMapReporter, log_job_failure_telemetry
+from burla._reporting import (
+    RemoteParallelMapReporter,
+    log_job_failure_telemetry,
+    print_timing_event,
+)
 
 # load on import and reuse because this is very slow in big envs
 PKG_MODULE_MAPPING = metadata.packages_distributions()
@@ -65,6 +69,18 @@ class FunctionTooBig(Exception):
         super().__init__(msg)
 
 
+EXEC_TYPES_TO_NOT_ALERT = [
+    NoNodes,
+    AllNodesBusy,
+    NoCompatibleNodes,
+    JobCanceled,
+    VersionMismatch,
+    FunctionTooBig,
+    FirestoreTimeout,
+    UnauthorizedError,
+    KeyboardInterrupt,
+]
+
 async def _grow_cluster(
     current_cpus: int, missing_cpus: int, session, async_db, spinner
 ) -> list[Node]:
@@ -76,28 +92,27 @@ async def _grow_cluster(
     if main_service_url != local_main_service_url:
         grow_urls.append(f"{local_main_service_url}/v1/cluster/grow")
 
-    async with aiohttp.ClientSession(trust_env=True) as request_session:
-        for index, url in enumerate(grow_urls):
-            request = request_session.post(url, json=request_json, headers=auth_headers)
-            async with await request as response:
-                if response.status == 200:
-                    response_json = await response.json()
-                    names = response_json["added_node_instance_names"]
-                    if len(names) == 0:
-                        return []
-                    target_parallelism_per_node = max(1, missing_cpus // len(names))
-                    node_kw = dict(
-                        target_parallelism=target_parallelism_per_node,
-                        session=session,
-                        async_db=async_db,
-                        spinner=spinner,
-                    )
-                    return [Node.from_booting(name, **node_kw) for name in names]
-                if response.status == 401:
-                    raise UnauthorizedError()
-                used_last_url = index == len(grow_urls) - 1
-                if response.status != 405 or used_last_url:
-                    raise Exception(f"Failed to grow cluster: {response.status}")
+    for index, url in enumerate(grow_urls):
+        request = session.post(url, json=request_json, headers=auth_headers)
+        async with await request as response:
+            if response.status == 200:
+                response_json = await response.json()
+                names = response_json["added_node_instance_names"]
+                if len(names) == 0:
+                    return []
+                target_parallelism_per_node = max(1, missing_cpus // len(names))
+                node_kw = dict(
+                    target_parallelism=target_parallelism_per_node,
+                    session=session,
+                    async_db=async_db,
+                    spinner=spinner,
+                )
+                return [Node.from_booting(name, **node_kw) for name in names]
+            if response.status == 401:
+                raise UnauthorizedError()
+            used_last_url = index == len(grow_urls) - 1
+            if response.status != 405 or used_last_url:
+                raise Exception(f"Failed to grow cluster: {response.status}")
 
 
 async def _execute_job_wrapped(*args, **kwargs):
@@ -112,6 +127,7 @@ async def _execute_job_wrapped(*args, **kwargs):
         client_session = aiohttp.ClientSession(connector=connector, trust_env=True)
         session = await stack.enter_async_context(client_session)
         reporter = RemoteParallelMapReporter(**kwargs, session=session)
+        reporter.print_timing_event("client_session_ready")
         execute_job_kwargs = dict(kwargs)
         execute_job_kwargs.pop("generator", None)
         await _execute_job(
@@ -146,6 +162,8 @@ async def _execute_job(
     dashboard_canceled_message = None
     auth_headers = get_auth_headers()
     sync_db, async_db = get_db_clients()
+    reporter.print_timing_event("auth_headers_ready")
+    reporter.print_timing_event("db_clients_ready")
 
     if background:
         reporter.print_detach_mode_enabled_message()
@@ -153,9 +171,11 @@ async def _execute_job(
     function_pkl = cloudpickle.dumps(function_)
     function_size_gb = len(function_pkl) / (1024**3)
     reporter.function_size_gb = function_size_gb
+    reporter.print_timing_event("function_pickled", function_size_mb=round(function_size_gb * 1024, 6))
     if function_size_gb > 0.1:
         raise FunctionTooBig(function_.__name__)
 
+    reporter.print_timing_event("node_selection_started")
     try:
         nodes, target_parallelism = await select_nodes_to_assign_to_job(
             db=async_db,
@@ -192,6 +212,13 @@ async def _execute_job(
             elif len(nodes) == 0:
                 raise NoNodes("Cluster refused to boot required additional nodes ...")
 
+    reporter.print_timing_event(
+        "nodes_ready_for_job",
+        node_count=len(nodes),
+        target_parallelism=target_parallelism,
+        booting_node_count=sum(node.state == "BOOTING" for node in nodes),
+    )
+
     sync_job_ref = sync_db.collection("jobs").document(job_id)
     async_job_ref = async_db.collection("jobs").document(job_id)
     await async_job_ref.set(
@@ -214,6 +241,7 @@ async def _execute_job(
             "fail_reason": [],
         }
     )
+    reporter.print_timing_event("job_registered", node_count=len(nodes))
 
     # start stdout/stderr stream
     def _on_new_logs_doc(col_snapshot, changes, read_time):
@@ -235,6 +263,7 @@ async def _execute_job(
 
     log_stream = sync_job_ref.collection("logs").on_snapshot(_on_new_logs_doc)
     session_stack.callback(log_stream.unsubscribe)
+    reporter.print_timing_event("log_stream_ready")
 
     job_start_telemetry_task = create_task(reporter.log_job_start_telemetry(nodes, packages))
     session_stack.callback(job_start_telemetry_task.cancel)
@@ -244,7 +273,6 @@ async def _execute_job(
     n_inputs = len(inputs)  # <- inputs will be popped from so len(inputs) will start changing
     inputs_with_indicies = list(enumerate(inputs))
     num_ready_nodes = max(1, sum(n.state == "READY" for n in nodes))
-    max_inputs_per_chunk = max(1, n_inputs // num_ready_nodes)
     for node in nodes:
         node_tasks.append(
             create_task(
@@ -256,17 +284,19 @@ async def _execute_job(
                     start_time=start_time,
                     function_pkl=function_pkl,
                     udf_error_event=udf_error_event,
-                    max_inputs_per_chunk=max_inputs_per_chunk,
+                    num_ready_nodes=num_ready_nodes,
                     inputs_with_indicies=inputs_with_indicies,
                     return_queue=return_queue,
                 )
             )
         )
+    reporter.print_timing_event("node_tasks_started", node_count=len(node_tasks))
 
     try:
         ping_process = None
         last_status_message_update_time = 0.0
         total_result_count = sum(node.result_count for node in nodes)
+        first_result_received = False
         while total_result_count < n_inputs:
             if (time() - start_time) < 5:
                 await asyncio.sleep(0.0005)
@@ -299,6 +329,7 @@ async def _execute_job(
             if len(inputs_with_indicies) == 0 and not inputs_done_event.is_set():
                 inputs_done_event.set()
                 await async_job_ref.update({"all_inputs_uploaded": True})
+                reporter.print_timing_event("all_inputs_uploaded")
                 if background:
                     reporter.print_inputs_done_message()
 
@@ -312,14 +343,19 @@ async def _execute_job(
                 raise Exception(f"Heartbeat process failed!\n{stderr}")
 
             total_result_count = sum(node.result_count for node in nodes)
+            if total_result_count > 0 and not first_result_received:
+                first_result_received = True
+                reporter.print_timing_event("first_result_received", result_count=total_result_count)
             if all([task.done() for task in node_tasks]) and total_result_count < n_inputs:
                 raise Exception("Zero nodes working on job and we have not received all results!")
 
+        reporter.print_timing_event("all_results_received", result_count=total_result_count)
         job_success_telemetry_task = create_task(
             reporter.log_job_success_telemetry(time() - start_time)
         )
         session_stack.callback(job_success_telemetry_task.cancel)
         await async_job_ref.update({"client_has_all_results": True})
+        reporter.print_timing_event("client_has_all_results_recorded")
     finally:
         [task.cancel() for task in node_tasks]
 
@@ -385,6 +421,7 @@ def remote_parallel_map(
     inputs = [(i,) if not isinstance(i, tuple) else i for i in inputs]
     if not inputs:
         return iter([]) if generator else []
+    print_timing_event("inputs_normalized", source="client", input_count=len(inputs))
 
     # TODO: rename internally
     background = detach
@@ -395,10 +432,17 @@ def remote_parallel_map(
         return function_(*args_tuple)
 
     wrapped_function_.__name__ = function_.__name__
+    print_timing_event("wrapped_function_ready", source="client")
 
     # Move below code back into `_execute_job` after above todo is done.
     # Needs to operate on function_.__globals__ which cannot be reassigned -> must be done here.
     custom_module_names, package_module_names = get_modules_required_on_remote(function_)
+    print_timing_event(
+        "dependency_scan_done",
+        source="client",
+        custom_module_count=len(custom_module_names),
+        package_module_count=len(package_module_names),
+    )
 
     # temp fix: these are mistetected as PyPI packages but are not!
     if "clim_shift" in package_module_names:
@@ -462,6 +506,19 @@ def remote_parallel_map(
         if "matplotlib" in PKG_MODULE_MAPPING and not ("matplotlib" in packages):
             packages["matplotlib"] = metadata.version("matplotlib")
     # ------------------------------------------------
+    print_timing_event(
+        "package_resolution_done",
+        source="client",
+        package_count=len(packages),
+    )
+
+    print_timing_event(
+        "client_preflight_done",
+        source="client",
+        input_count=len(inputs),
+        package_count=len(packages),
+        custom_module_count=len(custom_module_names),
+    )
 
     max_parallelism = max_parallelism if max_parallelism else len(inputs)
     uid = base64.urlsafe_b64encode(uuid4().bytes[:9]).decode()
@@ -474,11 +531,13 @@ def remote_parallel_map(
             spinner = yaspin(sigmap={})  # <- .start will overwrite my handlers without sigmap={}
             spinner.start()
             spinner.text = f"Preparing to call `{function_.__name__}` on {len(inputs)} inputs ..."
+            print_timing_event("spinner_started", source="client")
         terminal_cancel_event = Event()
         inputs_done_event = Event()
         original_signal_handlers = install_signal_handlers(
             job_id, background, spinner, terminal_cancel_event, inputs_done_event
         )
+        print_timing_event("signal_handlers_ready", source="client")
 
         def execute_job():
             try:
@@ -507,6 +566,7 @@ def remote_parallel_map(
 
         t = Thread(target=execute_job, daemon=True)
         t.start()
+        print_timing_event("worker_thread_started", source="client")
         t.join()
 
         if hasattr(execute_job, "exc_info"):
@@ -552,11 +612,7 @@ def remote_parallel_map(
 
         # Report errors back to Burla's cloud.
         if not udf_error_event.is_set():
-            exec_types_to_chill = [NoNodes, AllNodesBusy, NoCompatibleNodes, JobCanceled]
-            exec_types_to_chill.extend(
-                [VersionMismatch, FunctionTooBig, FirestoreTimeout, UnauthorizedError]
-            )
-            chill_exception = any([isinstance(e, e_type) for e_type in exec_types_to_chill])
+            chill_exception = any([isinstance(e, e_type) for e_type in EXEC_TYPES_TO_NOT_ALERT])
 
             exc_type, exc_value, exc_traceback = sys.exc_info()
             tb_details = traceback.format_exception(exc_type, exc_value, exc_traceback)

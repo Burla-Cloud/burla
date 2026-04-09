@@ -107,6 +107,19 @@ def get_auth_headers(request: Request):
     return {"Authorization": authorization, "X-User-Email": email}
 
 
+async def get_welcome_name(session: aiohttp.ClientSession):
+    try:
+        url = f"{BURLA_BACKEND_URL}/v1/clusters/{PROJECT_ID}/users:welcome_name"
+        async with session.get(url) as response:
+            if response.status == 200:
+                data = await response.json()
+                return data["first_name"]
+            if response.status != 204:
+                response.raise_for_status()
+    except aiohttp.ClientError:
+        return None
+
+
 def get_add_background_task_function(
     background_tasks: BackgroundTasks, logger: Logger = Depends(get_logger)
 ):
@@ -297,15 +310,6 @@ async def validate_requests(request: Request, call_next):
     authorization = request.session.get("Authorization") or request.headers.get("Authorization")
     auth_cookie_exists = email and authorization
     async with aiohttp.ClientSession() as session:
-        first_name = None
-        url = f"{BURLA_BACKEND_URL}/v1/clusters/{PROJECT_ID}/users:welcome_name"
-        async with session.get(url) as response:
-            if response.status == 200:
-                data = await response.json()
-                first_name = data["first_name"]
-            elif response.status != 204:
-                response.raise_for_status()
-
         if client_id:
             url = f"{BURLA_BACKEND_URL}/v2/login/dashboard/{client_id}/token"
             async with session.get(url) as response:
@@ -319,6 +323,7 @@ async def validate_requests(request: Request, call_next):
                     return RedirectResponse(url=base_url, status_code=303)
                 elif response.status == 403:
                     data = await response.json()
+                    first_name = await get_welcome_name(session)
                     rendered = STATIC_FILES_ENV.get_template("login.html.j2").render(
                         redirect_locally=REDIRECT_LOCALLY_ON_LOGIN,
                         project_id=PROJECT_ID,
@@ -335,6 +340,7 @@ async def validate_requests(request: Request, call_next):
                 elif response.status != 401:
                     response.raise_for_status()
                 else:
+                    first_name = await get_welcome_name(session)
                     rendered = STATIC_FILES_ENV.get_template("login.html.j2").render(
                         redirect_locally=REDIRECT_LOCALLY_ON_LOGIN,
                         project_id=PROJECT_ID,
@@ -343,6 +349,7 @@ async def validate_requests(request: Request, call_next):
                     )
                     return Response(content=rendered, status_code=200, media_type="text/html")
 
+        first_name = await get_welcome_name(session)
         rendered = STATIC_FILES_ENV.get_template("login.html.j2").render(
             redirect_locally=REDIRECT_LOCALLY_ON_LOGIN,
             project_id=PROJECT_ID,

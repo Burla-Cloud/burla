@@ -20,7 +20,7 @@ def format_traceback(traceback_details: list):
 
 class ResultsEndpointFilter(python_logging.Filter):
     def filter(self, record):
-        return not record.args[2].endswith("/results")
+        return not record.args[2].endswith(("/results", "/client-heartbeat"))
 
 
 class SizedQueue(queue.Queue):

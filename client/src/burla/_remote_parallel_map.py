@@ -41,10 +41,8 @@ from burla._node import (
 )
 from burla._reporting import (
     RemoteParallelMapReporter,
-    format_timing_event,
     log_job_failure_telemetry,
-    timing_debug_enabled,
-    write_timing_debug_line,
+    print_timing_event,
 )
 
 # load on import and reuse because this is very slow in big envs
@@ -71,13 +69,17 @@ class FunctionTooBig(Exception):
         super().__init__(msg)
 
 
-def _print_timing_event(phase_name: str, **fields):
-    if not timing_debug_enabled():
-        return
-    message = format_timing_event(time(), phase_name, **fields)
-    if not write_timing_debug_line(message):
-        print(message)
-
+EXEC_TYPES_TO_NOT_ALERT = [
+    NoNodes,
+    AllNodesBusy,
+    NoCompatibleNodes,
+    JobCanceled,
+    VersionMismatch,
+    FunctionTooBig,
+    FirestoreTimeout,
+    UnauthorizedError,
+    KeyboardInterrupt,
+]
 
 async def _grow_cluster(
     current_cpus: int, missing_cpus: int, session, async_db, spinner
@@ -125,7 +127,7 @@ async def _execute_job_wrapped(*args, **kwargs):
         client_session = aiohttp.ClientSession(connector=connector, trust_env=True)
         session = await stack.enter_async_context(client_session)
         reporter = RemoteParallelMapReporter(**kwargs, session=session)
-        reporter.print_timing_event(time(), "client_session_ready", source="client")
+        reporter.print_timing_event("client_session_ready")
         execute_job_kwargs = dict(kwargs)
         execute_job_kwargs.pop("generator", None)
         await _execute_job(
@@ -160,8 +162,8 @@ async def _execute_job(
     dashboard_canceled_message = None
     auth_headers = get_auth_headers()
     sync_db, async_db = get_db_clients()
-    reporter.print_timing_event(time(), "auth_headers_ready", source="client")
-    reporter.print_timing_event(time(), "db_clients_ready", source="client")
+    reporter.print_timing_event("auth_headers_ready")
+    reporter.print_timing_event("db_clients_ready")
 
     if background:
         reporter.print_detach_mode_enabled_message()
@@ -169,16 +171,11 @@ async def _execute_job(
     function_pkl = cloudpickle.dumps(function_)
     function_size_gb = len(function_pkl) / (1024**3)
     reporter.function_size_gb = function_size_gb
-    reporter.print_timing_event(
-        time(),
-        "function_pickled",
-        source="client",
-        function_size_mb=round(function_size_gb * 1024, 6),
-    )
+    reporter.print_timing_event("function_pickled", function_size_mb=round(function_size_gb * 1024, 6))
     if function_size_gb > 0.1:
         raise FunctionTooBig(function_.__name__)
 
-    reporter.print_timing_event(time(), "node_selection_started", source="client")
+    reporter.print_timing_event("node_selection_started")
     try:
         nodes, target_parallelism = await select_nodes_to_assign_to_job(
             db=async_db,
@@ -216,9 +213,7 @@ async def _execute_job(
                 raise NoNodes("Cluster refused to boot required additional nodes ...")
 
     reporter.print_timing_event(
-        time(),
         "nodes_ready_for_job",
-        source="client",
         node_count=len(nodes),
         target_parallelism=target_parallelism,
         booting_node_count=sum(node.state == "BOOTING" for node in nodes),
@@ -246,12 +241,7 @@ async def _execute_job(
             "fail_reason": [],
         }
     )
-    reporter.print_timing_event(
-        time(),
-        "job_registered",
-        source="client",
-        node_count=len(nodes),
-    )
+    reporter.print_timing_event("job_registered", node_count=len(nodes))
 
     # start stdout/stderr stream
     def _on_new_logs_doc(col_snapshot, changes, read_time):
@@ -273,7 +263,7 @@ async def _execute_job(
 
     log_stream = sync_job_ref.collection("logs").on_snapshot(_on_new_logs_doc)
     session_stack.callback(log_stream.unsubscribe)
-    reporter.print_timing_event(time(), "log_stream_ready", source="client")
+    reporter.print_timing_event("log_stream_ready")
 
     job_start_telemetry_task = create_task(reporter.log_job_start_telemetry(nodes, packages))
     session_stack.callback(job_start_telemetry_task.cancel)
@@ -300,12 +290,7 @@ async def _execute_job(
                 )
             )
         )
-    reporter.print_timing_event(
-        time(),
-        "node_tasks_started",
-        source="client",
-        node_count=len(node_tasks),
-    )
+    reporter.print_timing_event("node_tasks_started", node_count=len(node_tasks))
 
     try:
         ping_process = None
@@ -344,7 +329,7 @@ async def _execute_job(
             if len(inputs_with_indicies) == 0 and not inputs_done_event.is_set():
                 inputs_done_event.set()
                 await async_job_ref.update({"all_inputs_uploaded": True})
-                reporter.print_timing_event(time(), "all_inputs_uploaded", source="client")
+                reporter.print_timing_event("all_inputs_uploaded")
                 if background:
                     reporter.print_inputs_done_message()
 
@@ -360,31 +345,17 @@ async def _execute_job(
             total_result_count = sum(node.result_count for node in nodes)
             if total_result_count > 0 and not first_result_received:
                 first_result_received = True
-                reporter.print_timing_event(
-                    time(),
-                    "first_result_received",
-                    source="client",
-                    result_count=total_result_count,
-                )
+                reporter.print_timing_event("first_result_received", result_count=total_result_count)
             if all([task.done() for task in node_tasks]) and total_result_count < n_inputs:
                 raise Exception("Zero nodes working on job and we have not received all results!")
 
-        reporter.print_timing_event(
-            time(),
-            "all_results_received",
-            source="client",
-            result_count=total_result_count,
-        )
+        reporter.print_timing_event("all_results_received", result_count=total_result_count)
         job_success_telemetry_task = create_task(
             reporter.log_job_success_telemetry(time() - start_time)
         )
         session_stack.callback(job_success_telemetry_task.cancel)
         await async_job_ref.update({"client_has_all_results": True})
-        reporter.print_timing_event(
-            time(),
-            "client_has_all_results_recorded",
-            source="client",
-        )
+        reporter.print_timing_event("client_has_all_results_recorded")
     finally:
         [task.cancel() for task in node_tasks]
 
@@ -450,7 +421,7 @@ def remote_parallel_map(
     inputs = [(i,) if not isinstance(i, tuple) else i for i in inputs]
     if not inputs:
         return iter([]) if generator else []
-    _print_timing_event("inputs_normalized", source="client", input_count=len(inputs))
+    print_timing_event("inputs_normalized", source="client", input_count=len(inputs))
 
     # TODO: rename internally
     background = detach
@@ -461,12 +432,12 @@ def remote_parallel_map(
         return function_(*args_tuple)
 
     wrapped_function_.__name__ = function_.__name__
-    _print_timing_event("wrapped_function_ready", source="client")
+    print_timing_event("wrapped_function_ready", source="client")
 
     # Move below code back into `_execute_job` after above todo is done.
     # Needs to operate on function_.__globals__ which cannot be reassigned -> must be done here.
     custom_module_names, package_module_names = get_modules_required_on_remote(function_)
-    _print_timing_event(
+    print_timing_event(
         "dependency_scan_done",
         source="client",
         custom_module_count=len(custom_module_names),
@@ -535,13 +506,13 @@ def remote_parallel_map(
         if "matplotlib" in PKG_MODULE_MAPPING and not ("matplotlib" in packages):
             packages["matplotlib"] = metadata.version("matplotlib")
     # ------------------------------------------------
-    _print_timing_event(
+    print_timing_event(
         "package_resolution_done",
         source="client",
         package_count=len(packages),
     )
 
-    _print_timing_event(
+    print_timing_event(
         "client_preflight_done",
         source="client",
         input_count=len(inputs),
@@ -560,13 +531,13 @@ def remote_parallel_map(
             spinner = yaspin(sigmap={})  # <- .start will overwrite my handlers without sigmap={}
             spinner.start()
             spinner.text = f"Preparing to call `{function_.__name__}` on {len(inputs)} inputs ..."
-            _print_timing_event("spinner_started", source="client")
+            print_timing_event("spinner_started", source="client")
         terminal_cancel_event = Event()
         inputs_done_event = Event()
         original_signal_handlers = install_signal_handlers(
             job_id, background, spinner, terminal_cancel_event, inputs_done_event
         )
-        _print_timing_event("signal_handlers_ready", source="client")
+        print_timing_event("signal_handlers_ready", source="client")
 
         def execute_job():
             try:
@@ -595,7 +566,7 @@ def remote_parallel_map(
 
         t = Thread(target=execute_job, daemon=True)
         t.start()
-        _print_timing_event("worker_thread_started", source="client")
+        print_timing_event("worker_thread_started", source="client")
         t.join()
 
         if hasattr(execute_job, "exc_info"):
@@ -641,11 +612,7 @@ def remote_parallel_map(
 
         # Report errors back to Burla's cloud.
         if not udf_error_event.is_set():
-            exec_types_to_chill = [NoNodes, AllNodesBusy, NoCompatibleNodes, JobCanceled]
-            exec_types_to_chill.extend(
-                [VersionMismatch, FunctionTooBig, FirestoreTimeout, UnauthorizedError]
-            )
-            chill_exception = any([isinstance(e, e_type) for e_type in exec_types_to_chill])
+            chill_exception = any([isinstance(e, e_type) for e_type in EXEC_TYPES_TO_NOT_ALERT])
 
             exc_type, exc_value, exc_traceback = sys.exc_info()
             tb_details = traceback.format_exception(exc_type, exc_value, exc_traceback)

@@ -1,6 +1,7 @@
 import os
 import json
 from pathlib import Path
+from time import time
 
 import requests
 
@@ -63,6 +64,14 @@ def format_timing_event(event_time: float, phase_name: str, **fields):
     for field_name, field_value in fields.items():
         parts.append(f"{field_name}:\t{field_value}")
     return "\t".join(parts)
+
+
+def print_timing_event(phase_name: str, **fields):
+    if not timing_debug_enabled():
+        return
+    message = format_timing_event(time(), phase_name, **fields)
+    if not write_timing_debug_line(message):
+        print(message)
 
 
 class RemoteParallelMapReporter:
@@ -159,10 +168,12 @@ class RemoteParallelMapReporter:
         message += "------------------------------"
         self._write_message(message)
 
-    def print_timing_event(self, event_time: float, phase_name: str, **fields):
+    def print_timing_event(self, phase_name: str, **fields):
         if not self.debug_timing_enabled:
             return
-        message = format_timing_event(event_time, phase_name, **fields)
+        if "source" not in fields:
+            fields["source"] = "client"
+        message = format_timing_event(time(), phase_name, **fields)
         if not write_timing_debug_line(message):
             self._write_message(message)
 

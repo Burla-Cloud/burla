@@ -3,6 +3,7 @@ import sys
 import pty
 import pickle
 import multiprocessing
+import signal
 import requests
 import traceback
 import subprocess
@@ -49,6 +50,12 @@ SUBPROCESS_CONTEXT = multiprocessing.get_context("spawn")
 USER_FUNCTION_PROCESS = None
 USER_FUNCTION_REQUEST_QUEUE = None
 USER_FUNCTION_RESPONSE_QUEUE = None
+USER_FUNCTION_PROCESS_OOM_KILL_COUNT = None
+
+CGROUP_MEMORY_EVENTS_PATHS = [
+    Path("/sys/fs/cgroup/memory.events.local"),
+    Path("/sys/fs/cgroup/memory.events"),
+]
 
 
 def request_with_valid_dbheaders(method: str, *request_args, **request_kwargs):
@@ -365,6 +372,53 @@ def _start_user_function_process():
     return process, request_queue, response_queue
 
 
+def _read_oom_kill_count():
+    for path in CGROUP_MEMORY_EVENTS_PATHS:
+        if path.exists():
+            events = {}
+            for line in path.read_text().splitlines():
+                event_name, event_count = line.split()
+                events[event_name] = int(event_count)
+            return events.get("oom_kill")
+    return None
+
+
+def _format_process_exit(exit_code: int):
+    if exit_code < 0:
+        signal_number = -exit_code
+        try:
+            signal_name = signal.Signals(signal_number).name
+            return f"signal {signal_name} ({signal_number})"
+        except ValueError:
+            return f"signal {signal_number}"
+    return f"exit code {exit_code}"
+
+
+def _get_user_function_process_failure_exception():
+    if USER_FUNCTION_PROCESS is None or USER_FUNCTION_PROCESS.is_alive():
+        return None
+
+    current_oom_kill_count = _read_oom_kill_count()
+    was_oom_killed = (
+        USER_FUNCTION_PROCESS.exitcode == -signal.SIGKILL
+        and USER_FUNCTION_PROCESS_OOM_KILL_COUNT is not None
+        and current_oom_kill_count is not None
+        and current_oom_kill_count > USER_FUNCTION_PROCESS_OOM_KILL_COUNT
+    )
+    if was_oom_killed:
+        message = "\n\nUser function subprocess was killed by the Linux OOM killer.\n"
+        message += "This usually means your function used more memory than `func_ram` allows.\n"
+        message += "Increase `func_ram` or reduce memory usage inside your function.\n"
+        return RuntimeError(message)
+
+    exit_code = USER_FUNCTION_PROCESS.exitcode
+    if exit_code is None:
+        return RuntimeError("\n\nUser function subprocess exited unexpectedly.\n")
+
+    exit_details = _format_process_exit(exit_code)
+    return RuntimeError(f"\n\nUser function subprocess exited unexpectedly ({exit_details}).\n")
+
+
 def _stop_user_function_process(process, request_queue):
     if process is None:
         return
@@ -379,18 +433,26 @@ def initialize_user_function_process():
     global USER_FUNCTION_PROCESS
     global USER_FUNCTION_REQUEST_QUEUE
     global USER_FUNCTION_RESPONSE_QUEUE
+    global USER_FUNCTION_PROCESS_OOM_KILL_COUNT
     process_is_running = USER_FUNCTION_PROCESS and USER_FUNCTION_PROCESS.is_alive()
     if not process_is_running:
         USER_FUNCTION_PROCESS, USER_FUNCTION_REQUEST_QUEUE, USER_FUNCTION_RESPONSE_QUEUE = (
             _start_user_function_process()
         )
+        USER_FUNCTION_PROCESS_OOM_KILL_COUNT = _read_oom_kill_count()
 
 
 def _load_user_function(function_pkl: bytes):
     initialize_user_function_process()
     USER_FUNCTION_REQUEST_QUEUE.put(("load_function", function_pkl))
     while True:
-        action, is_error, traceback_str = USER_FUNCTION_RESPONSE_QUEUE.get()
+        try:
+            action, is_error, traceback_str = USER_FUNCTION_RESPONSE_QUEUE.get(timeout=0.1)
+        except Empty:
+            process_failure = _get_user_function_process_failure_exception()
+            if process_failure:
+                raise process_failure
+            continue
         if action != "load_function":
             continue
         if is_error:
@@ -403,10 +465,20 @@ def _execute_user_function(
     input_pkl: bytes,
     firestore_stdout: _FirestoreStdout,
 ):
+    process_failure = _get_user_function_process_failure_exception()
+    if process_failure:
+        raise process_failure
+
     initialize_user_function_process()
     USER_FUNCTION_REQUEST_QUEUE.put(("execute", input_index, input_pkl))
     while True:
-        response = USER_FUNCTION_RESPONSE_QUEUE.get()
+        try:
+            response = USER_FUNCTION_RESPONSE_QUEUE.get(timeout=0.1)
+        except Empty:
+            process_failure = _get_user_function_process_failure_exception()
+            if process_failure:
+                raise process_failure
+            continue
         response_type = response[0]
         if response_type == "log":
             _, response_input_index, log_msg = response

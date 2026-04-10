@@ -78,7 +78,7 @@ def REINIT_SELF(SELF):
     SELF["all_packages_installed_sent_to_client"] = False
     SELF["udf_start_latency"] = None
     SELF["active_client_request_count"] = 0
-    SELF["last_request_timestamp"] = time()
+    SELF["last_client_activity_timestamp"] = time()
 
 
 SELF = {}
@@ -151,7 +151,7 @@ async def shutdown_if_idle_for_too_long(logger: Logger):
     time_since_last_activity = 0
     while time_since_last_activity < INACTIVITY_SHUTDOWN_TIME_SEC or SELF["current_job"]:
         await asyncio.sleep(5)
-        time_since_last_activity = time() - SELF["last_request_timestamp"]
+        time_since_last_activity = time() - SELF["last_client_activity_timestamp"]
 
     if not IN_LOCAL_DEV_MODE:
         msg = f"Node has been idle for {INACTIVITY_SHUTDOWN_TIME_SEC // 60} minutes.\n"
@@ -255,7 +255,7 @@ class TrackOpenRequestMiddleware:
                 return
             request_done = True
             SELF["active_client_request_count"] -= 1
-            SELF["last_request_timestamp"] = time()
+            SELF["last_client_activity_timestamp"] = time()
 
         SELF["active_client_request_count"] += 1
 
@@ -336,7 +336,7 @@ async def handle_errors(request: Request, call_next):
         add_background_task = get_add_background_task_function(response.background, logger=logger)
         add_background_task(reboot_containers, logger=logger)
     if response.status_code == 200:
-        SELF["last_request_timestamp"] = time()
+        SELF["last_client_activity_timestamp"] = time()
 
     return response
 

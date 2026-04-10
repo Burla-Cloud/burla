@@ -142,9 +142,11 @@ async def _job_watcher(
 
         # is client connected?
         client_disconnected = False
-        sec_since_last_request = time() - SELF["last_request_timestamp"]
-        client_contact_last_1s = sec_since_last_request < CLIENT_CONTACT_TIMEOUT_SEC
-        client_contact_last_1s = client_contact_last_1s or SELF["active_client_request_count"] > 0
+        sec_since_last_activity = time() - SELF["last_client_activity_timestamp"]
+        client_contact_last_1s = sec_since_last_activity < CLIENT_CONTACT_TIMEOUT_SEC
+        # `SELF["active_client_request_count"] > 0` does not mean the client is alive.
+        active_request = SELF["active_client_request_count"] > 0 and sec_since_last_activity < 15
+        client_contact_last_1s = client_contact_last_1s or active_request
         if client_contact_last_1s != last_reported_client_contact_last_1s:
             await node_doc.update({"client_contact_last_1s": client_contact_last_1s})
             last_reported_client_contact_last_1s = client_contact_last_1s
@@ -203,7 +205,9 @@ async def _job_watcher(
                     seconds_neighbor_had_no_inputs = time() - neighbor_had_no_inputs_at
                     if seconds_neighbor_had_no_inputs > EMPTY_NEIGHBOR_TIMEOUT_SEC:
                         if no_buffered_results:
-                            msg = f"Neighbor had no extra inputs for {EMPTY_NEIGHBOR_TIMEOUT_SEC//60}"
+                            msg = (
+                                f"Neighbor had no extra inputs for {EMPTY_NEIGHBOR_TIMEOUT_SEC//60}"
+                            )
                             logger.log(f"{msg} minutes, done working on job!")
                             await restart_workers(session, logger, async_db)
                             break
@@ -211,7 +215,9 @@ async def _job_watcher(
                             "Neighbor timeout reached but waiting for buffered results to drain."
                         )
             not_waiting_on_client = SELF["results_queue"].empty() or client_disconnected
-            all_local_work_complete = all_inputs_processed and no_buffered_results and not_waiting_on_client
+            all_local_work_complete = (
+                all_inputs_processed and no_buffered_results and not_waiting_on_client
+            )
 
         # job over ?
         job_completed = False

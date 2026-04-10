@@ -125,7 +125,7 @@ class _FirestoreStdout:
 
     def actually_flush(self):
         if self._buffer:
-            SELF["logs"].append(f"Flushing {len(self._buffer)} logs")
+            # SELF["logs"].append(f"Flushing {len(self._buffer)} logs")
             timestamp_str = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
             timestamp_field = {"timestampValue": timestamp_str}
             logs_field = {"arrayValue": {"values": self._buffer}}

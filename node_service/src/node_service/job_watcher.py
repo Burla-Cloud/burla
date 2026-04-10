@@ -20,6 +20,7 @@ from node_service.lifecycle_endpoints import (
 EMPTY_NEIGHBOR_TIMEOUT_SEC = 2 * 60
 BYTES_PER_GB = 1024**3
 CLIENT_CONTACT_TIMEOUT_SEC = 5
+JOB_DOC_CONTACT_TIMEOUT_SEC = 4
 
 
 async def get_inputs_from_neighbor(
@@ -55,6 +56,8 @@ async def _job_watcher(
 ):
     sync_db = firestore.Client(project=PROJECT_ID, database="burla")
     job_doc = async_db.collection("jobs").document(SELF["current_job"])
+    sync_job_doc = sync_db.collection("jobs").document(SELF["current_job"])
+    last_job_doc_update_time = sync_job_doc.get().update_time.timestamp()
     node_docs_collection = job_doc.collection("assigned_nodes")
     node_doc = node_docs_collection.document(INSTANCE_NAME)
     await node_doc.set({"current_num_results": 0, "client_contact_last_1s": True})
@@ -66,8 +69,9 @@ async def _job_watcher(
     seconds_neighbor_had_no_inputs = 0
 
     def _on_job_snapshot(doc_snapshot, changes, read_time):
-        global JOB_FAILED, JOB_CANCELED
+        nonlocal JOB_FAILED, JOB_CANCELED, last_job_doc_update_time
         for change in changes:
+            last_job_doc_update_time = change.document.update_time.timestamp()
             job_dict = change.document.to_dict()
             if job_dict["all_inputs_uploaded"] == True:
                 SELF["all_inputs_uploaded"] = True
@@ -79,8 +83,7 @@ async def _job_watcher(
                 JOB_CANCELED = True
                 break
 
-    # Client intentionally updates the job doc every 2sec to signal that it's still listening.
-    sync_job_doc = sync_db.collection("jobs").document(SELF["current_job"])
+    # Client intentionally updates the job doc every few seconds to signal that it's still listening.
     job_watch = sync_job_doc.on_snapshot(_on_job_snapshot)
 
     all_workers_idle = False
@@ -146,8 +149,10 @@ async def _job_watcher(
             await node_doc.update({"client_contact_last_1s": client_contact_last_1s})
             last_reported_client_contact_last_1s = client_contact_last_1s
         if not client_contact_last_1s:
-            node_dicts = [d.to_dict() for d in await node_docs_collection.get()]
-            client_disconnected = not any([d["client_contact_last_1s"] for d in node_dicts])
+            seconds_since_job_doc_update = time() - last_job_doc_update_time
+            if seconds_since_job_doc_update > JOB_DOC_CONTACT_TIMEOUT_SEC:
+                node_dicts = [d.to_dict() for d in await node_docs_collection.get()]
+                client_disconnected = not any([d["client_contact_last_1s"] for d in node_dicts])
         must_be_connected = not is_background_job or not SELF["all_inputs_uploaded"]
         if client_disconnected and must_be_connected:
             JOB_FAILED = True

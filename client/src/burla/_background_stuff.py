@@ -1,7 +1,6 @@
 import asyncio
-import requests
 import aiohttp
-from time import sleep, time
+from time import time
 from asyncio import create_task
 
 from burla._auth import get_auth_headers
@@ -12,7 +11,9 @@ async def _send_node_pings(session: aiohttp.ClientSession, node_host: str, heade
     while True:
         try:
             url = f"{node_host}/client-heartbeat"
-            await session.post(url, data=b".", timeout=20, headers=headers)
+            async with session.post(url, data=b".", timeout=20, headers=headers):
+                # ignore all error responses.
+                pass
         except Exception:
             pass
         await asyncio.sleep(0.5)

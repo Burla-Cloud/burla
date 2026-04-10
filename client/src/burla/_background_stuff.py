@@ -1,45 +1,42 @@
+import asyncio
 import requests
-from time import sleep
+import aiohttp
+from time import sleep, time
+from asyncio import create_task
 
 from burla._auth import get_auth_headers
-
-HEARTBEAT_INTERVAL_SECONDS = 0.5
-HEARTBEAT_FAILURE_RETRY_SECONDS = 0.1
-HEARTBEAT_TIMEOUT_SECONDS = 2
-
-def _ping_node(session: requests.Session, node_host: str) -> bool:
-    url = f"{node_host}/client-heartbeat"
-    timeout = (HEARTBEAT_TIMEOUT_SECONDS, HEARTBEAT_TIMEOUT_SECONDS)
-    try:
-        response = session.post(url, data=b".", timeout=timeout)
-    except requests.exceptions.RequestException:
-        return False
-
-    if response.status_code in [404, 410]:
-        return False
-    response.raise_for_status()
-    return True
+from burla._helpers import get_db_clients
 
 
-def send_alive_pings(node_hosts: list[str]):
-    """Must run in a separate process so it is not blocked by client CPU spikes."""
-    if not node_hosts:
-        return
+async def _send_node_pings(session: aiohttp.ClientSession, node_host: str, headers: dict):
+    while True:
+        try:
+            url = f"{node_host}/client-heartbeat"
+            await session.post(url, data=b".", timeout=20, headers=headers)
+        except Exception:
+            pass
+        await asyncio.sleep(0.5)
 
-    current_node_index = 0
+
+async def send_alive_pings_async(node_hosts: list[str], job_id: str):
     auth_headers = get_auth_headers()
-    with requests.Session() as session:
-        session.headers.update(auth_headers)
-        while True:
-            found_reachable_node = False
-            for _ in range(len(node_hosts)):
-                node_host = node_hosts[current_node_index]
-                current_node_index = (current_node_index + 1) % len(node_hosts)
-                if _ping_node(session, node_host):
-                    found_reachable_node = True
-                    break
+    async with aiohttp.ClientSession() as session:
 
-            if found_reachable_node:
-                sleep(HEARTBEAT_INTERVAL_SECONDS)
-            else:
-                sleep(HEARTBEAT_FAILURE_RETRY_SECONDS)
+        tasks = []
+        for node_host in node_hosts:
+            tasks.append(create_task(_send_node_pings(session, node_host, auth_headers)))
+
+        # important to get this after tasks have started, not before, because it takes a sec.
+        job_doc = get_db_clients()[1].collection("jobs").document(job_id)
+
+        while True:
+            for task in tasks:
+                if task.done() and task.exception():
+                    raise task.exception()
+
+            await job_doc.update({"client_heartbeat_at": time()})
+            await asyncio.sleep(3)
+
+
+def send_alive_pings(node_hosts: list[str], job_id: str):
+    asyncio.run(send_alive_pings_async(node_hosts, job_id))

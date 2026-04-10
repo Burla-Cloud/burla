@@ -338,7 +338,7 @@ async def _execute_job(
 
             if ping_process is None and (time() - start_time) >= 5:
                 node_hosts = [node.host for node in nodes]
-                ping_process = await run_in_subprocess(send_alive_pings, node_hosts)
+                ping_process = await run_in_subprocess(send_alive_pings, node_hosts, job_id)
                 session_stack.callback(ping_process.kill)
 
             if ping_process and ping_process.poll():

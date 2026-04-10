@@ -17,6 +17,25 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v7
 
+      - name: Resolve main service image tag
+        run: |
+          version=$(python - <<'PY'
+          import tomllib
+          from pathlib import Path
+
+          pyproject = tomllib.loads(Path("client/pyproject.toml").read_text())
+          print(pyproject["project"]["version"])
+          PY
+          )
+          echo "MAIN_SERVICE_IMAGE=us-docker.pkg.dev/burla-prod/burla-main-service/burla-main-service:${version}" >> "$GITHUB_ENV"
+
+      - name: Fail if main service image tag is missing
+        run: |
+          if ! docker manifest inspect "$MAIN_SERVICE_IMAGE" > /dev/null 2>&1; then
+            echo "Expected main service image tag is missing: $MAIN_SERVICE_IMAGE"
+            exit 1
+          fi
+
       - name: Build dist
         run: uv build --directory ./client
 

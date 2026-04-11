@@ -318,8 +318,6 @@ def _user_function_process_loop(
     while True:
         message = request_queue.get()
         action = message[0]
-        if action == "shutdown":
-            break
         if action == "load_function":
             function_pkl = message[1]
             try:
@@ -417,16 +415,6 @@ def _get_user_function_process_failure_exception():
 
     exit_details = _format_process_exit(exit_code)
     return RuntimeError(f"\n\nUser function subprocess exited unexpectedly ({exit_details}).\n")
-
-
-def _stop_user_function_process(process, request_queue):
-    if process is None:
-        return
-    request_queue.put(("shutdown",))
-    process.join(timeout=1)
-    if process.is_alive():
-        process.kill()
-        process.join()
 
 
 def initialize_user_function_process():

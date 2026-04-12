@@ -80,6 +80,8 @@ print(f"Worker {os.environ.get('WORKER_NAME', 'unknown_worker')} has booted.")
 
 @app.on_event("startup")
 async def initialize_user_function_process_on_startup():
+    if os.getpid() != os.getpgrp():
+        os.setsid()
     initialize_user_function_process()
 
 

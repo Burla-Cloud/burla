@@ -1,6 +1,7 @@
 import os
 import sys
 import json
+import inspect
 import asyncio
 import traceback
 from pathlib import Path
@@ -23,7 +24,6 @@ from google.cloud import logging, secretmanager, firestore
 from google.cloud.compute_v1 import InstancesClient
 from google.cloud.firestore_v1.async_client import AsyncClient
 import aiohttp
-from starlette.concurrency import run_in_threadpool
 from fastapi import FastAPI, Request, BackgroundTasks, Depends
 from fastapi.responses import Response
 from starlette.requests import ClientDisconnect
@@ -57,12 +57,14 @@ from node_service.helpers import ResultsEndpointFilter, Logger, SizedQueue
 # SELF = state of this current instance of the node service
 def REINIT_SELF(SELF):
     SELF["workers"] = []
+    SELF["idle_workers"] = []
     SELF["index_of_last_worker_given_inputs"] = 0
+    SELF["inputs_queue"] = SizedQueue()
     SELF["results_queue"] = SizedQueue()
-    SELF["pending_inputs"] = []
     SELF["current_job"] = None
     SELF["current_parallelism"] = 0
     SELF["job_watcher_stop_event"] = Event()
+    SELF["job_watcher_task"] = None
     SELF["BOOTING"] = False
     SELF["RUNNING"] = False
     SELF["FAILED"] = False
@@ -121,9 +123,12 @@ def get_add_background_task_function(
         tb_details = traceback.format_list(traceback.extract_stack()[:-1])
         parent_traceback = "Traceback (most recent call last):\n" + format_traceback(tb_details)
 
-        def func_logged(*a, **kw):
+        async def func_logged(*a, **kw):
             try:
-                return func(*a, **kw)
+                result = func(*a, **kw)
+                if inspect.isawaitable(result):
+                    return await result
+                return result
             except Exception as e:
                 exc_type, exc_value, exc_traceback = sys.exc_info()
                 tb_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
@@ -193,7 +198,7 @@ async def lifespan(app: FastAPI):
     # boot containers before accepting any requests.
     # `reboot_containers` will delete VM's if it fails, no need to do that here.
     containers = [Container(**c) for c in json.loads(os.environ["CONTAINERS"])]
-    await run_in_threadpool(reboot_containers, new_container_config=containers, logger=logger)
+    await reboot_containers(new_container_config=containers, logger=logger)
 
     yield
 

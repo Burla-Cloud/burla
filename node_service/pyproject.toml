@@ -18,6 +18,8 @@ google-cloud-compute = "^1.31.0"
 google-cloud-secret-manager = "^2.24.0"
 psutil = "^7.1.0"
 packaging = "^25.0"
+cloudpickle = "^3.1.2"
+tblib = "^3.2.2"
 
 [build-system]
 requires = ["poetry-core"]

@@ -1,11 +1,10 @@
 import pickle
-import json
 import psutil
 from queue import Empty
 from typing import Optional
 
 import asyncio
-import aiohttp
+import cloudpickle
 from google.cloud.firestore_v1.async_client import AsyncClient
 from fastapi import APIRouter, Path, Depends, Response, Request, Query
 
@@ -18,9 +17,39 @@ from node_service import (
     get_request_files,
 )
 from node_service.helpers import Logger
-from node_service.job_watcher import send_inputs_to_workers, job_watcher_logged
+from node_service.job_watcher import job_watcher_logged
 
 router = APIRouter()
+
+
+def install_packages_in_shared_environment(packages: dict):
+    import importlib
+    import importlib.metadata as importlib_metadata
+    import subprocess
+
+    missing_packages = []
+    for package_name, version in packages.items():
+        try:
+            installed_version = importlib_metadata.version(package_name)
+        except importlib_metadata.PackageNotFoundError:
+            installed_version = None
+        if installed_version != version:
+            missing_packages.append(f"{package_name}=={version}")
+
+    if missing_packages:
+        command = [
+            "uv",
+            "pip",
+            "install",
+            "--python",
+            "python",
+            "--target",
+            "/worker_service_python_env",
+            *missing_packages,
+        ]
+        subprocess.run(command, check=True)
+
+    importlib.invalidate_caches()
 
 
 @router.get("/jobs/{job_id}/inputs")
@@ -34,25 +63,15 @@ async def get_inputs(
     elif SELF["SHUTTING_DOWN"]:
         return Response("Node is shutting down, can't give inputs.", status_code=410)
 
-    target_size_per_worker = target_reply_size / len(SELF["workers"])
-
-    async def _get_inputs_from_worker(session, worker):
+    inputs = []
+    total_bytes = 0
+    while total_bytes < target_reply_size:
         try:
-            url = f"{worker.url}/jobs/{job_id}/inputs?target_reply_size={target_size_per_worker}"
-            async with session.get(url, timeout=1) as response:
-                response.raise_for_status()
-                if response.status == 200:
-                    return pickle.loads(await response.read())
-                elif response.status == 204:
-                    return []
-        except Exception as e:
-            msg = f"Failed to get inputs from worker {worker.container_name} for job {job_id}: {e}"
-            logger.log(msg, severity="WARNING")
-            return []
-
-    async with aiohttp.ClientSession() as session:
-        tasks = [_get_inputs_from_worker(session, w) for w in SELF["workers"]]
-        inputs = [input for inputs in await asyncio.gather(*tasks) for input in inputs]
+            input_pkl_with_idx = SELF["inputs_queue"].get_nowait()
+        except Empty:
+            break
+        inputs.append(input_pkl_with_idx)
+        total_bytes += len(input_pkl_with_idx[1])
 
     if not inputs:
         return Response(status_code=204)
@@ -69,8 +88,6 @@ async def upload_inputs(
     job_id: str = Path(...),
     request_files: Optional[dict] = Depends(get_request_files),
 ):
-    if SELF["pending_inputs"]:
-        return Response("No space for more inputs! retry later.", status_code=409)
     if job_id != SELF["current_job"]:
         return Response("job not found", status_code=404)
     elif SELF["SHUTTING_DOWN"]:
@@ -82,11 +99,8 @@ async def upload_inputs(
 
     inputs_pkl_with_idx = pickle.loads(request_files["inputs_pkl_with_idx"])
     await asyncio.sleep(0)
-    async with aiohttp.ClientSession() as session:
-        # rejected = no space to store
-        rejected_inputs_pkl_with_idx = await send_inputs_to_workers(session, inputs_pkl_with_idx)
-        # is emptied from the job_watcher thread, no more inputs accepted until it's empty
-        SELF["pending_inputs"] = rejected_inputs_pkl_with_idx
+    for input_pkl_with_idx in inputs_pkl_with_idx:
+        SELF["inputs_queue"].put(input_pkl_with_idx, len(input_pkl_with_idx[1]))
 
     SELF["current_input_batch_forwarded"] = True
 
@@ -143,12 +157,6 @@ async def execute(
     is_background_job = request_json["is_background_job"]
     user_python_version = request_json["user_python_version"]
 
-    # move the installer worker to the front of the list so it's DEFINITELY included in the
-    # set of selected workers if there are any (otherwise unable to install packages)
-    installer_worker = [w for w in SELF["workers"] if w.elected_installer][0]
-    SELF["workers"].remove(installer_worker)
-    SELF["workers"] = [installer_worker, *SELF["workers"]]
-
     for worker in SELF["workers"]:
         correct_python_version = worker.python_version == user_python_version
         need_more_parallelism = future_parallelism < request_json["parallelism"]
@@ -198,43 +206,27 @@ async def execute(
     SELF["return_queue_ram_threshold_gb"] = worker_io_ram_limit_gb * NODE_TO_WORKER_IO_RAM_RATIO
     # logger.log(f"set return_queue_ram_threshold_gb to {SELF['return_queue_ram_threshold_gb']}")
 
-    async def assign_worker(session, worker):
-        data = aiohttp.FormData()
-        packages_json = json.dumps(
-            {
-                "start_time": request_json["start_time"],
-                "packages": request_json["packages"],
-                "io_queues_ram_limit_gb": worker_io_ram_limit_gb,
-                "worker_urls": [worker.url for worker in workers_to_assign],
-                "self_url": worker.url,
-            }
+    packages = request_json["packages"]
+    SELF["all_packages_installed"] = not packages
+    if packages:
+        installer_worker = workers_to_assign[0]
+        await installer_worker.load_function(
+            cloudpickle.dumps(install_packages_in_shared_environment)
         )
-        data.add_field("function_pkl", request_files["function_pkl"])
-        data.add_field("request_json", packages_json, content_type="application/json")
+        await installer_worker.call_function(cloudpickle.dumps(packages))
+        SELF["all_packages_installed"] = True
+        SELF["currently_installing_package"] = None
 
-        async with session.post(f"{worker.url}/jobs/{job_id}", data=data) as response:
-            if response.status == 200:
-                return worker
-            elif response.status == 500:
-                worker.log_debug_info()
-                return None
-            else:
-                msg = f"Worker {worker.container_name} returned error: {response.status}"
-                logger.log(msg, severity="WARNING")
-                return None
-
-    async with aiohttp.ClientSession() as session:
-        tasks = [assign_worker(session, worker) for worker in workers_to_assign]
-        successfully_assigned_workers = [w for w in await asyncio.gather(*tasks) if w is not None]
-
-    if len(successfully_assigned_workers) == 0:
-        raise Exception("Failed to assign job to any workers")
+    function_pkl = request_files["function_pkl"]
+    await asyncio.gather(*(w.load_function(function_pkl) for w in workers_to_assign))
 
     SELF["workers"] = workers_to_assign
     SELF["idle_workers"] = workers_to_leave_idle
+    SELF["current_parallelism"] = 0
 
     SELF["job_watcher_stop_event"].clear()  # is initalized as set by default
     job_watcher_coroutine = job_watcher_logged(
         request_json["n_inputs"], is_background_job, request_json["start_time"], request.headers
     )
     SELF["job_watcher_task"] = asyncio.create_task(job_watcher_coroutine)
+    return Response(status_code=200)

@@ -51,7 +51,6 @@ class Worker:
         else:
             self.container_name = f"worker_{uuid4().hex[:8]}"
         self.url = None
-        self.host_port = None
         self.python_version = None  # <- only assigned when container starts
         self.boot_timeout_sec = boot_timeout_sec
 

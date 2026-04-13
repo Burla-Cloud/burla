@@ -39,6 +39,7 @@ from node_service import (
 )
 from node_service.helpers import Logger
 from node_service.worker import Worker
+from node_service.worker_client import WorkerClient
 
 router = APIRouter()
 
@@ -69,7 +70,7 @@ async def get_neighboring_nodes(async_db):
 async def load_results_from_worker(
     worker: Worker, session: aiohttp.ClientSession, ejecting: bool = False
 ):
-    all_inputs_sent_to_workers = SELF["all_inputs_uploaded"] and (not SELF["pending_inputs"])
+    all_inputs_sent_to_workers = SELF["all_inputs_uploaded"] and SELF["inputs_queue"].empty()
     url = f"{worker.url}/jobs/{SELF['current_job']}/results?"
     url += f"ejecting={ejecting}&all_inputs_sent_to_workers={all_inputs_sent_to_workers}"
     async with session.get(url) as http_response:
@@ -190,14 +191,14 @@ async def shutdown_node(logger: Logger = Depends(get_logger)):
 
 
 @router.post("/reboot")
-def reboot_containers_endpoint(
+async def reboot_containers_endpoint(
     new_container_config: Optional[list[Container]] = None,
     logger: Logger = Depends(get_logger),
     add_background_task: Callable = Depends(get_add_background_task_function),
 ):
     if SELF["BOOTING"]:
         return Response("Node already BOOTING, unable to satisfy request.", status_code=409)
-    return reboot_containers(new_container_config, logger, add_background_task)
+    return await reboot_containers(new_container_config, logger, add_background_task)
 
 
 def _call_docker_threadsafe(method, *args, **kwargs):
@@ -362,7 +363,7 @@ def _schedule_container_removal(
         ).start()
 
 
-def reboot_containers(
+async def reboot_containers(
     new_container_config: Optional[list[Container]] = None,
     logger: Logger = Depends(get_logger),
     add_background_task: Optional[Callable] = None,
@@ -395,6 +396,7 @@ def reboot_containers(
         # reset state of the node service, except current_container_config, and the job_watcher.
         current_container_config = SELF["current_container_config"]
         REINIT_SELF(SELF)
+        SELF["BOOTING"] = True
         SELF["current_container_config"] = current_container_config
         if new_container_config:
             SELF["current_container_config"] = new_container_config
@@ -408,78 +410,64 @@ def reboot_containers(
 
         futures = []
         executor = concurrent.futures.ThreadPoolExecutor()
-        docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
-        if IN_LOCAL_DEV_MODE:
-            # Remove all "old" worker containers.
-            # Mark all existing workers as "old".
-            all_containers = docker_client.containers(all=True)
-            worker_containers = [c for c in all_containers if "worker" in c["Names"][0]]
-            for container in worker_containers:
-                is_old = container["Names"][0][1:].startswith("OLD")
-                belongs_to_current_node = f"node_{INSTANCE_NAME[11:]}" in container["Names"][0]
-
-                if is_old and belongs_to_current_node:
-                    try:
-                        docker_client.kill(container["Id"])
-                    except Exception:
-                        pass  # container might already be stopped
-                    _schedule_container_removal(container["Id"], logger, add_background_task)
-
-                elif belongs_to_current_node:
-                    args = (container["Id"], f"OLD--{container['Names'][0][1:]}")
-                    futures.append(executor.submit(_call_docker_threadsafe, "rename", *args))
-                    kwargs = dict(container=container["Id"], timeout=0)
-                    futures.append(executor.submit(_call_docker_threadsafe, "stop", **kwargs))
-        else:
-            # remove all worker containers
-            for container in docker_client.containers():
-                if "worker" in container["Names"][0]:
-                    try:
-                        docker_client.kill(container["Id"])
-                    except Exception:
-                        pass
-                    _schedule_container_removal(container["Id"], logger, add_background_task)
-
-        # Wait until all workers have been removed/marked old before starting new ones.
+        docker_client = docker.APIClient(base_url="unix://var/run/docker.sock", timeout=600)
         try:
-            [future.result() for future in futures]
-        except docker.errors.APIError as e:
-            if "already in progress" not in str(e):
-                raise e
+            if IN_LOCAL_DEV_MODE:
+                # Remove all "old" worker containers.
+                # Mark all existing workers as "old".
+                all_containers = docker_client.containers(all=True)
+                worker_containers = [c for c in all_containers if "worker" in c["Names"][0]]
+                for container in worker_containers:
+                    is_old = container["Names"][0][1:].startswith("OLD")
+                    belongs_to_current_node = f"node_{INSTANCE_NAME[11:]}" in container["Names"][0]
 
-        # doing this inside the worker creates thundering herd.
-        url = "https://pypi.org/pypi/burla/json"
-        latest_burla_version = requests.get(url).json()["info"]["version"]
+                    if is_old and belongs_to_current_node:
+                        try:
+                            docker_client.kill(container["Id"])
+                        except Exception:
+                            pass  # container might already be stopped
+                        _schedule_container_removal(container["Id"], logger, add_background_task)
 
-        # start new workers.
-        futures = []
-        for spec in SELF["current_container_config"]:
-            _pull_image_if_missing(spec.image, logger, docker_client)
+                    elif belongs_to_current_node:
+                        args = (container["Id"], f"OLD--{container['Names'][0][1:]}")
+                        futures.append(executor.submit(_call_docker_threadsafe, "rename", *args))
+                        kwargs = dict(container=container["Id"], timeout=0)
+                        futures.append(executor.submit(_call_docker_threadsafe, "stop", **kwargs))
+            else:
+                # remove all worker containers
+                for container in docker_client.containers():
+                    if "worker" in container["Names"][0]:
+                        try:
+                            docker_client.kill(container["Id"])
+                        except Exception:
+                            pass
+                        _schedule_container_removal(container["Id"], logger, add_background_task)
+
+            # Wait until all workers have been removed/marked old before starting new ones.
+            try:
+                [future.result() for future in futures]
+            except docker.errors.APIError as e:
+                if "already in progress" not in str(e):
+                    raise e
+            finally:
+                executor.shutdown(wait=True)
+
+            # start new workers.
+            workers = []
+            for spec in SELF["current_container_config"]:
+                _pull_image_if_missing(spec.image, logger, docker_client)
+                num_workers = INSTANCE_N_CPUS if NUM_GPUS == 0 else NUM_GPUS
+
+                msg = f"Image {spec.image} pulled successfully.\nWaiting for {num_workers} workers to start ..."
+                logger.log(msg)
+
+                for _ in range(num_workers):
+                    workers.append(WorkerClient(spec.image))
+        finally:
             docker_client.close()
-            num_workers = INSTANCE_N_CPUS if NUM_GPUS == 0 else NUM_GPUS
 
-            msg = f"Image {spec.image} pulled successfully.\nWaiting for {num_workers} workers to start ..."
-            logger.log(msg)
-
-            for i in range(num_workers):
-                # have just one worker install the worker svc, then share through docker volume
-                # (too many will ddoss github / be slow)
-                install_worker = i == 0
-                futures.append(
-                    executor.submit(
-                        Worker, spec.image, latest_burla_version, elected_installer=install_worker
-                    )
-                )
-
-        try:
-            completed_future_generator = concurrent.futures.as_completed(futures)
-            workers = [f.result() for f in completed_future_generator]
-        except Exception as e:
-            executor.shutdown(wait=False, cancel_futures=True)
-            raise e
-        else:
-            executor.shutdown(wait=True)
-            SELF["workers"] = workers
+        SELF["workers"] = workers
+        await asyncio.gather(*[worker.boot() for worker in workers])
         SELF["BOOTING"] = False
         node_doc.update({"status": "READY"})
 

@@ -39,7 +39,7 @@ async def restart():
     # dont need to append to logs because restart wipes it anyway
     # print(f"Restarting worker service, killing process: {os.getpid()}", flush=True)
 
-    os.kill(os.getpid(), signal.SIGTERM)
+    os.killpg(os.getpid(), signal.SIGKILL)
     # Can't use SELF["STOP_PROCESSING_EVENT"] because it dosent force restart immmediately.
 
 

@@ -365,7 +365,7 @@ class Node:
         self.all_packages_installed = None
         self.is_empty = False
         self.current_parallelism = 0
-        self.currently_installing_package = None
+        self.installing_packages = False
         self.result_count = 0
         self.last_reply_timestamp = time()
         self.auth_headers = get_auth_headers()
@@ -393,7 +393,6 @@ class Node:
             "results": [],
             "is_empty": False,
             "current_parallelism": self.current_parallelism,
-            "currently_installing_package": self.currently_installing_package,
         }
 
     @classmethod
@@ -534,7 +533,6 @@ class Node:
                         "results": [],
                         "is_empty": True,
                         "current_parallelism": 0,
-                        "currently_installing_package": None,
                     }
                 if response.status != 200:
                     raise Exception(f"Result-check failed for node: {self.instance_name}")
@@ -637,9 +635,12 @@ class Node:
             instance=self.instance_name,
             target_parallelism=self.target_parallelism,
         )
+        if packages:
+            self.installing_packages = True
         await self._assign_job(
             job_id, background, n_inputs, packages, start_time, function_pkl, udf_error_event
         )
+        self.installing_packages = False
         if self.state == "FAILED":
             return
         self._print_timing_event(
@@ -691,7 +692,6 @@ class Node:
                 self.all_packages_installed = node_results.get("all_packages_installed")
             self.is_empty = node_results["is_empty"]
             self.current_parallelism = node_results["current_parallelism"]
-            self.currently_installing_package = node_results["currently_installing_package"]
             if return_values and not first_result_received:
                 first_result_received = True
                 self._print_timing_event(

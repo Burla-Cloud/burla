@@ -2,6 +2,8 @@
 # Important: This file MUST be located adjecent to the node.py file.
 # It's mounted into the container at runtim at
 ###
+import importlib
+import importlib.metadata
 import io
 import os
 import signal
@@ -16,25 +18,46 @@ import urllib.request
 # Do not move. Node assumes first line printed is the Python version.
 print(f"{sys.version_info.major}.{sys.version_info.minor}", flush=True)
 
-if sys.platform != "linux" or os.uname().machine not in ("x86_64", "amd64"):
-    raise RuntimeError("Worker container must be Linux x86_64.")
+if sys.platform != "linux":
+    raise RuntimeError("Worker container must be Linux.")
 
-# Install UV if missing
+MACHINE_TO_UV_ARCH = {
+    "x86_64": "x86_64",
+    "amd64": "x86_64",
+    "aarch64": "aarch64",
+    "arm64": "aarch64",
+}
+
 if not shutil.which("uv"):
-    os.makedirs("/tmp/uv-bin", exist_ok=True)
-    os.environ["PATH"] = f"/tmp/uv-bin:{os.environ['PATH']}"
+    uv_bin_directory = "/worker_service_python_env/bin"
+    os.makedirs(uv_bin_directory, exist_ok=True)
+    os.environ["PATH"] = f"{uv_bin_directory}:{os.environ['PATH']}"
     libc = "musl" if os.path.exists("/etc/alpine-release") else "gnu"
-    target = f"x86_64-unknown-linux-{libc}"
+    architecture = MACHINE_TO_UV_ARCH[os.uname().machine]
+    target = f"{architecture}-unknown-linux-{libc}"
     url = f"https://github.com/astral-sh/uv/releases/latest/download/uv-{target}.tar.gz"
     with urllib.request.urlopen(url) as response:
         with tarfile.open(fileobj=io.BytesIO(response.read()), mode="r:gz") as tarball:
             with tarball.extractfile(f"uv-{target}/uv") as uv_binary:
-                with open("/tmp/uv-bin/uv", "wb") as output_file:
+                with open(f"{uv_bin_directory}/uv", "wb") as output_file:
                     output_file.write(uv_binary.read())
-    os.chmod("/tmp/uv-bin/uv", 0o755)
+    os.chmod(f"{uv_bin_directory}/uv", 0o755)
 
-# Use UV to install dependencies
-subprocess.run(["uv", "pip", "install", "--system", "cloudpickle", "tblib", "burla"], check=True)
+subprocess.run(
+    [
+        "uv",
+        "pip",
+        "install",
+        "--python",
+        "python",
+        "--target",
+        "/worker_service_python_env",
+        "cloudpickle",
+        "tblib",
+        "burla",
+    ],
+    check=True,
+)
 
 import cloudpickle
 from tblib import Traceback
@@ -87,6 +110,23 @@ with socket.create_server(("0.0.0.0", port)) as listener:
                 if command == b"r":
                     kill_all_other_processes()
                     loaded_function = None
+                if command == b"i":
+                    packages = pickle.loads(request_payload)
+                    missing_packages = []
+                    for package_name, version in packages.items():
+                        try:
+                            installed_version = importlib.metadata.version(package_name)
+                        except importlib.metadata.PackageNotFoundError:
+                            installed_version = None
+                        if installed_version != version:
+                            missing_packages.append(f"{package_name}=={version}")
+                    if missing_packages:
+                        subprocess.run([
+                            "uv", "pip", "install", "--python", "python",
+                            "--target", "/worker_service_python_env",
+                            *missing_packages,
+                        ], check=True)
+                    importlib.invalidate_caches()
                 if command == b"l":
                     loaded_function = cloudpickle.loads(request_payload)
                 if command == b"c":

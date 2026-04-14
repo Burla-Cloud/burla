@@ -3,7 +3,6 @@ import psutil
 from typing import Optional
 
 import asyncio
-import cloudpickle
 from google.cloud.firestore_v1.async_client import AsyncClient
 from fastapi import APIRouter, Path, Depends, Response, Request, Query
 
@@ -19,36 +18,6 @@ from node_service.helpers import Logger
 from node_service.job_watcher import job_watcher_logged
 
 router = APIRouter()
-
-
-def install_packages_in_shared_environment(packages: dict):
-    import importlib
-    import importlib.metadata as importlib_metadata
-    import subprocess
-
-    missing_packages = []
-    for package_name, version in packages.items():
-        try:
-            installed_version = importlib_metadata.version(package_name)
-        except importlib_metadata.PackageNotFoundError:
-            installed_version = None
-        if installed_version != version:
-            missing_packages.append(f"{package_name}=={version}")
-
-    if missing_packages:
-        command = [
-            "uv",
-            "pip",
-            "install",
-            "--python",
-            "python",
-            "--target",
-            "/worker_service_python_env",
-            *missing_packages,
-        ]
-        subprocess.run(command, check=True)
-
-    importlib.invalidate_caches()
 
 
 @router.get("/jobs/{job_id}/inputs")
@@ -124,7 +93,6 @@ async def get_results(job_id: str = Path(...)):
         "results": results,
         "current_parallelism": SELF["current_parallelism"],
         "is_empty": SELF["results_queue"].empty(),
-        "currently_installing_package": SELF["currently_installing_package"],
     }
 
     if SELF["all_packages_installed"] and not SELF["all_packages_installed_sent_to_client"]:
@@ -208,13 +176,9 @@ async def execute(
     packages = request_json["packages"]
     SELF["all_packages_installed"] = not packages
     if packages:
-        installer_worker = workers_to_assign[0]
-        await installer_worker.load_function(
-            cloudpickle.dumps(install_packages_in_shared_environment)
-        )
-        await installer_worker.call_function(cloudpickle.dumps(packages))
+        # installing in one installs in all, they share volume-mounted python env
+        await workers_to_assign[0].install_packages(packages)
         SELF["all_packages_installed"] = True
-        SELF["currently_installing_package"] = None
 
     function_pkl = request_files["function_pkl"]
     await asyncio.gather(*(w.load_function(function_pkl) for w in workers_to_assign))

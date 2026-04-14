@@ -5,7 +5,6 @@ import requests
 from functools import cache
 from time import sleep
 from uuid import uuid4
-from typing import Tuple
 
 from yaspin import yaspin
 
@@ -14,6 +13,7 @@ from burla._helpers import run_command
 
 AUTH_TIMEOUT_SECONDS = 180
 IN_COLAB = os.getenv("COLAB_RELEASE_TAG") is not None
+LOCAL_CLUSTER_DASHBOARD_URL = "http://localhost:5001"
 
 
 class AuthTimeoutException(Exception):
@@ -42,6 +42,16 @@ def get_auth_headers() -> dict[str, str]:
         "X-User-Email": email,
         "Authorization": f"Bearer {auth_token}",
     }
+
+
+def _cluster_dashboard_url_to_write(cluster_dashboard_url: str) -> str:
+    if not CONFIG_PATH.exists():
+        return cluster_dashboard_url
+    config = json.loads(CONFIG_PATH.read_text())
+    current_cluster_dashboard_url = config.get("cluster_dashboard_url")
+    if current_cluster_dashboard_url == LOCAL_CLUSTER_DASHBOARD_URL:
+        return LOCAL_CLUSTER_DASHBOARD_URL
+    return cluster_dashboard_url
 
 
 def _get_login_response(client_id, spinner, attempt=0):
@@ -103,6 +113,7 @@ def login(no_browser: bool = False):
         auth_token, email, project_id, cluster_dashboard_url, client_svc_account_key = (
             _get_login_response(client_id, spinner)
         )
+    cluster_dashboard_url = _cluster_dashboard_url_to_write(cluster_dashboard_url)
 
     print(f"\nYou are now logged in to [{project_id}] as [{email}].")
     print("Please email jake@burla.dev with any questions!\n")

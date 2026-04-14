@@ -193,7 +193,6 @@ class WorkerClient:
         self.docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
         self.is_idle = True
         self.is_empty = True
-        self.currently_installing_package = None
         self.python_version = None
         self.container_id = None
         self.logstream_task = None
@@ -426,6 +425,17 @@ class WorkerClient:
             await SELF["results_queue"].put(result, len(result[2]))
             SELF["num_results_received"] += 1
 
+    async def install_packages(self, packages: dict):
+        try:
+            payload = pickle.dumps(packages)
+            self.writer.write(b"i")
+            self.writer.write(len(payload).to_bytes(8, "big"))
+            self.writer.write(payload)
+            await self.writer.drain()
+            await self._read_response()
+        except (BrokenPipeError, ConnectionResetError):
+            await self._raise_if_worker_failed()
+
     async def load_function(self, function_bytes: bytes):
         try:
             self.writer.write(b"l")
@@ -467,7 +477,6 @@ class WorkerClient:
             self.log_writer = None
         self.is_idle = True
         self.is_empty = True
-        self.currently_installing_package = None
 
     async def stop(self):
         try:

@@ -38,7 +38,6 @@ from node_service import (
     __version__,
 )
 from node_service.helpers import Logger
-from node_service.worker import Worker
 from node_service.worker_client import WorkerClient
 
 router = APIRouter()
@@ -68,7 +67,7 @@ async def get_neighboring_nodes(async_db):
 
 
 async def load_results_from_worker(
-    worker: Worker, session: aiohttp.ClientSession, ejecting: bool = False
+    worker: WorkerClient, session: aiohttp.ClientSession, ejecting: bool = False
 ):
     all_inputs_sent_to_workers = SELF["all_inputs_uploaded"] and SELF["inputs_queue"].empty()
     url = f"{worker.url}/jobs/{SELF['current_job']}/results?"
@@ -91,7 +90,6 @@ async def load_results_from_worker(
 
         worker.is_idle = response["is_idle"]
         worker.is_empty = response["is_empty"]
-        worker.currently_installing_package = response["currently_installing_package"]
 
 
 async def get_inputs_from_worker(session, worker, min_reply_size):
@@ -467,7 +465,10 @@ async def reboot_containers(
             docker_client.close()
 
         SELF["workers"] = workers
-        await asyncio.gather(*[worker.boot() for worker in workers])
+        # boot only one first so it downloads uv / sets up env
+        # then others use that env instead of setting up themself.
+        await workers[0].boot()
+        await asyncio.gather(*[worker.boot() for worker in workers[1:]])
         SELF["BOOTING"] = False
         node_doc.update({"status": "READY"})
 

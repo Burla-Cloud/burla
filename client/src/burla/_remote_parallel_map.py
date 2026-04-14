@@ -341,8 +341,8 @@ async def _execute_job(
             if (current_time - last_status_message_update_time) > 0.05:
                 if all([n.state == "BOOTING" for n in nodes]):
                     reporter.set_booting_nodes_message(len(nodes))
-                elif all([n.currently_installing_package for n in nodes]):
-                    reporter.set_installing_package_message(nodes[0].currently_installing_package)
+                elif any([n.installing_packages for n in nodes]):
+                    reporter.set_installing_packages_message()
                 else:
                     total_parallelism = sum((n.current_parallelism for n in nodes))
                     booting_nodes = sum(n.state == "BOOTING" for n in nodes)

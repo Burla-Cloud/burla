@@ -71,8 +71,6 @@ async def _job_watcher(
                 break
 
             SELF["current_parallelism"] = sum(not worker.is_idle for worker in SELF["workers"])
-            if SELF["workers"]:
-                SELF["currently_installing_package"] = SELF["workers"][0].currently_installing_package
 
             input_queue_empty = SELF["inputs_queue"].empty()
             all_workers_idle = SELF["current_parallelism"] == 0
@@ -171,7 +169,6 @@ async def reinit_node(assigned_workers: list, async_db: AsyncClient):
     for w in current_workers:
         w.is_idle = True
         w.is_empty = True
-        w.currently_installing_package = None
 
     current_container_config = SELF["current_container_config"]
     authorized_users = SELF["authorized_users"]

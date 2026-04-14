@@ -81,7 +81,7 @@ async def load_results_from_worker(
         response_content = await http_response.content.read()
         response = pickle.loads(response_content)
         for result in response["results"]:
-            SELF["results_queue"].put(result, len(result[2]))
+            await SELF["results_queue"].put(result, len(result[2]))
             SELF["num_results_received"] += 1
 
         if response.get("udf_start_latency"):

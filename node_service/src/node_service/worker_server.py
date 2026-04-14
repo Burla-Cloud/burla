@@ -4,6 +4,7 @@
 ###
 import io
 import os
+import signal
 import sys
 import pickle
 import shutil
@@ -38,6 +39,23 @@ subprocess.run(["uv", "pip", "install", "--system", "cloudpickle", "tblib", "bur
 import cloudpickle
 from tblib import Traceback
 
+LOG_START_MARKER_PREFIX = "__burla_input_start__:"
+LOG_END_MARKER_PREFIX = "__burla_input_end__:"
+
+
+def kill_all_other_processes():
+    my_pid = os.getpid()
+    for entry in os.listdir("/proc"):
+        if not entry.isdigit():
+            continue
+        pid = int(entry)
+        if pid == my_pid:
+            continue
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
 
 def receive_exactly(connection, byte_count):
     payload = b""
@@ -53,6 +71,7 @@ port = int(sys.argv[1])
 with socket.create_server(("0.0.0.0", port)) as listener:
     connection, _ = listener.accept()
     with connection:
+        connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         loaded_function = None
         ping = receive_exactly(connection, 1)
         connection.sendall(ping)
@@ -65,16 +84,26 @@ with socket.create_server(("0.0.0.0", port)) as listener:
 
             response_payload = b""
             try:
+                if command == b"r":
+                    kill_all_other_processes()
+                    loaded_function = None
                 if command == b"l":
                     loaded_function = cloudpickle.loads(request_payload)
                 if command == b"c":
-                    argument = cloudpickle.loads(request_payload)
-                    return_value = loaded_function(argument)
+                    request = pickle.loads(request_payload)
+                    input_index = request["input_index"]
+                    argument = cloudpickle.loads(request["argument_bytes"])
+                    try:
+                        print(f"{LOG_START_MARKER_PREFIX}{input_index}", flush=True)
+                        return_value = loaded_function(argument)
+                    finally:
+                        print(f"{LOG_END_MARKER_PREFIX}{input_index}", flush=True)
                     response_payload = cloudpickle.dumps(return_value)
             except Exception as e:
                 tb_dict = Traceback(e.__traceback__).to_dict()
-                response_dict = dict(type=type(e), exception=e, traceback_dict=tb_dict)
-                response_payload = pickle.dumps(response_dict)
+                response_payload = pickle.dumps(
+                    {"error_info": dict(type=type(e), exception=e, traceback_dict=tb_dict)}
+                )
                 status = b"e"
             else:
                 status = b"s"

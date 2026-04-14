@@ -247,10 +247,15 @@ async def _execute_job(
     reporter.print_timing_event("job_registered", node_count=len(nodes))
 
     # start stdout/stderr stream
-    def _on_new_logs_doc(col_snapshot, changes, read_time):
+    seen_log_document_ids = set()
+
+    def _print_log_documents(log_documents):
         nonlocal dashboard_canceled_message
-        for change in changes:
-            log_doc = change.document.to_dict()
+        for log_document in log_documents:
+            if log_document.id in seen_log_document_ids:
+                continue
+            seen_log_document_ids.add(log_document.id)
+            log_doc = log_document.to_dict()
             logs = log_doc.get("logs", [])
             is_error_doc = bool(log_doc.get("is_error"))
 
@@ -264,9 +269,26 @@ async def _execute_job(
                 message = log["message"].rstrip("\r\n")
                 spinner.write(message) if spinner else print(message)
 
+    def _on_new_logs_doc(col_snapshot, changes, read_time):
+        _print_log_documents([change.document for change in changes])
+
     log_stream = sync_job_ref.collection("logs").on_snapshot(_on_new_logs_doc)
     session_stack.callback(log_stream.unsubscribe)
     reporter.print_timing_event("log_stream_ready")
+
+    async def _drain_remaining_logs():
+        consecutive_empty_polls = 0
+        while consecutive_empty_polls < 5:
+            log_documents = await asyncio.to_thread(
+                lambda: list(sync_job_ref.collection("logs").stream())
+            )
+            unseen_before_poll = len(seen_log_document_ids)
+            _print_log_documents(
+                sorted(log_documents, key=lambda log_document: log_document.id)
+            )
+            saw_new_logs = len(seen_log_document_ids) != unseen_before_poll
+            consecutive_empty_polls = 0 if saw_new_logs else consecutive_empty_polls + 1
+            await asyncio.sleep(0.2)
 
     job_start_telemetry_task = create_task(reporter.log_job_start_telemetry(nodes, packages))
     session_stack.callback(job_start_telemetry_task.cancel)
@@ -355,6 +377,7 @@ async def _execute_job(
                 raise Exception("Zero nodes working on job and we have not received all results!")
 
         reporter.print_timing_event("all_results_received", result_count=total_result_count)
+        # await _drain_remaining_logs()
         job_success_telemetry_task = create_task(
             reporter.log_job_success_telemetry(time() - start_time)
         )

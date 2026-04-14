@@ -1,4 +1,4 @@
-import queue
+import asyncio
 import sys
 import requests
 from itertools import groupby
@@ -23,22 +23,27 @@ class ResultsEndpointFilter(python_logging.Filter):
         return not record.args[2].endswith(("/results", "/client-heartbeat"))
 
 
-class SizedQueue(queue.Queue):
+class SizedQueue(asyncio.Queue):
     # Force user to submit size of their item because it's ususally already available and is slow
     # to calculate for any given generic object, but fast for known objects like input_pkl_with_idx.
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.item_sizes_queue = queue.Queue()
         self.size_bytes = 0
 
-    def put(self, item, size_bytes):
-        super()._put(item)
-        self.item_sizes_queue.put(size_bytes)
+    async def put(self, item, size_bytes):
+        self.put_nowait(item, size_bytes)
+
+    def put_nowait(self, item, size_bytes):
+        super().put_nowait((item, size_bytes))
+
+    def _put(self, item_and_size):
+        item, size_bytes = item_and_size
+        super()._put((item, size_bytes))
         self.size_bytes += size_bytes
 
     def _get(self):
-        item = super()._get()
-        self.size_bytes -= self.item_sizes_queue.get()
+        item, size_bytes = super()._get()
+        self.size_bytes -= size_bytes
         return item
 
     @property

@@ -1,6 +1,5 @@
 import pickle
 import psutil
-from queue import Empty
 from typing import Optional
 
 import asyncio
@@ -68,7 +67,7 @@ async def get_inputs(
     while total_bytes < target_reply_size:
         try:
             input_pkl_with_idx = SELF["inputs_queue"].get_nowait()
-        except Empty:
+        except asyncio.QueueEmpty:
             break
         inputs.append(input_pkl_with_idx)
         total_bytes += len(input_pkl_with_idx[1])
@@ -100,7 +99,7 @@ async def upload_inputs(
     inputs_pkl_with_idx = pickle.loads(request_files["inputs_pkl_with_idx"])
     await asyncio.sleep(0)
     for input_pkl_with_idx in inputs_pkl_with_idx:
-        SELF["inputs_queue"].put(input_pkl_with_idx, len(input_pkl_with_idx[1]))
+        await SELF["inputs_queue"].put(input_pkl_with_idx, len(input_pkl_with_idx[1]))
 
     SELF["current_input_batch_forwarded"] = True
 
@@ -118,7 +117,7 @@ async def get_results(job_id: str = Path(...)):
             result = SELF["results_queue"].get_nowait()
             results.append(result)
             total_bytes += len(result[2])
-        except Empty:
+        except asyncio.QueueEmpty:
             break
 
     response_json = {

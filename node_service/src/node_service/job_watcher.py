@@ -136,7 +136,7 @@ async def _job_watcher(
                 except Exception:
                     pass
 
-                await restart_workers(logger, async_db)
+                await reset_workers(logger, async_db)
                 break
     finally:
         job_watch.unsubscribe()
@@ -160,7 +160,7 @@ async def job_watcher_logged(
             await job_doc.update({"status": "FAILED", "fail_reason": ArrayUnion([str(e)])})
         except Exception:
             pass
-        await restart_workers(logger, async_db)
+        await reset_workers(logger, async_db)
 
 
 async def reinit_node(assigned_workers: list, async_db: AsyncClient):
@@ -183,20 +183,12 @@ async def reinit_node(assigned_workers: list, async_db: AsyncClient):
     await node_doc.update({"status": "READY", "current_job": None})
 
 
-async def restart_workers(logger: Logger, async_db: AsyncClient):
-    async def _restart_single_worker(worker):
-        image = worker.image
-        await worker.stop()
-        restarted_worker = WorkerClient(image)
-        await restarted_worker.boot()
-        return restarted_worker
-
+async def reset_workers(logger: Logger, async_db: AsyncClient):
     try:
-        tasks = [_restart_single_worker(w) for w in SELF["workers"]]
-        restarted_workers = await asyncio.gather(*tasks)
+        await asyncio.gather(*(worker.reset() for worker in SELF["workers"]))
     except Exception as e:
-        logger.log(f"Error restarting workers: {e}", severity="ERROR")
-        logger.log("Some workers failed to restart, rebooting containers ...")
+        logger.log(f"Error resetting workers: {e}", severity="ERROR")
+        logger.log("Some workers failed to reset, rebooting containers ...")
         await reboot_containers(logger=logger)
-    else:
-        await reinit_node(restarted_workers, async_db)
+        return
+    await reinit_node(SELF["workers"], async_db)

@@ -29,7 +29,7 @@ from burla._reporting import (
 
 
 NODE_SILENCE_TIMEOUT_SECONDS = 10 * 60
-LOGIN_TIMEOUT_SEC = 3
+LOGIN_TIMEOUT_SEC = 5
 MAX_INPUT_SIZE_BYTES = 1_000_000 * 200  # 200MB
 NETWORK_RETRY_ATTEMPTS = 5
 NETWORK_RETRY_DELAY_SECONDS = 1
@@ -616,7 +616,7 @@ class Node:
         start_time: float,
         function_pkl: bytes,
         udf_error_event: Event,
-        num_ready_nodes: int,
+        total_parallelism: int,
         inputs_with_indicies: list,
         return_queue: Queue,
     ):
@@ -650,7 +650,8 @@ class Node:
             target_parallelism=self.target_parallelism,
         )
 
-        max_inputs_per_chunk = max(1, round(n_inputs / num_ready_nodes))
+        proportional_share = max(1, round(n_inputs * self.target_parallelism / total_parallelism))
+        max_inputs_per_chunk = min(self.target_parallelism, proportional_share)
         chunk_generator = self._input_chunk_generator(inputs_with_indicies, max_inputs_per_chunk)
 
         iteration = 0

@@ -276,20 +276,6 @@ async def _execute_job(
     session_stack.callback(log_stream.unsubscribe)
     reporter.print_timing_event("log_stream_ready")
 
-    async def _drain_remaining_logs():
-        consecutive_empty_polls = 0
-        while consecutive_empty_polls < 5:
-            log_documents = await asyncio.to_thread(
-                lambda: list(sync_job_ref.collection("logs").stream())
-            )
-            unseen_before_poll = len(seen_log_document_ids)
-            _print_log_documents(
-                sorted(log_documents, key=lambda log_document: log_document.id)
-            )
-            saw_new_logs = len(seen_log_document_ids) != unseen_before_poll
-            consecutive_empty_polls = 0 if saw_new_logs else consecutive_empty_polls + 1
-            await asyncio.sleep(0.2)
-
     job_start_telemetry_task = create_task(reporter.log_job_start_telemetry(nodes, packages))
     session_stack.callback(job_start_telemetry_task.cancel)
     reporter.set_uploading_function_message(nodes)
@@ -297,7 +283,7 @@ async def _execute_job(
     node_tasks = []
     n_inputs = len(inputs)  # <- inputs will be popped from so len(inputs) will start changing
     inputs_with_indicies = list(enumerate(inputs))
-    num_ready_nodes = max(1, sum(n.state == "READY" for n in nodes))
+    total_parallelism = max(1, sum(n.target_parallelism for n in nodes))
     for node in nodes:
         node_tasks.append(
             create_task(
@@ -309,7 +295,7 @@ async def _execute_job(
                     start_time=start_time,
                     function_pkl=function_pkl,
                     udf_error_event=udf_error_event,
-                    num_ready_nodes=num_ready_nodes,
+                    total_parallelism=total_parallelism,
                     inputs_with_indicies=inputs_with_indicies,
                     return_queue=return_queue,
                 )

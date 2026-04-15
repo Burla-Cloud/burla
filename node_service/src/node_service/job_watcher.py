@@ -14,14 +14,15 @@ from node_service.helpers import Logger, format_traceback
 from node_service.lifecycle_endpoints import reboot_containers, get_neighboring_nodes
 
 EMPTY_NEIGHBOR_TIMEOUT_SEC = 60
+NEIGHBOR_CACHE_TTL = 5
 CLIENT_CONTACT_TIMEOUT_SEC = 5
 JOB_DOC_CONTACT_TIMEOUT_SEC = 4
 
 
-async def get_inputs_from_neighbor(neighboring_node, session, logger, auth_headers):
+async def get_inputs_from_neighbor(neighboring_node, session, logger, auth_headers, idle_workers):
     instance_name = neighboring_node["instance_name"]
     try:
-        url = f"{neighboring_node['host']}/jobs/{SELF['current_job']}/inputs"
+        url = f"{neighboring_node['host']}/jobs/{SELF['current_job']}/inputs?idle_workers={idle_workers}"
         async with session.get(url, timeout=2, headers=auth_headers) as response:
             if response.status in [204, 404]:
                 return
@@ -53,7 +54,8 @@ async def _job_watcher(
 
     JOB_FAILED = False
     JOB_CANCELED = False
-    neighboring_nodes = []
+    cached_neighbors = []
+    last_neighbor_refresh = 0
     neighbor_had_no_inputs_at = None
     seconds_neighbor_had_no_inputs = 0
 
@@ -94,8 +96,10 @@ async def _job_watcher(
                 break
 
             SELF["current_parallelism"] = sum(not worker.is_idle for worker in SELF["workers"])
+            idle_workers = len(SELF["workers"]) - SELF["current_parallelism"]
+            queue_size = SELF["inputs_queue"].qsize()
 
-            input_queue_empty = SELF["inputs_queue"].empty()
+            input_queue_empty = queue_size == 0
             all_workers_idle = SELF["current_parallelism"] == 0
 
             current_num_results = SELF["num_results_received"]
@@ -133,29 +137,32 @@ async def _job_watcher(
                 await job_doc.update({"status": "FAILED", "fail_reason": ArrayUnion(["Client DC"])})
                 logger.log("Client disconnected!")
 
-            all_inputs_processed = (
-                SELF["all_inputs_uploaded"] and input_queue_empty and all_workers_idle
-            )
             no_buffered_results = SELF["results_queue"].empty()
 
-            # TODO: Should get more inputs from neighbor whenever more than a couple workers dont
-            # have inputs instead of only when none have inputs
-            if all_inputs_processed and time() - job_started_at > 10:
+            should_steal = (
+                SELF["all_inputs_uploaded"]
+                and idle_workers > queue_size
+                and time() - job_started_at > 10
+                and not SELF["SHUTTING_DOWN"]
+            )
+            if should_steal:
+                if time() - last_neighbor_refresh > NEIGHBOR_CACHE_TTL:
+                    cached_neighbors = await get_neighboring_nodes(async_db)
+                    last_neighbor_refresh = time()
                 new_inputs = []
-                neighboring_nodes = await get_neighboring_nodes(async_db)
-                if neighboring_nodes and not SELF["SHUTTING_DOWN"]:
+                if cached_neighbors:
                     new_inputs = await get_inputs_from_neighbor(
-                        neighboring_nodes[0].to_dict(), session, logger, auth_headers
+                        cached_neighbors[0].to_dict(), session, logger, auth_headers, idle_workers
                     )
                 if new_inputs:
-                    logger.log(f"Got {len(new_inputs)} more inputs from {neighboring_nodes[0].id}")
+                    logger.log(f"Got {len(new_inputs)} more inputs from {cached_neighbors[0].id}")
                     neighbor_had_no_inputs_at = None
                     seconds_neighbor_had_no_inputs = 0
                     for input_pkl_with_idx in new_inputs:
                         await SELF["inputs_queue"].put(
                             input_pkl_with_idx, len(input_pkl_with_idx[1])
                         )
-                else:
+                elif all_workers_idle and input_queue_empty:
                     neighbor_had_no_inputs_at = neighbor_had_no_inputs_at or time()
                     seconds_neighbor_had_no_inputs = time() - neighbor_had_no_inputs_at
                     if seconds_neighbor_had_no_inputs > EMPTY_NEIGHBOR_TIMEOUT_SEC:
@@ -169,6 +176,13 @@ async def _job_watcher(
                         logger.log(
                             "Neighbor timeout reached but waiting for buffered results to drain."
                         )
+
+            all_inputs_processed = (
+                SELF["all_inputs_uploaded"]
+                and SELF["inputs_queue"].empty()
+                and all(worker.is_idle for worker in SELF["workers"])
+            )
+            no_buffered_results = SELF["results_queue"].empty()
 
             not_waiting_on_client = no_buffered_results or client_disconnected
             all_local_work_complete = (

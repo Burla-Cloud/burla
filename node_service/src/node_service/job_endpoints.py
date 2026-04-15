@@ -3,7 +3,7 @@ from typing import Optional
 
 import asyncio
 from google.cloud.firestore_v1.async_client import AsyncClient
-from fastapi import APIRouter, Path, Depends, Response, Request
+from fastapi import APIRouter, Path, Query, Depends, Response, Request
 
 from node_service import (
     SELF,
@@ -22,6 +22,7 @@ router = APIRouter()
 @router.get("/jobs/{job_id}/inputs")
 async def get_inputs(
     job_id: str = Path(...),
+    idle_workers: int = Query(0),
     logger: Logger = Depends(get_logger),
 ):
     if job_id != SELF["current_job"]:
@@ -30,11 +31,15 @@ async def get_inputs(
         return Response("Node is shutting down, can't give inputs.", status_code=410)
 
     queue_size = SELF["inputs_queue"].qsize()
-    available_to_give = max(1, queue_size // 4)
     if queue_size == 0:
         return Response(status_code=204)
 
-    max_reply_bytes = 2_000_000
+    my_workers = len(SELF["workers"])
+    total = my_workers + idle_workers
+    available_to_give = queue_size * idle_workers // total if total > 0 else 0
+    available_to_give = max(available_to_give, 1)
+
+    max_reply_bytes = 5_000_000
     inputs = []
     total_bytes = 0
     while len(inputs) < available_to_give and total_bytes < max_reply_bytes:

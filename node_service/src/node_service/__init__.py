@@ -149,10 +149,6 @@ from node_service.lifecycle_endpoints import (
 async def shutdown_if_idle_for_too_long(logger: Logger):
     """WARNING: Errors from this function are completely hidden!"""
 
-    while SELF["BOOTING"]:
-        await asyncio.sleep(1)
-
-    SELF["last_client_activity_timestamp"] = time()
     time_since_last_activity = 0
     while time_since_last_activity < INACTIVITY_SHUTDOWN_TIME_SEC or SELF["current_job"]:
         await asyncio.sleep(5)

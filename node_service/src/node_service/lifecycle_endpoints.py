@@ -1,13 +1,10 @@
-from time import time, sleep
+from time import time
 import requests
 import asyncio
 from typing import Optional, Callable
-import concurrent.futures
 import traceback
-import threading
-import subprocess
-import docker
-from docker.errors import APIError
+
+import aiodocker
 from pydantic import BaseModel
 from fastapi import APIRouter, Depends, Response
 from google.cloud import firestore
@@ -103,14 +100,6 @@ async def reboot_containers_endpoint(
     return await reboot_containers(new_container_config, logger, add_background_task)
 
 
-def _call_docker_threadsafe(method, *args, **kwargs):
-    client = docker.APIClient(base_url="unix://var/run/docker.sock")
-    try:
-        getattr(client, method)(*args, **kwargs)
-    finally:
-        client.close()
-
-
 def image_size_GB(image: str):
     name, tag = image.rsplit(":", 1) if ":" in image else (image, "latest")
     name = name if "/" in name else f"library/{name}"
@@ -131,8 +120,8 @@ def image_size_GB(image: str):
     return round(size / 1_000_000_000, 2)
 
 
-def _LOCAL_DEV_ONLY_pull_image_if_missing(
-    image: str, logger: Logger, docker_client: docker.APIClient
+async def _LOCAL_DEV_ONLY_pull_image_if_missing(
+    image: str, logger: Logger, docker: aiodocker.Docker
 ):
     """
     Cannot pull using cli in local dev mode because this is already running in a docker container
@@ -140,8 +129,10 @@ def _LOCAL_DEV_ONLY_pull_image_if_missing(
     It dosent use this in prod because it's unreliable, `docker_client.pull` often fails silently.
     """
     try:
-        docker_client.inspect_image(image)
-    except docker.errors.ImageNotFound:
+        await docker.images.inspect(image)
+    except aiodocker.DockerError as e:
+        if e.status != 404:
+            raise
 
         try:
             logger.log(f"Pulling image {image} ({image_size_GB(image)} GB) ...")
@@ -149,38 +140,45 @@ def _LOCAL_DEV_ONLY_pull_image_if_missing(
             logger.log(f"Pulling image {image} ...")
 
         try:
-            docker_client.pull(image)
-        except APIError as e:
+            await docker.images.pull(image)
+        except aiodocker.DockerError as e:
             if "Unauthenticated request" in str(e):
                 print("Image is not public, trying again with credentials ...")
                 CREDENTIALS.refresh(Request())
                 auth_config = {"username": "oauth2accesstoken", "password": CREDENTIALS.token}
-                docker_client.pull(image, auth_config=auth_config)
+                await docker.images.pull(image, auth=auth_config)
             else:
                 raise
         # ODDLY, if docker_client.pull fails to pull the image, it will NOT throw any error >:(
         # check here that the image was actually pulled and exists on disk,
         try:
-            docker_client.inspect_image(image)
-        except docker.errors.ImageNotFound:
-            msg = f"Image {image} not found after pulling!\nDid vm run out of disk space?"
-            raise Exception(msg)
+            await docker.images.inspect(image)
+        except aiodocker.DockerError as e:
+            if e.status == 404:
+                raise Exception(
+                    f"Image {image} not found after pulling!\nDid vm run out of disk space?"
+                )
+            raise
 
 
-def _pull_image_if_missing(image: str, logger: Logger, docker_client: docker.APIClient):
+async def _pull_image_if_missing(image: str, logger: Logger, docker: aiodocker.Docker):
     # Use CLI instead of python api because that api just generally horrible and broken.
     # I already tried using it correctly, it wasnt worth it.
 
     if IN_LOCAL_DEV_MODE:
-        return _LOCAL_DEV_ONLY_pull_image_if_missing(image, logger, docker_client)
+        return await _LOCAL_DEV_ONLY_pull_image_if_missing(image, logger, docker)
 
-    def _run_command(command, raise_error=True):
-        result = subprocess.run(command, shell=True, capture_output=True)
-        if result.returncode != 0 and raise_error:
+    async def _run_command(command, raise_error=True):
+        process = await asyncio.create_subprocess_shell(
+            command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await process.communicate()
+        if process.returncode != 0 and raise_error:
             print("")
-            raise Exception(command, result.stderr)
-        else:
-            return result
+            raise Exception(command, stderr)
+        return process.returncode, stdout, stderr
 
     attempt = 0
     while True:
@@ -191,18 +189,18 @@ def _pull_image_if_missing(image: str, logger: Logger, docker_client: docker.API
         except Exception:
             logger.log(f"Pulling image {image} ...")
 
-        result = _run_command(f"docker pull {image}", raise_error=False)
-        text_output = result.stderr.decode() + result.stdout.decode()
-        no_transient_error = not (result.returncode != 0 and "unexpected EOF" in text_output)
+        returncode, stdout, stderr = await _run_command(f"docker pull {image}", raise_error=False)
+        text_output = stderr.decode() + stdout.decode()
+        no_transient_error = not (returncode != 0 and "unexpected EOF" in text_output)
 
         if no_transient_error or attempt > 5:
             break
         else:
             logger.log(f"`Unexpected EOF` error detected, retrying... (attempt {attempt})")
-            sleep(3)
+            await asyncio.sleep(3)
 
-    docker_pull_failed = result.returncode != 0
-    docker_pull_stderr = result.stderr.decode()
+    docker_pull_failed = returncode != 0
+    docker_pull_stderr = stderr.decode()
     not_hosted_in_google_artifact_registry = "docker.pkg.dev" not in image
 
     if docker_pull_failed and not_hosted_in_google_artifact_registry:
@@ -222,47 +220,46 @@ def _pull_image_if_missing(image: str, logger: Logger, docker_client: docker.API
 
         CREDENTIALS.refresh(Request())
         login_cmd = f"docker login {host} -u oauth2accesstoken --password {CREDENTIALS.token}"
-        result = _run_command(login_cmd, raise_error=False)
-        if result.returncode != 0:
+        returncode, stdout, stderr = await _run_command(login_cmd, raise_error=False)
+        if returncode != 0:
             msg = f"CMD `docker pull {image}` failed with error:\n{docker_pull_stderr}\n"
             msg += f"Following attempt to login to {host} using service account: "
-            msg += f"`{svc_email}` also failed with error:\n{result.stderr}\n"
+            msg += f"`{svc_email}` also failed with error:\n{stderr}\n"
             raise Exception(msg)
 
-        _run_command(f"docker pull {image}")
+        await _run_command(f"docker pull {image}")
 
     # sanity check, not positive this is necessary with cli, but was with python api.
-    result = _run_command(f"docker inspect {image}", raise_error=False)
-    if result.returncode != 0:
+    returncode, stdout, stderr = await _run_command(
+        f"docker inspect {image}", raise_error=False
+    )
+    if returncode != 0:
         msg = f"CMD: `docker pull {image}` succeeded, but subsequent `docker inspect ...` failed!\n"
-        msg += f"`docker inspect` stderr:\n{result.stderr}\n"
+        msg += f"`docker inspect` stderr:\n{stderr}\n"
         raise Exception(msg)
 
 
 # Removing large GPU containers can take several minutes. The node should not block on the full
 # deletion – it only needs the process to be gone. A quick `kill` is enough for that. We then
-# queue the slower `remove_container` call as a FastAPI background task when available. When the
-# reboot function is executed outside of a request context (e.g. during lifespan startup), it
-# falls back to running the removal in a daemon thread so behaviour remains unchanged.
-def _remove_container_task(container_id: str, logger: Logger):
-    client = docker.APIClient(base_url="unix://var/run/docker.sock", timeout=600)
+# queue the slower `remove_container` call as a background task.
+async def _remove_container(container_id: str, logger: Logger):
+    docker = aiodocker.Docker()
     try:
-        client.remove_container(container=container_id, force=True)
+        container = docker.containers.container(container_id)
+        await container.delete(force=True)
     except Exception as e:
         logger.log(f"Failed to remove container {container_id}: {e}", severity="WARNING")
     finally:
-        client.close()
+        await docker.close()
 
 
 def _schedule_container_removal(
     container_id: str, logger: Logger, add_background_task: Optional[Callable] = None
 ):
     if add_background_task is not None:
-        add_background_task(_remove_container_task, container_id, logger)
+        add_background_task(_remove_container, container_id, logger)
     else:
-        threading.Thread(
-            target=_remove_container_task, args=(container_id, logger), daemon=True
-        ).start()
+        asyncio.create_task(_remove_container(container_id, logger))
 
 
 async def reboot_containers(
@@ -310,54 +307,52 @@ async def reboot_containers(
         response.raise_for_status()
         SELF["authorized_users"] = response.json()["authorized_users"]
 
-        futures = []
-        executor = concurrent.futures.ThreadPoolExecutor()
-        docker_client = docker.APIClient(base_url="unix://var/run/docker.sock", timeout=600)
+        docker = aiodocker.Docker()
         try:
             if IN_LOCAL_DEV_MODE:
                 # Remove all "old" worker containers.
                 # Mark all existing workers as "old".
-                all_containers = docker_client.containers(all=True)
-                worker_containers = [c for c in all_containers if "worker" in c["Names"][0]]
+                all_containers = await docker.containers.list(all=True)
+                worker_containers = [
+                    c for c in all_containers if "worker" in c._container["Names"][0]
+                ]
+                tasks = []
                 for container in worker_containers:
-                    is_old = container["Names"][0][1:].startswith("OLD")
-                    belongs_to_current_node = f"node_{INSTANCE_NAME[11:]}" in container["Names"][0]
+                    name = container._container["Names"][0][1:]
+                    is_old = name.startswith("OLD")
+                    belongs_to_current_node = f"node_{INSTANCE_NAME[11:]}" in name
 
                     if is_old and belongs_to_current_node:
                         try:
-                            docker_client.kill(container["Id"])
-                        except Exception:
-                            pass  # container might already be stopped
-                        _schedule_container_removal(container["Id"], logger, add_background_task)
-
-                    elif belongs_to_current_node:
-                        args = (container["Id"], f"OLD--{container['Names'][0][1:]}")
-                        futures.append(executor.submit(_call_docker_threadsafe, "rename", *args))
-                        kwargs = dict(container=container["Id"], timeout=0)
-                        futures.append(executor.submit(_call_docker_threadsafe, "stop", **kwargs))
-            else:
-                # remove all worker containers
-                for container in docker_client.containers():
-                    if "worker" in container["Names"][0]:
-                        try:
-                            docker_client.kill(container["Id"])
+                            await container.kill()
                         except Exception:
                             pass
-                        _schedule_container_removal(container["Id"], logger, add_background_task)
+                        _schedule_container_removal(container.id, logger, add_background_task)
 
-            # Wait until all workers have been removed/marked old before starting new ones.
-            try:
-                [future.result() for future in futures]
-            except docker.errors.APIError as e:
-                if "already in progress" not in str(e):
-                    raise e
-            finally:
-                executor.shutdown(wait=True)
+                    elif belongs_to_current_node:
+                        tasks.append(container.rename(f"OLD--{name}"))
+                        tasks.append(container.stop(t=0))
+
+                try:
+                    await asyncio.gather(*tasks)
+                except aiodocker.DockerError as e:
+                    if "already in progress" not in str(e):
+                        raise
+            else:
+                # remove all worker containers
+                all_containers = await docker.containers.list()
+                for container in all_containers:
+                    if "worker" in container._container["Names"][0]:
+                        try:
+                            await container.kill()
+                        except Exception:
+                            pass
+                        _schedule_container_removal(container.id, logger, add_background_task)
 
             # start new workers.
             workers = []
             for spec in SELF["current_container_config"]:
-                _pull_image_if_missing(spec.image, logger, docker_client)
+                await _pull_image_if_missing(spec.image, logger, docker)
                 num_workers = INSTANCE_N_CPUS if NUM_GPUS == 0 else NUM_GPUS
 
                 msg = f"Image {spec.image} pulled successfully.\nWaiting for {num_workers} workers to start ..."
@@ -366,7 +361,7 @@ async def reboot_containers(
                 for _ in range(num_workers):
                     workers.append(WorkerClient(spec.image))
         finally:
-            docker_client.close()
+            await docker.close()
 
         SELF["workers"] = workers
         # boot only one first so it downloads uv / sets up env

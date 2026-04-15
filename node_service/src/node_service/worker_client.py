@@ -8,9 +8,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
-import docker
+import aiodocker
 import psutil
-from docker.types import DeviceRequest
 from tblib import Traceback
 
 from node_service import SELF, ASYNC_DB, INSTANCE_NAME, IN_LOCAL_DEV_MODE, NUM_GPUS
@@ -193,53 +192,50 @@ class WorkerClient:
         self.container_name += f"--node_{INSTANCE_NAME[11:]}" if IN_LOCAL_DEV_MODE else ""
         self.port = None
         self.image = image
-        self.docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
+        self.docker = aiodocker.Docker()
         self.is_idle = True
         self.python_version = None
+        self.container = None
         self.container_id = None
         self.logstream_task = None
         self.reader = None
         self.writer = None
         self.process_inputs_task = None
         self.log_writer = None
-        self.event_loop = None
 
     def _worker_server_host_path(self):
         if IN_LOCAL_DEV_MODE:
             return f"{os.environ['HOST_PWD']}/node_service/src/node_service/worker_server.py"
         return str(Path(__file__).resolve().parent / "worker_server.py")
 
-    def _start_container_sync(self):
-        binds = {self._worker_server_host_path(): "/opt/burla/worker_server.py"}
+    async def _start_container(self):
+        binds = [f"{self._worker_server_host_path()}:/opt/burla/worker_server.py"]
+
+        host_config = {
+            "PortBindings": {f"{WORKER_INTERNAL_PORT}/tcp": [{"HostIp": "127.0.0.1"}]},
+            "ShmSize": 16 * 1024**3,
+        }
+
         if IN_LOCAL_DEV_MODE:
             host_pwd = os.environ["HOST_PWD"]
             host_home_dir = os.environ["HOST_HOME_DIR"]
             worker_python_environment_dir = f"{host_pwd}/_worker_service_python_env/{INSTANCE_NAME}"
-            host_config = self.docker_client.create_host_config(
-                port_bindings={WORKER_INTERNAL_PORT: ("127.0.0.1", None)},
-                network_mode="local-burla-cluster",
-                binds={
-                    **binds,
-                    f"{host_home_dir}/.config/gcloud": "/root/.config/gcloud",
-                    f"{host_pwd}/_shared_workspace": "/workspace/shared",
-                    worker_python_environment_dir: "/worker_service_python_env",
-                },
-                shm_size="16g",
-            )
+            host_config["NetworkMode"] = "local-burla-cluster"
+            binds.extend([
+                f"{host_home_dir}/.config/gcloud:/root/.config/gcloud",
+                f"{host_pwd}/_shared_workspace:/workspace/shared",
+                f"{worker_python_environment_dir}:/worker_service_python_env",
+            ])
         else:
-            device_requests = (
-                [DeviceRequest(count=-1, capabilities=[["gpu"]])] if NUM_GPUS != 0 else []
-            )
-            host_config = self.docker_client.create_host_config(
-                port_bindings={WORKER_INTERNAL_PORT: ("127.0.0.1", None)},
-                device_requests=device_requests,
-                binds={
-                    **binds,
-                    "/worker_service_python_env": "/worker_service_python_env",
-                    "/workspace/shared": "/workspace/shared",
-                },
-                shm_size="16g",
-            )
+            if NUM_GPUS != 0:
+                host_config["DeviceRequests"] = [{"Count": -1, "Capabilities": [["gpu"]]}]
+                host_config["Runtime"] = "nvidia"
+            binds.extend([
+                "/worker_service_python_env:/worker_service_python_env",
+                "/workspace/shared:/workspace/shared",
+            ])
+
+        host_config["Binds"] = binds
 
         command = [
             "sh",
@@ -252,24 +248,19 @@ class WorkerClient:
             ),
         ]
 
-        container = self.docker_client.create_container(
-            image=self.image,
-            command=command,
-            name=self.container_name,
-            ports=[WORKER_INTERNAL_PORT],
-            host_config=host_config,
-            detach=True,
-            runtime="nvidia" if NUM_GPUS != 0 else None,
-        )
-        self.docker_client.start(container=container["Id"])
-        self.container_id = container["Id"]
+        config = {
+            "Image": self.image,
+            "Cmd": command,
+            "ExposedPorts": {f"{WORKER_INTERNAL_PORT}/tcp": {}},
+            "HostConfig": host_config,
+        }
+
+        self.container = await self.docker.containers.run(config=config, name=self.container_name)
+        self.container_id = self.container.id
 
     async def _get_host_port(self):
         for _ in range(20):
-            container_info = await asyncio.to_thread(self._inspect_container_sync)
-            port_info = container_info["NetworkSettings"]["Ports"].get(
-                f"{WORKER_INTERNAL_PORT}/tcp"
-            )
+            port_info = await self.container.port(WORKER_INTERNAL_PORT)
             if port_info:
                 return int(port_info[0]["HostPort"])
             await asyncio.sleep(0.5)
@@ -277,29 +268,17 @@ class WorkerClient:
 
     async def _get_python_version(self):
         for _ in range(20):
-            logs = await asyncio.to_thread(self._get_logs)
+            logs = await self._get_logs()
             if logs:
                 return logs.splitlines()[0].strip()
             await asyncio.sleep(0.1)
         raise RuntimeError(f"Failed to get python version for {self.container_name}.")
 
     async def _handle_container_logs(self):
-        def stream_logs():
-            log_generator = self.docker_client.logs(
-                container=self.container_id,
-                stream=True,
-                follow=True,
-                stdout=True,
-                stderr=True,
-                timestamps=True,
-            )
-            for log_line in log_generator:
-                decoded_log_line = log_line.decode("utf-8", errors="ignore")
-                self.event_loop.call_soon_threadsafe(
-                    self._capture_container_output_chunk, decoded_log_line
-                )
-
-        await asyncio.to_thread(stream_logs)
+        async for log_line in self.container.log(
+            stdout=True, stderr=True, follow=True, timestamps=True
+        ):
+            self._capture_container_output_chunk(log_line)
 
     def _capture_container_output_chunk(self, container_output_chunk: str):
         if self.log_writer is None:
@@ -327,8 +306,7 @@ class WorkerClient:
         return "".join(traceback.format_exception(type(error), error, error.__traceback__))
 
     async def boot(self):
-        await asyncio.to_thread(self._start_container_sync)
-        self.event_loop = asyncio.get_running_loop()
+        await self._start_container()
         self.python_version = await self._get_python_version()
         self.port = WORKER_INTERNAL_PORT if IN_LOCAL_DEV_MODE else await self._get_host_port()
         await asyncio.sleep(0.5)
@@ -350,23 +328,23 @@ class WorkerClient:
                 if self.writer is not None:
                     self.writer.close()
                     self.writer = None
-                container_info = await asyncio.to_thread(self._inspect_container_sync)
+                container_info = await self.container.show()
                 if not container_info["State"]["Running"]:
-                    self._log_container_failure()
+                    await self._log_container_failure()
                     raise RuntimeError(f"Container {self.container_name} stopped while booting.")
                 if time.perf_counter() - boot_started_at > 10:
-                    raise WorkerBootTimeoutError(await asyncio.to_thread(self._get_logs))
+                    raise WorkerBootTimeoutError(await self._get_logs())
                 await asyncio.sleep(0.1)
         self.is_idle = True
         self.logstream_task = asyncio.create_task(self._handle_container_logs())
 
     async def _raise_if_worker_failed(self):
         for _ in range(10):
-            container_info = await asyncio.to_thread(self._inspect_container_sync)
+            container_info = await self.container.show()
             if container_info["State"]["OOMKilled"]:
                 raise WorkerContainerOutOfMemoryError()
             if not container_info["State"]["Running"]:
-                self._log_container_failure()
+                await self._log_container_failure()
                 raise RuntimeError("\n\nWorker container stopped unexpectedly.\n")
             await asyncio.sleep(0.1)
         raise RuntimeError("\n\nWorker connection closed unexpectedly.\n")
@@ -484,29 +462,27 @@ class WorkerClient:
             if self.writer is not None:
                 self.writer.close()
                 await self.writer.wait_closed()
-            await asyncio.to_thread(
-                self.docker_client.remove_container, self.container_id, force=True
-            )
+            await self.container.delete(force=True)
             if self.logstream_task is not None:
                 await self.logstream_task
         finally:
-            await asyncio.to_thread(self.docker_client.close)
+            await self.docker.close()
 
-    def _container_exists(self):
+    async def _container_exists(self):
         if not self.container_id:
             return False
         try:
-            self._inspect_container_sync()
+            await self.container.show()
             return True
-        except docker.errors.NotFound:
-            return False
+        except aiodocker.DockerError as e:
+            if e.status == 404:
+                return False
+            raise
 
-    def _inspect_container_sync(self):
-        return self.docker_client.inspect_container(self.container_id)
+    async def _get_logs(self):
+        log_lines = await self.container.log(stdout=True, stderr=True)
+        return "".join(log_lines)
 
-    def _get_logs(self):
-        return self.docker_client.logs(self.container_id).decode("utf-8", errors="ignore")
-
-    def _log_container_failure(self):
-        if self._container_exists():
-            print(self._get_logs(), end="")
+    async def _log_container_failure(self):
+        if await self._container_exists():
+            print(await self._get_logs(), end="")

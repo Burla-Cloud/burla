@@ -167,23 +167,21 @@ class JobLogWriter:
         await self.flush_task
 
 
-class WorkerContainerOutOfMemoryError(RuntimeError):
-    def __init__(self):
-        super().__init__(
-            "\n\nWorker container was killed by the Linux OOM killer.\n"
-            "This usually means the submitted function used more memory than the container had available.\n"
-            "Increase the container memory limit or reduce memory usage inside the function.\n"
-        )
+def _worker_oom_error():
+    return RuntimeError(
+        "\n\nWorker container was killed by the Linux OOM killer.\n"
+        "This usually means the submitted function used more memory than the container had available.\n"
+        "Increase the container memory limit or reduce memory usage inside the function.\n"
+    )
 
 
-class WorkerBootTimeoutError(RuntimeError):
-    def __init__(self, logs: str):
-        message = "\n\nWorker boot timed out after 10 seconds.\n"
-        message += "The worker container never became ready to accept connections.\n"
-        message += "\nBuffered worker logs:\n"
-        message += "---------------------\n"
-        message += f"{logs}\n"
-        super().__init__(message)
+def _worker_boot_timeout_error(logs: str):
+    message = "\n\nWorker boot timed out after 10 seconds.\n"
+    message += "The worker container never became ready to accept connections.\n"
+    message += "\nBuffered worker logs:\n"
+    message += "---------------------\n"
+    message += f"{logs}\n"
+    return RuntimeError(message)
 
 
 class WorkerClient:
@@ -221,19 +219,23 @@ class WorkerClient:
             host_home_dir = os.environ["HOST_HOME_DIR"]
             worker_python_environment_dir = f"{host_pwd}/_worker_service_python_env/{INSTANCE_NAME}"
             host_config["NetworkMode"] = "local-burla-cluster"
-            binds.extend([
-                f"{host_home_dir}/.config/gcloud:/root/.config/gcloud",
-                f"{host_pwd}/_shared_workspace:/workspace/shared",
-                f"{worker_python_environment_dir}:/worker_service_python_env",
-            ])
+            binds.extend(
+                [
+                    f"{host_home_dir}/.config/gcloud:/root/.config/gcloud",
+                    f"{host_pwd}/_shared_workspace:/workspace/shared",
+                    f"{worker_python_environment_dir}:/worker_service_python_env",
+                ]
+            )
         else:
             if NUM_GPUS != 0:
                 host_config["DeviceRequests"] = [{"Count": -1, "Capabilities": [["gpu"]]}]
                 host_config["Runtime"] = "nvidia"
-            binds.extend([
-                "/worker_service_python_env:/worker_service_python_env",
-                "/workspace/shared:/workspace/shared",
-            ])
+            binds.extend(
+                [
+                    "/worker_service_python_env:/worker_service_python_env",
+                    "/workspace/shared:/workspace/shared",
+                ]
+            )
 
         host_config["Binds"] = binds
 
@@ -333,7 +335,7 @@ class WorkerClient:
                     await self._log_container_failure()
                     raise RuntimeError(f"Container {self.container_name} stopped while booting.")
                 if time.perf_counter() - boot_started_at > 10:
-                    raise WorkerBootTimeoutError(await self._get_logs())
+                    raise _worker_boot_timeout_error(await self._get_logs())
                 await asyncio.sleep(0.1)
         self.is_idle = True
         self.logstream_task = asyncio.create_task(self._handle_container_logs())
@@ -342,7 +344,7 @@ class WorkerClient:
         for _ in range(10):
             container_info = await self.container.show()
             if container_info["State"]["OOMKilled"]:
-                raise WorkerContainerOutOfMemoryError()
+                raise _worker_oom_error()
             if not container_info["State"]["Running"]:
                 await self._log_container_failure()
                 raise RuntimeError("\n\nWorker container stopped unexpectedly.\n")

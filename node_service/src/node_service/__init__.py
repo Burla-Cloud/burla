@@ -43,7 +43,6 @@ INACTIVITY_SHUTDOWN_TIME_SEC = int(os.environ.get("INACTIVITY_SHUTDOWN_TIME_SEC"
 INSTANCE_N_CPUS = 2 if IN_LOCAL_DEV_MODE else os.cpu_count()
 GCL_CLIENT = logging.Client().logger("node_service", labels=dict(INSTANCE_NAME=INSTANCE_NAME))
 
-# must be same path on worker service!
 ENV_IS_READY_PATH = Path("/worker_service_python_env/.ALL_PACKAGES_INSTALLED")
 
 secret_client = secretmanager.SecretManagerServiceClient()
@@ -58,7 +57,6 @@ from node_service.helpers import ResultsEndpointFilter, Logger, SizedQueue
 def REINIT_SELF(SELF):
     SELF["workers"] = []
     SELF["idle_workers"] = []
-    SELF["index_of_last_worker_given_inputs"] = 0
     SELF["inputs_queue"] = SizedQueue()
     SELF["results_queue"] = SizedQueue()
     SELF["current_job"] = None
@@ -74,7 +72,6 @@ def REINIT_SELF(SELF):
     SELF["all_inputs_uploaded"] = False
     SELF["current_input_batch_forwarded"] = True
     SELF["num_results_received"] = 0
-    SELF["return_queue_ram_threshold_gb"] = None
     SELF["all_packages_installed"] = False
     SELF["all_packages_installed_sent_to_client"] = False
     SELF["udf_start_latency"] = None

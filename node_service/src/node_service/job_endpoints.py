@@ -1,10 +1,9 @@
 import pickle
-import psutil
 from typing import Optional
 
 import asyncio
 from google.cloud.firestore_v1.async_client import AsyncClient
-from fastapi import APIRouter, Path, Depends, Response, Request, Query
+from fastapi import APIRouter, Path, Depends, Response, Request
 
 from node_service import (
     SELF,
@@ -23,7 +22,6 @@ router = APIRouter()
 @router.get("/jobs/{job_id}/inputs")
 async def get_inputs(
     job_id: str = Path(...),
-    target_reply_size: int = Query(int(1_000_000 * 0.5)),
     logger: Logger = Depends(get_logger),
 ):
     if job_id != SELF["current_job"]:
@@ -31,9 +29,15 @@ async def get_inputs(
     elif SELF["SHUTTING_DOWN"]:
         return Response("Node is shutting down, can't give inputs.", status_code=410)
 
+    queue_size = SELF["inputs_queue"].qsize()
+    available_to_give = max(1, queue_size // 4)
+    if queue_size == 0:
+        return Response(status_code=204)
+
+    max_reply_bytes = 2_000_000
     inputs = []
     total_bytes = 0
-    while total_bytes < target_reply_size:
+    while len(inputs) < available_to_give and total_bytes < max_reply_bytes:
         try:
             input_pkl_with_idx = SELF["inputs_queue"].get_nowait()
         except asyncio.QueueEmpty:
@@ -160,18 +164,6 @@ async def execute(
         msg += f" - update the cluster to run containers with python{user_python_version}\n"
         msg += f" - update your local python version to be one of {versions}"
         return Response(msg, status_code=409)
-
-    # RAM limits on input/output queues prevent worker/node-service from getting fucked
-    IO_RAM_TO_TOTAL_RAM_RATIO = 0.75  # percent of total ram input/output queues allowed to use
-    NODE_TO_WORKER_IO_RAM_RATIO = 2  # node-service io queues can use 2x the ram of worker queues
-    io_ram_limit_gb = (psutil.virtual_memory().total / 1024**3) * IO_RAM_TO_TOTAL_RAM_RATIO
-    worker_io_ram_limit_gb = io_ram_limit_gb / (
-        len(workers_to_assign) + NODE_TO_WORKER_IO_RAM_RATIO
-    )
-    # This isn't a limit, it can be exceeded
-    # The node svc just dosen't ask for more results when it's over this size.
-    SELF["return_queue_ram_threshold_gb"] = worker_io_ram_limit_gb * NODE_TO_WORKER_IO_RAM_RATIO
-    # logger.log(f"set return_queue_ram_threshold_gb to {SELF['return_queue_ram_threshold_gb']}")
 
     packages = request_json["packages"]
     SELF["all_packages_installed"] = not packages

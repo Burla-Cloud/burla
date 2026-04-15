@@ -46,11 +46,6 @@ class SizedQueue(asyncio.Queue):
         self.size_bytes -= size_bytes
         return item
 
-    @property
-    def size_gb(self):
-        return self.size_bytes / (1024**3)
-
-
 class FirestoreLogHandler(python_logging.Handler):
     def __init__(self):
         super().__init__()

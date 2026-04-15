@@ -9,10 +9,13 @@ from pathlib import Path
 from uuid import uuid4
 
 import docker
+import psutil
 from docker.types import DeviceRequest
 from tblib import Traceback
 
 from node_service import SELF, ASYNC_DB, INSTANCE_NAME, IN_LOCAL_DEV_MODE, NUM_GPUS
+
+RESULTS_QUEUE_RAM_LIMIT_BYTES = int(psutil.virtual_memory().total * 0.5)
 
 WORKER_INTERNAL_PORT = 8080
 LOG_FLUSH_INTERVAL_SECONDS = 1
@@ -192,7 +195,6 @@ class WorkerClient:
         self.image = image
         self.docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
         self.is_idle = True
-        self.is_empty = True
         self.python_version = None
         self.container_id = None
         self.logstream_task = None
@@ -356,7 +358,6 @@ class WorkerClient:
                     raise WorkerBootTimeoutError(await asyncio.to_thread(self._get_logs))
                 await asyncio.sleep(0.1)
         self.is_idle = True
-        self.is_empty = True
         self.logstream_task = asyncio.create_task(self._handle_container_logs())
 
     async def _raise_if_worker_failed(self):
@@ -405,11 +406,11 @@ class WorkerClient:
     async def _process_inputs(self):
         while True:
             self.is_idle = True
-            self.is_empty = True
+            while SELF["results_queue"].size_bytes > RESULTS_QUEUE_RAM_LIMIT_BYTES:
+                await asyncio.sleep(0.1)
             input_index, input_pkl = await SELF["inputs_queue"].get()
 
             self.is_idle = False
-            self.is_empty = False
             await self._ensure_log_writer()
             try:
                 result_pkl = await self.call_function(input_index, input_pkl)
@@ -476,7 +477,6 @@ class WorkerClient:
             await self.log_writer.stop()
             self.log_writer = None
         self.is_idle = True
-        self.is_empty = True
 
     async def stop(self):
         try:

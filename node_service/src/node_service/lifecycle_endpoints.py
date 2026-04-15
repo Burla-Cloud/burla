@@ -6,9 +6,6 @@ import concurrent.futures
 import traceback
 import threading
 import subprocess
-import pickle
-
-import aiohttp
 import docker
 from docker.errors import APIError
 from pydantic import BaseModel
@@ -66,80 +63,6 @@ async def get_neighboring_nodes(async_db):
         return nodes[current_node_index + 1 :] + nodes[:current_node_index]
 
 
-async def load_results_from_worker(
-    worker: WorkerClient, session: aiohttp.ClientSession, ejecting: bool = False
-):
-    all_inputs_sent_to_workers = SELF["all_inputs_uploaded"] and SELF["inputs_queue"].empty()
-    url = f"{worker.url}/jobs/{SELF['current_job']}/results?"
-    url += f"ejecting={ejecting}&all_inputs_sent_to_workers={all_inputs_sent_to_workers}"
-    async with session.get(url) as http_response:
-        if http_response.status == 500:
-            worker.log_debug_info()
-        http_response.raise_for_status()
-
-        response_content = await http_response.content.read()
-        response = pickle.loads(response_content)
-        for result in response["results"]:
-            await SELF["results_queue"].put(result, len(result[2]))
-            SELF["num_results_received"] += 1
-
-        if response.get("udf_start_latency"):
-            SELF["udf_start_latency"] = response["udf_start_latency"]
-        if response.get("all_packages_installed"):
-            SELF["all_packages_installed"] = response["all_packages_installed"]
-
-        worker.is_idle = response["is_idle"]
-        worker.is_empty = response["is_empty"]
-
-
-async def get_inputs_from_worker(session, worker, min_reply_size):
-    job_id = SELF["current_job"]
-    url = f"{worker.url}/jobs/{job_id}/inputs?min_reply_size={min_reply_size}"
-    async with session.get(url, timeout=1) as response:
-        response.raise_for_status()
-        if response.status == 200:
-            return pickle.loads(await response.read())
-        elif response.status == 204:
-            return []
-
-
-async def _post_stop(url, session):
-    async with session.post(f"{url}/jobs/{SELF['current_job']}/stop") as response:
-        response.raise_for_status()
-
-
-async def eject(async_db):
-    async with aiohttp.ClientSession() as session:
-
-        # tell all workers to stop processing
-        await asyncio.gather(*[_post_stop(w.url) for w in SELF["workers"]], return_exceptions=True)
-
-        # load all results from workers into local result queue
-        tasks = [load_results_from_worker(w, session, ejecting=True) for w in SELF["workers"]]
-        await asyncio.gather(*tasks)
-
-        # send all inputs to other nodes
-        neighboring_nodes = get_neighboring_nodes(async_db)
-        for node in neighboring_nodes:
-
-            all_workers_empty = False
-            while not all_workers_empty:
-                # get some inputs
-                # TODO: make update all_workers_empty
-                size = (1_000_000 * 0.5) / len(SELF["workers"])
-                tasks = [get_inputs_from_worker(session, w, size) for w in SELF["workers"]]
-                inputs = [input for inputs in await asyncio.gather(*tasks) for input in inputs]
-                # TODO: send to current neighbor
-                pass
-            pass
-
-        # send remaining results to other nodes:
-        for node in neighboring_nodes:
-            # try sending all to this node and break
-            # if node is full or busy go to next node
-            pass
-
-
 @router.post("/shutdown")
 async def shutdown_node(logger: Logger = Depends(get_logger)):
     """
@@ -166,26 +89,7 @@ async def shutdown_node(logger: Logger = Depends(get_logger)):
             update_fields["display_in_dashboard"] = False
         await doc_ref.update(update_fields)
 
-    # send inputs/results to other nodes if preempted
-    try:
-        url = "http://metadata.google.internal/computeMetadata/v1/instance/preempted"
-        async with aiohttp.ClientSession(headers={"Metadata-Flavor": "Google"}) as session:
-            async with session.get(url, timeout=1) as response:
-                response.raise_for_status()
-                preempted = (await response.text()).strip() == "TRUE"
-    except Exception as e:
-        msg = f"ERROR checking if node {INSTANCE_NAME} was preempted! ASSUMING PREEMPTION ...\n {e}"
-        logger.log(msg, severity="ERROR")
-        preempted = True
-
-    if preempted:
-        logger.log(f"Node {INSTANCE_NAME} was preempted!")
-        seconds_available_for_ejection = 27 - (time() - start)
-        try:
-            await asyncio.wait_for(eject(async_db), timeout=seconds_available_for_ejection)
-        except asyncio.TimeoutError:
-            logger.log("JOB WILL FAIL!! Shutdown eject operation took too long!", severity="ERROR")
-            # TODO: fail job such that it actually stops and tells the user what happened
+    # TODO: on preemption, transfer queued inputs/results to other nodes
 
 
 @router.post("/reboot")

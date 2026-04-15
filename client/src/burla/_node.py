@@ -575,38 +575,6 @@ class Node:
             elif status >= 400:
                 raise Exception(response_text)
 
-    async def _input_chunk_generator(self, inputs_with_indicies: list, max_inputs_per_chunk: int):
-        chunk_size_limit = 200_000
-        max_chunk_size_limit = 10_000_000
-        input_chunk = []
-        chunk_size_bytes = 0
-        while len(inputs_with_indicies):
-            input_index, input_ = inputs_with_indicies[-1]
-            input_pkl = cloudpickle.dumps(input_)
-            if len(input_pkl) > MAX_INPUT_SIZE_BYTES:
-                raise InputTooBig(input_index)
-
-            future_chunk_size = chunk_size_bytes + len(input_pkl)
-            will_make_chunk_too_big = future_chunk_size >= chunk_size_limit
-            will_make_chunk_too_long = len(input_chunk) >= max_inputs_per_chunk
-            if will_make_chunk_too_big or will_make_chunk_too_long:
-                if input_chunk:
-                    yield input_chunk
-                    chunk_size_limit = min(max_chunk_size_limit, chunk_size_limit + 500_000)
-                    chunk_size_bytes = 0
-                    input_chunk = []
-                    continue
-                else:
-                    inputs_with_indicies.pop()
-                    chunk_size_bytes += len(input_pkl)
-                    input_chunk.append((input_index, input_pkl))
-            else:
-                inputs_with_indicies.pop()
-                chunk_size_bytes += len(input_pkl)
-                input_chunk.append((input_index, input_pkl))
-        if input_chunk:
-            yield input_chunk
-
     async def execute_job(
         self,
         job_id: str,
@@ -650,29 +618,29 @@ class Node:
             target_parallelism=self.target_parallelism,
         )
 
-        proportional_share = max(1, round(n_inputs * self.target_parallelism / total_parallelism))
-        max_inputs_per_chunk = min(self.target_parallelism, proportional_share)
-        chunk_generator = self._input_chunk_generator(inputs_with_indicies, max_inputs_per_chunk)
+        num_to_take = max(self.target_parallelism, round(n_inputs * self.target_parallelism / total_parallelism))
+        input_chunk = []
+        while inputs_with_indicies and len(input_chunk) < num_to_take:
+            input_index, input_ = inputs_with_indicies.pop()
+            input_pkl = cloudpickle.dumps(input_)
+            if len(input_pkl) > MAX_INPUT_SIZE_BYTES:
+                raise InputTooBig(input_index)
+            input_chunk.append((input_index, input_pkl))
+
+        if input_chunk:
+            await self._upload_input_chunk(input_chunk)
+            self._print_timing_event(
+                "node_first_upload_done",
+                source="client_node",
+                instance=self.instance_name,
+                upload_count=len(input_chunk),
+            )
 
         iteration = 0
         first_result_received = False
-        first_upload_completed = False
         while True:
 
             iteration += 1
-
-            input_chunk = await anext(chunk_generator, None)
-            if input_chunk:
-                await self._upload_input_chunk(input_chunk)
-                if not first_upload_completed:
-                    first_upload_completed = True
-                    self._print_timing_event(
-                        "node_first_upload_done",
-                        source="client_node",
-                        instance=self.instance_name,
-                        upload_count=len(input_chunk),
-                    )
-                await asyncio.sleep(0)
 
             node_results = await self._gather_results()
             return_values = []
@@ -701,11 +669,10 @@ class Node:
                     instance=self.instance_name,
                     result_count=len(return_values),
                 )
-            message = "time:\t{time:.2f}\tnode:\t{instance}\ti:\t{iteration}\tuploaded:\t{uploaded}\tresults:\t{results}".format(
+            message = "time:\t{time:.2f}\tnode:\t{instance}\ti:\t{iteration}\tresults:\t{results}".format(
                 time=time(),
                 instance=self.instance_name,
                 iteration=iteration,
-                uploaded=len(input_chunk) if input_chunk else 0,
                 results=len(return_values),
             )
             if self.debug_timing_enabled:

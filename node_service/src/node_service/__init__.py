@@ -147,7 +147,7 @@ async def shutdown_if_idle_for_too_long(logger: Logger):
     """WARNING: Errors from this function are completely hidden!"""
 
     time_since_last_activity = 0
-    while time_since_last_activity < INACTIVITY_SHUTDOWN_TIME_SEC or SELF["current_job"] or SELF["reserved_for_job"]:
+    while time_since_last_activity < INACTIVITY_SHUTDOWN_TIME_SEC or SELF["current_job"] or SELF["reserved_for_job"] or SELF["BOOTING"]:
         await asyncio.sleep(5)
         time_since_last_activity = time() - SELF["last_client_activity_timestamp"]
 

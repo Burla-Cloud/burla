@@ -258,9 +258,11 @@ async def reboot_containers(
 
         # reset state of the node service, except current_container_config, and the job_watcher.
         current_container_config = SELF["current_container_config"]
+        reserved_for_job = SELF["reserved_for_job"]
         REINIT_SELF(SELF)
         SELF["BOOTING"] = True
         SELF["current_container_config"] = current_container_config
+        SELF["reserved_for_job"] = reserved_for_job
         if new_container_config:
             SELF["current_container_config"] = new_container_config
 

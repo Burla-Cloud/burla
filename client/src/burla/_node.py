@@ -20,12 +20,7 @@ from yaspin import Spinner
 from burla import CONFIG_PATH, __version__
 from burla._auth import get_auth_headers
 from burla._helpers import parallelism_capacity
-from burla._reporting import (
-    RemoteParallelMapReporter,
-    format_timing_event,
-    timing_debug_enabled,
-    write_timing_debug_line,
-)
+from burla._reporting import RemoteParallelMapReporter
 
 
 NODE_SILENCE_TIMEOUT_SECONDS = 10 * 60
@@ -40,13 +35,6 @@ NETWORK_ERROR_TYPES = (
     ClientError,
     OSError,
 )
-
-
-def _print_timing_event(phase_name: str, **fields):
-    if not timing_debug_enabled():
-        return
-    message = format_timing_event(time(), phase_name, **fields)
-    write_timing_debug_line(message)
 
 
 class InputTooBig(Exception):
@@ -141,120 +129,56 @@ async def _run_network_request_with_retries(request_function):
 
 
 async def num_booting_nodes(db: AsyncClient):
-    start_time = time()
     filter_ = FieldFilter("status", "==", "BOOTING")
     nodes_snapshot = await db.collection("nodes").where(filter=filter_).get()
-    count = len(nodes_snapshot)
-    _print_timing_event(
-        "node_selection_db_query",
-        source="client",
-        query="booting_nodes",
-        duration_ms=round((time() - start_time) * 1000, 3),
-        count=count,
-    )
-    return count
+    return len(nodes_snapshot)
 
 
 async def num_running_nodes(db: AsyncClient):
-    start_time = time()
     filter_ = FieldFilter("status", "==", "RUNNING")
     nodes_snapshot = await db.collection("nodes").where(filter=filter_).get()
-    count = len(nodes_snapshot)
-    _print_timing_event(
-        "node_selection_db_query",
-        source="client",
-        query="running_nodes",
-        duration_ms=round((time() - start_time) * 1000, 3),
-        count=count,
-    )
-    return count
+    return len(nodes_snapshot)
 
 
 async def get_ready_nodes(db: AsyncClient) -> list[dict]:
-    start_time = time()
     status_filter = FieldFilter("status", "==", "READY")
     ready_nodes_coroutine = db.collection("nodes").where(filter=status_filter).get()
     try:
         docs = await asyncio.wait_for(ready_nodes_coroutine, timeout=LOGIN_TIMEOUT_SEC)
     except asyncio.TimeoutError:
         raise FirestoreTimeout()
-    ready_nodes = [document.to_dict() for document in docs]
-    _print_timing_event(
-        "node_selection_db_query",
-        source="client",
-        query="ready_nodes",
-        duration_ms=round((time() - start_time) * 1000, 3),
-        count=len(ready_nodes),
-    )
-    return ready_nodes
+    return [document.to_dict() for document in docs]
 
 
 async def wait_for_nodes_to_be_ready(
     db: AsyncClient,
     spinner: bool | Spinner,
 ) -> list[dict]:
-    wait_start_time = time()
     n_booting_nodes = await num_booting_nodes(db)
     n_running_nodes = await num_running_nodes(db)
-    _print_timing_event(
-        "node_selection_wait_state",
-        source="client",
-        booting_nodes=n_booting_nodes,
-        running_nodes=n_running_nodes,
-    )
 
     if n_running_nodes != 0:
         start_time = time()
         time_waiting = 0
-        poll_count = 0
-        _print_timing_event(
-            "node_selection_wait_for_running_nodes_started",
-            source="client",
-            running_nodes=n_running_nodes,
-        )
         while n_running_nodes != 0:
             if spinner:
                 msg = f"Waiting for {n_running_nodes} running nodes to become ready..."
                 spinner.text = msg + f" (timeout in {4-time_waiting:.1f}s)"
             await asyncio.sleep(0.01)
-            poll_count += 1
             n_running_nodes = await num_running_nodes(db)
             ready_nodes = await get_ready_nodes(db)
             time_waiting = time() - start_time
             if time_waiting > 4:
                 raise AllNodesBusy()
-        _print_timing_event(
-            "node_selection_wait_for_running_nodes_done",
-            source="client",
-            duration_ms=round((time() - start_time) * 1000, 3),
-            polls=poll_count,
-            ready_count=len(ready_nodes),
-        )
     elif n_booting_nodes != 0:
         ready_nodes = await get_ready_nodes(db)
-        start_time = time()
-        poll_count = 0
-        _print_timing_event(
-            "node_selection_wait_for_booting_nodes_started",
-            source="client",
-            booting_nodes=n_booting_nodes,
-            ready_count=len(ready_nodes),
-        )
         while n_booting_nodes != 0:
             if spinner:
                 msg = f"{len(ready_nodes)} Nodes are ready, waiting for remaining {n_booting_nodes}"
                 spinner.text = msg + " to boot before starting ..."
             await asyncio.sleep(0.1)
-            poll_count += 1
             n_booting_nodes = await num_booting_nodes(db)
             ready_nodes = await get_ready_nodes(db)
-        _print_timing_event(
-            "node_selection_wait_for_booting_nodes_done",
-            source="client",
-            duration_ms=round((time() - start_time) * 1000, 3),
-            polls=poll_count,
-            ready_count=len(ready_nodes),
-        )
         if not ready_nodes:
             main_service_url = json.loads(CONFIG_PATH.read_text())["cluster_dashboard_url"]
             msg = "\n\nZero nodes are ready after Booting. Did they fail to boot?\n"
@@ -262,14 +186,6 @@ async def wait_for_nodes_to_be_ready(
             raise NoNodes(msg)
 
     ready_nodes = await get_ready_nodes(db)
-    _print_timing_event(
-        "node_selection_wait_done",
-        source="client",
-        duration_ms=round((time() - wait_start_time) * 1000, 3),
-        ready_count=len(ready_nodes),
-        booting_nodes=n_booting_nodes,
-        running_nodes=n_running_nodes,
-    )
     if n_booting_nodes == 0 and n_running_nodes == 0 and len(ready_nodes) == 0:
         main_service_url = json.loads(CONFIG_PATH.read_text())["cluster_dashboard_url"]
         msg = "\n\nZero nodes are ready. Is your cluster turned on?\n"
@@ -286,34 +202,16 @@ async def select_nodes_to_assign_to_job(
     spinner: bool | Spinner,
     session,
 ) -> tuple[list["Node"], int]:
-    selection_start_time = time()
     ready_nodes = await get_ready_nodes(db)
-    _print_timing_event(
-        "node_selection_initial_ready_nodes",
-        source="client",
-        ready_count=len(ready_nodes),
-    )
 
     if not ready_nodes:
-        wait_start_time = time()
         ready_nodes = await wait_for_nodes_to_be_ready(db=db, spinner=spinner)
-        _print_timing_event(
-            "node_selection_wait_path_done",
-            source="client",
-            duration_ms=round((time() - wait_start_time) * 1000, 3),
-            ready_count=len(ready_nodes),
-        )
 
     upper_version = Version(ready_nodes[0]["main_svc_version"])
     lower_version = Version(ready_nodes[0]["min_compatible_client_version"])
     current_version = Version(__version__)
     if not lower_version <= current_version <= upper_version:
         raise VersionMismatch(lower_version, upper_version, current_version)
-    _print_timing_event(
-        "node_selection_version_check_done",
-        source="client",
-        ready_count=len(ready_nodes),
-    )
 
     planned_initial_job_parallelism = 0
     nodes_to_assign = []
@@ -341,14 +239,6 @@ async def select_nodes_to_assign_to_job(
     if len(nodes_to_assign) == 0:
         raise NoCompatibleNodes()
 
-    _print_timing_event(
-        "node_selection_completed",
-        source="client",
-        duration_ms=round((time() - selection_start_time) * 1000, 3),
-        ready_count=len(ready_nodes),
-        selected_count=len(nodes_to_assign),
-        target_parallelism=planned_initial_job_parallelism,
-    )
     return nodes_to_assign, planned_initial_job_parallelism
 
 
@@ -368,14 +258,6 @@ class Node:
         self.last_reply_timestamp = time()
         self.auth_headers = get_auth_headers()
         self.spinner_compatible_print = lambda msg: spinner.write(msg) if spinner else print(msg)
-        self.debug_timing_enabled = timing_debug_enabled()
-
-    def _print_timing_event(self, phase_name: str, **fields):
-        if not self.debug_timing_enabled:
-            return
-        message = format_timing_event(time(), phase_name, **fields)
-        if not write_timing_debug_line(message):
-            self.spinner_compatible_print(message)
 
     def _seconds_since_last_reply(self):
         return time() - self.last_reply_timestamp
@@ -593,12 +475,6 @@ class Node:
                     break
                 await asyncio.sleep(random.uniform(2, 6))
 
-        self._print_timing_event(
-            "node_assign_started",
-            source="client_node",
-            instance=self.instance_name,
-            target_parallelism=self.target_parallelism,
-        )
         if packages:
             self.installing_packages = True
         await self._assign_job(
@@ -607,12 +483,6 @@ class Node:
         self.installing_packages = False
         if self.state == "FAILED":
             return
-        self._print_timing_event(
-            "node_assign_done",
-            source="client_node",
-            instance=self.instance_name,
-            target_parallelism=self.target_parallelism,
-        )
 
         num_to_take = max(self.target_parallelism, round(n_inputs * self.target_parallelism / total_parallelism))
         input_chunk = []
@@ -625,19 +495,8 @@ class Node:
 
         if input_chunk:
             await self._upload_input_chunk(input_chunk)
-            self._print_timing_event(
-                "node_first_upload_done",
-                source="client_node",
-                instance=self.instance_name,
-                upload_count=len(input_chunk),
-            )
 
-        iteration = 0
-        first_result_received = False
         while True:
-
-            iteration += 1
-
             node_results = await self._gather_results()
             return_values = []
             for input_index, is_error, result_pkl in node_results["results"]:
@@ -654,31 +513,9 @@ class Node:
                     return_values.append(cloudpickle.loads(result_pkl))
 
             self.current_parallelism = node_results["current_parallelism"]
-            if return_values and not first_result_received:
-                first_result_received = True
-                self._print_timing_event(
-                    "node_first_result_received",
-                    source="client_node",
-                    instance=self.instance_name,
-                    result_count=len(return_values),
-                )
-            message = "time:\t{time:.2f}\tnode:\t{instance}\ti:\t{iteration}\tresults:\t{results}".format(
-                time=time(),
-                instance=self.instance_name,
-                iteration=iteration,
-                results=len(return_values),
-            )
-            if self.debug_timing_enabled:
-                write_timing_debug_line(message)
 
             for return_value in return_values:
                 return_queue.put_nowait(return_value)
                 self.result_count += 1
             if self.state == "DONE":
-                self._print_timing_event(
-                    "node_done",
-                    source="client_node",
-                    instance=self.instance_name,
-                    total_results=self.result_count,
-                )
                 return

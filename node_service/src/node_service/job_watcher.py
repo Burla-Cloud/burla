@@ -35,7 +35,7 @@ async def get_neighbor(async_db):
     return None, None
 
 
-async def _input_steal_loop(async_db, session, logger, auth_headers, self_host, job_started_at):
+async def _input_steal_loop(async_db, session, logger, self_host, job_started_at):
     global SEC_NEIGHBOR_HAD_NO_INPUTS
 
     last_neighbor_refresh = 0
@@ -71,7 +71,7 @@ async def _input_steal_loop(async_db, session, logger, auth_headers, self_host, 
             num_inputs_received = 0
             params = {"requester_queue_size": remaining_inputs, "requester_host": self_host}
             url = f"{neighbor_host}/jobs/{SELF['current_job']}/input_transfer"
-            async with session.get(url, params=params, headers=auth_headers) as response:
+            async with session.get(url, params=params, headers=SELF["auth_headers"]) as response:
                 if response.status == 404:
                     last_neighbor_refresh = time() - NEIGHBOR_CACHE_TTL - 1
                     continue
@@ -100,7 +100,6 @@ async def _job_watcher(
     is_background_job: bool,
     job_started_at: float,
     logger: Logger,
-    auth_headers: dict,
     async_db: AsyncClient,
     session: aiohttp.ClientSession,
     exit_stack: list,
@@ -136,12 +135,8 @@ async def _job_watcher(
     job_watch = sync_job_doc.on_snapshot(_on_job_snapshot)
     exit_stack.append(job_watch.unsubscribe)
 
-    steal_auth_headers = {
-        "Authorization": auth_headers.get("Authorization", ""),
-        "X-User-Email": auth_headers.get("X-User-Email", ""),
-    }
     steal_task = asyncio.create_task(
-        _input_steal_loop(async_db, session, logger, steal_auth_headers, self_host, job_started_at)
+        _input_steal_loop(async_db, session, logger, self_host, job_started_at)
     )
 
     last_results_update_time = time()
@@ -222,7 +217,7 @@ async def _job_watcher(
 
 
 async def job_watcher_logged(
-    n_inputs: int, is_background_job: bool, job_started_at: float, auth_headers: dict
+    n_inputs: int, is_background_job: bool, job_started_at: float
 ):
     logger = Logger()  # new logger has no request attached like the one in execute job did.
 
@@ -235,7 +230,6 @@ async def job_watcher_logged(
                 is_background_job,
                 job_started_at,
                 logger,
-                auth_headers,
                 async_db,
                 session,
                 exit_stack,

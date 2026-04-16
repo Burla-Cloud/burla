@@ -22,7 +22,6 @@ router = APIRouter()
 
 @router.get("/jobs/{job_id}/input_transfer")
 async def input_transfer(
-    request: Request,
     job_id: str = Path(...),
     requester_queue_size: int = Query(0),
     requester_host: str = Query(...),
@@ -52,17 +51,12 @@ async def input_transfer(
     try:
         url = f"{requester_host}/jobs/{job_id}/inputs"
         form_data = aiohttp.FormData()
-        inputs_pkl = pickle.dumps(inputs_to_send)
-        form_data.add_field("inputs_pkl_with_idx", inputs_pkl, filename="inputs_pkl_with_idx")
-        auth_headers = {
-            "Authorization": request.headers.get("Authorization", ""),
-            "X-User-Email": request.headers.get("X-User-Email", ""),
-        }
+        form_data.add_field("inputs_pkl_with_idx", pickle.dumps(inputs_to_send))
         async with aiohttp.ClientSession() as session:
-            async with session.post(url, data=form_data, headers=auth_headers) as response:
+            async with session.post(url, data=form_data, headers=SELF["auth_headers"]) as response:
                 response.raise_for_status()
     except Exception as e:
-        msg = f"Failed to push inputs to requester, returning {len(inputs_to_send)} to queue: {e}"
+        msg = f"Failed to transfer inputs! replacing {len(inputs_to_send)} inputs in queue: {e}"
         await logger.log(msg, "ERROR")
         for item in inputs_to_send:
             await SELF["inputs_queue"].put(item, len(item[1]))
@@ -180,10 +174,15 @@ async def execute(
     SELF["workers"] = workers_to_assign
     SELF["idle_workers"] = workers_to_leave_idle
     SELF["current_parallelism"] = 0
+    # user specific, assign to self to use for node <-> node requests only during this job.
+    SELF["auth_headers"] = {
+        "Authorization": request.headers.get("Authorization", ""),
+        "X-User-Email": request.headers.get("X-User-Email", ""),
+    }
 
     SELF["job_watcher_stop_event"].clear()  # is initalized as set by default
     job_watcher_coroutine = job_watcher_logged(
-        request_json["n_inputs"], is_background_job, request_json["start_time"], request.headers
+        request_json["n_inputs"], is_background_job, request_json["start_time"]
     )
     SELF["job_watcher_task"] = asyncio.create_task(job_watcher_coroutine)
     return Response(status_code=200)

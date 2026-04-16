@@ -2,6 +2,7 @@ import pickle
 from typing import Optional
 
 import asyncio
+import aiohttp
 from google.cloud.firestore_v1.async_client import AsyncClient
 from fastapi import APIRouter, Path, Query, Depends, Response, Request
 
@@ -19,45 +20,54 @@ from node_service.job_watcher import job_watcher_logged
 router = APIRouter()
 
 
-@router.get("/jobs/{job_id}/inputs")
-async def get_inputs(
+@router.get("/jobs/{job_id}/input_transfer")
+async def input_transfer(
+    request: Request,
     job_id: str = Path(...),
     idle_workers: int = Query(0),
+    requester_host: str = Query(...),
     logger: Logger = Depends(get_logger),
 ):
     if job_id != SELF["current_job"]:
         return Response("job not found", status_code=404)
-    elif SELF["SHUTTING_DOWN"]:
-        return Response("Node is shutting down, can't give inputs.", status_code=410)
 
-    queue_size = SELF["inputs_queue"].qsize()
-    if queue_size == 0:
-        return Response(status_code=204)
+    remaining_inputs = SELF["inputs_queue"].qsize()
+    available_to_give = max(remaining_inputs // 2, 1)
 
-    my_workers = len(SELF["workers"])
-    total = my_workers + idle_workers
-    available_to_give = queue_size * idle_workers // total if total > 0 else 0
-    available_to_give = max(available_to_give, 1)
-
-    max_reply_bytes = 5_000_000
-    inputs = []
+    inputs_to_send = []
     total_bytes = 0
-    while len(inputs) < available_to_give and total_bytes < max_reply_bytes:
+    while len(inputs_to_send) < available_to_give and total_bytes < 5_000_000:
         try:
             input_pkl_with_idx = SELF["inputs_queue"].get_nowait()
         except asyncio.QueueEmpty:
             break
-        inputs.append(input_pkl_with_idx)
+        inputs_to_send.append(input_pkl_with_idx)
         total_bytes += len(input_pkl_with_idx[1])
 
-    if not inputs:
-        return Response(status_code=204)
+    if not inputs_to_send:
+        return Response(content=str(0))
+
+    try:
+        url = f"{requester_host}/jobs/{job_id}/inputs"
+        form_data = aiohttp.FormData()
+        inputs_pkl = pickle.dumps(inputs_to_send)
+        form_data.add_field("inputs_pkl_with_idx", inputs_pkl, filename="inputs_pkl_with_idx")
+        auth_headers = {
+            "Authorization": request.headers.get("Authorization", ""),
+            "X-User-Email": request.headers.get("X-User-Email", ""),
+        }
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, data=form_data, headers=auth_headers) as response:
+                response.raise_for_status()
+    except Exception as e:
+        msg = f"Failed to push inputs to requester, returning {len(inputs_to_send)} to queue: {e}"
+        await logger.log(msg, "ERROR")
+        for item in inputs_to_send:
+            await SELF["inputs_queue"].put(item, len(item[1]))
+        return Response(status_code=500)
     else:
-        logger.log(f"Sending {len(inputs)} inputs to another node!")
-        data = pickle.dumps(inputs)
-        await asyncio.sleep(0)
-        headers = {"Content-Disposition": 'attachment; filename="inputs.pkl"'}
-        return Response(content=data, media_type="application/octet-stream", headers=headers)
+        await logger.log(f"Sent {len(inputs_to_send)} inputs to {requester_host}!")
+        return Response(content=str(len(inputs_to_send)))
 
 
 @router.post("/jobs/{job_id}/inputs")
@@ -67,19 +77,11 @@ async def upload_inputs(
 ):
     if job_id != SELF["current_job"]:
         return Response("job not found", status_code=404)
-    elif SELF["SHUTTING_DOWN"]:
-        return Response("Node is shutting down, inputs not accepted.", status_code=410)
-
-    # needs to be here so this is reset when transferring from another dying node
-    SELF["current_input_batch_forwarded"] = False
-    SELF["all_inputs_uploaded"] = False
 
     inputs_pkl_with_idx = pickle.loads(request_files["inputs_pkl_with_idx"])
     await asyncio.sleep(0)
     for input_pkl_with_idx in inputs_pkl_with_idx:
         await SELF["inputs_queue"].put(input_pkl_with_idx, len(input_pkl_with_idx[1]))
-
-    SELF["current_input_batch_forwarded"] = True
 
 
 @router.get("/jobs/{job_id}/results")
@@ -101,12 +103,7 @@ async def get_results(job_id: str = Path(...)):
     response_json = {
         "results": results,
         "current_parallelism": SELF["current_parallelism"],
-        "is_empty": SELF["results_queue"].empty(),
     }
-
-    if SELF["all_packages_installed"] and not SELF["all_packages_installed_sent_to_client"]:
-        response_json["all_packages_installed"] = SELF["all_packages_installed"]
-        SELF["all_packages_installed_sent_to_client"] = True
 
     data = pickle.dumps(response_json)
     headers = {"Content-Disposition": 'attachment; filename="results.pkl"'}
@@ -121,7 +118,7 @@ async def execute(
     request_files: Optional[dict] = Depends(get_request_files),
     logger: Logger = Depends(get_logger),
 ):
-    logger.log(f"Executing job {job_id} ...")
+    await logger.log(f"Executing job {job_id} ...")
     # The `on_job_start` function in __init__.py is run as soon as upload to this endpoint starts.
     # It exists to set `SELF["current_job"]` and set this node to RUNNING in the db as soon as
     # upload starts if the user's function is big.
@@ -171,11 +168,9 @@ async def execute(
         return Response(msg, status_code=409)
 
     packages = request_json["packages"]
-    SELF["all_packages_installed"] = not packages
     if packages:
         # installing in one installs in all, they share volume-mounted python env
         await workers_to_assign[0].install_packages(packages)
-        SELF["all_packages_installed"] = True
 
     function_pkl = request_files["function_pkl"]
     await asyncio.gather(*(w.load_function(function_pkl) for w in workers_to_assign))

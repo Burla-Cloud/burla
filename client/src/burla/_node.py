@@ -362,8 +362,6 @@ class Node:
         self.session = session
         self.job_id = None
         self.udf_error_event = None
-        self.all_packages_installed = None
-        self.is_empty = False
         self.current_parallelism = 0
         self.installing_packages = False
         self.result_count = 0
@@ -391,7 +389,6 @@ class Node:
     def _empty_node_results(self):
         return {
             "results": [],
-            "is_empty": False,
             "current_parallelism": self.current_parallelism,
         }
 
@@ -531,7 +528,6 @@ class Node:
                     self.state = "DONE"
                     return {
                         "results": [],
-                        "is_empty": True,
                         "current_parallelism": 0,
                     }
                 if response.status != 200:
@@ -657,9 +653,6 @@ class Node:
                 else:
                     return_values.append(cloudpickle.loads(result_pkl))
 
-            if node_results.get("all_packages_installed") is not None:
-                self.all_packages_installed = node_results.get("all_packages_installed")
-            self.is_empty = node_results["is_empty"]
             self.current_parallelism = node_results["current_parallelism"]
             if return_values and not first_result_received:
                 first_result_received = True

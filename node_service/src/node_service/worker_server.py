@@ -43,24 +43,28 @@ if not shutil.which("uv"):
                     output_file.write(uv_binary.read())
     os.chmod(f"{uv_bin_directory}/uv", 0o755)
 
-subprocess.run(
-    [
-        "uv",
-        "pip",
-        "install",
-        "--python",
-        "python",
-        "--target",
-        "/worker_service_python_env",
-        "cloudpickle",
-        "tblib",
-        "burla",
-    ],
-    check=True,
-)
-
-import cloudpickle
-from tblib import Traceback
+try:
+    import cloudpickle
+    from tblib import Traceback
+    import burla
+except ImportError:
+    subprocess.run(
+        [
+            "uv",
+            "pip",
+            "install",
+            "--python",
+            "python",
+            "--target",
+            "/worker_service_python_env",
+            "cloudpickle",
+            "tblib",
+            "burla",
+        ],
+        check=True,
+    )
+    import cloudpickle
+    from tblib import Traceback
 
 LOG_START_MARKER_PREFIX = "__burla_input_start__:"
 LOG_END_MARKER_PREFIX = "__burla_input_end__:"

@@ -5,14 +5,11 @@ from typing import Optional, Callable
 import traceback
 
 import aiodocker
-from pydantic import BaseModel
 from fastapi import APIRouter, Depends, Response
 from google.cloud import firestore
 from google.cloud.compute_v1 import InstancesClient
 from google.auth.transport.requests import Request
 from google.cloud.firestore import AsyncClient
-from google.cloud.firestore import FieldFilter, And
-from google.cloud.firestore_v1.field_path import FieldPath
 
 from node_service import (
     PROJECT_ID,
@@ -25,7 +22,6 @@ from node_service import (
     BURLA_BACKEND_URL,
     CLUSTER_ID_TOKEN,
     NUM_GPUS,
-    ENV_IS_READY_PATH,
     GCL_CLIENT,
     get_logger,
     get_add_background_task_function,
@@ -37,40 +33,15 @@ from node_service.worker_client import WorkerClient
 router = APIRouter()
 
 
-class Container(BaseModel):
-    image: str
-
-    class Config:
-        extra = "ignore"
-
-
-async def get_neighboring_nodes(async_db):
-    status_filter = FieldFilter("status", "==", "RUNNING")
-    job_filter = FieldFilter("current_job", "==", SELF["current_job"])
-    query = async_db.collection("nodes").where(filter=And([status_filter, job_filter]))
-    query = query.order_by(FieldPath.document_id())
-    nodes = [node async for node in query.stream()]
-    current_node_index = None
-    for index, node in enumerate(nodes):
-        if node.id == INSTANCE_NAME:
-            current_node_index = index
-    if current_node_index is None:
-        return []
-    else:
-        return nodes[current_node_index + 1 :] + nodes[:current_node_index]
-
-
 @router.post("/shutdown")
 async def shutdown_node(logger: Logger = Depends(get_logger)):
     """
     We dont need to delete the node here because the only way to call this is to run the shutdown
     script (by deleting the node)
     """
-    start = time()
-    SELF["SHUTTING_DOWN"] = True
     SELF["job_watcher_stop_event"].set()
     SELF["current_parallelism"] = 0
-    logger.log(f"Received shutdown request for node {INSTANCE_NAME}.")
+    await logger.log(f"Received shutdown request for node {INSTANCE_NAME}.")
 
     # mark failed
     async_db = AsyncClient(project=PROJECT_ID, database="burla")
@@ -86,12 +57,10 @@ async def shutdown_node(logger: Logger = Depends(get_logger)):
             update_fields["display_in_dashboard"] = False
         await doc_ref.update(update_fields)
 
-    # TODO: on preemption, transfer queued inputs/results to other nodes
-
 
 @router.post("/reboot")
 async def reboot_containers_endpoint(
-    new_container_config: Optional[list[Container]] = None,
+    new_container_config: Optional[list[str]] = None,
     logger: Logger = Depends(get_logger),
     add_background_task: Callable = Depends(get_add_background_task_function),
 ):
@@ -135,9 +104,9 @@ async def _LOCAL_DEV_ONLY_pull_image_if_missing(
             raise
 
         try:
-            logger.log(f"Pulling image {image} ({image_size_GB(image)} GB) ...")
+            await logger.log(f"Pulling image {image} ({image_size_GB(image)} GB) ...")
         except Exception:
-            logger.log(f"Pulling image {image} ...")
+            await logger.log(f"Pulling image {image} ...")
 
         try:
             await docker.images.pull(image)
@@ -185,9 +154,9 @@ async def _pull_image_if_missing(image: str, logger: Logger, docker: aiodocker.D
         attempt += 1
 
         try:
-            logger.log(f"Pulling image {image} ({image_size_GB(image)} GB) ...")
+            await logger.log(f"Pulling image {image} ({image_size_GB(image)} GB) ...")
         except Exception:
-            logger.log(f"Pulling image {image} ...")
+            await logger.log(f"Pulling image {image} ...")
 
         returncode, stdout, stderr = await _run_command(f"docker pull {image}", raise_error=False)
         text_output = stderr.decode() + stdout.decode()
@@ -196,7 +165,7 @@ async def _pull_image_if_missing(image: str, logger: Logger, docker: aiodocker.D
         if no_transient_error or attempt > 5:
             break
         else:
-            logger.log(f"`Unexpected EOF` error detected, retrying... (attempt {attempt})")
+            await logger.log(f"`Unexpected EOF` error detected, retrying... (attempt {attempt})")
             await asyncio.sleep(3)
 
     docker_pull_failed = returncode != 0
@@ -211,7 +180,7 @@ async def _pull_image_if_missing(image: str, logger: Logger, docker: aiodocker.D
         svc_email = getattr(CREDENTIALS, "service_account_email", "<no svc account email found>")
         msg = f"Failed to pull image: {image}\n"
         msg += "Trying again using the service account credentials attached to this VM:\n"
-        logger.log(f"{msg}\n{svc_email}")
+        await logger.log(f"{msg}\n{svc_email}")
 
         if image.startswith("https://"):
             host = f'https://{image.split("/")[2]}'
@@ -230,9 +199,7 @@ async def _pull_image_if_missing(image: str, logger: Logger, docker: aiodocker.D
         await _run_command(f"docker pull {image}")
 
     # sanity check, not positive this is necessary with cli, but was with python api.
-    returncode, stdout, stderr = await _run_command(
-        f"docker inspect {image}", raise_error=False
-    )
+    returncode, stdout, stderr = await _run_command(f"docker inspect {image}", raise_error=False)
     if returncode != 0:
         msg = f"CMD: `docker pull {image}` succeeded, but subsequent `docker inspect ...` failed!\n"
         msg += f"`docker inspect` stderr:\n{stderr}\n"
@@ -248,7 +215,7 @@ async def _remove_container(container_id: str, logger: Logger):
         container = docker.containers.container(container_id)
         await container.delete(force=True)
     except Exception as e:
-        logger.log(f"Failed to remove container {container_id}: {e}", severity="WARNING")
+        await logger.log(f"Failed to remove container {container_id}: {e}", severity="WARNING")
     finally:
         await docker.close()
 
@@ -263,7 +230,7 @@ def _schedule_container_removal(
 
 
 async def reboot_containers(
-    new_container_config: Optional[list[Container]] = None,
+    new_container_config: Optional[list[str]] = None,
     logger: Logger = Depends(get_logger),
     add_background_task: Optional[Callable] = None,
 ):
@@ -274,9 +241,6 @@ async def reboot_containers(
     # immediately stop watcher thread, this IS set in REINIT_SELF below
     # but watcher breaks sometimes if it's not set right away.
     SELF["job_watcher_stop_event"].set()
-
-    # important to delete or workers wont install packages
-    ENV_IS_READY_PATH.unlink(missing_ok=True)
 
     try:
         db = firestore.Client(project=PROJECT_ID, database="burla")
@@ -351,15 +315,15 @@ async def reboot_containers(
 
             # start new workers.
             workers = []
-            for spec in SELF["current_container_config"]:
-                await _pull_image_if_missing(spec.image, logger, docker)
+            for image in SELF["current_container_config"]:
+                await _pull_image_if_missing(image, logger, docker)
                 num_workers = INSTANCE_N_CPUS if NUM_GPUS == 0 else NUM_GPUS
 
-                msg = f"Image {spec.image} pulled successfully.\nWaiting for {num_workers} workers to start ..."
-                logger.log(msg)
+                msg = f"Image {image} pulled successfully.\nWaiting for {num_workers} workers to start ..."
+                await logger.log(msg)
 
                 for _ in range(num_workers):
-                    workers.append(WorkerClient(spec.image))
+                    workers.append(WorkerClient(image))
         finally:
             await docker.close()
 
@@ -399,4 +363,4 @@ async def reboot_containers(
             raise e from parent_exception
         raise parent_exception
 
-    logger.log(f"Done booting {len(SELF['workers'])} workers, {INSTANCE_NAME} is READY!")
+    await logger.log(f"Done booting {len(SELF['workers'])} workers, {INSTANCE_NAME} is READY!")

@@ -1,5 +1,4 @@
 import asyncio
-import sys
 import requests
 from itertools import groupby
 from typing import Optional
@@ -7,9 +6,7 @@ import logging as python_logging
 from time import time
 
 from fastapi import Request
-from google.cloud.firestore import Client
-
-from node_service import IN_LOCAL_DEV_MODE, GCL_CLIENT, PROJECT_ID, BURLA_BACKEND_URL, INSTANCE_NAME
+from node_service import ASYNC_DB, IN_LOCAL_DEV_MODE, GCL_CLIENT, PROJECT_ID, BURLA_BACKEND_URL, INSTANCE_NAME
 
 
 def format_traceback(traceback_details: list):
@@ -46,32 +43,12 @@ class SizedQueue(asyncio.Queue):
         self.size_bytes -= size_bytes
         return item
 
-class FirestoreLogHandler(python_logging.Handler):
-    def __init__(self):
-        super().__init__()
-        client = Client(project=PROJECT_ID, database="burla")
-        self.log_collection = client.collection("nodes").document(INSTANCE_NAME).collection("logs")
-
-    def emit(self, record):
-        try:
-            self.log_collection.document().set({"msg": record.getMessage(), "ts": time()})
-        except Exception as e:
-            print(f"Error logging to firestore: {e}")
-
-
 class Logger:
 
     def __init__(self, request: Optional[Request] = None):
         self.request = request
         self.loggable_request = None
-
-        # using prints instead of logger.info causes a bunch of issues with threading
-        self.logger = python_logging.getLogger("node_service")
-        if not self.logger.handlers:
-            self.logger.setLevel(python_logging.INFO)
-            self.logger.addHandler(python_logging.StreamHandler(sys.stdout))
-            self.logger.addHandler(FirestoreLogHandler())
-            self.logger.propagate = False
+        self.log_collection = ASYNC_DB.collection("nodes").document(INSTANCE_NAME).collection("logs")
 
     def __make_serializeable(self, obj):
         """
@@ -106,24 +83,31 @@ class Logger:
         # google cloud logging won't log tuples or bytes objects.
         return self.__make_serializeable(request_dict)
 
-    def log(self, message: str, severity="INFO", **kw):
+    async def log(self, message: str, severity="INFO", **kw):
         if (self.loggable_request is None) and self.request:
             self.loggable_request = self.__loggable_request(self.request)
 
-        if "traceback" in kw.keys():
-            self.logger.error(kw["traceback"].strip())
+        traceback_str = kw.get("traceback")
+        if traceback_str:
+            print(traceback_str.strip())
         else:
-            self.logger.info(message)
+            print(message)
+
+        firestore_msg = traceback_str.strip() if traceback_str else message
+        await self.log_collection.document().set({"msg": firestore_msg, "ts": time()})
 
         if not IN_LOCAL_DEV_MODE:
             struct = dict(message=message, request=self.loggable_request, **kw)
-            GCL_CLIENT.log_struct(struct, severity=severity)
+            await asyncio.to_thread(GCL_CLIENT.log_struct, struct, severity=severity)
 
-        # Report errors back to Burla's cloud.
-        if severity == "ERROR" or "traceback" in kw:
+        if severity == "ERROR" or traceback_str:
             try:
-                tb = kw.get("traceback", "")
-                json = {"project_id": PROJECT_ID, "message": message, "traceback": tb}
-                requests.post(f"{BURLA_BACKEND_URL}/v1/telemetry/log/ERROR", json=json, timeout=1)
+                payload = {"project_id": PROJECT_ID, "message": message, "traceback": traceback_str or ""}
+                await asyncio.to_thread(
+                    requests.post,
+                    f"{BURLA_BACKEND_URL}/v1/telemetry/log/ERROR",
+                    json=payload,
+                    timeout=1,
+                )
             except Exception:
                 pass

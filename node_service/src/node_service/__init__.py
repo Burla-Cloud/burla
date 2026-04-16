@@ -4,7 +4,6 @@ import json
 import inspect
 import asyncio
 import traceback
-from pathlib import Path
 from uuid import uuid4
 from time import time
 from typing import Callable
@@ -43,8 +42,6 @@ INACTIVITY_SHUTDOWN_TIME_SEC = int(os.environ.get("INACTIVITY_SHUTDOWN_TIME_SEC"
 INSTANCE_N_CPUS = 2 if IN_LOCAL_DEV_MODE else os.cpu_count()
 GCL_CLIENT = logging.Client().logger("node_service", labels=dict(INSTANCE_NAME=INSTANCE_NAME))
 
-ENV_IS_READY_PATH = Path("/worker_service_python_env/.ALL_PACKAGES_INSTALLED")
-
 secret_client = secretmanager.SecretManagerServiceClient()
 secret_name = f"projects/{PROJECT_ID}/secrets/burla-cluster-id-token/versions/latest"
 response = secret_client.access_secret_version(request={"name": secret_name})
@@ -62,19 +59,14 @@ def REINIT_SELF(SELF):
     SELF["current_job"] = None
     SELF["current_parallelism"] = 0
     SELF["job_watcher_stop_event"] = Event()
+    SELF["job_watcher_stop_event"].set()  # needs to be default set so it definitely dies on reboot
     SELF["job_watcher_task"] = None
     SELF["BOOTING"] = False
     SELF["RUNNING"] = False
     SELF["FAILED"] = False
-    SELF["SHUTTING_DOWN"] = False
     SELF["current_container_config"] = []
-    SELF["job_watcher_stop_event"].set()  # needs to be default set so it definitely dies on reboot
     SELF["all_inputs_uploaded"] = False
-    SELF["current_input_batch_forwarded"] = True
     SELF["num_results_received"] = 0
-    SELF["all_packages_installed"] = False
-    SELF["all_packages_installed_sent_to_client"] = False
-    SELF["udf_start_latency"] = None
     SELF["active_client_request_count"] = 0
     SELF["last_client_activity_timestamp"] = time()
 
@@ -130,7 +122,7 @@ def get_add_background_task_function(
                 tb_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
                 local_traceback_no_title = "\n".join(format_traceback(tb_details).split("\n")[1:])
                 traceback_str = parent_traceback + local_traceback_no_title
-                logger.log(message=str(e), severity="ERROR", traceback=traceback_str)
+                await logger.log(message=str(e), severity="ERROR", traceback=traceback_str)
 
         background_tasks.add_task(func_logged, *a, **kw)
 
@@ -142,7 +134,6 @@ from node_service.job_endpoints import router as job_endpoints_router
 from node_service.lifecycle_endpoints import (
     reboot_containers,
     router as lifecycle_endpoints_router,
-    Container,
 )
 
 
@@ -157,7 +148,7 @@ async def shutdown_if_idle_for_too_long(logger: Logger):
     if not IN_LOCAL_DEV_MODE:
         msg = f"Node has been idle for {INACTIVITY_SHUTDOWN_TIME_SEC // 60} minutes.\n"
         msg += f"SHUTTING DOWN NODE {INSTANCE_NAME} DUE TO INACTIVITY."
-        logger.log(msg, severity="WARNING")
+        await logger.log(msg, severity="WARNING")
 
         client = firestore.Client(project=PROJECT_ID, database="burla")
         node_doc = client.collection("nodes").document(INSTANCE_NAME)
@@ -172,13 +163,13 @@ async def shutdown_if_idle_for_too_long(logger: Logger):
             zone = vm.zone.split("/")[-1]
             instance_client.delete(project=PROJECT_ID, zone=zone, instance=INSTANCE_NAME)
     else:
-        logger.log(f"Would have deleted vm due to inactivity here! {INSTANCE_NAME}")
+        await logger.log(f"Would have deleted vm due to inactivity here! {INSTANCE_NAME}")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger = Logger()
-    logger.log(f"Started node service v{__version__}")
+    await logger.log(f"Started node service v{__version__}")
 
     # In dev all the workers restart everytime I hit save (server is in "reload" mode)
     # This is annoying but you must leave it like this, otherwise stuff won't restart correctly!
@@ -187,13 +178,12 @@ async def lifespan(app: FastAPI):
 
     if INACTIVITY_SHUTDOWN_TIME_SEC:
         asyncio.create_task(shutdown_if_idle_for_too_long(logger=logger))
-        logger.log(
-            f"This node will shutdown if idle for {INACTIVITY_SHUTDOWN_TIME_SEC//60} minutes!"
-        )
+        msg = f"This node will shutdown if idle for {INACTIVITY_SHUTDOWN_TIME_SEC//60} minutes!"
+        await logger.log(msg)
 
     # boot containers before accepting any requests.
     # `reboot_containers` will delete VM's if it fails, no need to do that here.
-    containers = [Container(**c) for c in json.loads(os.environ["CONTAINERS"])]
+    containers = [c["image"] for c in json.loads(os.environ["CONTAINERS"])]
     await reboot_containers(new_container_config=containers, logger=logger)
 
     yield
@@ -285,7 +275,7 @@ app.include_router(lifecycle_endpoints_router)
 
 
 @app.get("/")
-def get_status():
+async def get_status():
     if SELF["FAILED"]:
         return {"status": "FAILED"}
     elif SELF["BOOTING"]:
@@ -303,7 +293,7 @@ async def client_heartbeat(request: Request, logger: Logger = Depends(get_logger
         now = time()
         seconds_since_last_ping = now - (last_ping_received_at or now)
         if seconds_since_last_ping > 2:
-            logger.log(f"high heartbeat gap: {seconds_since_last_ping:.3f}s", severity="WARNING")
+            await logger.log(f"high heartbeat gap: {seconds_since_last_ping:.3f}s", severity="WARNING")
         last_ping_received_at = now
         await asyncio.sleep(0)
     return Response(status_code=204)
@@ -316,6 +306,7 @@ async def handle_errors(request: Request, call_next):
     Catching errors in a `Depends` function will not distinguish
         http errors originating here vs other services.
     """
+    logger = Logger(request)
     try:
         # Important to note that HTTP exceptions do not raise errors here!
         response = await call_next(request)
@@ -327,8 +318,7 @@ async def handle_errors(request: Request, call_next):
         exc_type, exc_value, exc_traceback = sys.exc_info()
         tb_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
         traceback_str = format_traceback(tb_details)
-        logger = Logger(request)
-        logger.log(str(exception), "ERROR", traceback=traceback_str)
+        await logger.log(str(exception), "ERROR", traceback=traceback_str)
 
     # handle response failure/success:
     if response.status_code == 500 and not str(request.url).endswith("/shutdown"):

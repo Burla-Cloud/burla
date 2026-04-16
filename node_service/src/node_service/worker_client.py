@@ -441,11 +441,6 @@ class WorkerClient:
             await self._raise_if_worker_failed()
 
     async def reset(self):
-        if self.writer is not None:
-            self.writer.write(b"r")
-            self.writer.write((0).to_bytes(8, "big"))
-            await self.writer.drain()
-            await self._read_response()
         if self.process_inputs_task is not None:
             self.process_inputs_task.cancel()
             try:
@@ -453,6 +448,13 @@ class WorkerClient:
             except asyncio.CancelledError:
                 pass
             self.process_inputs_task = None
+        if self.writer is not None:
+            if not self.is_idle:
+                await self._read_response()
+            self.writer.write(b"r")
+            self.writer.write((0).to_bytes(8, "big"))
+            await self.writer.drain()
+            await self._read_response()
         if self.log_writer is not None:
             await self.log_writer.stop()
             self.log_writer = None

@@ -336,7 +336,7 @@ async def reboot_containers(
 
         # main_service writes the host field after creating the VM/container.
         # Wait for that before marking READY so clients never see READY with host=None.
-        while (await node_doc.get()).to_dict().get("host") is None:
+        while node_doc.get().to_dict().get("host") is None:
             await asyncio.sleep(1)
 
         node_doc.update({"status": "READY"})

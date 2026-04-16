@@ -76,7 +76,7 @@ async def _input_steal_loop(
         url = f"{neighbor_host}/jobs/{SELF['current_job']}/input_transfer"
         async with session.get(url, params=params, headers=SELF["auth_headers"]) as response:
             if response.status == 404:
-                continue
+                nodes_might_join = True
             elif response.status == 200:
                 num_inputs_received = int(await response.text())
             else:
@@ -190,6 +190,7 @@ async def _job_watcher(
             if SELF["results_queue"].empty() and all_workers_idle:
                 msg = f"Neighbor had no extra inputs for {EMPTY_NEIGHBOR_TIMEOUT_SEC}s"
                 await logger.log(msg + ", done working on job!")
+                await node_doc.update({"client_contact_last_1s": False})
                 await reset_workers(logger, async_db)
                 break
 
@@ -212,6 +213,7 @@ async def _job_watcher(
                 sync_job_doc.update({"status": status})
             except Exception:
                 pass
+            await node_doc.update({"client_contact_last_1s": False})
             await reset_workers(logger, async_db)
             break
 

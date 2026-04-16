@@ -333,6 +333,12 @@ async def reboot_containers(
         await workers[0].boot()
         await asyncio.gather(*[worker.boot() for worker in workers[1:]])
         SELF["BOOTING"] = False
+
+        # main_service writes the host field after creating the VM/container.
+        # Wait for that before marking READY so clients never see READY with host=None.
+        while (await node_doc.get()).to_dict().get("host") is None:
+            await asyncio.sleep(1)
+
         node_doc.update({"status": "READY"})
 
     except Exception as parent_exception:

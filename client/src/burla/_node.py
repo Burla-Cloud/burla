@@ -147,7 +147,7 @@ async def get_ready_nodes(db: AsyncClient) -> list[dict]:
         docs = await asyncio.wait_for(ready_nodes_coroutine, timeout=LOGIN_TIMEOUT_SEC)
     except asyncio.TimeoutError:
         raise FirestoreTimeout()
-    return [document.to_dict() for document in docs]
+    return [document.to_dict() for document in docs if not document.to_dict().get("reserved_for_job")]
 
 
 async def wait_for_nodes_to_be_ready(

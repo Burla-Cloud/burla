@@ -129,6 +129,7 @@ class Node:
         inactivity_shutdown_time_sec: Optional[int] = None,
         disk_size: Optional[int] = None,
         instance_name: Optional[str] = None,
+        reserved_for_job: Optional[str] = None,
     ):
         self = cls.__new__(cls)
         self.db = db
@@ -141,6 +142,7 @@ class Node:
         self.port = service_port
         self.sync_gcs_bucket_name = sync_gcs_bucket_name
         self.inactivity_shutdown_time_sec = inactivity_shutdown_time_sec
+        self.reserved_for_job = reserved_for_job
         self.disk_size = disk_size if disk_size else 20  # minimum is 10 due to disk image
         self.instance_client = instance_client if instance_client else InstancesClient()
         self.machine_types_client = (
@@ -312,6 +314,7 @@ class Node:
                 "INSTANCE_NAME": self.instance_name,
                 "CONTAINERS": json.dumps([c.to_dict() for c in self.containers]),
                 "INACTIVITY_SHUTDOWN_TIME_SEC": self.inactivity_shutdown_time_sec,
+                "RESERVED_FOR_JOB": self.reserved_for_job or "",
                 "NUM_GPUS": 0,
             },
             detach=True,
@@ -496,6 +499,7 @@ class Node:
         export PROJECT_ID="{PROJECT_ID}"
         export CONTAINERS='{json.dumps([c.to_dict() for c in self.containers])}'
         export INACTIVITY_SHUTDOWN_TIME_SEC="{self.inactivity_shutdown_time_sec}"
+        export RESERVED_FOR_JOB="{self.reserved_for_job or ''}"
 
         cd /opt/burla
         git fetch --depth=1 origin "{CURRENT_BURLA_VERSION}"

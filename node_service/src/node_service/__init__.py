@@ -38,7 +38,9 @@ IN_LOCAL_DEV_MODE = os.environ.get("IN_LOCAL_DEV_MODE") == "True"  # Cluster run
 
 NUM_GPUS = int(os.environ.get("NUM_GPUS"))
 INSTANCE_NAME = os.environ["INSTANCE_NAME"]
-INACTIVITY_SHUTDOWN_TIME_SEC = int(os.environ.get("INACTIVITY_SHUTDOWN_TIME_SEC"))
+_raw_inactivity = os.environ.get("INACTIVITY_SHUTDOWN_TIME_SEC")
+INACTIVITY_SHUTDOWN_TIME_SEC = int(_raw_inactivity) if _raw_inactivity is not None else None
+RESERVED_FOR_JOB = os.environ.get("RESERVED_FOR_JOB") or None
 INSTANCE_N_CPUS = 2 if IN_LOCAL_DEV_MODE else os.cpu_count()
 GCL_CLIENT = logging.Client().logger("node_service", labels=dict(INSTANCE_NAME=INSTANCE_NAME))
 
@@ -71,10 +73,12 @@ def REINIT_SELF(SELF):
     SELF["inputs_pending_transfer"] = []
     SELF["active_client_request_count"] = 0
     SELF["last_client_activity_timestamp"] = time()
+    SELF["reserved_for_job"] = None
 
 
 SELF = {}
 REINIT_SELF(SELF)
+SELF["reserved_for_job"] = RESERVED_FOR_JOB
 
 # Silence fastapi logs coming from the `/results` endpoint, there are so many it slows stuff down.
 python_logging.getLogger("uvicorn.access").addFilter(ResultsEndpointFilter())
@@ -143,7 +147,7 @@ async def shutdown_if_idle_for_too_long(logger: Logger):
     """WARNING: Errors from this function are completely hidden!"""
 
     time_since_last_activity = 0
-    while time_since_last_activity < INACTIVITY_SHUTDOWN_TIME_SEC or SELF["current_job"]:
+    while time_since_last_activity < INACTIVITY_SHUTDOWN_TIME_SEC or SELF["current_job"] or SELF["reserved_for_job"]:
         await asyncio.sleep(5)
         time_since_last_activity = time() - SELF["last_client_activity_timestamp"]
 
@@ -178,7 +182,7 @@ async def lifespan(app: FastAPI):
     # (you tried skipping the worker restarts here when reloading,
     # this won't work because this whole file re-runs, and SELF is reset when reloading.)
 
-    if INACTIVITY_SHUTDOWN_TIME_SEC:
+    if INACTIVITY_SHUTDOWN_TIME_SEC is not None:
         asyncio.create_task(shutdown_if_idle_for_too_long(logger=logger))
         msg = f"This node will shutdown if idle for {INACTIVITY_SHUTDOWN_TIME_SEC//60} minutes!"
         await logger.log(msg)
@@ -194,12 +198,13 @@ async def lifespan(app: FastAPI):
 async def on_job_start(scope, first_event):
     job_id = scope.get("path", "").split("/jobs/")[-1]
     node_doc = ASYNC_DB.collection("nodes").document(INSTANCE_NAME)
-    await node_doc.update({"status": "RUNNING", "current_job": job_id})
+    await node_doc.update({"status": "RUNNING", "current_job": job_id, "reserved_for_job": None})
     # these must be set after ^
     # used to confirm in execution endpoint that this ran BEFORE setting node back to ready
     # in the case of a failure, it may not have because async.
     SELF["RUNNING"] = True
     SELF["current_job"] = job_id
+    SELF["reserved_for_job"] = None
 
 
 class CallHookOnJobStartMiddleware:

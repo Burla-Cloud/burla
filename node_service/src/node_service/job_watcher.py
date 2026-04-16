@@ -265,7 +265,7 @@ async def reinit_node(assigned_workers: list, async_db: AsyncClient):
     SELF["workers"] = current_workers
     SELF["authorized_users"] = authorized_users
     node_doc = async_db.collection("nodes").document(INSTANCE_NAME)
-    await node_doc.update({"status": "READY", "current_job": None})
+    await node_doc.update({"status": "READY", "current_job": None, "reserved_for_job": None})
 
 
 async def reset_workers(logger: Logger, async_db: AsyncClient):

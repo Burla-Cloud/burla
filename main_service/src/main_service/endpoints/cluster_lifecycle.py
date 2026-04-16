@@ -82,6 +82,7 @@ def _start_nodes(
     config: dict,
     n_nodes_to_add: int = None,
     node_instance_names: list[str] = None,
+    reserved_for_job: str = None,
 ):
     node_service_port = _current_local_dev_max_node_port()
     futures = []
@@ -113,6 +114,7 @@ def _start_nodes(
                 inactivity_shutdown_time_sec=node_spec.get("inactivity_shutdown_time_sec"),
                 disk_size=node_spec.get("disk_size_gb"),
                 instance_name=instance_name,
+                reserved_for_job=reserved_for_job,
             )
             futures.append(executor.submit(_add_node_logged, **node_start_kwargs))
         if n_nodes_to_add is not None:
@@ -184,6 +186,7 @@ async def grow_cluster(
     request_json = await request.json()
     current_cpus = int(request_json["current_cpus"])
     cpu_deficit = int(request_json["missing_cpus"])
+    reserved_for_job = request_json.get("job_id")
 
     max_cpu = LOCAL_DEV_MAX_GROW_CPUS if IN_LOCAL_DEV_MODE else MAX_GROW_CPUS
     max_additional_cpus = max(0, max_cpu - current_cpus)
@@ -203,6 +206,7 @@ async def grow_cluster(
             config,
             n_nodes_to_add,
             node_instance_names,
+            reserved_for_job,
         )
 
     return {"added_node_instance_names": node_instance_names}

@@ -1,5 +1,6 @@
 import asyncio
 import json
+import random
 import sys
 import traceback
 import base64
@@ -78,9 +79,9 @@ EXEC_TYPES_TO_NOT_ALERT = [
 
 
 async def _grow_cluster(
-    current_cpus: int, missing_cpus: int, session, async_db, spinner
+    current_cpus: int, missing_cpus: int, job_id: str, session, async_db, spinner
 ) -> list[Node]:
-    request_json = {"current_cpus": current_cpus, "missing_cpus": missing_cpus}
+    request_json = {"current_cpus": current_cpus, "missing_cpus": missing_cpus, "job_id": job_id}
     auth_headers = get_auth_headers()
     main_service_url = json.loads(CONFIG_PATH.read_text())["cluster_dashboard_url"]
     url = f"{main_service_url}/v1/cluster/grow"
@@ -185,6 +186,7 @@ async def _execute_job(
             booting_nodes = await _grow_cluster(
                 current_cpus,
                 missing_cpus,
+                job_id,
                 session,
                 async_db,
                 spinner,
@@ -253,6 +255,7 @@ async def _execute_job(
     node_tasks = []
     n_inputs = len(inputs)  # <- inputs will be popped from so len(inputs) will start changing
     inputs_with_indicies = list(enumerate(inputs))
+    random.shuffle(inputs_with_indicies)
     total_parallelism = max(1, sum(n.target_parallelism for n in nodes))
     node_ids_expected = [n.instance_name for n in nodes]
     for node in nodes:

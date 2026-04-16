@@ -488,9 +488,9 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
                                         type="number"
                                         disabled={!isEditing}
                                         className="w-full h-9.5"
-                                        min={1}
+                                        min={0}
                                         max={1440}
-                                        value={settings.inactivityTimeout || ""}
+                                        value={settings.inactivityTimeout ?? ""}
                                         onChange={(e) => {
                                             const raw = e.target.value;
                                             const num = parseInt(raw, 10);
@@ -502,8 +502,8 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
                                         }}
                                         onBlur={(e) => {
                                             const val = parseInt(e.target.value, 10);
-                                            if (val < 1) {
-                                                handleInputChange("inactivityTimeout", 1);
+                                            if (val < 0) {
+                                                handleInputChange("inactivityTimeout", 0);
                                             } else if (val > 1440) {
                                                 handleInputChange("inactivityTimeout", 1440);
                                             }

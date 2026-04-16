@@ -23,7 +23,7 @@ from burla._helpers import parallelism_capacity
 from burla._reporting import RemoteParallelMapReporter
 
 
-NODE_SILENCE_TIMEOUT_SECONDS = 10 * 60
+NODE_SILENCE_TIMEOUT_SECONDS = 2 * 60
 LOGIN_TIMEOUT_SEC = 5
 MAX_INPUT_SIZE_BYTES = 1_000_000 * 200  # 200MB
 NETWORK_RETRY_ATTEMPTS = 5
@@ -116,14 +116,14 @@ async def _post_with_retries(session, url, headers, data, max_retries=5):
             await asyncio.sleep(0.5)
 
 
-async def _run_network_request_with_retries(request_function):
+async def _run_network_request_with_retries(request_function, max_retries=NETWORK_RETRY_ATTEMPTS):
     last_error = None
-    for attempt_index in range(NETWORK_RETRY_ATTEMPTS):
+    for attempt_index in range(max_retries):
         try:
             return await request_function()
         except NETWORK_ERROR_TYPES as error:
             last_error = error
-            if attempt_index == NETWORK_RETRY_ATTEMPTS - 1:
+            if attempt_index == max_retries - 1:
                 raise last_error
             await asyncio.sleep(NETWORK_RETRY_DELAY_SECONDS)
 
@@ -266,7 +266,7 @@ class Node:
         return self._seconds_since_last_reply() > NODE_SILENCE_TIMEOUT_SECONDS
 
     def _node_silence_timeout_message(self, action: str):
-        return f"Node {self.instance_name} has not replied for over 10 minutes while {action}.\n"
+        return f"Node {self.instance_name} has not replied for over 2 minutes while {action}.\n"
 
     def _empty_node_results(self):
         return {
@@ -347,6 +347,7 @@ class Node:
         start_time: float,
         function_pkl: bytes,
         udf_error_event: Event,
+        node_ids_expected: list,
     ):
         request_json = {
             "parallelism": self.target_parallelism,
@@ -355,9 +356,10 @@ class Node:
             "n_inputs": n_inputs,
             "packages": packages,
             "start_time": start_time,
+            "node_ids_expected": node_ids_expected,
         }
         url = f"{self.host}/jobs/{job_id}"
-        timeout = aiohttp.ClientTimeout(300)
+        timeout = aiohttp.ClientTimeout(120)
         self.last_reply_timestamp = time()
 
         async def request_function():
@@ -386,7 +388,7 @@ class Node:
 
         while True:
             try:
-                return await _run_network_request_with_retries(request_function)
+                return await _run_network_request_with_retries(request_function, max_retries=2)
             except NETWORK_ERROR_TYPES:
                 if self._node_silence_timeout_exceeded():
                     await self._fail_and_delete(self._node_silence_timeout_message("assigning job"))
@@ -399,7 +401,7 @@ class Node:
             return await self.session.get(
                 url,
                 headers=self.auth_headers,
-                timeout=ClientTimeout(total=60),
+                timeout=ClientTimeout(total=15),
             )
 
         try:
@@ -465,6 +467,7 @@ class Node:
         total_parallelism: int,
         inputs_with_indicies: list,
         return_queue: Queue,
+        node_ids_expected: list,
     ):
         # wait until ready
         if self.state != "READY":
@@ -478,7 +481,8 @@ class Node:
         if packages:
             self.installing_packages = True
         await self._assign_job(
-            job_id, background, n_inputs, packages, start_time, function_pkl, udf_error_event
+            job_id, background, n_inputs, packages, start_time, function_pkl, udf_error_event,
+            node_ids_expected,
         )
         self.installing_packages = False
         if self.state == "FAILED":

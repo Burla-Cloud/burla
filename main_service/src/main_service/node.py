@@ -66,10 +66,13 @@ GCE_DEFAULT_SVC = f"{project.name.split('/')[-1]}-compute@developer.gserviceacco
 NODE_BOOT_TIMEOUT = 60 * 10
 
 
-def zones_supporting_machine_type(region_name: str, machine_type_name: str):
+def zones_supporting_machine_type(
+    region_name: str, machine_type_name: str, machine_types_client=None
+):
     name_filter = f"name={machine_type_name}"
     request = AggregatedListMachineTypesRequest(project=PROJECT_ID, filter=name_filter)
-    zone_generator = MachineTypesClient().aggregated_list(request=request)
+    client = machine_types_client or MachineTypesClient()
+    zone_generator = client.aggregated_list(request=request)
     for zone, matches in zone_generator:
         if matches.machine_types and zone.startswith(f"zones/{region_name}"):
             yield zone.split("/")[1]
@@ -122,6 +125,7 @@ class Node:
         as_local_container: bool = False,
         sync_gcs_bucket_name: Optional[str] = None,  # <- not a uri, just the name
         instance_client: Optional[InstancesClient] = None,
+        machine_types_client: Optional[MachineTypesClient] = None,
         inactivity_shutdown_time_sec: Optional[int] = None,
         disk_size: Optional[int] = None,
         instance_name: Optional[str] = None,
@@ -139,6 +143,9 @@ class Node:
         self.inactivity_shutdown_time_sec = inactivity_shutdown_time_sec
         self.disk_size = disk_size if disk_size else 20  # minimum is 10 due to disk image
         self.instance_client = instance_client if instance_client else InstancesClient()
+        self.machine_types_client = (
+            machine_types_client if machine_types_client else MachineTypesClient()
+        )
 
         self.instance_name = instance_name if instance_name else f"burla-node-{uuid4().hex[:8]}"
         self.started_booting_at = time()
@@ -165,7 +172,14 @@ class Node:
         current_state["min_compatible_client_version"] = MIN_COMPATIBLE_CLIENT_VERSION
         current_state["display_in_dashboard"] = True
         current_state["containers"] = [container.to_dict() for container in containers]
-        attrs_to_not_save = ["db", "logger", "instance_client", "node_ref", "auth_headers"]
+        attrs_to_not_save = [
+            "db",
+            "logger",
+            "instance_client",
+            "machine_types_client",
+            "node_ref",
+            "auth_headers",
+        ]
         current_state = {k: v for k, v in current_state.items() if k not in attrs_to_not_save}
         self.node_ref.set(current_state)
 
@@ -344,7 +358,11 @@ class Node:
         startup_script_metadata = Items(key="startup-script", value=startup_script)
         shutdown_script_metadata = Items(key="shutdown-script", value=shutdown_script)
         exhausted_zones = []
-        zones = list(zones_supporting_machine_type(self.gcp_region, self.machine_type))
+        zones = list(
+            zones_supporting_machine_type(
+                self.gcp_region, self.machine_type, self.machine_types_client
+            )
+        )
         if not zones:
             msg = f"None of the zones in region {self.gcp_region} "
             raise Exception(msg + f"support the machine type {self.machine_type}.")

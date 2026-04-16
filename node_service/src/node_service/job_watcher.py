@@ -18,72 +18,73 @@ EMPTY_NEIGHBOR_TIMEOUT_SEC = 60
 CLIENT_CONTACT_TIMEOUT_SEC = 5
 JOB_DOC_CONTACT_TIMEOUT_SEC = 4
 
-NEIGHBOR_CACHE_TTL = 5
 SEC_NEIGHBOR_HAD_NO_INPUTS = 0
 
 
-async def get_neighbor(async_db):
+async def get_neighbor(async_db, node_ids_expected):
     status_filter = FieldFilter("status", "==", "RUNNING")
     job_filter = FieldFilter("current_job", "==", SELF["current_job"])
     query = async_db.collection("nodes").where(filter=And([status_filter, job_filter]))
     query = query.order_by(FieldPath.document_id())
     nodes = [node async for node in query.stream()]
     self_index = [i for i, n in enumerate(nodes) if n.id == INSTANCE_NAME]
+
+    running_node_ids = {n.id for n in nodes}
+    missing_node_ids = [nid for nid in node_ids_expected if nid not in running_node_ids]
+    still_booting = False
+    if missing_node_ids:
+        booting_filter = FieldFilter("status", "==", "BOOTING")
+        query = async_db.collection("nodes").where(filter=booting_filter).stream()
+        booting_nodes = {n.id async for n in query}
+        still_booting = any(nid in booting_nodes for nid in missing_node_ids)
+
+    neighbor_id, neighbor_host = None, None
     if self_index and len(nodes) > 1:
         neighbors = nodes[self_index[0] + 1 :] + nodes[: self_index[0]]
-        return neighbors[0].id, neighbors[0].to_dict()["host"]
-    return None, None
+        neighbor_id = neighbors[0].id
+        neighbor_host = neighbors[0].to_dict()["host"]
+    return neighbor_id, neighbor_host, still_booting
 
 
-async def _input_steal_loop(async_db, session, logger, self_host, job_started_at):
+async def _input_steal_loop(
+    async_db, session, logger, self_host, job_started_at, node_ids_expected
+):
     global SEC_NEIGHBOR_HAD_NO_INPUTS
 
-    last_neighbor_refresh = 0
-    no_neighbor_since = None
+    should_steal = lambda: SELF["all_inputs_uploaded"] and (time() - job_started_at > 10)
+    neighbor_id, neighbor_host, nodes_might_join = await get_neighbor(async_db, node_ids_expected)
     neighbor_had_no_inputs_at = None
 
     while not SELF["job_watcher_stop_event"].is_set():
-        await asyncio.sleep(0.2)
+        await asyncio.sleep(1)
 
-        # should steal?
-        remaining_inputs = SELF["inputs_queue"].qsize()
-        job_past_startup = time() - job_started_at > 10
-        should_steal = SELF["all_inputs_uploaded"] and job_past_startup
-        if not should_steal:
+        if not should_steal():
             await asyncio.sleep(1)
             continue
 
-        try:
-            # get neighbor
-            if time() - last_neighbor_refresh > NEIGHBOR_CACHE_TTL:
-                neighbor_id, neighbor_host = await get_neighbor(async_db)
-                last_neighbor_refresh = time()
-                if not neighbor_id:
-                    no_neighbor_since = no_neighbor_since or time()
-                    if time() - no_neighbor_since > 600:
-                        await logger.log("No neighbors found for 10 minutes, giving up.")
-                        return
-                    await asyncio.sleep(20)
-                    continue
-                no_neighbor_since = None
+        if nodes_might_join and (time() - job_started_at > 60):
+            _get_neighbor = get_neighbor(async_db, node_ids_expected)
+            neighbor_id, neighbor_host, nodes_might_join = await _get_neighbor
+            if not (neighbor_id or nodes_might_join):
+                return
+            if not neighbor_id:
+                continue
 
-            # get inputs from neighbor
-            num_inputs_received = 0
-            params = {"requester_queue_size": remaining_inputs, "requester_host": self_host}
-            url = f"{neighbor_host}/jobs/{SELF['current_job']}/input_transfer"
-            async with session.get(url, params=params, headers=SELF["auth_headers"]) as response:
-                if response.status == 404:
-                    last_neighbor_refresh = time() - NEIGHBOR_CACHE_TTL - 1
-                    continue
-                elif response.status == 200:
-                    num_inputs_received = int(await response.text())
-                else:
-                    msg = f"Error getting inputs from neighbor: {response.status}"
-                    await logger.log(msg, "ERROR")
-        except Exception as e:
-            await logger.log(f"Error in steal loop: {e}", "ERROR")
-            await asyncio.sleep(5)
-            continue
+        num_inputs_received = 0
+        remaining_inputs = SELF["inputs_queue"].qsize()
+        params = {"requester_queue_size": remaining_inputs, "requester_host": self_host}
+        url = f"{neighbor_host}/jobs/{SELF['current_job']}/input_transfer"
+        async with session.get(url, params=params, headers=SELF["auth_headers"]) as response:
+            if response.status == 404:
+                continue
+            elif response.status == 200:
+                num_inputs_received = int(await response.text())
+            else:
+                nodes_might_join = True  # <- refreshes current neighbor
+                msg = f"Error getting inputs from neighbor: {response.status}"
+                await logger.log(msg, "ERROR")
+                await asyncio.sleep(5)
+                continue
 
         if num_inputs_received > 0:
             neighbor_had_no_inputs_at = None
@@ -99,6 +100,7 @@ async def _job_watcher(
     n_inputs: int,
     is_background_job: bool,
     job_started_at: float,
+    node_ids_expected: list,
     logger: Logger,
     async_db: AsyncClient,
     session: aiohttp.ClientSession,
@@ -136,7 +138,7 @@ async def _job_watcher(
     exit_stack.append(job_watch.unsubscribe)
 
     steal_task = asyncio.create_task(
-        _input_steal_loop(async_db, session, logger, self_host, job_started_at)
+        _input_steal_loop(async_db, session, logger, self_host, job_started_at, node_ids_expected)
     )
 
     last_results_update_time = time()
@@ -145,7 +147,7 @@ async def _job_watcher(
     while not SELF["job_watcher_stop_event"].is_set():
 
         SELF["current_parallelism"] = sum(not worker.is_idle for worker in SELF["workers"])
-        remaining_inputs = SELF["inputs_queue"].qsize()
+        remaining_inputs = SELF["inputs_queue"].qsize() + len(SELF["inputs_pending_transfer"])
         input_queue_empty = remaining_inputs == 0
         all_workers_idle = SELF["current_parallelism"] == 0
         slow_poll = input_queue_empty and all_workers_idle and (time() - job_started_at) >= 7
@@ -217,7 +219,7 @@ async def _job_watcher(
 
 
 async def job_watcher_logged(
-    n_inputs: int, is_background_job: bool, job_started_at: float
+    n_inputs: int, is_background_job: bool, job_started_at: float, node_ids_expected: list
 ):
     logger = Logger()  # new logger has no request attached like the one in execute job did.
 
@@ -229,6 +231,7 @@ async def job_watcher_logged(
                 n_inputs,
                 is_background_job,
                 job_started_at,
+                node_ids_expected,
                 logger,
                 async_db,
                 session,

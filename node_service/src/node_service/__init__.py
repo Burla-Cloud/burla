@@ -68,6 +68,7 @@ def REINIT_SELF(SELF):
     SELF["auth_headers"] = {}
     SELF["all_inputs_uploaded"] = False
     SELF["num_results_received"] = 0
+    SELF["inputs_pending_transfer"] = []
     SELF["active_client_request_count"] = 0
     SELF["last_client_activity_timestamp"] = time()
 

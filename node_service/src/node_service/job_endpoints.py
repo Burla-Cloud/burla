@@ -30,40 +30,44 @@ async def input_transfer(
     if job_id != SELF["current_job"]:
         return Response("job not found", status_code=404)
 
-    difference = SELF["inputs_queue"].qsize() - requester_queue_size
-    num_inputs_to_give = max(difference, 1) // 2  # <- evals to 0 when Qs are same size
-
-    inputs_to_send = []
     total_bytes = 0
+    SELF["inputs_pending_transfer"] = []
     difference = SELF["inputs_queue"].qsize() - requester_queue_size
-    num_inputs_to_give = max(difference, 1) // 2  # <- evals to 0 when Qs are same size
-    while len(inputs_to_send) < num_inputs_to_give and total_bytes < 3_000_000:
+    target_num_to_transfer = max(difference, 1) // 2  # <- evals to 0 when Qs are same size
+    while len(SELF["inputs_pending_transfer"]) < target_num_to_transfer:
         try:
             input_pkl_with_idx = SELF["inputs_queue"].get_nowait()
         except asyncio.QueueEmpty:
             break
-        inputs_to_send.append(input_pkl_with_idx)
-        total_bytes += len(input_pkl_with_idx[1])
+        input_size = len(input_pkl_with_idx[1])
+        if total_bytes + input_size > 3_000_000 and SELF["inputs_pending_transfer"]:
+            SELF["inputs_queue"].put_nowait(input_pkl_with_idx)
+            break
+        SELF["inputs_pending_transfer"].append(input_pkl_with_idx)
+        total_bytes += input_size
 
-    if len(inputs_to_send) == 0:
+    if len(SELF["inputs_pending_transfer"]) == 0:
         return Response(content=str(0))
 
     try:
         url = f"{requester_host}/jobs/{job_id}/inputs"
         form_data = aiohttp.FormData()
-        form_data.add_field("inputs_pkl_with_idx", pickle.dumps(inputs_to_send))
+        form_data.add_field("inputs_pkl_with_idx", pickle.dumps(SELF["inputs_pending_transfer"]))
         async with aiohttp.ClientSession() as session:
             async with session.post(url, data=form_data, headers=SELF["auth_headers"]) as response:
                 response.raise_for_status()
     except Exception as e:
-        msg = f"Failed to transfer inputs! replacing {len(inputs_to_send)} inputs in queue: {e}"
+        size_mb = total_bytes / 1024 / 1024
+        msg = f"Failed to transfer {len(SELF['inputs_pending_transfer'])} inputs! ({size_mb:.2f}MB)\n{e}"
         await logger.log(msg, "ERROR")
-        for item in inputs_to_send:
+        for item in SELF["inputs_pending_transfer"]:
             await SELF["inputs_queue"].put(item, len(item[1]))
         return Response(status_code=500)
     else:
-        await logger.log(f"Sent {len(inputs_to_send)} inputs another node!")
-        return Response(content=str(len(inputs_to_send)))
+        await logger.log(f"Sent {len(SELF['inputs_pending_transfer'])} inputs another node!")
+        return Response(content=str(len(SELF["inputs_pending_transfer"])))
+    finally:
+        SELF["inputs_pending_transfer"] = []
 
 
 @router.post("/jobs/{job_id}/inputs")
@@ -182,7 +186,10 @@ async def execute(
 
     SELF["job_watcher_stop_event"].clear()  # is initalized as set by default
     job_watcher_coroutine = job_watcher_logged(
-        request_json["n_inputs"], is_background_job, request_json["start_time"]
+        request_json["n_inputs"],
+        is_background_job,
+        request_json["start_time"],
+        request_json["node_ids_expected"],
     )
     SELF["job_watcher_task"] = asyncio.create_task(job_watcher_coroutine)
     return Response(status_code=200)

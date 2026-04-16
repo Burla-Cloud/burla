@@ -9,7 +9,6 @@ from importlib import metadata
 from queue import Queue
 from threading import Event, Thread
 from time import time
-from types import NoneType
 from typing import Callable, Optional, Union
 from uuid import uuid4
 
@@ -84,32 +83,24 @@ async def _grow_cluster(
     request_json = {"current_cpus": current_cpus, "missing_cpus": missing_cpus}
     auth_headers = get_auth_headers()
     main_service_url = json.loads(CONFIG_PATH.read_text())["cluster_dashboard_url"]
-    local_main_service_url = "http://localhost:5001"
-    grow_urls = [f"{main_service_url}/v1/cluster/grow"]
-    if main_service_url != local_main_service_url:
-        grow_urls.append(f"{local_main_service_url}/v1/cluster/grow")
-
-    for index, url in enumerate(grow_urls):
-        request = session.post(url, json=request_json, headers=auth_headers)
-        async with await request as response:
-            if response.status == 200:
-                response_json = await response.json()
-                names = response_json["added_node_instance_names"]
-                if len(names) == 0:
-                    return []
-                target_parallelism_per_node = max(1, missing_cpus // len(names))
-                node_kw = dict(
-                    target_parallelism=target_parallelism_per_node,
-                    session=session,
-                    async_db=async_db,
-                    spinner=spinner,
-                )
-                return [Node.from_booting(name, **node_kw) for name in names]
-            if response.status == 401:
-                raise UnauthorizedError()
-            used_last_url = index == len(grow_urls) - 1
-            if response.status != 405 or used_last_url:
-                raise Exception(f"Failed to grow cluster: {response.status}")
+    url = f"{main_service_url}/v1/cluster/grow"
+    async with await session.post(url, json=request_json, headers=auth_headers) as response:
+        if response.status == 200:
+            response_json = await response.json()
+            names = response_json["added_node_instance_names"]
+            if len(names) == 0:
+                return []
+            target_parallelism_per_node = max(1, missing_cpus // len(names))
+            node_kw = dict(
+                target_parallelism=target_parallelism_per_node,
+                session=session,
+                async_db=async_db,
+                spinner=spinner,
+            )
+            return [Node.from_booting(name, **node_kw) for name in names]
+        if response.status == 401:
+            raise UnauthorizedError()
+        raise Exception(f"Failed to grow cluster: {response.status}")
 
 
 async def _execute_job_wrapped(*args, **kwargs):
@@ -263,6 +254,7 @@ async def _execute_job(
     n_inputs = len(inputs)  # <- inputs will be popped from so len(inputs) will start changing
     inputs_with_indicies = list(enumerate(inputs))
     total_parallelism = max(1, sum(n.target_parallelism for n in nodes))
+    node_ids_expected = [n.instance_name for n in nodes]
     for node in nodes:
         node_tasks.append(
             create_task(
@@ -277,6 +269,7 @@ async def _execute_job(
                     total_parallelism=total_parallelism,
                     inputs_with_indicies=inputs_with_indicies,
                     return_queue=return_queue,
+                    node_ids_expected=node_ids_expected,
                 )
             )
         )

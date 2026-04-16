@@ -5,7 +5,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Request, HTTPException
 from google.cloud.firestore_v1.base_query import FieldFilter
-from google.cloud.compute_v1 import InstancesClient
+from google.cloud.compute_v1 import InstancesClient, MachineTypesClient
 from concurrent.futures import ThreadPoolExecutor
 
 from main_service import (
@@ -86,6 +86,8 @@ def _start_nodes(
     node_service_port = _current_local_dev_max_node_port()
     futures = []
     executor = ThreadPoolExecutor(max_workers=32)
+    instance_client = InstancesClient()
+    machine_types_client = MachineTypesClient()
 
     def _add_node_logged(**node_start_kwargs):
         return Node.start(**node_start_kwargs).instance_name
@@ -103,6 +105,8 @@ def _start_nodes(
                 gcp_region=node_spec["gcp_region"],
                 containers=[Container.from_dict(c) for c in node_spec["containers"]],
                 auth_headers=auth_headers,
+                instance_client=instance_client,
+                machine_types_client=machine_types_client,
                 service_port=node_service_port,
                 sync_gcs_bucket_name=config["gcs_bucket_name"],
                 as_local_container=IN_LOCAL_DEV_MODE,

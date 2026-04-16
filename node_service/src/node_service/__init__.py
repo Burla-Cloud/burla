@@ -65,6 +65,7 @@ def REINIT_SELF(SELF):
     SELF["RUNNING"] = False
     SELF["FAILED"] = False
     SELF["current_container_config"] = []
+    SELF["auth_headers"] = {}
     SELF["all_inputs_uploaded"] = False
     SELF["num_results_received"] = 0
     SELF["active_client_request_count"] = 0

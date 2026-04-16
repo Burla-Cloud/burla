@@ -31,15 +31,14 @@ async def input_transfer(
     if job_id != SELF["current_job"]:
         return Response("job not found", status_code=404)
 
-    my_queue_size = SELF["inputs_queue"].qsize()
-    difference = my_queue_size - requester_queue_size
-    if difference <= 0:
-        return Response(content=str(0))
-    available_to_give = difference // 2
+    difference = SELF["inputs_queue"].qsize() - requester_queue_size
+    num_inputs_to_give = max(difference, 1) // 2  # <- evals to 0 when Qs are same size
 
     inputs_to_send = []
     total_bytes = 0
-    while len(inputs_to_send) < available_to_give and total_bytes < 5_000_000:
+    difference = SELF["inputs_queue"].qsize() - requester_queue_size
+    num_inputs_to_give = max(difference, 1) // 2  # <- evals to 0 when Qs are same size
+    while len(inputs_to_send) < num_inputs_to_give and total_bytes < 3_000_000:
         try:
             input_pkl_with_idx = SELF["inputs_queue"].get_nowait()
         except asyncio.QueueEmpty:
@@ -47,7 +46,7 @@ async def input_transfer(
         inputs_to_send.append(input_pkl_with_idx)
         total_bytes += len(input_pkl_with_idx[1])
 
-    if not inputs_to_send:
+    if len(inputs_to_send) == 0:
         return Response(content=str(0))
 
     try:

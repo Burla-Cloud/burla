@@ -24,15 +24,18 @@ router = APIRouter()
 async def input_transfer(
     request: Request,
     job_id: str = Path(...),
-    idle_workers: int = Query(0),
+    requester_queue_size: int = Query(0),
     requester_host: str = Query(...),
     logger: Logger = Depends(get_logger),
 ):
     if job_id != SELF["current_job"]:
         return Response("job not found", status_code=404)
 
-    remaining_inputs = SELF["inputs_queue"].qsize()
-    available_to_give = max(remaining_inputs // 2, 1)
+    my_queue_size = SELF["inputs_queue"].qsize()
+    difference = my_queue_size - requester_queue_size
+    if difference <= 0:
+        return Response(content=str(0))
+    available_to_give = difference // 2
 
     inputs_to_send = []
     total_bytes = 0
@@ -66,7 +69,7 @@ async def input_transfer(
             await SELF["inputs_queue"].put(item, len(item[1]))
         return Response(status_code=500)
     else:
-        await logger.log(f"Sent {len(inputs_to_send)} inputs to {requester_host}!")
+        await logger.log(f"Sent {len(inputs_to_send)} inputs another node!")
         return Response(content=str(len(inputs_to_send)))
 
 

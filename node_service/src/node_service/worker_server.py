@@ -46,7 +46,8 @@ if not shutil.which("uv"):
 try:
     import cloudpickle
     from tblib import Traceback
-    import burla
+
+    # import burla
 except ImportError:
     subprocess.run(
         [
@@ -59,7 +60,7 @@ except ImportError:
             "/worker_service_python_env",
             "cloudpickle",
             "tblib",
-            "burla",
+            # "burla",
         ],
         check=True,
     )
@@ -125,11 +126,19 @@ with socket.create_server(("0.0.0.0", port)) as listener:
                         if installed_version != version:
                             missing_packages.append(f"{package_name}=={version}")
                     if missing_packages:
-                        subprocess.run([
-                            "uv", "pip", "install", "--python", "python",
-                            "--target", "/worker_service_python_env",
-                            *missing_packages,
-                        ], check=True)
+                        subprocess.run(
+                            [
+                                "uv",
+                                "pip",
+                                "install",
+                                "--python",
+                                "python",
+                                "--target",
+                                "/worker_service_python_env",
+                                *missing_packages,
+                            ],
+                            check=True,
+                        )
                     importlib.invalidate_caches()
                 if command == b"l":
                     loaded_function = cloudpickle.loads(request_payload)

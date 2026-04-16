@@ -46,32 +46,30 @@ async def _input_steal_loop(async_db, session, logger, auth_headers, self_host, 
         await asyncio.sleep(0.2)
 
         # should steal?
-        idle_workers = len(SELF["workers"]) - SELF["current_parallelism"]
         remaining_inputs = SELF["inputs_queue"].qsize()
-        workers_need_inputs = idle_workers > remaining_inputs
         job_past_startup = time() - job_started_at > 10
-        should_steal = SELF["all_inputs_uploaded"] and workers_need_inputs and job_past_startup
+        should_steal = SELF["all_inputs_uploaded"] and job_past_startup
         if not should_steal:
             await asyncio.sleep(1)
             continue
 
-        # get neighbor
-        if time() - last_neighbor_refresh > NEIGHBOR_CACHE_TTL:
-            neighbor_id, neighbor_host = await get_neighbor(async_db)
-            last_neighbor_refresh = time()
-            if not neighbor_id:
-                no_neighbor_since = no_neighbor_since or time()
-                if time() - no_neighbor_since > 600:
-                    await logger.log("No neighbors found for 10 minutes, giving up.")
-                    return
-                await asyncio.sleep(20)
-                continue
-            no_neighbor_since = None
-
-        # get inputs from neighbor
-        num_inputs_received = 0
         try:
-            params = {"idle_workers": idle_workers, "requester_host": self_host}
+            # get neighbor
+            if time() - last_neighbor_refresh > NEIGHBOR_CACHE_TTL:
+                neighbor_id, neighbor_host = await get_neighbor(async_db)
+                last_neighbor_refresh = time()
+                if not neighbor_id:
+                    no_neighbor_since = no_neighbor_since or time()
+                    if time() - no_neighbor_since > 600:
+                        await logger.log("No neighbors found for 10 minutes, giving up.")
+                        return
+                    await asyncio.sleep(20)
+                    continue
+                no_neighbor_since = None
+
+            # get inputs from neighbor
+            num_inputs_received = 0
+            params = {"requester_queue_size": remaining_inputs, "requester_host": self_host}
             url = f"{neighbor_host}/jobs/{SELF['current_job']}/input_transfer"
             async with session.get(url, params=params, headers=auth_headers) as response:
                 if response.status == 404:
@@ -82,8 +80,10 @@ async def _input_steal_loop(async_db, session, logger, auth_headers, self_host, 
                 else:
                     msg = f"Error getting inputs from neighbor: {response.status}"
                     await logger.log(msg, "ERROR")
-        except asyncio.TimeoutError:
-            await logger.log(f"Timeout getting more inputs from {neighbor_id}", "ERROR")
+        except Exception as e:
+            await logger.log(f"Error in steal loop: {e}", "ERROR")
+            await asyncio.sleep(5)
+            continue
 
         if num_inputs_received > 0:
             neighbor_had_no_inputs_at = None
@@ -92,6 +92,7 @@ async def _input_steal_loop(async_db, session, logger, auth_headers, self_host, 
         else:
             neighbor_had_no_inputs_at = neighbor_had_no_inputs_at or time()
             SEC_NEIGHBOR_HAD_NO_INPUTS = time() - neighbor_had_no_inputs_at
+            await asyncio.sleep(1)
 
 
 async def _job_watcher(
@@ -135,8 +136,12 @@ async def _job_watcher(
     job_watch = sync_job_doc.on_snapshot(_on_job_snapshot)
     exit_stack.append(job_watch.unsubscribe)
 
+    steal_auth_headers = {
+        "Authorization": auth_headers.get("Authorization", ""),
+        "X-User-Email": auth_headers.get("X-User-Email", ""),
+    }
     steal_task = asyncio.create_task(
-        _input_steal_loop(async_db, session, logger, auth_headers, self_host, job_started_at)
+        _input_steal_loop(async_db, session, logger, steal_auth_headers, self_host, job_started_at)
     )
 
     last_results_update_time = time()

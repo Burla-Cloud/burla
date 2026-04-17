@@ -187,7 +187,11 @@ async def stop_job(job_id: str, request: Request):
     timestamp = datetime.now(timezone.utc)
     logs = [{"is_error": True, "message": msg, "timestamp": timestamp}]
     job_doc = ASYNC_DB.collection("jobs").document(job_id)
-    await job_doc.collection("logs").add({"logs": logs, "timestamp": timestamp})
+    # Outer `is_error` is required for the client's log listener to surface this as a clean
+    # JobCanceled with the dashboard message instead of falling through to a generic error.
+    await job_doc.collection("logs").add(
+        {"logs": logs, "timestamp": timestamp, "is_error": True}
+    )
     await job_doc.update({"status": "CANCELED"})
 
 

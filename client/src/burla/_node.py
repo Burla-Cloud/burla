@@ -94,10 +94,10 @@ class JobCanceled(Exception):
     pass
 
 
-class UnPickleableUserFunctionException(Exception):
-    def __init__(self, traceback_str: str):
-        message = "\nThis exception had to be sent to your machine as a string:\n\n"
-        message += f"{traceback_str}\n"
+class ClusterRestarted(Exception):
+    def __init__(self):
+        message = "\n\nThe cluster was restarted. "
+        message += "Your job was ended because the nodes it was running on were destroyed.\n"
         super().__init__(message)
 
 
@@ -536,13 +536,11 @@ class Node:
                         msg += "(the cluster may have been restarted):\n\n"
                         msg += error_info["traceback_str"]
                         raise NodeDisconnected(msg)
-                    if error_info.get("traceback_dict"):
-                        traceback = Traceback.from_dict(error_info["traceback_dict"]).as_traceback()
-                        self.udf_error_event.set()
-                        log_error = RemoteParallelMapReporter.log_user_function_error_async
-                        await log_error(self.job_id, self.session)
-                        reraise(tp=error_info["type"], value=error_info["exception"], tb=traceback)
-                    raise UnPickleableUserFunctionException(error_info["traceback_str"])
+                    traceback = Traceback.from_dict(error_info["traceback_dict"]).as_traceback()
+                    self.udf_error_event.set()
+                    log_error = RemoteParallelMapReporter.log_user_function_error_async
+                    await log_error(self.job_id, self.session)
+                    reraise(tp=error_info["type"], value=error_info["exception"], tb=traceback)
                 else:
                     return_values.append(cloudpickle.loads(result_pkl))
 

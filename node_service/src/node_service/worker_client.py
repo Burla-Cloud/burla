@@ -300,8 +300,6 @@ class WorkerClient:
 
     def _traceback_string(self, error: Exception):
         error_info = getattr(error, "burla_error_info", None)
-        if error_info and error_info.get("traceback_str"):
-            return error_info["traceback_str"]
         if error_info and error_info.get("traceback_dict"):
             traceback_object = Traceback.from_dict(error_info["traceback_dict"]).as_traceback()
             return "".join(traceback.format_exception(type(error), error, traceback_object))

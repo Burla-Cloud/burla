@@ -30,6 +30,7 @@ from burla._helpers import (
 )
 from burla._node import (
     AllNodesBusy,
+    ClusterRestarted,
     FirestoreTimeout,
     JobCanceled,
     Node,
@@ -71,6 +72,7 @@ EXEC_TYPES_TO_NOT_ALERT = [
     AllNodesBusy,
     NoCompatibleNodes,
     JobCanceled,
+    ClusterRestarted,
     VersionMismatch,
     FunctionTooBig,
     FirestoreTimeout,
@@ -149,6 +151,7 @@ async def _execute_job(
     reporter: RemoteParallelMapReporter,
 ):
     dashboard_canceled_message = None
+    cluster_restarted = False
     auth_headers = get_auth_headers()
     sync_db, async_db = get_db_clients()
 
@@ -225,7 +228,7 @@ async def _execute_job(
     seen_log_document_ids = set()
 
     def _print_log_documents(log_documents):
-        nonlocal dashboard_canceled_message
+        nonlocal dashboard_canceled_message, cluster_restarted
         for log_document in log_documents:
             if log_document.id in seen_log_document_ids:
                 continue
@@ -234,6 +237,9 @@ async def _execute_job(
             logs = log_doc.get("logs", [])
             is_error_doc = bool(log_doc.get("is_error"))
 
+            if log_doc.get("event") == "cluster_restarted":
+                cluster_restarted = True
+                continue
             if is_error_doc and sync_job_ref.get().to_dict()["status"] == "CANCELED" and logs:
                 dashboard_canceled_message = logs[-1]["message"]
                 continue
@@ -289,6 +295,8 @@ async def _execute_job(
             else:
                 await asyncio.sleep(0.1)
 
+            if cluster_restarted:
+                raise ClusterRestarted()
             if dashboard_canceled_message:
                 raise JobCanceled(f"\n\n{dashboard_canceled_message}\n")
             elif terminal_cancel_event.is_set():
@@ -296,10 +304,16 @@ async def _execute_job(
 
             for task in node_tasks:
                 if task.done() and task.exception():
+                    # Infrastructure failures during a cluster restart race the firestore listener.
+                    # Prefer the definitive ClusterRestarted signal when it's present.
+                    if cluster_restarted:
+                        raise ClusterRestarted()
                     raise task.exception()
 
             for node in nodes:
                 if node.state == "FAILED":
+                    if cluster_restarted:
+                        raise ClusterRestarted()
                     raise NodeDisconnected(f"Node {node.instance_name} failed during job.")
 
             current_time = time()

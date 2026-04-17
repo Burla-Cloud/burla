@@ -1,5 +1,6 @@
 import docker
 import math
+from datetime import datetime, timezone
 from time import time
 from uuid import uuid4
 
@@ -138,6 +139,29 @@ def _start_nodes(
     return node_instance_names
 
 
+def _mark_running_jobs_as_cluster_restarted():
+    """
+    Runs synchronously in the restart endpoint so clients see a definitive
+    `ClusterRestarted` signal via their firestore log listener before their nodes
+    start going away and producing infrastructure errors.
+    """
+    status_filter = FieldFilter("status", "==", "RUNNING")
+    running_jobs = list(DB.collection("jobs").where(filter=status_filter).stream())
+    if not running_jobs:
+        return
+    timestamp = datetime.now(timezone.utc)
+    restart_log_doc = {
+        "logs": [{"message": "The cluster was restarted.", "timestamp": timestamp}],
+        "timestamp": timestamp,
+        "is_error": True,
+        "event": "cluster_restarted",
+    }
+    for job_snapshot in running_jobs:
+        job_ref = job_snapshot.reference
+        job_ref.collection("logs").add(restart_log_doc)
+        job_ref.update({"status": "CANCELED"})
+
+
 def _restart_cluster(logger: Logger, auth_headers: dict):
     start = time()
 
@@ -159,6 +183,7 @@ def restart_cluster(
     auth_headers: dict = Depends(get_auth_headers),
     add_background_task=Depends(get_add_background_task_function),
 ):
+    _mark_running_jobs_as_cluster_restarted()
     add_background_task(_restart_cluster, logger, auth_headers)
 
 

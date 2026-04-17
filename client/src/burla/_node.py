@@ -26,6 +26,7 @@ from burla._reporting import RemoteParallelMapReporter
 NODE_SILENCE_TIMEOUT_SECONDS = 2 * 60
 LOGIN_TIMEOUT_SEC = 5
 MAX_INPUT_SIZE_BYTES = 1_000_000 * 200  # 200MB
+MAX_CHUNK_SIZE_BYTES = 1_000_000 * 2  # 2MB
 NETWORK_RETRY_ATTEMPTS = 5
 NETWORK_RETRY_DELAY_SECONDS = 1
 NETWORK_ERROR_TYPES = (
@@ -147,7 +148,9 @@ async def get_ready_nodes(db: AsyncClient) -> list[dict]:
         docs = await asyncio.wait_for(ready_nodes_coroutine, timeout=LOGIN_TIMEOUT_SEC)
     except asyncio.TimeoutError:
         raise FirestoreTimeout()
-    return [document.to_dict() for document in docs if not document.to_dict().get("reserved_for_job")]
+    return [
+        document.to_dict() for document in docs if not document.to_dict().get("reserved_for_job")
+    ]
 
 
 async def wait_for_nodes_to_be_ready(
@@ -347,7 +350,7 @@ class Node:
         start_time: float,
         function_pkl: bytes,
         udf_error_event: Event,
-        node_ids_expected: list,
+        assigned_node_ids: list,
     ):
         request_json = {
             "parallelism": self.target_parallelism,
@@ -356,7 +359,7 @@ class Node:
             "n_inputs": n_inputs,
             "packages": packages,
             "start_time": start_time,
-            "node_ids_expected": node_ids_expected,
+            "node_ids_expected": assigned_node_ids,
         }
         url = f"{self.host}/jobs/{job_id}"
         timeout = aiohttp.ClientTimeout(120)
@@ -469,11 +472,13 @@ class Node:
         start_time: float,
         function_pkl: bytes,
         udf_error_event: Event,
-        total_parallelism: int,
         inputs_with_indicies: list,
         return_queue: Queue,
-        node_ids_expected: list,
+        n_ready_nodes: int,
+        assigned_node_ids: list,
+        first_chunk_barrier: asyncio.Barrier | None,
     ):
+        was_initially_ready = self.state == "READY"
         # wait until ready
         if self.state != "READY":
             await asyncio.sleep(max(0, 30 - (time() - start_time)))
@@ -486,26 +491,41 @@ class Node:
         if packages:
             self.installing_packages = True
         await self._assign_job(
-            job_id, background, n_inputs, packages, start_time, function_pkl, udf_error_event,
-            node_ids_expected,
+            job_id,
+            background,
+            n_inputs,
+            packages,
+            start_time,
+            function_pkl,
+            udf_error_event,
+            assigned_node_ids,
         )
         self.installing_packages = False
         if self.state == "FAILED":
             return
 
-        num_to_take = max(self.target_parallelism, round(n_inputs * self.target_parallelism / total_parallelism))
-        input_chunk = []
-        while inputs_with_indicies and len(input_chunk) < num_to_take:
-            input_index, input_ = inputs_with_indicies.pop()
-            input_pkl = cloudpickle.dumps(input_)
-            if len(input_pkl) > MAX_INPUT_SIZE_BYTES:
-                raise InputTooBig(input_index)
-            input_chunk.append((input_index, input_pkl))
-
-        if input_chunk:
-            await self._upload_input_chunk(input_chunk)
-
         while True:
+            input_chunksize = max(self.target_parallelism, n_inputs // n_ready_nodes)
+            input_chunk = []
+            chunk_size_bytes = 0
+            while inputs_with_indicies and len(input_chunk) < input_chunksize:
+                input_index, input_ = inputs_with_indicies.pop()
+                input_pkl = cloudpickle.dumps(input_)
+                if len(input_pkl) > MAX_INPUT_SIZE_BYTES:
+                    raise InputTooBig(input_index)
+                if input_chunk and chunk_size_bytes + len(input_pkl) > MAX_CHUNK_SIZE_BYTES:
+                    inputs_with_indicies.append((input_index, input_))
+                    break
+                input_chunk.append((input_index, input_pkl))
+                chunk_size_bytes += len(input_pkl)
+
+            if input_chunk:
+                await self._upload_input_chunk(input_chunk)
+
+            if was_initially_ready and first_chunk_barrier:
+                await first_chunk_barrier.wait()
+                first_chunk_barrier = None
+
             node_results = await self._gather_results()
             return_values = []
             for input_index, is_error, result_pkl in node_results["results"]:

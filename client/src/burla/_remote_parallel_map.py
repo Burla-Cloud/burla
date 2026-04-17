@@ -31,12 +31,11 @@ from burla._helpers import (
 from burla._node import (
     AllNodesBusy,
     FirestoreTimeout,
-    InputTooBig,
     JobCanceled,
-    MAX_INPUT_SIZE_BYTES,
     Node,
     NoCompatibleNodes,
     NoNodes,
+    NodeDisconnected,
     UnauthorizedError,
     VersionMismatch,
     select_nodes_to_assign_to_job,
@@ -176,6 +175,7 @@ async def _execute_job(
         if not grow:
             raise
 
+    booting_nodes = []
     if grow:
         # assuming static 1:4 cpu/ram ratio, how many more cpus do we need?
         requested_parallelism = min(len(inputs), max_parallelism)
@@ -258,8 +258,8 @@ async def _execute_job(
     n_inputs = len(inputs)  # <- inputs will be popped from so len(inputs) will start changing
     inputs_with_indicies = list(enumerate(inputs))
     random.shuffle(inputs_with_indicies)
-    total_parallelism = max(1, sum(n.target_parallelism for n in nodes))
-    node_ids_expected = [n.instance_name for n in nodes]
+    n_ready_nodes = len(nodes) - len(booting_nodes)
+    first_chunk_barrier = asyncio.Barrier(n_ready_nodes) if n_ready_nodes else None
     for node in nodes:
         node_tasks.append(
             create_task(
@@ -271,10 +271,11 @@ async def _execute_job(
                     start_time=start_time,
                     function_pkl=function_pkl,
                     udf_error_event=udf_error_event,
-                    total_parallelism=total_parallelism,
                     inputs_with_indicies=inputs_with_indicies,
                     return_queue=return_queue,
-                    node_ids_expected=node_ids_expected,
+                    n_ready_nodes=n_ready_nodes,
+                    assigned_node_ids=[n.instance_name for n in nodes],
+                    first_chunk_barrier=first_chunk_barrier,
                 )
             )
         )
@@ -297,17 +298,9 @@ async def _execute_job(
                 if task.done() and task.exception():
                     raise task.exception()
 
-            alive_nodes = [n for n in nodes if n.state != "FAILED"]
-            dead_nodes_exist = len(alive_nodes) < len(nodes)
-            if dead_nodes_exist and inputs_with_indicies and alive_nodes:
-                orphans = []
-                while inputs_with_indicies:
-                    input_index, input_ = inputs_with_indicies.pop()
-                    input_pkl = cloudpickle.dumps(input_)
-                    if len(input_pkl) > MAX_INPUT_SIZE_BYTES:
-                        raise InputTooBig(input_index)
-                    orphans.append((input_index, input_pkl))
-                create_task(alive_nodes[0]._upload_input_chunk(orphans))
+            for node in nodes:
+                if node.state == "FAILED":
+                    raise NodeDisconnected(f"Node {node.instance_name} failed during job.")
 
             current_time = time()
             if (current_time - last_status_message_update_time) > 0.05:

@@ -508,7 +508,7 @@ class Node:
         uv venv --python 3.13 --seed
         uv pip install ./node_service
         
-        /opt/burla/.venv/bin/python -m uvicorn node_service:app --host 0.0.0.0 --port {self.port} --workers 1 --timeout-keep-alive 600
+        nice -n -20 /opt/burla/.venv/bin/python -m uvicorn node_service:app --host 0.0.0.0 --port {self.port} --workers 1 --timeout-keep-alive 600
         """
 
     def __get_shutdown_script(self):

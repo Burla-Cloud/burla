@@ -388,31 +388,38 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
                                     </Select>
                                 </div>
 
-                                {/* GPUs per VM (hidden when None) */}
-                                {gpuVariant !== "None" ? (
-                                    <div className="flex flex-col space-y-2">
-                                        <label className={labelClass}>GPUs per VM</label>
-                                        <Select
-                                            disabled={!isEditing}
-                                            value={gpusPerVm.toString()}
-                                            onValueChange={(val) => setGpusPerVm(parseInt(val, 10))}
-                                        >
-                                            <SelectTrigger className="w-full h-9.5">
-                                                <SelectValue />
-                                            </SelectTrigger>
-                                            <SelectContent>
-                                                {VARIANT_INFO[gpuVariant].map((n) => (
-                                                    <SelectItem key={n} value={n.toString()}>
-                                                        {n}
-                                                    </SelectItem>
-                                                ))}
-                                            </SelectContent>
-                                        </Select>
-                                    </div>
-                                ) : (
-                                    // placeholder to maintain grid alignment
-                                    <div className="hidden md:block" />
-                                )}
+                                {/* GPUs per VM */}
+                                <div className="flex flex-col space-y-2">
+                                    <label className={labelClass}>GPUs per VM</label>
+                                    <Select
+                                        disabled={!isEditing || gpuVariant === "None"}
+                                        value={gpuVariant === "None" ? "0" : gpusPerVm.toString()}
+                                        onValueChange={(val) => {
+                                            const count = parseInt(val, 10);
+                                            if (count === 0) {
+                                                setGpuVariant("None");
+                                            } else {
+                                                setGpusPerVm(count);
+                                            }
+                                        }}
+                                    >
+                                        <SelectTrigger className="w-full h-9.5">
+                                            <SelectValue>
+                                                {gpuVariant === "None" ? "0" : gpusPerVm.toString()}
+                                            </SelectValue>
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            {(gpuVariant === "None"
+                                                ? [0]
+                                                : [0, ...VARIANT_INFO[gpuVariant]]
+                                            ).map((n) => (
+                                                <SelectItem key={n} value={n.toString()}>
+                                                    {n}
+                                                </SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                </div>
                             </div>
 
                             {/* Second row: two equal columns */}

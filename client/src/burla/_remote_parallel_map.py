@@ -31,7 +31,9 @@ from burla._helpers import (
 from burla._node import (
     AllNodesBusy,
     FirestoreTimeout,
+    InputTooBig,
     JobCanceled,
+    MAX_INPUT_SIZE_BYTES,
     Node,
     NoCompatibleNodes,
     NoNodes,
@@ -294,6 +296,18 @@ async def _execute_job(
             for task in node_tasks:
                 if task.done() and task.exception():
                     raise task.exception()
+
+            alive_nodes = [n for n in nodes if n.state != "FAILED"]
+            dead_nodes_exist = len(alive_nodes) < len(nodes)
+            if dead_nodes_exist and inputs_with_indicies and alive_nodes:
+                orphans = []
+                while inputs_with_indicies:
+                    input_index, input_ = inputs_with_indicies.pop()
+                    input_pkl = cloudpickle.dumps(input_)
+                    if len(input_pkl) > MAX_INPUT_SIZE_BYTES:
+                        raise InputTooBig(input_index)
+                    orphans.append((input_index, input_pkl))
+                create_task(alive_nodes[0]._upload_input_chunk(orphans))
 
             current_time = time()
             if (current_time - last_status_message_update_time) > 0.05:

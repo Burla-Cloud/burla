@@ -74,6 +74,7 @@ def REINIT_SELF(SELF):
     SELF["active_client_request_count"] = 0
     SELF["last_client_activity_timestamp"] = time()
     SELF["reserved_for_job"] = None
+    SELF["SHUTTING_DOWN"] = False
 
 
 SELF = {}
@@ -147,9 +148,17 @@ async def shutdown_if_idle_for_too_long(logger: Logger):
     """WARNING: Errors from this function are completely hidden!"""
 
     time_since_last_activity = 0
-    while time_since_last_activity < INACTIVITY_SHUTDOWN_TIME_SEC or SELF["current_job"] or SELF["reserved_for_job"] or SELF["BOOTING"]:
+    while (
+        time_since_last_activity < INACTIVITY_SHUTDOWN_TIME_SEC
+        or SELF["active_client_request_count"] > 0
+        or SELF["current_job"]
+        or SELF["reserved_for_job"]
+        or SELF["BOOTING"]
+    ):
         await asyncio.sleep(5)
         time_since_last_activity = time() - SELF["last_client_activity_timestamp"]
+
+    SELF["SHUTTING_DOWN"] = True
 
     if not IN_LOCAL_DEV_MODE:
         msg = f"Node has been idle for {INACTIVITY_SHUTDOWN_TIME_SEC // 60} minutes.\n"
@@ -219,6 +228,9 @@ class CallHookOnJobStartMiddleware:
 
         if is_job_execution_request:
             started = False
+            if SELF["SHUTTING_DOWN"]:
+                msg = "Node is shutting down due to inactivity."
+                return await Response(msg, status_code=503)(scope, receive, send)
             if SELF["RUNNING"] or SELF["BOOTING"]:
                 msg = "Node currently running or booting, request refused."
                 return await Response(msg, status_code=409)(scope, receive, send)

@@ -50,9 +50,7 @@ async def get_neighbor(async_db, node_ids_expected):
     return neighbor_id, neighbor_host, still_booting
 
 
-async def _input_steal_loop(
-    async_db, session, logger, job_started_at, node_ids_expected
-):
+async def _input_steal_loop(async_db, session, logger, job_started_at, node_ids_expected):
     global SEC_NEIGHBOR_HAD_NO_INPUTS
 
     should_steal = lambda: SELF["all_inputs_uploaded"] and (time() - job_started_at > 10)
@@ -81,7 +79,9 @@ async def _input_steal_loop(
 
         items = None
         try:
-            async with session.get(get_url, params=get_params, headers=SELF["auth_headers"]) as response:
+            async with session.get(
+                get_url, params=get_params, headers=SELF["auth_headers"]
+            ) as response:
                 if response.status == 404:
                     nodes_might_join = True
                     continue
@@ -104,7 +104,9 @@ async def _input_steal_loop(
             if SELF["job_watcher_stop_event"].is_set():
                 return
             try:
-                async with session.post(ack_url, params=ack_params, headers=SELF["auth_headers"]) as response:
+                async with session.post(
+                    ack_url, params=ack_params, headers=SELF["auth_headers"]
+                ) as response:
                     response.raise_for_status()
                 ack_ok = True
                 break

@@ -382,6 +382,11 @@ class Node:
                     raise UnauthorizedError()
                 elif response.status == 409:
                     raise NodeConflict(self.instance_name, await response.text())
+                elif response.status == 503:
+                    self.state = "FAILED"
+                    msg = f"Node {self.instance_name} is shutting down, removed from job."
+                    self.spinner_compatible_print(msg)
+                    return
                 else:
                     msg = f"Failed to assign {self.instance_name}: {response.status}"
                     raise Exception(msg)

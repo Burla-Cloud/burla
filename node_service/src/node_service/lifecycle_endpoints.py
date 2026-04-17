@@ -245,6 +245,11 @@ async def reboot_containers(
     try:
         db = firestore.Client(project=PROJECT_ID, database="burla")
         node_doc = db.collection("nodes").document(INSTANCE_NAME)
+
+        current_status = node_doc.get().to_dict().get("status")
+        if current_status in ("DELETED", "FAILED"):
+            raise Exception(f"Node marked {current_status} before boot started.")
+
         node_doc.update(
             {
                 "status": "BOOTING",
@@ -340,6 +345,10 @@ async def reboot_containers(
         # Wait for that before marking READY so clients never see READY with host=None.
         while node_doc.get().to_dict().get("host") is None:
             await asyncio.sleep(1)
+
+        current_status = node_doc.get().to_dict().get("status")
+        if current_status in ("DELETED", "FAILED"):
+            raise Exception(f"Node marked {current_status} during boot.")
 
         node_doc.update({"status": "READY"})
 

@@ -1,8 +1,10 @@
 import sys
+import pickle
 import traceback
 import asyncio
 import aiohttp
 from time import time
+from uuid import uuid4
 
 from google.cloud import firestore
 from google.cloud.firestore import ArrayUnion
@@ -17,6 +19,8 @@ from node_service.lifecycle_endpoints import reboot_containers
 EMPTY_NEIGHBOR_TIMEOUT_SEC = 60
 CLIENT_CONTACT_TIMEOUT_SEC = 5
 JOB_DOC_CONTACT_TIMEOUT_SEC = 4
+ACK_RETRY_TIMEOUT_SEC = 600
+ACK_RETRY_DELAY_SEC = 15
 
 SEC_NEIGHBOR_HAD_NO_INPUTS = 0
 
@@ -47,7 +51,7 @@ async def get_neighbor(async_db, node_ids_expected):
 
 
 async def _input_steal_loop(
-    async_db, session, logger, self_host, job_started_at, node_ids_expected
+    async_db, session, logger, job_started_at, node_ids_expected
 ):
     global SEC_NEIGHBOR_HAD_NO_INPUTS
 
@@ -70,26 +74,60 @@ async def _input_steal_loop(
             if not neighbor_id:
                 continue
 
-        num_inputs_received = 0
+        transfer_id = uuid4().hex
         remaining_inputs = SELF["inputs_queue"].qsize()
-        params = {"requester_queue_size": remaining_inputs, "requester_host": self_host}
-        url = f"{neighbor_host}/jobs/{SELF['current_job']}/input_transfer"
-        async with session.get(url, params=params, headers=SELF["auth_headers"]) as response:
-            if response.status == 404:
-                nodes_might_join = True
-            elif response.status == 200:
-                num_inputs_received = int(await response.text())
-            else:
-                nodes_might_join = True  # <- refreshes current neighbor
-                msg = f"Error getting inputs from neighbor: {response.status}"
-                await logger.log(msg, "ERROR")
-                await asyncio.sleep(5)
-                continue
+        get_url = f"{neighbor_host}/jobs/{SELF['current_job']}/get_inputs"
+        get_params = {"transfer_id": transfer_id, "requester_queue_size": remaining_inputs}
 
-        if num_inputs_received > 0:
+        items = None
+        try:
+            async with session.get(get_url, params=get_params, headers=SELF["auth_headers"]) as response:
+                if response.status == 404:
+                    nodes_might_join = True
+                    continue
+                if response.status == 200:
+                    items = pickle.loads(await response.read())
+        except Exception as error:
+            await logger.log(f"GET inputs from {neighbor_id} failed: {error}", "WARNING")
+
+        if items:
+            for input_index, input_pkl in items:
+                SELF["inputs_queue"].put_nowait((input_index, input_pkl), len(input_pkl))
+
+        received = bool(items)
+
+        ack_url = f"{neighbor_host}/jobs/{SELF['current_job']}/ack_transfer"
+        ack_params = {"transfer_id": transfer_id, "received": "true" if received else "false"}
+        ack_started = time()
+        ack_ok = False
+        while time() - ack_started < ACK_RETRY_TIMEOUT_SEC:
+            if SELF["job_watcher_stop_event"].is_set():
+                return
+            try:
+                async with session.post(ack_url, params=ack_params, headers=SELF["auth_headers"]) as response:
+                    response.raise_for_status()
+                ack_ok = True
+                break
+            except Exception:
+                await asyncio.sleep(ACK_RETRY_DELAY_SEC)
+
+        if not ack_ok:
+            reason = (
+                f"Could not ACK transfer {transfer_id} to {neighbor_id} after "
+                f"{ACK_RETRY_TIMEOUT_SEC}s. Failing job to preserve exactly-once semantics."
+            )
+            await logger.log(reason, "ERROR")
+            job_doc = async_db.collection("jobs").document(SELF["current_job"])
+            try:
+                await job_doc.update({"status": "FAILED", "fail_reason": ArrayUnion([reason])})
+            except Exception:
+                pass
+            return
+
+        if received:
             neighbor_had_no_inputs_at = None
             SEC_NEIGHBOR_HAD_NO_INPUTS = 0
-            await logger.log(f"Got {num_inputs_received} more inputs from {neighbor_id}")
+            await logger.log(f"Got {len(items)} more inputs from {neighbor_id}")
         else:
             neighbor_had_no_inputs_at = neighbor_had_no_inputs_at or time()
             SEC_NEIGHBOR_HAD_NO_INPUTS = time() - neighbor_had_no_inputs_at
@@ -112,8 +150,6 @@ async def _job_watcher(
     last_job_doc_update_time = sync_job_doc.get().update_time.timestamp()
     node_docs_collection = job_doc.collection("assigned_nodes")
     node_doc = node_docs_collection.document(INSTANCE_NAME)
-    self_node_doc = async_db.collection("nodes").document(INSTANCE_NAME)
-    self_host = (await self_node_doc.get()).to_dict()["host"]
     await node_doc.set({"current_num_results": 0, "client_contact_last_1s": True})
 
     JOB_FAILED = False
@@ -138,7 +174,7 @@ async def _job_watcher(
     exit_stack.append(job_watch.unsubscribe)
 
     steal_task = asyncio.create_task(
-        _input_steal_loop(async_db, session, logger, self_host, job_started_at, node_ids_expected)
+        _input_steal_loop(async_db, session, logger, job_started_at, node_ids_expected)
     )
 
     last_results_update_time = time()
@@ -147,7 +183,8 @@ async def _job_watcher(
     while not SELF["job_watcher_stop_event"].is_set():
 
         SELF["current_parallelism"] = sum(not worker.is_idle for worker in SELF["workers"])
-        remaining_inputs = SELF["inputs_queue"].qsize() + len(SELF["inputs_pending_transfer"])
+        pending_transfer_count = sum(len(batch) for batch in SELF["pending_transfers"].values())
+        remaining_inputs = SELF["inputs_queue"].qsize() + pending_transfer_count
         input_queue_empty = remaining_inputs == 0
         all_workers_idle = SELF["current_parallelism"] == 0
         slow_poll = input_queue_empty and all_workers_idle and (time() - job_started_at) >= 7
@@ -190,7 +227,6 @@ async def _job_watcher(
             if SELF["results_queue"].empty() and all_workers_idle:
                 msg = f"Neighbor had no extra inputs for {EMPTY_NEIGHBOR_TIMEOUT_SEC}s"
                 await logger.log(msg + ", done working on job!")
-                await node_doc.update({"client_contact_last_1s": False})
                 await reset_workers(logger, async_db)
                 break
 
@@ -213,7 +249,6 @@ async def _job_watcher(
                 sync_job_doc.update({"status": status})
             except Exception:
                 pass
-            await node_doc.update({"client_contact_last_1s": False})
             await reset_workers(logger, async_db)
             break
 

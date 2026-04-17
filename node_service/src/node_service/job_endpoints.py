@@ -2,7 +2,6 @@ import pickle
 from typing import Optional
 
 import asyncio
-import aiohttp
 from google.cloud.firestore_v1.async_client import AsyncClient
 from fastapi import APIRouter, Path, Query, Depends, Response, Request
 
@@ -20,54 +19,57 @@ from node_service.job_watcher import job_watcher_logged
 router = APIRouter()
 
 
-@router.get("/jobs/{job_id}/input_transfer")
-async def input_transfer(
+@router.get("/jobs/{job_id}/get_inputs")
+async def get_inputs(
     job_id: str = Path(...),
+    transfer_id: str = Query(...),
     requester_queue_size: int = Query(0),
-    requester_host: str = Query(...),
-    logger: Logger = Depends(get_logger),
 ):
     if job_id != SELF["current_job"]:
         return Response("job not found", status_code=404)
 
-    total_bytes = 0
-    SELF["inputs_pending_transfer"] = []
-    difference = SELF["inputs_queue"].qsize() - requester_queue_size
-    target_num_to_transfer = max(difference, 1) // 2  # <- evals to 0 when Qs are same size
-    while len(SELF["inputs_pending_transfer"]) < target_num_to_transfer:
-        try:
-            input_pkl_with_idx = SELF["inputs_queue"].get_nowait()
-        except asyncio.QueueEmpty:
-            break
-        input_size = len(input_pkl_with_idx[1])
-        if total_bytes + input_size > 3_000_000 and SELF["inputs_pending_transfer"]:
-            SELF["inputs_queue"].put_nowait(input_pkl_with_idx)
-            break
-        SELF["inputs_pending_transfer"].append(input_pkl_with_idx)
-        total_bytes += input_size
-
-    if len(SELF["inputs_pending_transfer"]) == 0:
-        return Response(content=str(0))
-
-    try:
-        url = f"{requester_host}/jobs/{job_id}/inputs"
-        form_data = aiohttp.FormData()
-        form_data.add_field("inputs_pkl_with_idx", pickle.dumps(SELF["inputs_pending_transfer"]))
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, data=form_data, headers=SELF["auth_headers"]) as response:
-                response.raise_for_status()
-    except Exception as e:
-        size_mb = total_bytes / 1024 / 1024
-        msg = f"Failed to transfer {len(SELF['inputs_pending_transfer'])} inputs! ({size_mb:.2f}MB)\n{e}"
-        await logger.log(msg, "ERROR")
-        for item in SELF["inputs_pending_transfer"]:
-            await SELF["inputs_queue"].put(item, len(item[1]))
-        return Response(status_code=500)
+    if transfer_id in SELF["pending_transfers"]:
+        items = SELF["pending_transfers"][transfer_id]
     else:
-        await logger.log(f"Sent {len(SELF['inputs_pending_transfer'])} inputs another node!")
-        return Response(content=str(len(SELF["inputs_pending_transfer"])))
-    finally:
-        SELF["inputs_pending_transfer"] = []
+        difference = SELF["inputs_queue"].qsize() - requester_queue_size
+        target_num = max(difference, 1) // 2
+        items = []
+        total_bytes = 0
+        while len(items) < target_num:
+            try:
+                input_index, input_pkl = SELF["inputs_queue"].get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            if total_bytes + len(input_pkl) > 3_000_000 and items:
+                SELF["inputs_queue"].put_nowait((input_index, input_pkl), len(input_pkl))
+                break
+            items.append((input_index, input_pkl))
+            total_bytes += len(input_pkl)
+        SELF["pending_transfers"][transfer_id] = items
+
+    return Response(
+        content=pickle.dumps(items),
+        media_type="application/octet-stream",
+    )
+
+
+@router.post("/jobs/{job_id}/ack_transfer")
+async def ack_transfer(
+    job_id: str = Path(...),
+    transfer_id: str = Query(...),
+    received: bool = Query(...),
+):
+    if job_id != SELF["current_job"]:
+        return Response("job not found", status_code=404)
+
+    items = SELF["pending_transfers"].pop(transfer_id, None)
+    if items is None:
+        return Response(status_code=200)
+
+    if not received:
+        for input_index, input_pkl in items:
+            SELF["inputs_queue"].put_nowait((input_index, input_pkl), len(input_pkl))
+    return Response(status_code=200)
 
 
 @router.post("/jobs/{job_id}/inputs")

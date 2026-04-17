@@ -18,7 +18,12 @@ def format_traceback(traceback_details: list):
 class ResultsEndpointFilter(python_logging.Filter):
     def filter(self, record):
         path = record.args[2]
-        return not ("/results" in path or "/client-heartbeat" in path or "/input_transfer" in path)
+        return not (
+            "/results" in path
+            or "/client-heartbeat" in path
+            or "/get_inputs" in path
+            or "/ack_transfer" in path
+        )
 
 
 class SizedQueue(asyncio.Queue):

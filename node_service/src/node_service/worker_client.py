@@ -375,13 +375,16 @@ class WorkerClient:
         raise Exception(f"unknown response status: {status}")
 
     def _serialize_error(self, error: Exception):
+        # UDF errors carry `burla_error_info` (set in `_read_response`) and pickle cleanly because
+        # their type comes from user code the client already has. Infrastructure errors (worker
+        # container died, aiodocker failures during cluster shutdown, etc.) may reference modules
+        # like `aiodocker` that the client does not have installed, so we send a traceback string
+        # instead of the raw exception type.
         error_info = getattr(error, "burla_error_info", None)
         if error_info is not None:
             return pickle.dumps(error_info)
-        error_info = {"type": type(error), "exception": error}
-        if error.__traceback__ is not None:
-            error_info["traceback_dict"] = Traceback(error.__traceback__).to_dict()
-        return pickle.dumps(error_info)
+        traceback_str = "".join(traceback.format_exception(type(error), error, error.__traceback__))
+        return pickle.dumps({"traceback_str": traceback_str, "is_infrastructure_error": True})
 
     async def _process_inputs(self):
         while True:
@@ -448,9 +451,14 @@ class WorkerClient:
             except asyncio.CancelledError:
                 pass
             self.process_inputs_task = None
+        if not self.is_idle:
+            # Worker is mid-UDF. The worker_server.py main thread is blocked inside the
+            # user's function and can't service the 'r' byte over TCP until the call returns.
+            # Waiting on the UDF can take arbitrarily long, so kill the container and
+            # boot a fresh one instead.
+            await self._restart_container()
+            return
         if self.writer is not None:
-            if not self.is_idle:
-                await self._read_response()
             self.writer.write(b"r")
             self.writer.write((0).to_bytes(8, "big"))
             await self.writer.drain()
@@ -459,6 +467,33 @@ class WorkerClient:
             await self.log_writer.stop()
             self.log_writer = None
         self.is_idle = True
+
+    async def _restart_container(self):
+        if self.writer is not None:
+            try:
+                self.writer.close()
+                await self.writer.wait_closed()
+            except Exception:
+                pass
+            self.writer = None
+            self.reader = None
+        if self.logstream_task is not None:
+            self.logstream_task.cancel()
+            try:
+                await self.logstream_task
+            except asyncio.CancelledError:
+                pass
+            self.logstream_task = None
+        if self.log_writer is not None:
+            await self.log_writer.stop()
+            self.log_writer = None
+        try:
+            await self.container.delete(force=True)
+        except Exception:
+            pass
+        self.container = None
+        self.container_id = None
+        await self.boot()
 
     async def stop(self):
         try:

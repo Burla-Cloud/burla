@@ -474,7 +474,7 @@ class Node:
         udf_error_event: Event,
         inputs_with_indicies: list,
         return_queue: Queue,
-        n_ready_nodes: int,
+        nodes: list["Node"],
         assigned_node_ids: list,
         first_chunk_barrier: asyncio.Barrier | None,
     ):
@@ -505,6 +505,7 @@ class Node:
             return
 
         while True:
+            n_ready_nodes = sum(1 for node in nodes if node.state == "READY")
             input_chunksize = max(self.target_parallelism, n_inputs // n_ready_nodes)
             input_chunk = []
             chunk_size_bytes = 0

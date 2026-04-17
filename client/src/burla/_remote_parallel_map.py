@@ -279,7 +279,7 @@ async def _execute_job(
                     udf_error_event=udf_error_event,
                     inputs_with_indicies=inputs_with_indicies,
                     return_queue=return_queue,
-                    n_ready_nodes=n_ready_nodes,
+                    nodes=nodes,
                     assigned_node_ids=[n.instance_name for n in nodes],
                     first_chunk_barrier=first_chunk_barrier,
                 )

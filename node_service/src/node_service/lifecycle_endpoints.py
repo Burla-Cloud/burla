@@ -12,6 +12,7 @@ from google.auth.transport.requests import Request
 from google.cloud.firestore import AsyncClient
 
 from node_service import (
+    ASYNC_DB,
     PROJECT_ID,
     SELF,
     REINIT_SELF,
@@ -229,6 +230,32 @@ def _schedule_container_removal(
         asyncio.create_task(_remove_container(container_id, logger))
 
 
+RESERVATION_ASSIGNMENT_TIMEOUT_SEC = 60
+RESERVATION_POLL_INTERVAL_SEC = 2
+
+
+async def _watch_reservation(job_id: str):
+    """
+    Wait until this node is assigned to `job_id`, or until the reservation is no longer valid.
+    A reservation is no longer valid if the job is not RUNNING, or if the assignment never
+    arrives within `RESERVATION_ASSIGNMENT_TIMEOUT_SEC`. In either case, clear the reservation
+    so another job can use this node.
+    """
+    job_ref = ASYNC_DB.collection("jobs").document(job_id)
+    deadline = time() + RESERVATION_ASSIGNMENT_TIMEOUT_SEC
+
+    while time() < deadline and SELF["reserved_for_job"] == job_id:
+        status = (await job_ref.get()).to_dict()["status"]
+        if status != "RUNNING":
+            break
+        await asyncio.sleep(RESERVATION_POLL_INTERVAL_SEC)
+
+    if SELF["reserved_for_job"] == job_id:
+        SELF["reserved_for_job"] = None
+        node_doc = ASYNC_DB.collection("nodes").document(INSTANCE_NAME)
+        await node_doc.update({"reserved_for_job": None})
+
+
 async def reboot_containers(
     new_container_config: Optional[list[str]] = None,
     logger: Logger = Depends(get_logger),
@@ -351,6 +378,9 @@ async def reboot_containers(
             raise Exception(f"Node marked {current_status} during boot.")
 
         node_doc.update({"status": "READY"})
+
+        if SELF["reserved_for_job"]:
+            asyncio.create_task(_watch_reservation(SELF["reserved_for_job"]))
 
     except Exception as parent_exception:
         SELF["FAILED"] = True

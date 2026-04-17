@@ -14,6 +14,7 @@ from docker.errors import APIError
 from google.cloud import resourcemanager_v3
 from google.auth.transport.requests import Request
 from google.api_core.exceptions import NotFound, ServiceUnavailable, Conflict
+from google.api_core.retry import Retry, if_transient_error
 from google.cloud.compute_v1 import MachineTypesClient, AggregatedListMachineTypesRequest
 from google.cloud import firestore
 from google.cloud.firestore import DocumentSnapshot
@@ -64,6 +65,13 @@ project = client.get_project(name=f"projects/{PROJECT_ID}")
 GCE_DEFAULT_SVC = f"{project.name.split('/')[-1]}-compute@developer.gserviceaccount.com"
 
 NODE_BOOT_TIMEOUT = 60 * 10
+
+# Retries GCE API calls (unary RPCs and polling done by ExtendedOperation.result()) on
+# transient network errors, e.g. requests.exceptions.ConnectionError from
+# "Remote end closed connection". Operation-level errors like ZONE_RESOURCE_POOL_EXHAUSTED
+# are set on the future via set_exception and not raised from _refresh, so this retry
+# does not hide them.
+GCE_TRANSIENT_RETRY = Retry(predicate=if_transient_error)
 
 
 def zones_supporting_machine_type(
@@ -230,7 +238,7 @@ class Node:
             self.instance_client = InstancesClient()
         try:
             kwargs = dict(project=PROJECT_ID, zone=self.zone, instance=self.instance_name)
-            self.instance_client.delete(**kwargs)
+            self.instance_client.delete(**kwargs, retry=GCE_TRANSIENT_RETRY)
         except (NotFound, ValueError):
             pass  # these errors mean it was already deleted.
 
@@ -385,7 +393,8 @@ class Node:
                     scheduling=scheduling,
                 )
                 kw = dict(project=PROJECT_ID, zone=zone, instance_resource=instance)
-                self.instance_client.insert(**kw).result()
+                operation = self.instance_client.insert(**kw, retry=GCE_TRANSIENT_RETRY)
+                operation.result(retry=GCE_TRANSIENT_RETRY)
                 instance_created = True
                 break
             except ServiceUnavailable:  # not enough instances in this zone, try next zone.
@@ -402,7 +411,8 @@ class Node:
             raise Exception(msg)
 
         kw = dict(project=PROJECT_ID, zone=zone, instance=self.instance_name)
-        external_ip = self.instance_client.get(**kw).network_interfaces[0].access_configs[0].nat_i_p
+        instance_info = self.instance_client.get(**kw, retry=GCE_TRANSIENT_RETRY)
+        external_ip = instance_info.network_interfaces[0].access_configs[0].nat_i_p
 
         self.host = f"http://{external_ip}:{self.port}"
         self.zone = zone

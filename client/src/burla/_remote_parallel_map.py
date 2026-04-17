@@ -31,6 +31,7 @@ from burla._helpers import (
 from burla._node import (
     AllNodesBusy,
     ClusterRestarted,
+    ClusterShutdown,
     FirestoreTimeout,
     JobCanceled,
     Node,
@@ -73,6 +74,7 @@ EXEC_TYPES_TO_NOT_ALERT = [
     NoCompatibleNodes,
     JobCanceled,
     ClusterRestarted,
+    ClusterShutdown,
     VersionMismatch,
     FunctionTooBig,
     FirestoreTimeout,
@@ -152,6 +154,7 @@ async def _execute_job(
 ):
     dashboard_canceled_message = None
     cluster_restarted = False
+    cluster_shutdown = False
     auth_headers = get_auth_headers()
     sync_db, async_db = get_db_clients()
 
@@ -228,7 +231,7 @@ async def _execute_job(
     seen_log_document_ids = set()
 
     def _print_log_documents(log_documents):
-        nonlocal dashboard_canceled_message, cluster_restarted
+        nonlocal dashboard_canceled_message, cluster_restarted, cluster_shutdown
         for log_document in log_documents:
             if log_document.id in seen_log_document_ids:
                 continue
@@ -239,6 +242,9 @@ async def _execute_job(
 
             if log_doc.get("event") == "cluster_restarted":
                 cluster_restarted = True
+                continue
+            if log_doc.get("event") == "cluster_shutdown":
+                cluster_shutdown = True
                 continue
             if is_error_doc and sync_job_ref.get().to_dict()["status"] == "CANCELED" and logs:
                 dashboard_canceled_message = logs[-1]["message"]
@@ -295,6 +301,8 @@ async def _execute_job(
             else:
                 await asyncio.sleep(0.1)
 
+            if cluster_shutdown:
+                raise ClusterShutdown()
             if cluster_restarted:
                 raise ClusterRestarted()
             if dashboard_canceled_message:
@@ -304,14 +312,18 @@ async def _execute_job(
 
             for task in node_tasks:
                 if task.done() and task.exception():
-                    # Infrastructure failures during a cluster restart race the firestore listener.
-                    # Prefer the definitive ClusterRestarted signal when it's present.
+                    # Infrastructure failures during a cluster restart/shutdown race the
+                    # firestore listener. Prefer the definitive lifecycle signal when present.
+                    if cluster_shutdown:
+                        raise ClusterShutdown()
                     if cluster_restarted:
                         raise ClusterRestarted()
                     raise task.exception()
 
             for node in nodes:
                 if node.state == "FAILED":
+                    if cluster_shutdown:
+                        raise ClusterShutdown()
                     if cluster_restarted:
                         raise ClusterRestarted()
                     raise NodeDisconnected(f"Node {node.instance_name} failed during job.")

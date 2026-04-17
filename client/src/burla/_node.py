@@ -47,12 +47,6 @@ class InputTooBig(Exception):
         super().__init__(message)
 
 
-class NodeConflict(Exception):
-    def __init__(self, instance_name: str, response_text: str):
-        message = f"ERROR from {instance_name}: {response_text}"
-        super().__init__(message)
-
-
 class NoNodes(Exception):
     pass
 
@@ -97,6 +91,13 @@ class JobCanceled(Exception):
 class ClusterRestarted(Exception):
     def __init__(self):
         message = "\n\nThe cluster was restarted. "
+        message += "Your job was ended because the nodes it was running on were destroyed.\n"
+        super().__init__(message)
+
+
+class ClusterShutdown(Exception):
+    def __init__(self):
+        message = "\n\nThe cluster was shut down. "
         message += "Your job was ended because the nodes it was running on were destroyed.\n"
         super().__init__(message)
 
@@ -384,9 +385,12 @@ class Node:
                 elif response.status == 401:
                     raise UnauthorizedError()
                 elif response.status == 409:
-                    raise NodeConflict(self.instance_name, await response.text())
+                    self.state = "REMOVED"
+                    msg = f"Node {self.instance_name} refused job assignment, removed from job."
+                    self.spinner_compatible_print(msg)
+                    return
                 elif response.status == 503:
-                    self.state = "FAILED"
+                    self.state = "REMOVED"
                     msg = f"Node {self.instance_name} is shutting down, removed from job."
                     self.spinner_compatible_print(msg)
                     return
@@ -501,11 +505,13 @@ class Node:
             assigned_node_ids,
         )
         self.installing_packages = False
-        if self.state == "FAILED":
+        if self.state in ("FAILED", "REMOVED"):
+            if was_initially_ready and first_chunk_barrier:
+                await first_chunk_barrier.abort()
             return
 
         while True:
-            n_ready_nodes = sum(1 for node in nodes if node.state == "READY")
+            n_ready_nodes = sum(1 for node in nodes if node.state in ("READY", "RUNNING"))
             input_chunksize = max(self.target_parallelism, n_inputs // n_ready_nodes)
             input_chunk = []
             chunk_size_bytes = 0
@@ -524,7 +530,10 @@ class Node:
                 await self._upload_input_chunk(input_chunk)
 
             if was_initially_ready and first_chunk_barrier:
-                await first_chunk_barrier.wait()
+                try:
+                    await first_chunk_barrier.wait()
+                except asyncio.BrokenBarrierError:
+                    pass
                 first_chunk_barrier = None
 
             node_results = await self._gather_results()

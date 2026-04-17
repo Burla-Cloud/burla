@@ -47,11 +47,17 @@ async def cluster_info(request: Request, logger: Logger = Depends(get_logger)):
                 if change.type.name == "REMOVED":
                     event_data = {"nodeId": instance_name, "deleted": True}
                 else:
+                    current_function = None
+                    job_id = doc_data.get("current_job") or doc_data.get("reserved_for_job")
+                    if job_id:
+                        job_data = DB.collection("jobs").document(job_id).get().to_dict()
+                        current_function = job_data.get("function_name")
                     event_data = {
                         "nodeId": instance_name,
                         "status": doc_data.get("status"),
                         "type": doc_data.get("machine_type"),
                         "started_booting_at": _to_epoch_ms(doc_data.get("started_booting_at")),
+                        "current_function": current_function,
                     }
                 current_loop.call_soon_threadsafe(queue.put_nowait, event_data)
 

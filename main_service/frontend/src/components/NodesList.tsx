@@ -540,6 +540,9 @@ remote_parallel_map(my_function, list(range(1000)))`;
                                                 <TableHead className="w-48 pl-6 pr-4 py-2">
                                                     Name
                                                 </TableHead>
+                                                <TableHead className="w-48 pl-6 pr-4 py-2">
+                                                    Function
+                                                </TableHead>
                                                 <TableHead className="w-24 pl-6 pr-4 py-2">
                                                     vCPUs
                                                 </TableHead>
@@ -592,6 +595,14 @@ remote_parallel_map(my_function, list(range(1000)))`;
                                                         <TableCell className="w-48 pl-6 pr-4 py-2 whitespace-nowrap">
                                                             {node.name}
                                                         </TableCell>
+                                                        <TableCell className="w-48 pl-6 pr-4 py-2">
+                                                            <div
+                                                                className="max-w-[220px] truncate"
+                                                                title={node.current_function ?? ""}
+                                                            >
+                                                                {node.current_function ?? "-"}
+                                                            </div>
+                                                        </TableCell>
                                                         <TableCell className="w-24 pl-6 pr-4 py-2">
                                                             <div className="inline-flex items-center space-x-1 justify-center">
                                                                 <Cpu className="h-4 w-4" />
@@ -618,7 +629,7 @@ remote_parallel_map(my_function, list(range(1000)))`;
                                                             key={`${node.id}-logs`}
                                                             className="bg-gray-50"
                                                         >
-                                                            <TableCell colSpan={7} className="p-0">
+                                                            <TableCell colSpan={8} className="p-0">
                                                                 <div className="overflow-y-auto h-[400px] resize-y py-2 px-4">
                                                                     {logsLoading[node.id] ? (
                                                                         <div className="flex flex-col items-center justify-center h-40 w-full text-gray-500">

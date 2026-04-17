@@ -139,26 +139,26 @@ def _start_nodes(
     return node_instance_names
 
 
-def _mark_running_jobs_as_cluster_restarted():
+def _mark_running_jobs_with_lifecycle_event(event: str, message: str):
     """
-    Runs synchronously in the restart endpoint so clients see a definitive
-    `ClusterRestarted` signal via their firestore log listener before their nodes
-    start going away and producing infrastructure errors.
+    Runs synchronously in the restart/shutdown endpoints so clients see a
+    definitive lifecycle signal via their firestore log listener before their
+    nodes start going away and producing infrastructure errors.
     """
     status_filter = FieldFilter("status", "==", "RUNNING")
     running_jobs = list(DB.collection("jobs").where(filter=status_filter).stream())
     if not running_jobs:
         return
     timestamp = datetime.now(timezone.utc)
-    restart_log_doc = {
-        "logs": [{"message": "The cluster was restarted.", "timestamp": timestamp}],
+    log_doc = {
+        "logs": [{"message": message, "timestamp": timestamp}],
         "timestamp": timestamp,
         "is_error": True,
-        "event": "cluster_restarted",
+        "event": event,
     }
     for job_snapshot in running_jobs:
         job_ref = job_snapshot.reference
-        job_ref.collection("logs").add(restart_log_doc)
+        job_ref.collection("logs").add(log_doc)
         job_ref.update({"status": "CANCELED"})
 
 
@@ -183,7 +183,7 @@ def restart_cluster(
     auth_headers: dict = Depends(get_auth_headers),
     add_background_task=Depends(get_add_background_task_function),
 ):
-    _mark_running_jobs_as_cluster_restarted()
+    _mark_running_jobs_with_lifecycle_event("cluster_restarted", "The cluster was restarted.")
     add_background_task(_restart_cluster, logger, auth_headers)
 
 
@@ -194,6 +194,7 @@ async def shutdown_cluster(
 ):
     start = time()
 
+    _mark_running_jobs_with_lifecycle_event("cluster_shutdown", "The cluster was shut down.")
     log_telemetry("Cluster turned off.", severity="INFO")
     _shutdown_cluster(logger, auth_headers)
 

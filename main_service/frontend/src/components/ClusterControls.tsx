@@ -27,8 +27,7 @@ export const ClusterControls = ({
     const isStopping = status === "STOPPING";
     const isOn = status === "ON";
     const isOff = status === "OFF";
-    const isStartDisabled =
-        isStarting || isStopping || isRebooting || disableStartButton || pendingAction !== null;
+    const isStartDisabled = isStopping || disableStartButton || pendingAction !== null;
 
     useEffect(() => {
         if (status === "ON" || status === "OFF") {
@@ -80,7 +79,7 @@ export const ClusterControls = ({
                     "w-32 text-white transition-all duration-300 ease-in-out shadow-md hover:shadow-xl active:shadow transform-gpu hover:-translate-y-0.5 active:translate-y-0 disabled:shadow-none",
                     isStarting || isRebooting
                         ? "bg-primary hover:bg-primary/90"
-                        : "bg-primary hover:bg-primary/90 disabled:bg-gray-400",
+                        : "bg-primary hover:bg-primary/90 disabled:bg-gray-400 dark:disabled:bg-gray-600",
                     highlightStart &&
                         !isOn &&
                         !isStartDisabled &&
@@ -94,7 +93,7 @@ export const ClusterControls = ({
                 variant="destructive"
                 size="lg"
                 onClick={onStop}
-                disabled={isStopping || isOff || isRebooting || isStarting || disableStopButton}
+                disabled={isStopping || isOff || disableStopButton}
                 aria-busy={isStopping}
                 className="w-32 transition-all duration-300 ease-in-out shadow-md hover:shadow-xl active:shadow transform-gpu hover:-translate-y-0.5 active:translate-y-0 disabled:shadow-none"
             >

@@ -1,13 +1,9 @@
 import pickle
-import json
-import psutil
-from queue import Empty
 from typing import Optional
 
 import asyncio
-import aiohttp
 from google.cloud.firestore_v1.async_client import AsyncClient
-from fastapi import APIRouter, Path, Depends, Response, Request, Query
+from fastapi import APIRouter, Path, Query, Depends, Response, Request
 
 from node_service import (
     SELF,
@@ -18,50 +14,62 @@ from node_service import (
     get_request_files,
 )
 from node_service.helpers import Logger
-from node_service.job_watcher import send_inputs_to_workers, job_watcher_logged
+from node_service.job_watcher import job_watcher_logged
 
 router = APIRouter()
 
 
-@router.get("/jobs/{job_id}/inputs")
+@router.get("/jobs/{job_id}/get_inputs")
 async def get_inputs(
     job_id: str = Path(...),
-    target_reply_size: int = Query(int(1_000_000 * 0.5)),
-    logger: Logger = Depends(get_logger),
+    transfer_id: str = Query(...),
+    requester_queue_size: int = Query(0),
 ):
     if job_id != SELF["current_job"]:
         return Response("job not found", status_code=404)
-    elif SELF["SHUTTING_DOWN"]:
-        return Response("Node is shutting down, can't give inputs.", status_code=410)
 
-    target_size_per_worker = target_reply_size / len(SELF["workers"])
-
-    async def _get_inputs_from_worker(session, worker):
-        try:
-            url = f"{worker.url}/jobs/{job_id}/inputs?target_reply_size={target_size_per_worker}"
-            async with session.get(url, timeout=1) as response:
-                response.raise_for_status()
-                if response.status == 200:
-                    return pickle.loads(await response.read())
-                elif response.status == 204:
-                    return []
-        except Exception as e:
-            msg = f"Failed to get inputs from worker {worker.container_name} for job {job_id}: {e}"
-            logger.log(msg, severity="WARNING")
-            return []
-
-    async with aiohttp.ClientSession() as session:
-        tasks = [_get_inputs_from_worker(session, w) for w in SELF["workers"]]
-        inputs = [input for inputs in await asyncio.gather(*tasks) for input in inputs]
-
-    if not inputs:
-        return Response(status_code=204)
+    if transfer_id in SELF["pending_transfers"]:
+        items = SELF["pending_transfers"][transfer_id]
     else:
-        logger.log(f"Sending {len(inputs)} inputs to another node!")
-        data = pickle.dumps(inputs)
-        await asyncio.sleep(0)
-        headers = {"Content-Disposition": 'attachment; filename="inputs.pkl"'}
-        return Response(content=data, media_type="application/octet-stream", headers=headers)
+        difference = SELF["inputs_queue"].qsize() - requester_queue_size
+        target_num = max(difference, 1) // 2
+        items = []
+        total_bytes = 0
+        while len(items) < target_num:
+            try:
+                input_index, input_pkl = SELF["inputs_queue"].get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            if total_bytes + len(input_pkl) > 3_000_000 and items:
+                SELF["inputs_queue"].put_nowait((input_index, input_pkl), len(input_pkl))
+                break
+            items.append((input_index, input_pkl))
+            total_bytes += len(input_pkl)
+        SELF["pending_transfers"][transfer_id] = items
+
+    return Response(
+        content=pickle.dumps(items),
+        media_type="application/octet-stream",
+    )
+
+
+@router.post("/jobs/{job_id}/ack_transfer")
+async def ack_transfer(
+    job_id: str = Path(...),
+    transfer_id: str = Query(...),
+    received: bool = Query(...),
+):
+    if job_id != SELF["current_job"]:
+        return Response("job not found", status_code=404)
+
+    items = SELF["pending_transfers"].pop(transfer_id, None)
+    if items is None:
+        return Response(status_code=200)
+
+    if not received:
+        for input_index, input_pkl in items:
+            SELF["inputs_queue"].put_nowait((input_index, input_pkl), len(input_pkl))
+    return Response(status_code=200)
 
 
 @router.post("/jobs/{job_id}/inputs")
@@ -69,26 +77,13 @@ async def upload_inputs(
     job_id: str = Path(...),
     request_files: Optional[dict] = Depends(get_request_files),
 ):
-    if SELF["pending_inputs"]:
-        return Response("No space for more inputs! retry later.", status_code=409)
     if job_id != SELF["current_job"]:
         return Response("job not found", status_code=404)
-    elif SELF["SHUTTING_DOWN"]:
-        return Response("Node is shutting down, inputs not accepted.", status_code=410)
-
-    # needs to be here so this is reset when transferring from another dying node
-    SELF["current_input_batch_forwarded"] = False
-    SELF["all_inputs_uploaded"] = False
 
     inputs_pkl_with_idx = pickle.loads(request_files["inputs_pkl_with_idx"])
     await asyncio.sleep(0)
-    async with aiohttp.ClientSession() as session:
-        # rejected = no space to store
-        rejected_inputs_pkl_with_idx = await send_inputs_to_workers(session, inputs_pkl_with_idx)
-        # is emptied from the job_watcher thread, no more inputs accepted until it's empty
-        SELF["pending_inputs"] = rejected_inputs_pkl_with_idx
-
-    SELF["current_input_batch_forwarded"] = True
+    for input_pkl_with_idx in inputs_pkl_with_idx:
+        await SELF["inputs_queue"].put(input_pkl_with_idx, len(input_pkl_with_idx[1]))
 
 
 @router.get("/jobs/{job_id}/results")
@@ -104,19 +99,13 @@ async def get_results(job_id: str = Path(...)):
             result = SELF["results_queue"].get_nowait()
             results.append(result)
             total_bytes += len(result[2])
-        except Empty:
+        except asyncio.QueueEmpty:
             break
 
     response_json = {
         "results": results,
         "current_parallelism": SELF["current_parallelism"],
-        "is_empty": SELF["results_queue"].empty(),
-        "currently_installing_package": SELF["currently_installing_package"],
     }
-
-    if SELF["all_packages_installed"] and not SELF["all_packages_installed_sent_to_client"]:
-        response_json["all_packages_installed"] = SELF["all_packages_installed"]
-        SELF["all_packages_installed_sent_to_client"] = True
 
     data = pickle.dumps(response_json)
     headers = {"Content-Disposition": 'attachment; filename="results.pkl"'}
@@ -131,7 +120,7 @@ async def execute(
     request_files: Optional[dict] = Depends(get_request_files),
     logger: Logger = Depends(get_logger),
 ):
-    logger.log(f"Executing job {job_id} ...")
+    await logger.log(f"Executing job {job_id} ...")
     # The `on_job_start` function in __init__.py is run as soon as upload to this endpoint starts.
     # It exists to set `SELF["current_job"]` and set this node to RUNNING in the db as soon as
     # upload starts if the user's function is big.
@@ -142,12 +131,6 @@ async def execute(
     future_parallelism = 0
     is_background_job = request_json["is_background_job"]
     user_python_version = request_json["user_python_version"]
-
-    # move the installer worker to the front of the list so it's DEFINITELY included in the
-    # set of selected workers if there are any (otherwise unable to install packages)
-    installer_worker = [w for w in SELF["workers"] if w.elected_installer][0]
-    SELF["workers"].remove(installer_worker)
-    SELF["workers"] = [installer_worker, *SELF["workers"]]
 
     for worker in SELF["workers"]:
         correct_python_version = worker.python_version == user_python_version
@@ -186,55 +169,29 @@ async def execute(
         msg += f" - update your local python version to be one of {versions}"
         return Response(msg, status_code=409)
 
-    # RAM limits on input/output queues prevent worker/node-service from getting fucked
-    IO_RAM_TO_TOTAL_RAM_RATIO = 0.75  # percent of total ram input/output queues allowed to use
-    NODE_TO_WORKER_IO_RAM_RATIO = 2  # node-service io queues can use 2x the ram of worker queues
-    io_ram_limit_gb = (psutil.virtual_memory().total / 1024**3) * IO_RAM_TO_TOTAL_RAM_RATIO
-    worker_io_ram_limit_gb = io_ram_limit_gb / (
-        len(workers_to_assign) + NODE_TO_WORKER_IO_RAM_RATIO
-    )
-    # This isn't a limit, it can be exceeded
-    # The node svc just dosen't ask for more results when it's over this size.
-    SELF["return_queue_ram_threshold_gb"] = worker_io_ram_limit_gb * NODE_TO_WORKER_IO_RAM_RATIO
-    # logger.log(f"set return_queue_ram_threshold_gb to {SELF['return_queue_ram_threshold_gb']}")
+    packages = request_json["packages"]
+    if packages:
+        # installing in one installs in all, they share volume-mounted python env
+        await workers_to_assign[0].install_packages(packages)
 
-    async def assign_worker(session, worker):
-        data = aiohttp.FormData()
-        packages_json = json.dumps(
-            {
-                "start_time": request_json["start_time"],
-                "packages": request_json["packages"],
-                "io_queues_ram_limit_gb": worker_io_ram_limit_gb,
-                "worker_urls": [worker.url for worker in workers_to_assign],
-                "self_url": worker.url,
-            }
-        )
-        data.add_field("function_pkl", request_files["function_pkl"])
-        data.add_field("request_json", packages_json, content_type="application/json")
-
-        async with session.post(f"{worker.url}/jobs/{job_id}", data=data) as response:
-            if response.status == 200:
-                return worker
-            elif response.status == 500:
-                worker.log_debug_info()
-                return None
-            else:
-                msg = f"Worker {worker.container_name} returned error: {response.status}"
-                logger.log(msg, severity="WARNING")
-                return None
-
-    async with aiohttp.ClientSession() as session:
-        tasks = [assign_worker(session, worker) for worker in workers_to_assign]
-        successfully_assigned_workers = [w for w in await asyncio.gather(*tasks) if w is not None]
-
-    if len(successfully_assigned_workers) == 0:
-        raise Exception("Failed to assign job to any workers")
+    function_pkl = request_files["function_pkl"]
+    await asyncio.gather(*(w.load_function(function_pkl) for w in workers_to_assign))
 
     SELF["workers"] = workers_to_assign
     SELF["idle_workers"] = workers_to_leave_idle
+    SELF["current_parallelism"] = 0
+    # user specific, assign to self to use for node <-> node requests only during this job.
+    SELF["auth_headers"] = {
+        "Authorization": request.headers.get("Authorization", ""),
+        "X-User-Email": request.headers.get("X-User-Email", ""),
+    }
 
     SELF["job_watcher_stop_event"].clear()  # is initalized as set by default
     job_watcher_coroutine = job_watcher_logged(
-        request_json["n_inputs"], is_background_job, request_json["start_time"], request.headers
+        request_json["n_inputs"],
+        is_background_job,
+        request_json["start_time"],
+        request_json["node_ids_expected"],
     )
     SELF["job_watcher_task"] = asyncio.create_task(job_watcher_coroutine)
+    return Response(status_code=200)

@@ -34,8 +34,8 @@ async def cluster_info(request: Request, logger: Logger = Depends(get_logger)):
     current_loop = asyncio.get_running_loop()
 
     async def node_stream():
-        display_filter = firestore.FieldFilter("display_in_dashboard", "==", True)
-        query = DB.collection("nodes").where(filter=display_filter)
+        active_filter = firestore.FieldFilter("status", "in", ["BOOTING", "READY", "RUNNING"])
+        query = DB.collection("nodes").where(filter=active_filter)
         if len([doc for doc in query.stream()]) == 0:
             yield f"data: {json.dumps({'type': 'empty'})}\n\n"
 
@@ -47,15 +47,19 @@ async def cluster_info(request: Request, logger: Logger = Depends(get_logger)):
                 if change.type.name == "REMOVED":
                     event_data = {"nodeId": instance_name, "deleted": True}
                 else:
+                    # job_id is `f"{function_name}-{uid}"` (see client _remote_parallel_map.py)
+                    job_id = doc_data.get("current_job") or doc_data.get("reserved_for_job")
+                    current_function = job_id.rsplit("-", 1)[0] if job_id else None
                     event_data = {
                         "nodeId": instance_name,
                         "status": doc_data.get("status"),
                         "type": doc_data.get("machine_type"),
                         "started_booting_at": _to_epoch_ms(doc_data.get("started_booting_at")),
+                        "current_function": current_function,
                     }
                 current_loop.call_soon_threadsafe(queue.put_nowait, event_data)
 
-        node_watch = DB.collection("nodes").where(filter=display_filter).on_snapshot(on_snapshot)
+        node_watch = DB.collection("nodes").where(filter=active_filter).on_snapshot(on_snapshot)
         try:
             yield "retry: 5000\n\n"
             yield ": init\n\n"
@@ -79,7 +83,6 @@ async def cluster_info(request: Request, logger: Logger = Depends(get_logger)):
 def delete_node(
     node_id: str,
     request: Request,
-    hide_if_failed: bool = True,
     add_background_task=Depends(get_add_background_task_function),
     logger: Logger = Depends(get_logger),
 ):
@@ -87,7 +90,7 @@ def delete_node(
 
     node_doc = DB.collection("nodes").document(node_id).get()
     node = Node.from_snapshot(DB, logger, node_doc, auth_headers)
-    add_background_task(node.delete, hide_if_failed=hide_if_failed)
+    add_background_task(node.delete)
 
 
 @router.get("/v1/cluster/{node_id}/logs")

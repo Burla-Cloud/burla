@@ -92,6 +92,8 @@ export interface BurlaNode {
 
   // set for anything that came from /v1/cluster/deleted_recent_paginated
   deletedAt?: number; // milliseconds since epoch
+
+  current_function?: string | null;
 }
 
 export interface BurlaJob {

@@ -14,6 +14,7 @@ from docker.errors import APIError
 from google.cloud import resourcemanager_v3
 from google.auth.transport.requests import Request
 from google.api_core.exceptions import NotFound, ServiceUnavailable, Conflict
+from google.api_core.retry import Retry, if_transient_error
 from google.cloud.compute_v1 import MachineTypesClient, AggregatedListMachineTypesRequest
 from google.cloud import firestore
 from google.cloud.firestore import DocumentSnapshot
@@ -65,11 +66,21 @@ GCE_DEFAULT_SVC = f"{project.name.split('/')[-1]}-compute@developer.gserviceacco
 
 NODE_BOOT_TIMEOUT = 60 * 10
 
+# Retries GCE API calls (unary RPCs and polling done by ExtendedOperation.result()) on
+# transient network errors, e.g. requests.exceptions.ConnectionError from
+# "Remote end closed connection". Operation-level errors like ZONE_RESOURCE_POOL_EXHAUSTED
+# are set on the future via set_exception and not raised from _refresh, so this retry
+# does not hide them.
+GCE_TRANSIENT_RETRY = Retry(predicate=if_transient_error)
 
-def zones_supporting_machine_type(region_name: str, machine_type_name: str):
+
+def zones_supporting_machine_type(
+    region_name: str, machine_type_name: str, machine_types_client=None
+):
     name_filter = f"name={machine_type_name}"
     request = AggregatedListMachineTypesRequest(project=PROJECT_ID, filter=name_filter)
-    zone_generator = MachineTypesClient().aggregated_list(request=request)
+    client = machine_types_client or MachineTypesClient()
+    zone_generator = client.aggregated_list(request=request)
     for zone, matches in zone_generator:
         if matches.machine_types and zone.startswith(f"zones/{region_name}"):
             yield zone.split("/")[1]
@@ -122,9 +133,11 @@ class Node:
         as_local_container: bool = False,
         sync_gcs_bucket_name: Optional[str] = None,  # <- not a uri, just the name
         instance_client: Optional[InstancesClient] = None,
+        machine_types_client: Optional[MachineTypesClient] = None,
         inactivity_shutdown_time_sec: Optional[int] = None,
         disk_size: Optional[int] = None,
         instance_name: Optional[str] = None,
+        reserved_for_job: Optional[str] = None,
     ):
         self = cls.__new__(cls)
         self.db = db
@@ -137,8 +150,12 @@ class Node:
         self.port = service_port
         self.sync_gcs_bucket_name = sync_gcs_bucket_name
         self.inactivity_shutdown_time_sec = inactivity_shutdown_time_sec
+        self.reserved_for_job = reserved_for_job
         self.disk_size = disk_size if disk_size else 20  # minimum is 10 due to disk image
         self.instance_client = instance_client if instance_client else InstancesClient()
+        self.machine_types_client = (
+            machine_types_client if machine_types_client else MachineTypesClient()
+        )
 
         self.instance_name = instance_name if instance_name else f"burla-node-{uuid4().hex[:8]}"
         self.started_booting_at = time()
@@ -163,9 +180,15 @@ class Node:
         current_state["status"] = "BOOTING"
         current_state["main_svc_version"] = CURRENT_BURLA_VERSION
         current_state["min_compatible_client_version"] = MIN_COMPATIBLE_CLIENT_VERSION
-        current_state["display_in_dashboard"] = True
         current_state["containers"] = [container.to_dict() for container in containers]
-        attrs_to_not_save = ["db", "logger", "instance_client", "node_ref", "auth_headers"]
+        attrs_to_not_save = [
+            "db",
+            "logger",
+            "instance_client",
+            "machine_types_client",
+            "node_ref",
+            "auth_headers",
+        ]
         current_state = {k: v for k, v in current_state.items() if k not in attrs_to_not_save}
         self.node_ref.set(current_state)
 
@@ -177,7 +200,7 @@ class Node:
 
             start = time()
             status = self.status()
-            while status != "READY":
+            while status not in ("READY", "RUNNING"):
                 sleep(1)
                 booting_too_long = (time() - start) > NODE_BOOT_TIMEOUT
                 status = self.status()
@@ -196,25 +219,18 @@ class Node:
         self.is_booting = False
         return self
 
-    def delete(self, hide_if_failed: bool = False):
-        """
-        hide_if_failed: should I hide this node from the dashboard if it's state is failed?
-        be default, no, so the user can inspect the logs of a failed node, then remove it later.
-        """
+    def delete(self):
         node_snapshot = self.node_ref.get()
         node_is_failed = node_snapshot.exists and node_snapshot.to_dict().get("status") == "FAILED"
-        display_if_failed = not hide_if_failed
 
-        if node_is_failed:
-            self.node_ref.update(dict(status="FAILED", display_in_dashboard=display_if_failed))
-        else:
-            self.node_ref.update(dict(status="DELETED", display_in_dashboard=False))
+        if not node_is_failed:
+            self.node_ref.update({"status": "DELETED"})
 
         if not self.instance_client:
             self.instance_client = InstancesClient()
         try:
             kwargs = dict(project=PROJECT_ID, zone=self.zone, instance=self.instance_name)
-            self.instance_client.delete(**kwargs)
+            self.instance_client.delete(**kwargs, retry=GCE_TRANSIENT_RETRY)
         except (NotFound, ValueError):
             pass  # these errors mean it was already deleted.
 
@@ -298,6 +314,7 @@ class Node:
                 "INSTANCE_NAME": self.instance_name,
                 "CONTAINERS": json.dumps([c.to_dict() for c in self.containers]),
                 "INACTIVITY_SHUTDOWN_TIME_SEC": self.inactivity_shutdown_time_sec,
+                "RESERVED_FOR_JOB": self.reserved_for_job or "",
                 "NUM_GPUS": 0,
             },
             detach=True,
@@ -344,7 +361,11 @@ class Node:
         startup_script_metadata = Items(key="startup-script", value=startup_script)
         shutdown_script_metadata = Items(key="shutdown-script", value=shutdown_script)
         exhausted_zones = []
-        zones = list(zones_supporting_machine_type(self.gcp_region, self.machine_type))
+        zones = list(
+            zones_supporting_machine_type(
+                self.gcp_region, self.machine_type, self.machine_types_client
+            )
+        )
         if not zones:
             msg = f"None of the zones in region {self.gcp_region} "
             raise Exception(msg + f"support the machine type {self.machine_type}.")
@@ -364,7 +385,8 @@ class Node:
                     scheduling=scheduling,
                 )
                 kw = dict(project=PROJECT_ID, zone=zone, instance_resource=instance)
-                self.instance_client.insert(**kw).result()
+                operation = self.instance_client.insert(**kw, retry=GCE_TRANSIENT_RETRY)
+                operation.result(retry=GCE_TRANSIENT_RETRY)
                 instance_created = True
                 break
             except ServiceUnavailable:  # not enough instances in this zone, try next zone.
@@ -381,7 +403,8 @@ class Node:
             raise Exception(msg)
 
         kw = dict(project=PROJECT_ID, zone=zone, instance=self.instance_name)
-        external_ip = self.instance_client.get(**kw).network_interfaces[0].access_configs[0].nat_i_p
+        instance_info = self.instance_client.get(**kw, retry=GCE_TRANSIENT_RETRY)
+        external_ip = instance_info.network_interfaces[0].access_configs[0].nat_i_p
 
         self.host = f"http://{external_ip}:{self.port}"
         self.zone = zone
@@ -409,8 +432,8 @@ class Node:
                 -d "$payload" || true
 
             # set status as FAILED
-            status_payload=$(jq -n --arg ts "$(date +%s)" '{{"fields":{{"status":{{"stringValue":"FAILED"}},"display_in_dashboard":{{"booleanValue":true}},"ended_at":{{"integerValue":$ts}}}}}}')
-            curl -sS -o /dev/null -X PATCH "$DB_BASE_URL/nodes/{self.instance_name}?updateMask.fieldPaths=status&updateMask.fieldPaths=display_in_dashboard&updateMask.fieldPaths=ended_at" \
+            status_payload=$(jq -n --arg ts "$(date +%s)" '{{"fields":{{"status":{{"stringValue":"FAILED"}},"ended_at":{{"integerValue":$ts}}}}}}')
+            curl -sS -o /dev/null -X PATCH "$DB_BASE_URL/nodes/{self.instance_name}?updateMask.fieldPaths=status&updateMask.fieldPaths=ended_at" \
                 -H "Authorization: Bearer $ACCESS_TOKEN" \
                 -H "Content-Type: application/json" \
                 -d "$status_payload" || true
@@ -478,6 +501,7 @@ class Node:
         export PROJECT_ID="{PROJECT_ID}"
         export CONTAINERS='{json.dumps([c.to_dict() for c in self.containers])}'
         export INACTIVITY_SHUTDOWN_TIME_SEC="{self.inactivity_shutdown_time_sec}"
+        export RESERVED_FOR_JOB="{self.reserved_for_job or ''}"
 
         cd /opt/burla
         git fetch --depth=1 origin "{CURRENT_BURLA_VERSION}"
@@ -486,7 +510,7 @@ class Node:
         uv venv --python 3.13 --seed
         uv pip install ./node_service
         
-        /opt/burla/.venv/bin/python -m uvicorn node_service:app --host 0.0.0.0 --port {self.port} --workers 1 --timeout-keep-alive 600
+        nice -n -20 /opt/burla/.venv/bin/python -m uvicorn node_service:app --host 0.0.0.0 --port {self.port} --workers 1 --timeout-keep-alive 600
         """
 
     def __get_shutdown_script(self):

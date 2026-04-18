@@ -52,27 +52,27 @@ export default function ProfilePicture() {
             <img
                 src={profilePicUrl}
                 alt="User profile"
-                className="h-9 w-9 rounded-full border-2 border-gray-200 shadow-md object-cover cursor-pointer"
+                className="h-9 w-9 rounded-full border-2 border-border shadow-md object-cover cursor-pointer"
                 onClick={() => setIsOpen(!isOpen)}
             />
 
             {isOpen && (
-                <div className="absolute top-full mt-2 right-0 z-50 bg-white border border-gray-200 rounded-xl shadow-lg px-4 pt-6 pb-2 w-56 text-center">
+                <div className="absolute top-full mt-2 right-0 z-50 bg-card border border-border rounded-xl shadow-lg px-4 pt-6 pb-2 w-56 text-center">
                     <img
                         src={profilePicUrl}
                         alt="User profile large"
                         className="h-20 w-20 rounded-full mx-auto object-cover"
                     />
-                    <p className="mt-2 font-semibold text-gray-800">Hi {firstName} !</p>
-                    <p className="text-sm text-gray-600 mt-1">logged in as {userEmail}</p>
-                    <hr className="border-t border-gray-200 mt-6 mb-2" />
+                    <p className="mt-2 font-semibold text-foreground">Hi {firstName} !</p>
+                    <p className="text-sm text-muted-foreground mt-1">logged in as {userEmail}</p>
+                    <hr className="border-t border-border mt-6 mb-2" />
                     <button
                         onClick={handleLogout}
-                        className="flex items-center w-full text-left px-2 py-1 hover:bg-gray-100 rounded-md"
+                        className="flex items-center w-full text-left px-2 py-1 hover:bg-muted rounded-md"
                     >
                         <svg
                             xmlns="http://www.w3.org/2000/svg"
-                            className="h-5 w-5 text-gray-600 mr-2 stroke-current"
+                            className="h-5 w-5 text-muted-foreground mr-2 stroke-current"
                             fill="none"
                             viewBox="0 0 24 24"
                             stroke="currentColor"
@@ -99,7 +99,7 @@ export default function ProfilePicture() {
                                 y2="12"
                             />
                         </svg>
-                        <span className="text-sm text-gray-800">Log out</span>
+                        <span className="text-sm text-foreground">Log out</span>
                     </button>
                 </div>
             )}

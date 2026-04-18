@@ -23,11 +23,15 @@ class ErrorBoundary extends Component<Props, State> {
     public render() {
         if (this.state.hasError) {
             return (
-                <div style={{ padding: "20px", textAlign: "center" }}>
+                <div
+                    className="bg-background text-foreground min-h-screen"
+                    style={{ padding: "20px", textAlign: "center" }}
+                >
                     <br />
                     <br />
                     <img
                         src={clusterImage}
+                        className="dark:invert dark:brightness-95"
                         style={{
                             width: "120px",
                             height: "auto",
@@ -40,7 +44,10 @@ class ErrorBoundary extends Component<Props, State> {
                     <p>If that dosen't work please email me!</p>
                     <p>
                         (&nbsp;{" "}
-                        <a href="mailto:jake@burla.dev" className="text-blue-500 hover:underline">
+                        <a
+                            href="mailto:jake@burla.dev"
+                            className="text-blue-500 dark:text-blue-400 hover:underline"
+                        >
                             jake@burla.dev
                         </a>
                         &nbsp;)

@@ -33,14 +33,38 @@ if (originalNotExist && !Reflect.has(observerPrototype, "__burlaPatchedNotExist"
 registerLicense(import.meta.env.VITE_SYNCFUSION_LICENSE_KEY as string);
 
 let authRedirectInProgress = false;
+const redirectToLogin = () => {
+    if (authRedirectInProgress) {
+        return;
+    }
+    authRedirectInProgress = true;
+    window.location.replace("https://login.burla.dev");
+};
+
 const originalFetch = window.fetch.bind(window);
 window.fetch = async (...args) => {
     const response = await originalFetch(...args);
-    if (response.status === 401 && !authRedirectInProgress) {
-        authRedirectInProgress = true;
-        window.location.assign(window.location.pathname);
+    if (response.status === 401) {
+        redirectToLogin();
     }
     return response;
+};
+
+const originalXhrSend = XMLHttpRequest.prototype.send;
+XMLHttpRequest.prototype.send = function (
+    this: XMLHttpRequest,
+    body?: Document | XMLHttpRequestBodyInit | null,
+) {
+    this.addEventListener(
+        "loadend",
+        () => {
+            if (this.status === 401) {
+                redirectToLogin();
+            }
+        },
+        { once: true },
+    );
+    return originalXhrSend.call(this, body);
 };
 
 createRoot(document.getElementById("root")!).render(<App />);

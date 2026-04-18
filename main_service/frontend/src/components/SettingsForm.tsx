@@ -145,7 +145,7 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
             if (typeof onChange === "function") onChange();
           };
 
-        const labelClass = "block text-sm font-medium text-gray-500 mb-1";
+        const labelClass = "block text-sm font-medium text-muted-foreground mb-1";
 
         // --- REGION LOGIC ---
         // Region lists for each GPU type
@@ -263,7 +263,7 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
                                         <TooltipProvider>
                                             <Tooltip>
                                                 <TooltipTrigger asChild>
-                                                    <InfoIcon className="h-4 w-4 text-gray-400 hover:text-gray-600 cursor-help -mt-2" />
+                                                    <InfoIcon className="h-4 w-4 text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 cursor-help -mt-2" />
                                                 </TooltipTrigger>
                                                 <TooltipContent>
                                                     <p>
@@ -388,31 +388,38 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
                                     </Select>
                                 </div>
 
-                                {/* GPUs per VM (hidden when None) */}
-                                {gpuVariant !== "None" ? (
-                                    <div className="flex flex-col space-y-2">
-                                        <label className={labelClass}>GPUs per VM</label>
-                                        <Select
-                                            disabled={!isEditing}
-                                            value={gpusPerVm.toString()}
-                                            onValueChange={(val) => setGpusPerVm(parseInt(val, 10))}
-                                        >
-                                            <SelectTrigger className="w-full h-9.5">
-                                                <SelectValue />
-                                            </SelectTrigger>
-                                            <SelectContent>
-                                                {VARIANT_INFO[gpuVariant].map((n) => (
-                                                    <SelectItem key={n} value={n.toString()}>
-                                                        {n}
-                                                    </SelectItem>
-                                                ))}
-                                            </SelectContent>
-                                        </Select>
-                                    </div>
-                                ) : (
-                                    // placeholder to maintain grid alignment
-                                    <div className="hidden md:block" />
-                                )}
+                                {/* GPUs per VM */}
+                                <div className="flex flex-col space-y-2">
+                                    <label className={labelClass}>GPUs per VM</label>
+                                    <Select
+                                        disabled={!isEditing || gpuVariant === "None"}
+                                        value={gpuVariant === "None" ? "0" : gpusPerVm.toString()}
+                                        onValueChange={(val) => {
+                                            const count = parseInt(val, 10);
+                                            if (count === 0) {
+                                                setGpuVariant("None");
+                                            } else {
+                                                setGpusPerVm(count);
+                                            }
+                                        }}
+                                    >
+                                        <SelectTrigger className="w-full h-9.5">
+                                            <SelectValue>
+                                                {gpuVariant === "None" ? "0" : gpusPerVm.toString()}
+                                            </SelectValue>
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            {(gpuVariant === "None"
+                                                ? [0]
+                                                : [0, ...VARIANT_INFO[gpuVariant]]
+                                            ).map((n) => (
+                                                <SelectItem key={n} value={n.toString()}>
+                                                    {n}
+                                                </SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                </div>
                             </div>
 
                             {/* Second row: two equal columns */}
@@ -473,7 +480,7 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
                                         </SelectContent>
                                     </Select>
                                     {!isRegionValid && isEditing && (
-                                        <span className="text-xs text-red-600 mt-1">
+                                        <span className="text-xs text-red-600 dark:text-red-400 mt-1">
                                             Please select a region from dropdown
                                         </span>
                                     )}
@@ -488,9 +495,9 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
                                         type="number"
                                         disabled={!isEditing}
                                         className="w-full h-9.5"
-                                        min={1}
+                                        min={0}
                                         max={1440}
-                                        value={settings.inactivityTimeout || ""}
+                                        value={settings.inactivityTimeout ?? ""}
                                         onChange={(e) => {
                                             const raw = e.target.value;
                                             const num = parseInt(raw, 10);
@@ -502,8 +509,8 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
                                         }}
                                         onBlur={(e) => {
                                             const val = parseInt(e.target.value, 10);
-                                            if (val < 1) {
-                                                handleInputChange("inactivityTimeout", 1);
+                                            if (val < 0) {
+                                                handleInputChange("inactivityTimeout", 0);
                                             } else if (val > 1440) {
                                                 handleInputChange("inactivityTimeout", 1440);
                                             }
@@ -521,7 +528,7 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
                                     <TooltipProvider>
                                         <Tooltip>
                                             <TooltipTrigger asChild>
-                                                <InfoIcon className="h-4 w-4 text-gray-400 hover:text-gray-600 cursor-help -mt-2" />
+                                                <InfoIcon className="h-4 w-4 text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 cursor-help -mt-2" />
                                             </TooltipTrigger>
                                             <TooltipContent>
                                                 <p>
@@ -554,13 +561,13 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
                             {users.map((user) => (
                                     <span
                                         key={user}
-                                        className="bg-gray-100 border border-gray-300 text-gray-800 px-2 py-1 rounded-md flex items-center gap-1"
+                                        className="bg-muted border border-border text-foreground px-2 py-1 rounded-md flex items-center gap-1"
                                     >
                                         {user}
                                         {isEditing && (
                                             <button
                                                 onClick={() => removeUser(user)}
-                                                className="text-gray-500 hover:text-gray-700 text-xl leading-none"
+                                                className="text-muted-foreground hover:text-foreground text-xl leading-none"
                                             >
                                                 ×
                                             </button>

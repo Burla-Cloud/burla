@@ -330,11 +330,10 @@ class Node:
             self.state = "FAILED"
             self.spinner_compatible_print(f"Marking Node {self.instance_name} as FAILED: {message}")
             node_doc = self.async_db.collection("nodes").document(self.instance_name)
-            await node_doc.update({"status": "FAILED", "display_in_dashboard": True})
+            await node_doc.update({"status": "FAILED"})
             await node_doc.collection("logs").document().set({"msg": message, "ts": time()})
             main_service_url = json.loads(CONFIG_PATH.read_text())["cluster_dashboard_url"]
             url = f"{main_service_url}/v1/cluster/{self.instance_name}"
-            url += "?hide_if_failed=false"
             async with self.session.delete(url, headers=self.auth_headers, timeout=1) as response:
                 if response.status != 200:
                     msg = f"Failed to delete node {self.instance_name}."

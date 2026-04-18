@@ -180,7 +180,6 @@ class Node:
         current_state["status"] = "BOOTING"
         current_state["main_svc_version"] = CURRENT_BURLA_VERSION
         current_state["min_compatible_client_version"] = MIN_COMPATIBLE_CLIENT_VERSION
-        current_state["display_in_dashboard"] = True
         current_state["containers"] = [container.to_dict() for container in containers]
         attrs_to_not_save = [
             "db",
@@ -201,7 +200,7 @@ class Node:
 
             start = time()
             status = self.status()
-            while status != "READY":
+            while status not in ("READY", "RUNNING"):
                 sleep(1)
                 booting_too_long = (time() - start) > NODE_BOOT_TIMEOUT
                 status = self.status()
@@ -220,19 +219,12 @@ class Node:
         self.is_booting = False
         return self
 
-    def delete(self, hide_if_failed: bool = False):
-        """
-        hide_if_failed: should I hide this node from the dashboard if it's state is failed?
-        be default, no, so the user can inspect the logs of a failed node, then remove it later.
-        """
+    def delete(self):
         node_snapshot = self.node_ref.get()
         node_is_failed = node_snapshot.exists and node_snapshot.to_dict().get("status") == "FAILED"
-        display_if_failed = not hide_if_failed
 
-        if node_is_failed:
-            self.node_ref.update(dict(status="FAILED", display_in_dashboard=display_if_failed))
-        else:
-            self.node_ref.update(dict(status="DELETED", display_in_dashboard=False))
+        if not node_is_failed:
+            self.node_ref.update({"status": "DELETED"})
 
         if not self.instance_client:
             self.instance_client = InstancesClient()
@@ -440,8 +432,8 @@ class Node:
                 -d "$payload" || true
 
             # set status as FAILED
-            status_payload=$(jq -n --arg ts "$(date +%s)" '{{"fields":{{"status":{{"stringValue":"FAILED"}},"display_in_dashboard":{{"booleanValue":true}},"ended_at":{{"integerValue":$ts}}}}}}')
-            curl -sS -o /dev/null -X PATCH "$DB_BASE_URL/nodes/{self.instance_name}?updateMask.fieldPaths=status&updateMask.fieldPaths=display_in_dashboard&updateMask.fieldPaths=ended_at" \
+            status_payload=$(jq -n --arg ts "$(date +%s)" '{{"fields":{{"status":{{"stringValue":"FAILED"}},"ended_at":{{"integerValue":$ts}}}}}}')
+            curl -sS -o /dev/null -X PATCH "$DB_BASE_URL/nodes/{self.instance_name}?updateMask.fieldPaths=status&updateMask.fieldPaths=ended_at" \
                 -H "Authorization: Bearer $ACCESS_TOKEN" \
                 -H "Content-Type: application/json" \
                 -d "$status_payload" || true

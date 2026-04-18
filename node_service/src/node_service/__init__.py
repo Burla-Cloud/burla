@@ -19,7 +19,7 @@ os.environ["GLOG_minloglevel"] = "2"  # 0-INFO, 1-WARNING, 2-ERROR, 3-FATAL
 
 import google.auth
 from google.auth.transport.requests import Request
-from google.cloud import logging, secretmanager, firestore
+from google.cloud import logging, secretmanager
 from google.cloud.compute_v1 import InstancesClient
 from google.cloud.firestore_v1.async_client import AsyncClient
 import aiohttp
@@ -164,10 +164,6 @@ async def shutdown_if_idle_for_too_long(logger: Logger):
         msg = f"Node has been idle for {INACTIVITY_SHUTDOWN_TIME_SEC // 60} minutes.\n"
         msg += f"SHUTTING DOWN NODE {INSTANCE_NAME} DUE TO INACTIVITY."
         await logger.log(msg, severity="WARNING")
-
-        client = firestore.Client(project=PROJECT_ID, database="burla")
-        node_doc = client.collection("nodes").document(INSTANCE_NAME)
-        node_doc.update({"idle_for_too_long": True})
 
         instance_client = InstancesClient()
         silly_response = instance_client.aggregated_list(project=PROJECT_ID)

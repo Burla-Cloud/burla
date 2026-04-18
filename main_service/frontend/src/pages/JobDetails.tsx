@@ -109,13 +109,14 @@ const JobDetails = () => {
     };
     const getStatusBadgeClass = (status: string | null) => {
         const statusClasses: Record<string, string> = {
-            PENDING: "border-slate-300 bg-slate-50 text-slate-700",
-            RUNNING: "border-amber-200 bg-amber-50 text-amber-700",
-            FAILED: "border-rose-200 bg-rose-50 text-rose-600",
-            CANCELED: "border-rose-200 bg-rose-50 text-rose-600",
-            COMPLETED: "border-emerald-200 bg-emerald-50 text-emerald-700",
+            PENDING: "border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/40 text-slate-700 dark:text-slate-300",
+            RUNNING: "border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-300",
+            FAILED: "border-rose-200 dark:border-rose-900 bg-rose-50 dark:bg-rose-950/30 text-rose-600 dark:text-rose-400",
+            CANCELED: "border-rose-200 dark:border-rose-900 bg-rose-50 dark:bg-rose-950/30 text-rose-600 dark:text-rose-400",
+            COMPLETED: "border-emerald-200 dark:border-emerald-900 bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-400",
         };
-        return status ? statusClasses[status] || "border-slate-300 bg-slate-50 text-slate-700" : "border-slate-300 bg-slate-50 text-slate-700";
+        const fallback = "border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/40 text-slate-700 dark:text-slate-300";
+        return status ? statusClasses[status] || fallback : fallback;
     };
 
     const getStatusDotClass = (status: string | null) => {
@@ -150,7 +151,9 @@ const JobDetails = () => {
     if (!jobId) {
         return (
             <div className="flex-1 flex flex-col items-center justify-center px-12 pt-10">
-                <h1 className="text-2xl font-semibold text-red-600">Missing job ID</h1>
+                <h1 className="text-2xl font-semibold text-red-600 dark:text-red-400">
+                    Missing job ID
+                </h1>
                 <button
                     onClick={() => navigate("/jobs")}
                     className="mt-4 text-primary underline underline-offset-2"
@@ -243,7 +246,7 @@ const JobDetails = () => {
     if (!job) {
         return (
             <div className="flex-1 flex flex-col items-center justify-center px-12 pt-10">
-                <h1 className="text-2xl font-semibold text-gray-500">Loading job...</h1>
+                <h1 className="text-2xl font-semibold text-muted-foreground">Loading job...</h1>
             </div>
         );
     }
@@ -251,13 +254,15 @@ const JobDetails = () => {
     if (isStatsLoading) {
         return (
             <div className="flex-1 flex flex-col items-center justify-center px-12 pt-10">
-                <div className="inline-flex items-center gap-3 text-gray-600">
+                <div className="inline-flex items-center gap-3 text-muted-foreground">
                     <div
-                        className="h-6 w-6 rounded-full border-2 border-gray-300 border-t-primary animate-spin"
+                        className="h-6 w-6 rounded-full border-2 border-border border-t-primary animate-spin"
                         role="status"
                         aria-label="Loading job result stats"
                     />
-                    <h1 className="text-2xl font-semibold text-gray-500">Loading job details...</h1>
+                    <h1 className="text-2xl font-semibold text-muted-foreground">
+                        Loading job details...
+                    </h1>
                 </div>
             </div>
         );
@@ -266,7 +271,7 @@ const JobDetails = () => {
     if (statsLoadError || !stats) {
         return (
             <div className="flex-1 flex flex-col items-center justify-center px-12 pt-10">
-                <h1 className="text-2xl font-semibold text-red-600">
+                <h1 className="text-2xl font-semibold text-red-600 dark:text-red-400">
                     Failed to load job result stats
                 </h1>
                 <button
@@ -289,7 +294,7 @@ const JobDetails = () => {
     return (
         <div className="flex flex-col flex-1 min-h-0 px-12 pt-0">
             <div className="max-w-6xl mx-auto w-full flex flex-col flex-1 min-h-0">
-                <div className="mb-3 rounded-lg border border-gray-200 bg-white px-4 py-3">
+                <div className="mb-3 rounded-lg border border-border bg-card px-4 py-3">
                     <div className="flex flex-row items-start justify-between mb-2">
                         <h1 className="text-2xl font-bold mt-[-4px] text-primary">
                             <button
@@ -315,7 +320,7 @@ const JobDetails = () => {
                         </Button>
                     </div>
 
-                    <div className="flex flex-row items-center text-[14.5px] text-gray-800">
+                    <div className="flex flex-row items-center text-[14.5px] text-foreground">
                         <div className="flex items-center space-x-6">
                             <div className="flex items-center space-x-2">
                                 <span
@@ -349,10 +354,10 @@ const JobDetails = () => {
                     </div>
                 </div>
 
-                <div className="mb-3 rounded-lg border border-gray-200 bg-white px-4 py-3">
+                <div className="mb-3 rounded-lg border border-border bg-card px-4 py-3">
                     <div className="flex items-end justify-between gap-6">
                         <div>
-                            <div className="mt-0.5 text-[14.5px] tabular-nums text-gray-800">
+                            <div className="mt-0.5 text-[14.5px] tabular-nums text-foreground">
                                 {succeededCount.toLocaleString()}
                                 <span className="mx-1.5">/</span>
                                 <span>
@@ -364,7 +369,7 @@ const JobDetails = () => {
                             </div>
                         </div>
 
-                        <div className="flex flex-wrap items-center justify-end gap-5 text-[14.5px] text-gray-800">
+                        <div className="flex flex-wrap items-center justify-end gap-5 text-[14.5px] text-foreground">
                             <span className="inline-flex items-center gap-1.5">
                                 <span className="h-2 w-2 rounded-full bg-emerald-500" />
                                 <span>Success</span>
@@ -389,7 +394,7 @@ const JobDetails = () => {
                         </div>
                     </div>
 
-                    <div className="mt-2 h-2.5 w-full overflow-hidden rounded-full bg-slate-200">
+                    <div className="mt-2 h-2.5 w-full overflow-hidden rounded-full bg-slate-200 dark:bg-slate-700">
                         <div className="flex h-full w-full">
                             <div
                                 className="h-full bg-emerald-500 transition-all"

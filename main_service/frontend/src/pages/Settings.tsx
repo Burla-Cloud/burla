@@ -210,10 +210,10 @@ const SettingsPage = () => {
                   variant="ghost"
                   disabled={saving || loading || !!error}
                   className={[
-                    "relative rounded-md bg-white text-gray-900",
+                    "relative rounded-md bg-card text-foreground",
                     "border border-border shadow-[0_1px_3px_rgba(0,0,0,0.04)]",
                     "transform-gpu transition-all duration-200 ease-in-out",
-                    "hover:-translate-y-0.5 hover:bg-gray-50",
+                    "hover:-translate-y-0.5 hover:bg-muted",
                     "hover:shadow-[0_6px_14px_rgba(0,0,0,0.08)]",
                     "!focus:outline-none !ring-0 focus:border-border",
                     "active:translate-y-0 active:shadow-[0_1px_3px_rgba(0,0,0,0.04)]",
@@ -221,7 +221,7 @@ const SettingsPage = () => {
                 >
                   <span className="flex items-center justify-center min-w-[48px]">
                     {saving ? (
-                      <Loader2 className="h-4 w-4 animate-spin text-gray-600" />
+                      <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
                     ) : (
                       "Save"
                     )}
@@ -235,14 +235,14 @@ const SettingsPage = () => {
 
           <div className="mt-6">
             <nav
-              className="relative inline-grid h-9 grid-cols-2 rounded-xl bg-gray-100/80 p-1"
+              className="relative inline-grid h-9 grid-cols-2 rounded-xl bg-gray-100/80 dark:bg-gray-800/60 p-1"
               aria-label="Settings sections"
             >
               <span
                 aria-hidden="true"
                 className={[
-                  "pointer-events-none absolute bottom-1 left-1 top-1 w-[calc(50%-4px)] rounded-[10px] bg-white",
-                  "border border-gray-200 shadow-[0_1px_2px_rgba(15,23,42,0.06)]",
+                  "pointer-events-none absolute bottom-1 left-1 top-1 w-[calc(50%-4px)] rounded-[10px] bg-card",
+                  "border border-border shadow-[0_1px_2px_rgba(15,23,42,0.06)]",
                   "transition-transform duration-150 ease-out",
                   section === "cluster" ? "translate-x-0" : "translate-x-full",
                 ].join(" ")}
@@ -253,10 +253,10 @@ const SettingsPage = () => {
                 className={[
                   "relative z-10 h-7 min-w-[112px] rounded-[10px] px-3 text-sm font-medium",
                   "transition-colors duration-150",
-                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-300/80 focus-visible:ring-offset-1 focus-visible:ring-offset-white",
+                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
                   section === "cluster"
-                    ? "text-gray-900"
-                    : "text-gray-500 hover:bg-gray-200/60 hover:text-gray-700",
+                    ? "text-foreground"
+                    : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
                 ].join(" ")}
                 aria-pressed={section === "cluster"}
               >
@@ -269,10 +269,10 @@ const SettingsPage = () => {
                 className={[
                   "relative z-10 h-7 min-w-[112px] rounded-[10px] px-3 text-sm font-medium",
                   "transition-colors duration-150",
-                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-300/80 focus-visible:ring-offset-1 focus-visible:ring-offset-white",
+                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
                   section === "usage"
-                    ? "text-gray-900"
-                    : "text-gray-500 hover:bg-gray-200/60 hover:text-gray-700",
+                    ? "text-foreground"
+                    : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
                 ].join(" ")}
                 aria-pressed={section === "usage"}
               >
@@ -284,18 +284,21 @@ const SettingsPage = () => {
 
         <div className="mt-8 space-y-10 flex-1 min-w-0">{content}</div>
 
-        <div className="text-center text-sm text-gray-500 mt-10 pb-2">
+        <div className="text-center text-sm text-gray-500 dark:text-gray-400 mt-10 pb-2">
           Need help? Email me{" "}
-          <a href="mailto:jake@burla.dev" className="text-blue-500 hover:underline">
+          <a
+            href="mailto:jake@burla.dev"
+            className="text-blue-500 dark:text-blue-400 hover:underline"
+          >
             jake@burla.dev
           </a>
         </div>
       </div>
 
       <AlertDialog open={showExitDialog} onOpenChange={setShowExitDialog}>
-        <AlertDialogContent className="max-w-[360px] mx-auto py-7 px-6 rounded-lg shadow-[0_8px_24px_rgba(0,0,0,0.06)] bg-white">
+        <AlertDialogContent className="max-w-[360px] mx-auto py-7 px-6 rounded-lg shadow-[0_8px_24px_rgba(0,0,0,0.06)] bg-card">
           <div className="text-center mb-2">
-            <AlertDialogTitle className="text-[15px] font-medium text-gray-900">
+            <AlertDialogTitle className="text-[15px] font-medium text-foreground">
               Unsaved changes
             </AlertDialogTitle>
           </div>
@@ -308,7 +311,7 @@ const SettingsPage = () => {
                 const ok = await handleSave();
                 if (ok && pendingNavRef.current) navigate(pendingNavRef.current);
               }}
-              className="bg-gray-700 text-white hover:bg-gray-800 rounded-md px-5 py-2.5 font-medium min-w-[130px] transition-all focus:outline-none"
+              className="bg-gray-700 dark:bg-gray-200 text-white dark:text-gray-900 hover:bg-gray-800 dark:hover:bg-gray-100 rounded-md px-5 py-2.5 font-medium min-w-[130px] transition-all focus:outline-none"
             >
               Save & Exit
             </AlertDialogAction>
@@ -317,7 +320,7 @@ const SettingsPage = () => {
               onClick={() => {
                 if (pendingNavRef.current) navigate(pendingNavRef.current);
               }}
-              className="border border-gray-200 bg-gray-50 text-gray-800 hover:bg-gray-100 rounded-md px-5 py-2.5 font-medium min-w-[130px] transition-all focus:outline-none"
+              className="border border-border bg-muted/50 text-foreground hover:bg-muted rounded-md px-5 py-2.5 font-medium min-w-[130px] transition-all focus:outline-none"
             >
               Exit Without Saving
             </AlertDialogAction>

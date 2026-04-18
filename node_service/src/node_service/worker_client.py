@@ -467,6 +467,7 @@ class WorkerClient:
         self.is_idle = True
 
     async def _restart_container(self):
+        t0 = time.time()
         if self.writer is not None:
             try:
                 self.writer.close()
@@ -482,16 +483,29 @@ class WorkerClient:
             except asyncio.CancelledError:
                 pass
             self.logstream_task = None
+        t_before_log_stop = time.time()
         if self.log_writer is not None:
             await self.log_writer.stop()
             self.log_writer = None
+        t_before_delete = time.time()
         try:
             await self.container.delete(force=True)
         except Exception:
             pass
+        t_after_delete = time.time()
         self.container = None
         self.container_id = None
         await self.boot()
+        t_after_boot = time.time()
+        print(
+            f"[TIMING] _restart_container worker={self.container_name} "
+            f"setup={t_before_log_stop - t0:.3f}s "
+            f"log_stop={t_before_delete - t_before_log_stop:.3f}s "
+            f"delete={t_after_delete - t_before_delete:.3f}s "
+            f"boot={t_after_boot - t_after_delete:.3f}s "
+            f"total={t_after_boot - t0:.3f}s",
+            flush=True,
+        )
 
     async def stop(self):
         try:

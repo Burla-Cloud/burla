@@ -404,10 +404,10 @@ remote_parallel_map(my_function, list(range(1000)))`;
         <div className="space-y-6 [scrollbar-gutter:stable_both-edges]">
             {showWelcome && (
                 <div className="spotlight-surface rounded-xl mt-4 mb-8">
-                    <Card className="w-full relative rounded-xl shadow-lg shadow-black/5 bg-white/90 backdrop-blur">
+                    <Card className="w-full relative rounded-xl shadow-lg shadow-black/5 bg-white/90 dark:bg-card/90 backdrop-blur">
                         <button
                             onClick={handleDismissWelcome}
-                            className="absolute top-2 right-2 p-1 hover:bg-gray-100 rounded-full"
+                            className="absolute top-2 right-2 p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full"
                             aria-label="Dismiss welcome message"
                         >
                             <X className="h-6 w-6" />
@@ -419,18 +419,10 @@ remote_parallel_map(my_function, list(range(1000)))`;
                                         <h2 className="text-xl font-semibold text-primary">
                                             Two minute quickstart:
                                         </h2>
-                                        <ol className="list-decimal pl-6 mt-2 space-y-2 text-base font-medium text-gray-700">
+                                        <ol className="list-decimal pl-6 mt-2 space-y-2 text-base font-medium text-gray-700 dark:text-gray-300">
                                             <li>
                                                 Hit the flashing{" "}
-                                                <span
-                                                    className="font-semibold text-gray-900"
-                                                    style={{
-                                                        background: "#f6f6f6",
-                                                        borderRadius: "0.36rem",
-                                                        padding: "0.11em 0.44em",
-                                                        display: "inline-block",
-                                                    }}
-                                                >
+                                                <span className="font-semibold text-gray-900 dark:text-gray-100 bg-gray-100 dark:bg-gray-800 rounded-[0.36rem] px-[0.44em] py-[0.11em] inline-block">
                                                     <span
                                                         style={{
                                                             fontWeight: 700,
@@ -452,7 +444,7 @@ remote_parallel_map(my_function, list(range(1000)))`;
                                                     href="https://colab.research.google.com/drive/1bR8Gpa85gqJi7_9uKdcJDX9_WG0tuVmG?usp=sharing"
                                                     target="_blank"
                                                     rel="noopener noreferrer"
-                                                    className="inline-flex items-center gap-1 text-[#2563eb] hover:underline font-medium"
+                                                    className="inline-flex items-center gap-1 text-[#2563eb] dark:text-blue-400 hover:underline font-medium"
                                                 >
                                                     Google Colab notebook
                                                     <span
@@ -523,7 +515,7 @@ remote_parallel_map(my_function, list(range(1000)))`;
                             )}
 
                             {deletedError && showDeleted && (
-                                <div className="border border-red-300 rounded-lg p-4 mb-4 text-sm text-red-700 bg-red-50">
+                                <div className="border border-red-300 dark:border-red-800 rounded-lg p-4 mb-4 text-sm text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-950/30">
                                     {deletedError}
                                 </div>
                             )}
@@ -627,16 +619,16 @@ remote_parallel_map(my_function, list(range(1000)))`;
                                                     {expandedNodeId === node.id && (
                                                         <TableRow
                                                             key={`${node.id}-logs`}
-                                                            className="bg-gray-50"
+                                                            className="bg-gray-50 dark:bg-gray-900/50"
                                                         >
                                                             <TableCell colSpan={8} className="p-0">
                                                                 <div className="overflow-y-auto h-[400px] resize-y py-2 px-4">
                                                                     {logsLoading[node.id] ? (
-                                                                        <div className="flex flex-col items-center justify-center h-40 w-full text-gray-500">
+                                                                        <div className="flex flex-col items-center justify-center h-40 w-full text-gray-500 dark:text-gray-400">
                                                                             <div className="w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin mb-2" />
                                                                         </div>
                                                                     ) : (
-                                                                        <pre className="whitespace-pre-wrap text-gray-600 text-sm">
+                                                                        <pre className="whitespace-pre-wrap text-gray-600 dark:text-gray-300 text-sm">
                                                                             {nodeLogs[
                                                                                 node.id
                                                                             ]?.join("\n")}
@@ -665,8 +657,8 @@ remote_parallel_map(my_function, list(range(1000)))`;
                                             onClick={() => setPage(0)}
                                             className={`px-3 py-1 rounded text-sm border ${
                                                 page === 0
-                                                    ? "bg-primary text-primary-foreground"
-                                                    : "bg-white text-gray-700 hover:bg-gray-100"
+                                                    ? "bg-primary text-primary-foreground border-primary"
+                                                    : "bg-card text-foreground hover:bg-muted"
                                             }`}
                                         >
                                             1
@@ -687,8 +679,8 @@ remote_parallel_map(my_function, list(range(1000)))`;
                                                     onClick={() => setPage(i)}
                                                     className={`px-3 py-1 rounded text-sm border ${
                                                         page === i
-                                                            ? "bg-primary text-primary-foreground"
-                                                            : "bg-white text-gray-700 hover:bg-gray-100"
+                                                            ? "bg-primary text-primary-foreground border-primary"
+                                                            : "bg-card text-foreground hover:bg-muted"
                                                     }`}
                                                 >
                                                     {i + 1}
@@ -702,8 +694,8 @@ remote_parallel_map(my_function, list(range(1000)))`;
                                                 onClick={() => setPage(totalPages - 1)}
                                                 className={`px-3 py-1 rounded text-sm border ${
                                                     page === totalPages - 1
-                                                        ? "bg-primary text-primary-foreground"
-                                                        : "bg-white text-gray-700 hover:bg-gray-100"
+                                                        ? "bg-primary text-primary-foreground border-primary"
+                                                        : "bg-card text-foreground hover:bg-muted"
                                                 }`}
                                             >
                                                 {totalPages}

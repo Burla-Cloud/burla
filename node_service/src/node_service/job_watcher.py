@@ -169,6 +169,7 @@ async def _job_watcher(
                 break
             elif job_dict["status"] == "CANCELED":
                 JOB_CANCELED = True
+                print(f"[TIMING] node snapshot saw CANCELED: t={time():.3f}", flush=True)
                 break
 
     # Client intentionally updates the job doc every few seconds to signal it's still connected.
@@ -244,6 +245,7 @@ async def _job_watcher(
         elif all_local_work_complete:
             job_completed = (await job_doc.get()).to_dict()["client_has_all_results"]
         if job_completed or JOB_FAILED or JOB_CANCELED:
+            print(f"[TIMING] watcher loop detected terminal status: t={time():.3f}", flush=True)
             status = sync_job_doc.get().to_dict()["status"]
             status = status if status in ["FAILED", "CANCELED"] else "COMPLETED"
             await logger.log(f"Job is {status}! (id={SELF['current_job']})")
@@ -251,7 +253,9 @@ async def _job_watcher(
                 sync_job_doc.update({"status": status})
             except Exception:
                 pass
+            print(f"[TIMING] watcher calling reset_workers: t={time():.3f}", flush=True)
             await reset_workers(logger, async_db)
+            print(f"[TIMING] watcher reset_workers returned: t={time():.3f}", flush=True)
             break
 
     steal_task.cancel()
@@ -304,15 +308,20 @@ async def reinit_node(assigned_workers: list, async_db: AsyncClient):
     SELF["workers"] = current_workers
     SELF["authorized_users"] = authorized_users
     node_doc = async_db.collection("nodes").document(INSTANCE_NAME)
+    print(f"[TIMING] reinit_node about to write READY: t={time():.3f}", flush=True)
     await node_doc.update({"status": "READY", "current_job": None, "reserved_for_job": None})
+    print(f"[TIMING] reinit_node READY written: t={time():.3f}", flush=True)
 
 
 async def reset_workers(logger: Logger, async_db: AsyncClient):
+    gather_start = time()
     try:
         await asyncio.gather(*(worker.reset() for worker in SELF["workers"]))
     except Exception as e:
+        print(f"[TIMING] reset_workers gather failed after {time()-gather_start:.3f}s", flush=True)
         await logger.log(f"Error resetting workers: {e}", severity="ERROR")
         await logger.log("Some workers failed to reset, rebooting containers ...")
         await reboot_containers(logger=logger)
         return
+    print(f"[TIMING] reset_workers gather done in {time()-gather_start:.3f}s", flush=True)
     await reinit_node(SELF["workers"], async_db)

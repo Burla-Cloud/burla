@@ -44,19 +44,11 @@ async def shutdown_node(logger: Logger = Depends(get_logger)):
     SELF["current_parallelism"] = 0
     await logger.log(f"Received shutdown request for node {INSTANCE_NAME}.")
 
-    # mark failed
     async_db = AsyncClient(project=PROJECT_ID, database="burla")
     doc_ref = async_db.collection("nodes").document(INSTANCE_NAME)
     snapshot = await doc_ref.get()
-    if snapshot.exists:
-        node_dict = snapshot.to_dict()
-        update_fields = {"status": "DELETED", "ended_at": time()}
-        # TODO: `display_in_dashboard` does nothing and is not needed anymore
-        if node_dict.get("status") != "FAILED" and node_dict.get("idle_for_too_long"):
-            update_fields["display_in_dashboard"] = True
-        elif node_dict.get("status") != "FAILED":
-            update_fields["display_in_dashboard"] = False
-        await doc_ref.update(update_fields)
+    if snapshot.exists and snapshot.to_dict().get("status") != "FAILED":
+        await doc_ref.update({"status": "DELETED", "ended_at": time()})
 
 
 @router.post("/reboot")

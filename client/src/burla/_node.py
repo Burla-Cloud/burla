@@ -560,3 +560,4 @@ class Node:
                 self.result_count += 1
             if self.state == "DONE":
                 return
+            await asyncio.sleep(0.05)

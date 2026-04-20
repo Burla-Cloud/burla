@@ -44,10 +44,12 @@ if not shutil.which("uv"):
     os.chmod(f"{uv_bin_directory}/uv", 0o755)
 
 try:
-    import burla
-    import cloudpickle
-    from tblib import Traceback
-except ImportError:
+    installed_burla_version = importlib.metadata.version("burla")
+except importlib.metadata.PackageNotFoundError:
+    installed_burla_version = None
+
+target_burla_version = sys.argv[2]
+if installed_burla_version != target_burla_version:
     subprocess.run(
         [
             "uv",
@@ -57,14 +59,13 @@ except ImportError:
             "python",
             "--target",
             "/worker_service_python_env",
-            "cloudpickle",
-            "tblib",
-            "burla",
+            f"burla=={target_burla_version}",
         ],
         check=True,
     )
-    import cloudpickle
-    from tblib import Traceback
+
+import cloudpickle
+from tblib import Traceback
 
 LOG_START_MARKER_PREFIX = "__burla_input_start__:"
 LOG_END_MARKER_PREFIX = "__burla_input_end__:"

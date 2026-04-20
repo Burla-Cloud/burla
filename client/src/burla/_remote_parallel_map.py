@@ -112,8 +112,8 @@ async def _grow_cluster(
 async def _execute_job_wrapped(*args, **kwargs):
     async with AsyncExitStack() as stack:
         connector = aiohttp.TCPConnector(
-            limit=500,
-            limit_per_host=100,
+            limit=200,
+            limit_per_host=20,
             keepalive_timeout=60,
             enable_cleanup_closed=True,
             use_dns_cache=True,
@@ -296,10 +296,7 @@ async def _execute_job(
         last_status_message_update_time = 0.0
         total_result_count = sum(node.result_count for node in nodes)
         while total_result_count < n_inputs:
-            if (time() - start_time) < 5:
-                await asyncio.sleep(0.0005)
-            else:
-                await asyncio.sleep(0.1)
+            await asyncio.sleep(0.05)
 
             if cluster_shutdown:
                 raise ClusterShutdown()

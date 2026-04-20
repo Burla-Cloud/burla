@@ -12,7 +12,6 @@ import cloudpickle
 from aiohttp import ClientConnectorError, ClientError, ClientOSError, ClientTimeout
 from google.cloud.firestore import FieldFilter
 from google.cloud.firestore_v1.async_client import AsyncClient
-from packaging.version import Version
 from tblib import Traceback
 from yaspin import Spinner
 
@@ -73,7 +72,7 @@ class NodeDisconnected(Exception):
 
 
 class VersionMismatch(Exception):
-    def __init__(self, lower_version: Version, upper_version: Version, current_version: Version):
+    def __init__(self, lower_version: str, upper_version: str, current_version: str):
         msg = f"Incompatible cluster and client versions!\n"
         msg += f"This cluster supports clients v{lower_version} - v{upper_version}"
         msg += f", you have v{current_version}.\n"
@@ -81,6 +80,12 @@ class VersionMismatch(Exception):
         msg += f"    pip install burla=={upper_version}\n\n"
         msg += f"-------------------------------------------\n"
         super().__init__(msg)
+
+
+def _parse_version(version_str: str) -> tuple[int, ...]:
+    # Burla versions are always MAJOR.MINOR.PATCH (see client/__init__.py and
+    # main_service/__init__.py). Pure tuple compare is enough.
+    return tuple(int(part) for part in version_str.split("."))
 
 
 class JobCanceled(Exception):
@@ -210,10 +215,13 @@ async def select_nodes_to_assign_to_job(
     if not ready_nodes:
         ready_nodes = await wait_for_nodes_to_be_ready(db=db, spinner=spinner)
 
-    upper_version = Version(ready_nodes[0]["main_svc_version"])
-    lower_version = Version(ready_nodes[0]["min_compatible_client_version"])
-    current_version = Version(__version__)
-    if not lower_version <= current_version <= upper_version:
+    upper_version = ready_nodes[0]["main_svc_version"]
+    lower_version = ready_nodes[0]["min_compatible_client_version"]
+    current_version = __version__
+    lower = _parse_version(lower_version)
+    upper = _parse_version(upper_version)
+    current = _parse_version(current_version)
+    if not lower <= current <= upper:
         raise VersionMismatch(lower_version, upper_version, current_version)
 
     planned_initial_job_parallelism = 0

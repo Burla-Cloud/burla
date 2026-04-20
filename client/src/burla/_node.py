@@ -224,7 +224,7 @@ async def select_nodes_to_assign_to_job(
         max_node_parallelism = parallelism_capacity(node_data["machine_type"], func_cpu, func_ram)
 
         if max_node_parallelism > 0 and parallelism_deficit > 0:
-            node_target_parallelism = min(parallelism_deficit, max_node_parallelism)
+            node_target_parallelism = max_node_parallelism
             planned_initial_job_parallelism += node_target_parallelism
             host = node_data["host"]
             if host.startswith("http://node_"):
@@ -511,8 +511,9 @@ class Node:
 
         i = 0
         while True:
-            n_ready_nodes = sum(1 for node in nodes if node.state in ("READY", "RUNNING"))
-            input_chunksize = max(self.target_parallelism, n_inputs // n_ready_nodes)
+            ready_nodes = [n for n in nodes if n.state in ("READY", "RUNNING")]
+            total_target_parallelism = sum(n.target_parallelism for n in ready_nodes)
+            input_chunksize = max(1, (n_inputs * self.target_parallelism) // total_target_parallelism)
             input_chunk = []
             chunk_size_bytes = 0
             while inputs_with_indicies and len(input_chunk) < input_chunksize:

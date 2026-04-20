@@ -24,6 +24,11 @@ TRUNCATED_LOG_SUFFIX = "<too-long--remaining-msg-truncated-due-to-length>"
 LOG_START_MARKER_PREFIX = "__burla_input_start__:"
 LOG_END_MARKER_PREFIX = "__burla_input_end__:"
 
+# The first worker on a fresh VM downloads uv from GitHub and installs cloudpickle/tblib into
+# /worker_service_python_env before opening its socket. Under any network slowness this can take
+# well over 10 seconds; 10s was causing ~15% of initial boots to fail.
+WORKER_BOOT_TIMEOUT_SECONDS = 20
+
 
 class JobLogWriter:
     def __init__(self, job_id: str):
@@ -177,7 +182,7 @@ def _worker_oom_error():
 
 
 def _worker_boot_timeout_error(logs: str):
-    message = "\n\nWorker boot timed out after 10 seconds.\n"
+    message = f"\n\nWorker boot timed out after {WORKER_BOOT_TIMEOUT_SECONDS} seconds.\n"
     message += "The worker container never became ready to accept connections.\n"
     message += "\nBuffered worker logs:\n"
     message += "---------------------\n"
@@ -275,9 +280,7 @@ class WorkerClient:
     async def _get_worker_host_pid(self) -> int:
         # Docker's /top endpoint returns host PIDs of every process in the container.
         # aiodocker doesn't expose a wrapper for it so we call it via the internal client.
-        data = await self.docker._query_json(
-            f"containers/{self.container_id}/top", method="GET"
-        )
+        data = await self.docker._query_json(f"containers/{self.container_id}/top", method="GET")
         for row in data.get("Processes", []):
             cmd = row[-1]
             # The shell wrapper's CMD also contains worker_server.py because the script text
@@ -351,7 +354,7 @@ class WorkerClient:
                 if not container_info["State"]["Running"]:
                     await self._log_container_failure()
                     raise RuntimeError(f"Container {self.container_name} stopped while booting.")
-                if time.perf_counter() - boot_started_at > 10:
+                if time.perf_counter() - boot_started_at > WORKER_BOOT_TIMEOUT_SECONDS:
                     raise _worker_boot_timeout_error(await self._get_logs())
                 await asyncio.sleep(0.1)
         self.is_idle = True
@@ -506,7 +509,7 @@ class WorkerClient:
                 if self.writer is not None:
                     self.writer.close()
                     self.writer = None
-                if time.perf_counter() - reconnect_started_at > 15:
+                if time.perf_counter() - reconnect_started_at > WORKER_BOOT_TIMEOUT_SECONDS:
                     raise _worker_boot_timeout_error(await self._get_logs())
                 await asyncio.sleep(0.05)
         self.is_idle = True

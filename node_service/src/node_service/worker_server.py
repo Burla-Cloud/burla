@@ -44,6 +44,7 @@ if not shutil.which("uv"):
     os.chmod(f"{uv_bin_directory}/uv", 0o755)
 
 try:
+    import burla
     import cloudpickle
     from tblib import Traceback
 except ImportError:
@@ -58,6 +59,7 @@ except ImportError:
             "/worker_service_python_env",
             "cloudpickle",
             "tblib",
+            "burla",
         ],
         check=True,
     )

@@ -508,18 +508,6 @@ class WorkerClient:
         )
         await logger.log(msg)
 
-    async def stop(self, logger: Logger):
-        try:
-            await self.reset(logger)
-            if self.writer is not None:
-                self.writer.close()
-                await self.writer.wait_closed()
-            await self.container.delete(force=True)
-            if self.logstream_task is not None:
-                await self.logstream_task
-        finally:
-            await self.docker.close()
-
     async def _container_exists(self):
         if not self.container_id:
             return False

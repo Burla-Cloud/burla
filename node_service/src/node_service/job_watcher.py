@@ -315,7 +315,7 @@ async def reset_workers(logger: Logger, async_db: AsyncClient):
     except Exception as e:
         # dont throw errors if node deleting
         node_doc = async_db.collection("nodes").document(INSTANCE_NAME)
-        current_status = node_doc.get().to_dict().get("status")
+        current_status = (await node_doc.get()).to_dict().get("status")
         if current_status in ("DELETED", "FAILED"):
             return
 

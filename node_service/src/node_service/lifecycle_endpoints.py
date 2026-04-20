@@ -370,7 +370,7 @@ async def reboot_containers(
 
         current_status = node_doc.get().to_dict().get("status")
         if current_status in ("DELETED", "FAILED"):
-            raise Exception(f"Node marked {current_status} during boot.")
+            return
 
         node_doc.update({"status": "READY"})
 

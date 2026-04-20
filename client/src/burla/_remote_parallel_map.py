@@ -112,8 +112,8 @@ async def _grow_cluster(
 async def _execute_job_wrapped(*args, **kwargs):
     async with AsyncExitStack() as stack:
         connector = aiohttp.TCPConnector(
-            limit=200,
-            limit_per_host=20,
+            limit=300,
+            limit_per_host=50,
             keepalive_timeout=60,
             enable_cleanup_closed=True,
             use_dns_cache=True,

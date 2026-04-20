@@ -129,7 +129,7 @@ async def _input_steal_loop(async_db, session, logger, job_started_at, node_ids_
         if received:
             neighbor_had_no_inputs_at = None
             SEC_NEIGHBOR_HAD_NO_INPUTS = 0
-            await logger.log(f"Got {len(items)} more inputs from {neighbor_id}")
+            # await logger.log(f"Got {len(items)} more inputs from {neighbor_id}")
         else:
             neighbor_had_no_inputs_at = neighbor_had_no_inputs_at or time()
             SEC_NEIGHBOR_HAD_NO_INPUTS = time() - neighbor_had_no_inputs_at

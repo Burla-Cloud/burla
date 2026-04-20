@@ -280,7 +280,12 @@ class WorkerClient:
             f"containers/{self.container_id}/top", method="GET"
         )
         for row in data.get("Processes", []):
-            if "worker_server.py" in row[-1]:
+            cmd = row[-1]
+            # The shell wrapper's CMD also contains worker_server.py because the script text
+            # embeds that path. Skip the wrapper and match only the actual python invocation.
+            if "while true" in cmd:
+                continue
+            if "worker_server.py" in cmd:
                 return int(row[1])
         raise RuntimeError(f"worker_server.py not found in {self.container_name}")
 

@@ -102,9 +102,13 @@ async def get_results(job_id: str = Path(...)):
         except asyncio.QueueEmpty:
             break
 
+    drained_logs = SELF["pending_logs"]
+    SELF["pending_logs"] = []
+
     response_json = {
         "results": results,
         "current_parallelism": SELF["current_parallelism"],
+        "logs": drained_logs,
     }
 
     data = pickle.dumps(response_json)

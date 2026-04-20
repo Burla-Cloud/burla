@@ -369,7 +369,6 @@ dependencies = [
     { name = "packaging" },
     { name = "platformdirs" },
     { name = "requests" },
-    { name = "six" },
     { name = "tblib" },
     { name = "yaspin" },
 ]
@@ -409,7 +408,6 @@ requires-dist = [
     { name = "packaging", specifier = ">=25.0" },
     { name = "platformdirs", specifier = ">=4.5.0" },
     { name = "requests", specifier = "==2.32.4" },
-    { name = "six", specifier = ">=1.17.0" },
     { name = "tblib", specifier = ">=3.2.0" },
     { name = "yaspin", specifier = ">=3.3.0" },
 ]

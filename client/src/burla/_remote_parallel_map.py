@@ -249,12 +249,6 @@ async def _execute_job(
             if is_error_doc and sync_job_ref.get().to_dict()["status"] == "CANCELED" and logs:
                 dashboard_canceled_message = logs[-1]["message"]
                 continue
-            if is_error_doc or udf_error_event.is_set():
-                continue
-
-            for log in logs:
-                message = log["message"].rstrip("\r\n")
-                spinner.write(message) if spinner else print(message)
 
     def _on_new_logs_doc(col_snapshot, changes, read_time):
         _print_log_documents([change.document for change in changes])

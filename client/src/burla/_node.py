@@ -13,7 +13,6 @@ from aiohttp import ClientConnectorError, ClientError, ClientOSError, ClientTime
 from google.cloud.firestore import FieldFilter
 from google.cloud.firestore_v1.async_client import AsyncClient
 from packaging.version import Version
-from six import reraise
 from tblib import Traceback
 from yaspin import Spinner
 
@@ -276,7 +275,16 @@ class Node:
         return {
             "results": [],
             "current_parallelism": self.current_parallelism,
+            "logs": [],
         }
+
+    def _print_logs(self, log_documents: list):
+        if self.udf_error_event is not None and self.udf_error_event.is_set():
+            return
+        for log_document in log_documents:
+            for log in log_document.get("logs", []):
+                message = log["message"].rstrip("\r\n")
+                self.spinner_compatible_print(message)
 
     @classmethod
     def from_ready(
@@ -424,6 +432,7 @@ class Node:
                     return {
                         "results": [],
                         "current_parallelism": 0,
+                        "logs": [],
                     }
                 if response.status != 200:
                     raise Exception(f"Result-check failed for node: {self.instance_name}")
@@ -443,6 +452,7 @@ class Node:
                 raise NodeDisconnected(self._node_silence_timeout_message("returning results"))
             return self._empty_node_results()
 
+        self._print_logs(node_results.get("logs", []))
         return node_results
 
     async def _upload_input_chunk(self, input_chunk: list):
@@ -549,7 +559,7 @@ class Node:
                     self.udf_error_event.set()
                     log_error = RemoteParallelMapReporter.log_user_function_error_async
                     await log_error(self.job_id, self.session)
-                    reraise(tp=error_info["type"], value=error_info["exception"], tb=traceback)
+                    raise error_info["exception"].with_traceback(traceback)
                 else:
                     return_values.append(cloudpickle.loads(result_pkl))
 

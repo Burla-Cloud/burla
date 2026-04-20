@@ -149,6 +149,10 @@ class JobLogWriter:
             documents = self.pending_documents
             self.pending_documents = []
 
+        for document in documents:
+            if not document.get("is_error"):
+                SELF["pending_logs"].append(document)
+
         batch = ASYNC_DB.batch()
         for document in documents:
             batch.set(self.logs_collection.document(), document)

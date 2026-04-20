@@ -71,6 +71,7 @@ def REINIT_SELF(SELF):
     SELF["all_inputs_uploaded"] = False
     SELF["num_results_received"] = 0
     SELF["pending_transfers"] = {}
+    SELF["pending_logs"] = []
     SELF["active_client_request_count"] = 0
     SELF["last_client_activity_timestamp"] = time()
     SELF["reserved_for_job"] = None

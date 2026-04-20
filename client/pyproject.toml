@@ -11,7 +11,6 @@ dependencies = [
     "packaging>=25.0",
     "platformdirs>=4.5.0",
     "requests==2.32.4",
-    "six>=1.17.0",
     "tblib>=3.2.0",
     "yaspin>=3.3.0",
 ]

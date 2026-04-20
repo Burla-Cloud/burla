@@ -404,8 +404,7 @@ async def validate_requests(request: Request, call_next):
 async def log_and_time_requests(request: Request, call_next):
     start = time()
     request.state.uuid = uuid4().hex
-    not_requesting_udf_results = not str(request.url).endswith("/results")  # too many to log
-    not_requesting_udf_results = True if IN_LOCAL_DEV_MODE else not_requesting_udf_results
+    chatty_endpoint = request.url.path.endswith(("/results", "/ack_transfer", "/get_inputs"))
 
     logger = Logger(request)
     # Don't use this ^ (except in `get_add_background_task_function`) because it logs to firestore
@@ -441,7 +440,7 @@ async def log_and_time_requests(request: Request, call_next):
             yield body
 
         response.body_iterator = body_stream()
-    elif response.status_code == 200 and not_requesting_udf_results and not IN_LOCAL_DEV_MODE:
+    elif response.status_code == 200 and not chatty_endpoint and not IN_LOCAL_DEV_MODE:
         latency = time() - start
         msg = f"{request.method} to {request.url} returned 200 after {latency}s."
         add_background_task(GCL_CLIENT.log_text, msg)

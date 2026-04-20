@@ -313,6 +313,12 @@ async def reset_workers(logger: Logger, async_db: AsyncClient):
     try:
         await asyncio.gather(*(worker.reset() for worker in SELF["workers"]))
     except Exception as e:
+        # dont throw errors if node deleting
+        node_doc = async_db.collection("nodes").document(INSTANCE_NAME)
+        current_status = node_doc.get().to_dict().get("status")
+        if current_status in ("DELETED", "FAILED"):
+            return
+
         await logger.log(f"Error resetting workers: {e}", severity="ERROR")
         await logger.log("Some workers failed to reset, rebooting containers ...")
         await reboot_containers(logger=logger)

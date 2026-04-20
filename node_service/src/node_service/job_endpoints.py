@@ -109,6 +109,9 @@ async def get_results(job_id: str = Path(...)):
         "results": results,
         "current_parallelism": SELF["current_parallelism"],
         "logs": drained_logs,
+        "cluster_shutdown": SELF["pending_cluster_shutdown"],
+        "cluster_restarted": SELF["pending_cluster_restarted"],
+        "dashboard_canceled": SELF["pending_dashboard_canceled"],
     }
 
     data = pickle.dumps(response_json)

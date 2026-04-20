@@ -164,6 +164,12 @@ async def _job_watcher(
             job_dict = change.document.to_dict()
             if job_dict["all_inputs_uploaded"] == True:
                 SELF["all_inputs_uploaded"] = True
+            if job_dict.get("cluster_shutdown"):
+                SELF["pending_cluster_shutdown"] = True
+            if job_dict.get("cluster_restarted"):
+                SELF["pending_cluster_restarted"] = True
+            if job_dict.get("dashboard_canceled"):
+                SELF["pending_dashboard_canceled"] = True
             if job_dict["status"] == "FAILED":
                 JOB_FAILED = True
                 break

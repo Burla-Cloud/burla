@@ -187,12 +187,14 @@ async def stop_job(job_id: str, request: Request):
     timestamp = datetime.now(timezone.utc)
     logs = [{"is_error": True, "message": msg, "timestamp": timestamp}]
     job_doc = ASYNC_DB.collection("jobs").document(job_id)
-    # Outer `is_error` is required for the client's log listener to surface this as a clean
-    # JobCanceled with the dashboard message instead of falling through to a generic error.
+    # The log subdoc still exists for the dashboard's log view.
     await job_doc.collection("logs").add(
         {"logs": logs, "timestamp": timestamp, "is_error": True}
     )
-    await job_doc.update({"status": "CANCELED"})
+    # `dashboard_canceled` on the job doc is the signal the client reads: each
+    # node's _on_job_snapshot caches it into SELF, the next /results response
+    # returns it, and the client raises JobCanceled directly.
+    await job_doc.update({"status": "CANCELED", "dashboard_canceled": True})
 
 
 @router.get("/v1/jobs/{job_id}/result-stats")

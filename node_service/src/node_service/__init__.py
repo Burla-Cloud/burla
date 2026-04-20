@@ -72,6 +72,9 @@ def REINIT_SELF(SELF):
     SELF["num_results_received"] = 0
     SELF["pending_transfers"] = {}
     SELF["pending_logs"] = []
+    SELF["pending_cluster_shutdown"] = False
+    SELF["pending_cluster_restarted"] = False
+    SELF["pending_dashboard_canceled"] = False
     SELF["active_client_request_count"] = 0
     SELF["last_client_activity_timestamp"] = time()
     SELF["reserved_for_job"] = None

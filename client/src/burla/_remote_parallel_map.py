@@ -152,9 +152,6 @@ async def _execute_job(
     session_stack: AsyncExitStack,
     reporter: RemoteParallelMapReporter,
 ):
-    dashboard_canceled_message = None
-    cluster_restarted = False
-    cluster_shutdown = False
     auth_headers = get_auth_headers()
     sync_db, async_db = get_db_clients()
 
@@ -227,34 +224,6 @@ async def _execute_job(
             "fail_reason": [],
         }
     )
-    # start stdout/stderr stream
-    seen_log_document_ids = set()
-
-    def _print_log_documents(log_documents):
-        nonlocal dashboard_canceled_message, cluster_restarted, cluster_shutdown
-        for log_document in log_documents:
-            if log_document.id in seen_log_document_ids:
-                continue
-            seen_log_document_ids.add(log_document.id)
-            log_doc = log_document.to_dict()
-            logs = log_doc.get("logs", [])
-            is_error_doc = bool(log_doc.get("is_error"))
-
-            if log_doc.get("event") == "cluster_restarted":
-                cluster_restarted = True
-                continue
-            if log_doc.get("event") == "cluster_shutdown":
-                cluster_shutdown = True
-                continue
-            if is_error_doc and sync_job_ref.get().to_dict()["status"] == "CANCELED" and logs:
-                dashboard_canceled_message = logs[-1]["message"]
-                continue
-
-    def _on_new_logs_doc(col_snapshot, changes, read_time):
-        _print_log_documents([change.document for change in changes])
-
-    log_stream = sync_job_ref.collection("logs").on_snapshot(_on_new_logs_doc)
-    session_stack.callback(log_stream.unsubscribe)
 
     job_start_telemetry_task = create_task(reporter.log_job_start_telemetry(nodes, packages))
     session_stack.callback(job_start_telemetry_task.cancel)
@@ -292,32 +261,21 @@ async def _execute_job(
         while total_result_count < n_inputs:
             await asyncio.sleep(0.05)
 
-            if cluster_shutdown:
-                raise ClusterShutdown()
-            if cluster_restarted:
-                raise ClusterRestarted()
-            if dashboard_canceled_message:
-                raise JobCanceled(f"\n\n{dashboard_canceled_message}\n")
-            elif terminal_cancel_event.is_set():
+            if terminal_cancel_event.is_set():
                 return
 
-            for task in node_tasks:
-                if task.done() and task.exception():
-                    # Infrastructure failures during a cluster restart/shutdown race the
-                    # firestore listener. Prefer the definitive lifecycle signal when present.
-                    if cluster_shutdown:
+            for task, node in zip(node_tasks, nodes):
+                exception = task.exception() if task.done() else None
+                exception = NodeDisconnected(node) if node.state == "FAILED" else exception
+                if exception:
+                    job_dict = sync_job_ref.get().to_dict() or {}
+                    if job_dict.get("cluster_shutdown"):
                         raise ClusterShutdown()
-                    if cluster_restarted:
+                    if job_dict.get("cluster_restarted"):
                         raise ClusterRestarted()
-                    raise task.exception()
-
-            for node in nodes:
-                if node.state == "FAILED":
-                    if cluster_shutdown:
-                        raise ClusterShutdown()
-                    if cluster_restarted:
-                        raise ClusterRestarted()
-                    raise NodeDisconnected(f"Node {node.instance_name} failed during job.")
+                    if job_dict.get("dashboard_canceled"):
+                        raise JobCanceled("\n\nJob canceled from dashboard.\n")
+                    raise exception
 
             current_time = time()
             if (current_time - last_status_message_update_time) > 0.05:

@@ -68,7 +68,9 @@ class FirestoreTimeout(Exception):
 
 
 class NodeDisconnected(Exception):
-    pass
+    def __init__(self, node: "Node", message: str | None = None):
+        self.node = node
+        super().__init__(message or f"Node {node.instance_name} failed during job.")
 
 
 class VersionMismatch(Exception):
@@ -454,11 +456,19 @@ class Node:
                     if (await job_ref.get()).to_dict()["status"] == "CANCELED":
                         raise JobCanceled("Job canceled from dashboard.")
                     msg = f"Node {self.instance_name} disconnected while transmitting results.\n"
-                    raise NodeDisconnected(msg)
+                    raise NodeDisconnected(self, msg)
         except NETWORK_ERROR_TYPES:
             if self._node_silence_timeout_exceeded():
-                raise NodeDisconnected(self._node_silence_timeout_message("returning results"))
+                msg = self._node_silence_timeout_message("returning results")
+                raise NodeDisconnected(self, msg)
             return self._empty_node_results()
+
+        if node_results.get("cluster_shutdown"):
+            raise ClusterShutdown()
+        if node_results.get("cluster_restarted"):
+            raise ClusterRestarted()
+        if node_results.get("dashboard_canceled"):
+            raise JobCanceled("\n\nJob canceled from dashboard.\n")
 
         self._print_logs(node_results.get("logs", []))
         return node_results
@@ -562,7 +572,7 @@ class Node:
                         msg = f"Worker on node {self.instance_name} failed "
                         msg += "(the cluster may have been restarted):\n\n"
                         msg += error_info["traceback_str"]
-                        raise NodeDisconnected(msg)
+                        raise NodeDisconnected(self, msg)
                     traceback = Traceback.from_dict(error_info["traceback_dict"]).as_traceback()
                     self.udf_error_event.set()
                     log_error = RemoteParallelMapReporter.log_user_function_error_async

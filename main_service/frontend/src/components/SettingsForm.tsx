@@ -301,20 +301,15 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
                                 <div className="flex flex-col space-y-2">
                                     <label className={labelClass}>Quantity</label>
                                     <Input
-                                        type="number"
+                                        type="text"
+                                        inputMode="numeric"
                                         disabled={!isEditing}
                                         className="h-9.5 w-full"
-                                        min={1}
-                                        max={1000}
                                         value={settings.machineQuantity || ""}
                                         onChange={(e) => {
-                                            const raw = e.target.value;
-                                            const num = parseInt(raw, 10);
-                                            if (!isNaN(num)) {
-                                                handleInputChange("machineQuantity", num);
-                                            } else if (raw === "") {
-                                                handleInputChange("machineQuantity", 0);
-                                            }
+                                            const digits = e.target.value.replace(/\D/g, "");
+                                            const num = digits === "" ? 0 : parseInt(digits, 10);
+                                            handleInputChange("machineQuantity", num);
                                         }}
                                         onBlur={(e) => {
                                             const val = parseInt(e.target.value, 10);
@@ -428,20 +423,15 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
                                 <div className="flex flex-col space-y-2">
                                     <label className={labelClass}>Disk Size (GB)</label>
                                     <Input
-                                        type="number"
+                                        type="text"
+                                        inputMode="numeric"
                                         disabled={!isEditing}
                                         className="w-full h-9.5"
-                                        min={10}
-                                        max={2000}
                                         value={settings.diskSize || ""}
                                         onChange={(e) => {
-                                            const raw = e.target.value;
-                                            const num = parseInt(raw, 10);
-                                            if (!isNaN(num)) {
-                                                handleInputChange("diskSize", num);
-                                            } else if (raw === "") {
-                                                handleInputChange("diskSize", 0);
-                                            }
+                                            const digits = e.target.value.replace(/\D/g, "");
+                                            const num = digits === "" ? 0 : parseInt(digits, 10);
+                                            handleInputChange("diskSize", num);
                                         }}
                                         onBlur={(e) => {
                                             const val = parseInt(e.target.value, 10);
@@ -492,20 +482,15 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
                                         Inactivity Timeout (minutes)
                                     </label>
                                     <Input
-                                        type="number"
+                                        type="text"
+                                        inputMode="numeric"
                                         disabled={!isEditing}
                                         className="w-full h-9.5"
-                                        min={0}
-                                        max={1440}
                                         value={settings.inactivityTimeout ?? ""}
                                         onChange={(e) => {
-                                            const raw = e.target.value;
-                                            const num = parseInt(raw, 10);
-                                            if (!isNaN(num)) {
-                                                handleInputChange("inactivityTimeout", num);
-                                            } else if (raw === "") {
-                                                handleInputChange("inactivityTimeout", 0);
-                                            }
+                                            const digits = e.target.value.replace(/\D/g, "");
+                                            const num = digits === "" ? 0 : parseInt(digits, 10);
+                                            handleInputChange("inactivityTimeout", num);
                                         }}
                                         onBlur={(e) => {
                                             const val = parseInt(e.target.value, 10);

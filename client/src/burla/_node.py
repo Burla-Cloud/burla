@@ -509,6 +509,7 @@ class Node:
                 await first_chunk_barrier.abort()
             return
 
+        i = 0
         while True:
             n_ready_nodes = sum(1 for node in nodes if node.state in ("READY", "RUNNING"))
             input_chunksize = max(self.target_parallelism, n_inputs // n_ready_nodes)
@@ -554,6 +555,11 @@ class Node:
                     return_values.append(cloudpickle.loads(result_pkl))
 
             self.current_parallelism = node_results["current_parallelism"]
+
+            self.spinner_compatible_print(
+                f"i: {i} inputs: {len(input_chunk)} returns: {len(return_values)}"
+            )
+            i += 1
 
             for return_value in return_values:
                 return_queue.put_nowait(return_value)

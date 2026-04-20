@@ -227,6 +227,7 @@ async def _job_watcher(
         # Neighbor had no inputs for too long?
         if SEC_NEIGHBOR_HAD_NO_INPUTS and SEC_NEIGHBOR_HAD_NO_INPUTS > EMPTY_NEIGHBOR_TIMEOUT_SEC:
             if SELF["results_queue"].empty() and all_workers_idle:
+                steal_task.cancel()
                 msg = f"Neighbor had no extra inputs for {EMPTY_NEIGHBOR_TIMEOUT_SEC}s"
                 await logger.log(msg + ", done working on job!")
                 await reset_workers(logger, async_db)
@@ -244,6 +245,7 @@ async def _job_watcher(
         elif all_local_work_complete:
             job_completed = (await job_doc.get()).to_dict()["client_has_all_results"]
         if job_completed or JOB_FAILED or JOB_CANCELED:
+            steal_task.cancel()
             await logger.log(f"[TIMING] watcher loop detected terminal status: t={time():.3f}")
             status = sync_job_doc.get().to_dict()["status"]
             status = status if status in ["FAILED", "CANCELED"] else "COMPLETED"

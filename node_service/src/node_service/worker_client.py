@@ -467,6 +467,8 @@ class WorkerClient:
         self.is_idle = True
 
     async def _reconnect(self):
+        # aiodocker caches NetworkSettings; restart reassigns the host port so we force a refresh.
+        await self.container.show()
         self.port = WORKER_INTERNAL_PORT if IN_LOCAL_DEV_MODE else await self._get_host_port()
         reconnect_started_at = time.perf_counter()
         while True:

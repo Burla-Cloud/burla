@@ -218,9 +218,10 @@ class CallHookOnJobStartMiddleware:
 
     async def __call__(self, scope, receive, send):
         is_post_request = scope.get("method") == "POST"
-        is_jobs_request = scope.get("path", "").startswith("/jobs/")
-        is_jobs_request = "inputs" not in scope.get("path", "") and is_jobs_request
-        is_job_execution_request = is_post_request and is_jobs_request
+        path_parts = scope.get("path", "").strip("/").split("/")
+        is_job_execution_request = (
+            is_post_request and len(path_parts) == 2 and path_parts[0] == "jobs"
+        )
 
         if is_job_execution_request:
             started = False

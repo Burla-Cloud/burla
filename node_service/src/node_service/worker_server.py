@@ -18,10 +18,6 @@ import urllib.request
 # Do not move. Node assumes first line printed is the Python version.
 print(f"{sys.version_info.major}.{sys.version_info.minor}", flush=True)
 
-# Become a session + process group leader so the node_service can kill this worker together with
-# any subprocess the user's UDF spawned via a single os.killpg from the host.
-os.setsid()
-
 if sys.platform != "linux":
     raise RuntimeError("Worker container must be Linux.")
 
@@ -95,6 +91,11 @@ def receive_exactly(connection, byte_count):
         payload += chunk
     return payload
 
+
+# Become a session + process group leader so the node_service can kill this worker together with
+# any subprocess the user's UDF spawned via a single os.killpg from the host. Runs after uv/pip
+# setup so subprocess.run above still inherits the container's original session cleanly.
+os.setsid()
 
 port = int(sys.argv[1])
 with socket.create_server(("0.0.0.0", port)) as listener:

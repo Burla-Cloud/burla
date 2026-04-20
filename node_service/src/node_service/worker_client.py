@@ -274,9 +274,12 @@ class WorkerClient:
         raise RuntimeError(f"Failed to get port for container {self.container_name} in 10s")
 
     async def _get_worker_host_pid(self) -> int:
-        # container.top() returns host PIDs of every process running in the container.
-        top = await self.container.top()
-        for row in top.get("Processes", []):
+        # Docker's /top endpoint returns host PIDs of every process in the container.
+        # aiodocker doesn't expose a wrapper for it so we call it via the internal client.
+        data = await self.docker._query_json(
+            f"containers/{self.container_id}/top", method="GET"
+        )
+        for row in data.get("Processes", []):
             if "worker_server.py" in row[-1]:
                 return int(row[1])
         raise RuntimeError(f"worker_server.py not found in {self.container_name}")

@@ -13,6 +13,7 @@ import psutil
 from tblib import Traceback
 
 from node_service import SELF, ASYNC_DB, INSTANCE_NAME, IN_LOCAL_DEV_MODE, NUM_GPUS
+from node_service.helpers import Logger
 
 RESULTS_QUEUE_RAM_LIMIT_BYTES = int(psutil.virtual_memory().total * 0.5)
 
@@ -441,7 +442,7 @@ class WorkerClient:
         except (BrokenPipeError, ConnectionResetError):
             await self._raise_if_worker_failed()
 
-    async def reset(self):
+    async def reset(self, logger: Logger):
         if self.process_inputs_task is not None:
             self.process_inputs_task.cancel()
             try:
@@ -454,7 +455,7 @@ class WorkerClient:
             # user's function and can't service the 'r' byte over TCP until the call returns.
             # Waiting on the UDF can take arbitrarily long, so kill the container and
             # boot a fresh one instead.
-            await self._restart_container()
+            await self._restart_container(logger)
             return
         if self.writer is not None:
             self.writer.write(b"r")
@@ -466,7 +467,7 @@ class WorkerClient:
             self.log_writer = None
         self.is_idle = True
 
-    async def _restart_container(self):
+    async def _restart_container(self, logger: Logger):
         t0 = time.time()
         if self.writer is not None:
             try:
@@ -497,19 +498,19 @@ class WorkerClient:
         self.container_id = None
         await self.boot()
         t_after_boot = time.time()
-        print(
+        msg = (
             f"[TIMING] _restart_container worker={self.container_name} "
             f"setup={t_before_log_stop - t0:.3f}s "
             f"log_stop={t_before_delete - t_before_log_stop:.3f}s "
             f"delete={t_after_delete - t_before_delete:.3f}s "
             f"boot={t_after_boot - t_after_delete:.3f}s "
-            f"total={t_after_boot - t0:.3f}s",
-            flush=True,
+            f"total={t_after_boot - t0:.3f}s"
         )
+        await logger.log(msg)
 
-    async def stop(self):
+    async def stop(self, logger: Logger):
         try:
-            await self.reset()
+            await self.reset(logger)
             if self.writer is not None:
                 self.writer.close()
                 await self.writer.wait_closed()

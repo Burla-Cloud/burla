@@ -7,7 +7,6 @@ import subprocess
 import textwrap
 import logging
 import types
-from time import time
 from typing import Union
 from threading import Event
 
@@ -167,13 +166,10 @@ def install_signal_handlers(
 
         if job_failed:
             try:
-                print(f"[TIMING] client signal handler start: t={time():.3f}", flush=True)
                 sync_db, _ = get_db_clients()
                 job_doc = sync_db.collection("jobs").document(job_id)
                 if job_doc.get().to_dict()["status"] != "CANCELED":
-                    print(f"[TIMING] client before CANCELED write: t={time():.3f}", flush=True)
                     job_doc.update({"status": "CANCELED", "fail_reason": ArrayUnion([fail_reason])})
-                    print(f"[TIMING] client after CANCELED write: t={time():.3f}", flush=True)
             except Exception:
                 pass
 

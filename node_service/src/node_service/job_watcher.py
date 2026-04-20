@@ -246,7 +246,6 @@ async def _job_watcher(
             job_completed = (await job_doc.get()).to_dict()["client_has_all_results"]
         if job_completed or JOB_FAILED or JOB_CANCELED:
             steal_task.cancel()
-            await logger.log(f"[TIMING] watcher loop detected terminal status: t={time():.3f}")
             status = sync_job_doc.get().to_dict()["status"]
             status = status if status in ["FAILED", "CANCELED"] else "COMPLETED"
             await logger.log(f"Job is {status}! (id={SELF['current_job']})")
@@ -254,9 +253,7 @@ async def _job_watcher(
                 sync_job_doc.update({"status": status})
             except Exception:
                 pass
-            await logger.log(f"[TIMING] watcher calling reset_workers: t={time():.3f}")
             await reset_workers(logger, async_db)
-            await logger.log(f"[TIMING] watcher reset_workers returned: t={time():.3f}")
             break
 
     steal_task.cancel()
@@ -313,14 +310,11 @@ async def reinit_node(assigned_workers: list, async_db: AsyncClient):
 
 
 async def reset_workers(logger: Logger, async_db: AsyncClient):
-    gather_start = time()
     try:
-        await asyncio.gather(*(worker.reset(logger=logger) for worker in SELF["workers"]))
+        await asyncio.gather(*(worker.reset() for worker in SELF["workers"]))
     except Exception as e:
-        await logger.log(f"[TIMING] reset_workers gather failed after {time()-gather_start:.3f}s")
         await logger.log(f"Error resetting workers: {e}", severity="ERROR")
         await logger.log("Some workers failed to reset, rebooting containers ...")
         await reboot_containers(logger=logger)
         return
-    await logger.log(f"[TIMING] reset_workers gather done in {time()-gather_start:.3f}s")
     await reinit_node(SELF["workers"], async_db)

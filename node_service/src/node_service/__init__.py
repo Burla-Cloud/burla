@@ -149,7 +149,7 @@ async def shutdown_if_idle_for_too_long(logger: Logger):
 
     time_since_last_activity = 0
     while (
-        time_since_last_activity < INACTIVITY_SHUTDOWN_TIME_SEC
+        time_since_last_activity <= INACTIVITY_SHUTDOWN_TIME_SEC
         or SELF["active_client_request_count"] > 0
         or SELF["current_job"]
         or SELF["reserved_for_job"]
@@ -159,6 +159,11 @@ async def shutdown_if_idle_for_too_long(logger: Logger):
         time_since_last_activity = time() - SELF["last_client_activity_timestamp"]
 
     SELF["SHUTTING_DOWN"] = True
+
+    node_doc = ASYNC_DB.collection("nodes").document(INSTANCE_NAME)
+    snapshot = await node_doc.get()
+    if snapshot.exists and snapshot.to_dict().get("status") != "FAILED":
+        await node_doc.update({"status": "DELETED", "ended_at": time()})
 
     if not IN_LOCAL_DEV_MODE:
         msg = f"Node has been idle for {INACTIVITY_SHUTDOWN_TIME_SEC // 60} minutes.\n"

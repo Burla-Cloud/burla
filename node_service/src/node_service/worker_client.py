@@ -14,7 +14,6 @@ import psutil
 from tblib import Traceback
 
 from node_service import SELF, ASYNC_DB, INSTANCE_NAME, IN_LOCAL_DEV_MODE, NUM_GPUS
-from node_service.helpers import Logger
 
 RESULTS_QUEUE_RAM_LIMIT_BYTES = int(psutil.virtual_memory().total * 0.5)
 
@@ -463,7 +462,7 @@ class WorkerClient:
         except (BrokenPipeError, ConnectionResetError):
             await self._raise_if_worker_failed()
 
-    async def reset(self, logger: Logger):
+    async def reset(self):
         if self.process_inputs_task is not None:
             self.process_inputs_task.cancel()
             try:
@@ -476,7 +475,7 @@ class WorkerClient:
             # user's function and can't service the 'r' byte over TCP until the call returns.
             # Waiting on the UDF can take arbitrarily long, so kill the container and
             # boot a fresh one instead.
-            await self._restart_container(logger)
+            await self._restart_container()
             return
         if self.writer is not None:
             self.writer.write(b"r")
@@ -513,8 +512,7 @@ class WorkerClient:
         self.is_idle = True
         self.logstream_task = asyncio.create_task(self._handle_container_logs())
 
-    async def _restart_container(self, logger: Logger):
-        t0 = time.time()
+    async def _restart_container(self):
         if self.writer is not None:
             try:
                 self.writer.close()
@@ -530,29 +528,16 @@ class WorkerClient:
             except asyncio.CancelledError:
                 pass
             self.logstream_task = None
-        t_before_log_stop = time.time()
         if self.log_writer is not None:
             await self.log_writer.stop()
             self.log_writer = None
-        t_before_kill = time.time()
         if IN_LOCAL_DEV_MODE:
             await self.container.restart(t=0)
         else:
             os.killpg(self.worker_host_pid, signal.SIGKILL)
-        t_after_kill = time.time()
         await self._reconnect()
-        t_after_reconnect = time.time()
         if not IN_LOCAL_DEV_MODE:
             self.worker_host_pid = await self._get_worker_host_pid()
-        msg = (
-            f"[TIMING] _restart_container worker={self.container_name} "
-            f"setup={t_before_log_stop - t0:.3f}s "
-            f"log_stop={t_before_kill - t_before_log_stop:.3f}s "
-            f"kill={t_after_kill - t_before_kill:.3f}s "
-            f"reconnect={t_after_reconnect - t_after_kill:.3f}s "
-            f"total={t_after_reconnect - t0:.3f}s"
-        )
-        await logger.log(msg)
 
     async def _container_exists(self):
         if not self.container_id:

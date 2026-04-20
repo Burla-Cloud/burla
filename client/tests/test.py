@@ -17,7 +17,7 @@ from burla import _auth
 from burla import _helpers
 
 
-N_INPUTS = 10
+N_INPUTS = 100
 MAX_RUNTIME_SECONDS_WHEN_READY = 30
 
 
@@ -42,7 +42,9 @@ def _run_test_base_in_subprocess(result_queue):
         _helpers.CONFIG_PATH = temp_config_path
 
         with contextlib.redirect_stdout(stdout_buffer):
-            outputs = remote_parallel_map(test_function, list(range(N_INPUTS)), spinner=False)
+            outputs = remote_parallel_map(
+                test_function, list(range(N_INPUTS)), spinner=False, grow=True
+            )
         result_queue.put({"ok": True, "stdout": stdout_buffer.getvalue(), "outputs": outputs})
     except Exception:
         result_queue.put({"ok": False, "traceback": traceback.format_exc()})
@@ -80,7 +82,7 @@ def test_base():
     hi_count = sum(1 for line in stdout_lines if line == "hi")
     assert len(result["outputs"]) == N_INPUTS
     assert set(result["outputs"]) == set(range(N_INPUTS))
-    assert hi_count >= 0
+    assert hi_count == N_INPUTS
 
 
 def _test_big_function():

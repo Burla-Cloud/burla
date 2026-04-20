@@ -20,17 +20,13 @@ from yaspin import Spinner
 from burla import CONFIG_PATH, __version__
 from burla._auth import get_auth_headers
 from burla._helpers import parallelism_capacity
-from burla._reporting import (
-    RemoteParallelMapReporter,
-    format_timing_event,
-    timing_debug_enabled,
-    write_timing_debug_line,
-)
+from burla._reporting import RemoteParallelMapReporter
 
 
-NODE_SILENCE_TIMEOUT_SECONDS = 10 * 60
-LOGIN_TIMEOUT_SEC = 3
+NODE_SILENCE_TIMEOUT_SECONDS = 2 * 60
+LOGIN_TIMEOUT_SEC = 5
 MAX_INPUT_SIZE_BYTES = 1_000_000 * 200  # 200MB
+MAX_CHUNK_SIZE_BYTES = 1_000_000 * 2  # 2MB
 NETWORK_RETRY_ATTEMPTS = 5
 NETWORK_RETRY_DELAY_SECONDS = 1
 NETWORK_ERROR_TYPES = (
@@ -42,25 +38,12 @@ NETWORK_ERROR_TYPES = (
 )
 
 
-def _print_timing_event(phase_name: str, **fields):
-    if not timing_debug_enabled():
-        return
-    message = format_timing_event(time(), phase_name, **fields)
-    write_timing_debug_line(message)
-
-
 class InputTooBig(Exception):
     def __init__(self, index: int):
         message = f"\n\nInput at index {index} exceeds maximum size of 0.2GB.\n"
         message += "Please download large inputs from the internet once inside your function.\n"
         message += "We apologize for this temporary limitation! "
         message += "If this is confusing or blocking you, please tell us! (jake@burla.dev)\n\n"
-        super().__init__(message)
-
-
-class NodeConflict(Exception):
-    def __init__(self, instance_name: str, response_text: str):
-        message = f"ERROR from {instance_name}: {response_text}"
         super().__init__(message)
 
 
@@ -105,10 +88,17 @@ class JobCanceled(Exception):
     pass
 
 
-class UnPickleableUserFunctionException(Exception):
-    def __init__(self, traceback_str: str):
-        message = "\nThis exception had to be sent to your machine as a string:\n\n"
-        message += f"{traceback_str}\n"
+class ClusterRestarted(Exception):
+    def __init__(self):
+        message = "\n\nThe cluster was restarted. "
+        message += "Your job was ended because the nodes it was running on were destroyed.\n"
+        super().__init__(message)
+
+
+class ClusterShutdown(Exception):
+    def __init__(self):
+        message = "\n\nThe cluster was shut down. "
+        message += "Your job was ended because the nodes it was running on were destroyed.\n"
         super().__init__(message)
 
 
@@ -128,133 +118,71 @@ async def _post_with_retries(session, url, headers, data, max_retries=5):
             await asyncio.sleep(0.5)
 
 
-async def _run_network_request_with_retries(request_function):
+async def _run_network_request_with_retries(request_function, max_retries=NETWORK_RETRY_ATTEMPTS):
     last_error = None
-    for attempt_index in range(NETWORK_RETRY_ATTEMPTS):
+    for attempt_index in range(max_retries):
         try:
             return await request_function()
         except NETWORK_ERROR_TYPES as error:
             last_error = error
-            if attempt_index == NETWORK_RETRY_ATTEMPTS - 1:
+            if attempt_index == max_retries - 1:
                 raise last_error
             await asyncio.sleep(NETWORK_RETRY_DELAY_SECONDS)
 
 
 async def num_booting_nodes(db: AsyncClient):
-    start_time = time()
     filter_ = FieldFilter("status", "==", "BOOTING")
     nodes_snapshot = await db.collection("nodes").where(filter=filter_).get()
-    count = len(nodes_snapshot)
-    _print_timing_event(
-        "node_selection_db_query",
-        source="client",
-        query="booting_nodes",
-        duration_ms=round((time() - start_time) * 1000, 3),
-        count=count,
-    )
-    return count
+    return len(nodes_snapshot)
 
 
 async def num_running_nodes(db: AsyncClient):
-    start_time = time()
     filter_ = FieldFilter("status", "==", "RUNNING")
     nodes_snapshot = await db.collection("nodes").where(filter=filter_).get()
-    count = len(nodes_snapshot)
-    _print_timing_event(
-        "node_selection_db_query",
-        source="client",
-        query="running_nodes",
-        duration_ms=round((time() - start_time) * 1000, 3),
-        count=count,
-    )
-    return count
+    return len(nodes_snapshot)
 
 
 async def get_ready_nodes(db: AsyncClient) -> list[dict]:
-    start_time = time()
     status_filter = FieldFilter("status", "==", "READY")
     ready_nodes_coroutine = db.collection("nodes").where(filter=status_filter).get()
     try:
         docs = await asyncio.wait_for(ready_nodes_coroutine, timeout=LOGIN_TIMEOUT_SEC)
     except asyncio.TimeoutError:
         raise FirestoreTimeout()
-    ready_nodes = [document.to_dict() for document in docs]
-    _print_timing_event(
-        "node_selection_db_query",
-        source="client",
-        query="ready_nodes",
-        duration_ms=round((time() - start_time) * 1000, 3),
-        count=len(ready_nodes),
-    )
-    return ready_nodes
+    return [
+        document.to_dict() for document in docs if not document.to_dict().get("reserved_for_job")
+    ]
 
 
 async def wait_for_nodes_to_be_ready(
     db: AsyncClient,
     spinner: bool | Spinner,
 ) -> list[dict]:
-    wait_start_time = time()
     n_booting_nodes = await num_booting_nodes(db)
     n_running_nodes = await num_running_nodes(db)
-    _print_timing_event(
-        "node_selection_wait_state",
-        source="client",
-        booting_nodes=n_booting_nodes,
-        running_nodes=n_running_nodes,
-    )
 
     if n_running_nodes != 0:
         start_time = time()
         time_waiting = 0
-        poll_count = 0
-        _print_timing_event(
-            "node_selection_wait_for_running_nodes_started",
-            source="client",
-            running_nodes=n_running_nodes,
-        )
         while n_running_nodes != 0:
             if spinner:
                 msg = f"Waiting for {n_running_nodes} running nodes to become ready..."
                 spinner.text = msg + f" (timeout in {4-time_waiting:.1f}s)"
             await asyncio.sleep(0.01)
-            poll_count += 1
             n_running_nodes = await num_running_nodes(db)
             ready_nodes = await get_ready_nodes(db)
             time_waiting = time() - start_time
             if time_waiting > 4:
                 raise AllNodesBusy()
-        _print_timing_event(
-            "node_selection_wait_for_running_nodes_done",
-            source="client",
-            duration_ms=round((time() - start_time) * 1000, 3),
-            polls=poll_count,
-            ready_count=len(ready_nodes),
-        )
     elif n_booting_nodes != 0:
         ready_nodes = await get_ready_nodes(db)
-        start_time = time()
-        poll_count = 0
-        _print_timing_event(
-            "node_selection_wait_for_booting_nodes_started",
-            source="client",
-            booting_nodes=n_booting_nodes,
-            ready_count=len(ready_nodes),
-        )
         while n_booting_nodes != 0:
             if spinner:
                 msg = f"{len(ready_nodes)} Nodes are ready, waiting for remaining {n_booting_nodes}"
                 spinner.text = msg + " to boot before starting ..."
             await asyncio.sleep(0.1)
-            poll_count += 1
             n_booting_nodes = await num_booting_nodes(db)
             ready_nodes = await get_ready_nodes(db)
-        _print_timing_event(
-            "node_selection_wait_for_booting_nodes_done",
-            source="client",
-            duration_ms=round((time() - start_time) * 1000, 3),
-            polls=poll_count,
-            ready_count=len(ready_nodes),
-        )
         if not ready_nodes:
             main_service_url = json.loads(CONFIG_PATH.read_text())["cluster_dashboard_url"]
             msg = "\n\nZero nodes are ready after Booting. Did they fail to boot?\n"
@@ -262,14 +190,6 @@ async def wait_for_nodes_to_be_ready(
             raise NoNodes(msg)
 
     ready_nodes = await get_ready_nodes(db)
-    _print_timing_event(
-        "node_selection_wait_done",
-        source="client",
-        duration_ms=round((time() - wait_start_time) * 1000, 3),
-        ready_count=len(ready_nodes),
-        booting_nodes=n_booting_nodes,
-        running_nodes=n_running_nodes,
-    )
     if n_booting_nodes == 0 and n_running_nodes == 0 and len(ready_nodes) == 0:
         main_service_url = json.loads(CONFIG_PATH.read_text())["cluster_dashboard_url"]
         msg = "\n\nZero nodes are ready. Is your cluster turned on?\n"
@@ -286,34 +206,16 @@ async def select_nodes_to_assign_to_job(
     spinner: bool | Spinner,
     session,
 ) -> tuple[list["Node"], int]:
-    selection_start_time = time()
     ready_nodes = await get_ready_nodes(db)
-    _print_timing_event(
-        "node_selection_initial_ready_nodes",
-        source="client",
-        ready_count=len(ready_nodes),
-    )
 
     if not ready_nodes:
-        wait_start_time = time()
         ready_nodes = await wait_for_nodes_to_be_ready(db=db, spinner=spinner)
-        _print_timing_event(
-            "node_selection_wait_path_done",
-            source="client",
-            duration_ms=round((time() - wait_start_time) * 1000, 3),
-            ready_count=len(ready_nodes),
-        )
 
     upper_version = Version(ready_nodes[0]["main_svc_version"])
     lower_version = Version(ready_nodes[0]["min_compatible_client_version"])
     current_version = Version(__version__)
     if not lower_version <= current_version <= upper_version:
         raise VersionMismatch(lower_version, upper_version, current_version)
-    _print_timing_event(
-        "node_selection_version_check_done",
-        source="client",
-        ready_count=len(ready_nodes),
-    )
 
     planned_initial_job_parallelism = 0
     nodes_to_assign = []
@@ -322,7 +224,7 @@ async def select_nodes_to_assign_to_job(
         max_node_parallelism = parallelism_capacity(node_data["machine_type"], func_cpu, func_ram)
 
         if max_node_parallelism > 0 and parallelism_deficit > 0:
-            node_target_parallelism = min(parallelism_deficit, max_node_parallelism)
+            node_target_parallelism = max_node_parallelism
             planned_initial_job_parallelism += node_target_parallelism
             host = node_data["host"]
             if host.startswith("http://node_"):
@@ -341,14 +243,6 @@ async def select_nodes_to_assign_to_job(
     if len(nodes_to_assign) == 0:
         raise NoCompatibleNodes()
 
-    _print_timing_event(
-        "node_selection_completed",
-        source="client",
-        duration_ms=round((time() - selection_start_time) * 1000, 3),
-        ready_count=len(ready_nodes),
-        selected_count=len(nodes_to_assign),
-        target_parallelism=planned_initial_job_parallelism,
-    )
     return nodes_to_assign, planned_initial_job_parallelism
 
 
@@ -362,22 +256,12 @@ class Node:
         self.session = session
         self.job_id = None
         self.udf_error_event = None
-        self.all_packages_installed = None
-        self.is_empty = False
         self.current_parallelism = 0
-        self.currently_installing_package = None
+        self.installing_packages = False
         self.result_count = 0
         self.last_reply_timestamp = time()
         self.auth_headers = get_auth_headers()
         self.spinner_compatible_print = lambda msg: spinner.write(msg) if spinner else print(msg)
-        self.debug_timing_enabled = timing_debug_enabled()
-
-    def _print_timing_event(self, phase_name: str, **fields):
-        if not self.debug_timing_enabled:
-            return
-        message = format_timing_event(time(), phase_name, **fields)
-        if not write_timing_debug_line(message):
-            self.spinner_compatible_print(message)
 
     def _seconds_since_last_reply(self):
         return time() - self.last_reply_timestamp
@@ -386,14 +270,12 @@ class Node:
         return self._seconds_since_last_reply() > NODE_SILENCE_TIMEOUT_SECONDS
 
     def _node_silence_timeout_message(self, action: str):
-        return f"Node {self.instance_name} has not replied for over 10 minutes while {action}.\n"
+        return f"Node {self.instance_name} has not replied for over 2 minutes while {action}.\n"
 
     def _empty_node_results(self):
         return {
             "results": [],
-            "is_empty": False,
             "current_parallelism": self.current_parallelism,
-            "currently_installing_package": self.currently_installing_package,
         }
 
     @classmethod
@@ -448,11 +330,10 @@ class Node:
             self.state = "FAILED"
             self.spinner_compatible_print(f"Marking Node {self.instance_name} as FAILED: {message}")
             node_doc = self.async_db.collection("nodes").document(self.instance_name)
-            await node_doc.update({"status": "FAILED", "display_in_dashboard": True})
+            await node_doc.update({"status": "FAILED"})
             await node_doc.collection("logs").document().set({"msg": message, "ts": time()})
             main_service_url = json.loads(CONFIG_PATH.read_text())["cluster_dashboard_url"]
             url = f"{main_service_url}/v1/cluster/{self.instance_name}"
-            url += "?hide_if_failed=false"
             async with self.session.delete(url, headers=self.auth_headers, timeout=1) as response:
                 if response.status != 200:
                     msg = f"Failed to delete node {self.instance_name}."
@@ -469,6 +350,7 @@ class Node:
         start_time: float,
         function_pkl: bytes,
         udf_error_event: Event,
+        assigned_node_ids: list,
     ):
         request_json = {
             "parallelism": self.target_parallelism,
@@ -477,9 +359,10 @@ class Node:
             "n_inputs": n_inputs,
             "packages": packages,
             "start_time": start_time,
+            "node_ids_expected": assigned_node_ids,
         }
         url = f"{self.host}/jobs/{job_id}"
-        timeout = aiohttp.ClientTimeout(300)
+        timeout = aiohttp.ClientTimeout(120)
         self.last_reply_timestamp = time()
 
         async def request_function():
@@ -501,14 +384,22 @@ class Node:
                 elif response.status == 401:
                     raise UnauthorizedError()
                 elif response.status == 409:
-                    raise NodeConflict(self.instance_name, await response.text())
+                    self.state = "REMOVED"
+                    msg = f"Node {self.instance_name} refused job assignment, removed from job."
+                    self.spinner_compatible_print(msg)
+                    return
+                elif response.status == 503:
+                    self.state = "REMOVED"
+                    msg = f"Node {self.instance_name} is shutting down, removed from job."
+                    self.spinner_compatible_print(msg)
+                    return
                 else:
                     msg = f"Failed to assign {self.instance_name}: {response.status}"
                     raise Exception(msg)
 
         while True:
             try:
-                return await _run_network_request_with_retries(request_function)
+                return await _run_network_request_with_retries(request_function, max_retries=2)
             except NETWORK_ERROR_TYPES:
                 if self._node_silence_timeout_exceeded():
                     await self._fail_and_delete(self._node_silence_timeout_message("assigning job"))
@@ -521,7 +412,7 @@ class Node:
             return await self.session.get(
                 url,
                 headers=self.auth_headers,
-                timeout=ClientTimeout(total=60),
+                timeout=ClientTimeout(total=15),
             )
 
         try:
@@ -532,9 +423,7 @@ class Node:
                     self.state = "DONE"
                     return {
                         "results": [],
-                        "is_empty": True,
                         "current_parallelism": 0,
-                        "currently_installing_package": None,
                     }
                 if response.status != 200:
                     raise Exception(f"Result-check failed for node: {self.instance_name}")
@@ -577,38 +466,6 @@ class Node:
             elif status >= 400:
                 raise Exception(response_text)
 
-    async def _input_chunk_generator(self, inputs_with_indicies: list, max_inputs_per_chunk: int):
-        chunk_size_limit = 200_000
-        max_chunk_size_limit = 10_000_000
-        input_chunk = []
-        chunk_size_bytes = 0
-        while len(inputs_with_indicies):
-            input_index, input_ = inputs_with_indicies[-1]
-            input_pkl = cloudpickle.dumps(input_)
-            if len(input_pkl) > MAX_INPUT_SIZE_BYTES:
-                raise InputTooBig(input_index)
-
-            future_chunk_size = chunk_size_bytes + len(input_pkl)
-            will_make_chunk_too_big = future_chunk_size >= chunk_size_limit
-            will_make_chunk_too_long = len(input_chunk) >= max_inputs_per_chunk
-            if will_make_chunk_too_big or will_make_chunk_too_long:
-                if input_chunk:
-                    yield input_chunk
-                    chunk_size_limit = min(max_chunk_size_limit, chunk_size_limit + 500_000)
-                    chunk_size_bytes = 0
-                    input_chunk = []
-                    continue
-                else:
-                    inputs_with_indicies.pop()
-                    chunk_size_bytes += len(input_pkl)
-                    input_chunk.append((input_index, input_pkl))
-            else:
-                inputs_with_indicies.pop()
-                chunk_size_bytes += len(input_pkl)
-                input_chunk.append((input_index, input_pkl))
-        if input_chunk:
-            yield input_chunk
-
     async def execute_job(
         self,
         job_id: str,
@@ -618,10 +475,13 @@ class Node:
         start_time: float,
         function_pkl: bytes,
         udf_error_event: Event,
-        num_ready_nodes: int,
         inputs_with_indicies: list,
         return_queue: Queue,
+        nodes: list["Node"],
+        assigned_node_ids: list,
+        first_chunk_barrier: asyncio.Barrier | None,
     ):
+        was_initially_ready = self.state == "READY"
         # wait until ready
         if self.state != "READY":
             await asyncio.sleep(max(0, 30 - (time() - start_time)))
@@ -631,93 +491,72 @@ class Node:
                     break
                 await asyncio.sleep(random.uniform(2, 6))
 
-        self._print_timing_event(
-            "node_assign_started",
-            source="client_node",
-            instance=self.instance_name,
-            target_parallelism=self.target_parallelism,
-        )
+        if packages:
+            self.installing_packages = True
         await self._assign_job(
-            job_id, background, n_inputs, packages, start_time, function_pkl, udf_error_event
+            job_id,
+            background,
+            n_inputs,
+            packages,
+            start_time,
+            function_pkl,
+            udf_error_event,
+            assigned_node_ids,
         )
-        if self.state == "FAILED":
+        self.installing_packages = False
+        if self.state in ("FAILED", "REMOVED"):
+            if was_initially_ready and first_chunk_barrier:
+                await first_chunk_barrier.abort()
             return
-        self._print_timing_event(
-            "node_assign_done",
-            source="client_node",
-            instance=self.instance_name,
-            target_parallelism=self.target_parallelism,
-        )
 
-        max_inputs_per_chunk = max(1, round(n_inputs / num_ready_nodes))
-        chunk_generator = self._input_chunk_generator(inputs_with_indicies, max_inputs_per_chunk)
-
-        iteration = 0
-        first_result_received = False
-        first_upload_completed = False
         while True:
+            n_ready_nodes = sum(1 for node in nodes if node.state in ("READY", "RUNNING"))
+            input_chunksize = max(self.target_parallelism, n_inputs // n_ready_nodes)
+            input_chunk = []
+            chunk_size_bytes = 0
+            while inputs_with_indicies and len(input_chunk) < input_chunksize:
+                input_index, input_ = inputs_with_indicies.pop()
+                input_pkl = cloudpickle.dumps(input_)
+                if len(input_pkl) > MAX_INPUT_SIZE_BYTES:
+                    raise InputTooBig(input_index)
+                if input_chunk and chunk_size_bytes + len(input_pkl) > MAX_CHUNK_SIZE_BYTES:
+                    inputs_with_indicies.append((input_index, input_))
+                    break
+                input_chunk.append((input_index, input_pkl))
+                chunk_size_bytes += len(input_pkl)
 
-            iteration += 1
-
-            input_chunk = await anext(chunk_generator, None)
             if input_chunk:
                 await self._upload_input_chunk(input_chunk)
-                if not first_upload_completed:
-                    first_upload_completed = True
-                    self._print_timing_event(
-                        "node_first_upload_done",
-                        source="client_node",
-                        instance=self.instance_name,
-                        upload_count=len(input_chunk),
-                    )
-                await asyncio.sleep(0)
+
+            if was_initially_ready and first_chunk_barrier:
+                try:
+                    await first_chunk_barrier.wait()
+                except asyncio.BrokenBarrierError:
+                    pass
+                first_chunk_barrier = None
 
             node_results = await self._gather_results()
             return_values = []
             for input_index, is_error, result_pkl in node_results["results"]:
                 if is_error:
                     error_info = pickle.loads(result_pkl)
-                    if error_info.get("traceback_dict"):
-                        traceback = Traceback.from_dict(error_info["traceback_dict"]).as_traceback()
-                        self.udf_error_event.set()
-                        log_error = RemoteParallelMapReporter.log_user_function_error_async
-                        await log_error(self.job_id, self.session)
-                        reraise(tp=error_info["type"], value=error_info["exception"], tb=traceback)
-                    raise UnPickleableUserFunctionException(error_info["traceback_str"])
+                    if error_info.get("is_infrastructure_error"):
+                        msg = f"Worker on node {self.instance_name} failed "
+                        msg += "(the cluster may have been restarted):\n\n"
+                        msg += error_info["traceback_str"]
+                        raise NodeDisconnected(msg)
+                    traceback = Traceback.from_dict(error_info["traceback_dict"]).as_traceback()
+                    self.udf_error_event.set()
+                    log_error = RemoteParallelMapReporter.log_user_function_error_async
+                    await log_error(self.job_id, self.session)
+                    reraise(tp=error_info["type"], value=error_info["exception"], tb=traceback)
                 else:
                     return_values.append(cloudpickle.loads(result_pkl))
 
-            if node_results.get("all_packages_installed") is not None:
-                self.all_packages_installed = node_results.get("all_packages_installed")
-            self.is_empty = node_results["is_empty"]
             self.current_parallelism = node_results["current_parallelism"]
-            self.currently_installing_package = node_results["currently_installing_package"]
-            if return_values and not first_result_received:
-                first_result_received = True
-                self._print_timing_event(
-                    "node_first_result_received",
-                    source="client_node",
-                    instance=self.instance_name,
-                    result_count=len(return_values),
-                )
-            message = "time:\t{time:.2f}\tnode:\t{instance}\ti:\t{iteration}\tuploaded:\t{uploaded}\tresults:\t{results}".format(
-                time=time(),
-                instance=self.instance_name,
-                iteration=iteration,
-                uploaded=len(input_chunk) if input_chunk else 0,
-                results=len(return_values),
-            )
-            if self.debug_timing_enabled:
-                write_timing_debug_line(message)
 
             for return_value in return_values:
                 return_queue.put_nowait(return_value)
                 self.result_count += 1
             if self.state == "DONE":
-                self._print_timing_event(
-                    "node_done",
-                    source="client_node",
-                    instance=self.instance_name,
-                    total_results=self.result_count,
-                )
                 return

@@ -1,26 +1,18 @@
-from time import time, sleep
+from time import time
 import requests
 import asyncio
 from typing import Optional, Callable
-import concurrent.futures
 import traceback
-import threading
-import subprocess
-import pickle
 
-import aiohttp
-import docker
-from docker.errors import APIError
-from pydantic import BaseModel
+import aiodocker
 from fastapi import APIRouter, Depends, Response
 from google.cloud import firestore
 from google.cloud.compute_v1 import InstancesClient
 from google.auth.transport.requests import Request
 from google.cloud.firestore import AsyncClient
-from google.cloud.firestore import FieldFilter, And
-from google.cloud.firestore_v1.field_path import FieldPath
 
 from node_service import (
+    ASYNC_DB,
     PROJECT_ID,
     SELF,
     REINIT_SELF,
@@ -31,114 +23,15 @@ from node_service import (
     BURLA_BACKEND_URL,
     CLUSTER_ID_TOKEN,
     NUM_GPUS,
-    ENV_IS_READY_PATH,
     GCL_CLIENT,
     get_logger,
     get_add_background_task_function,
     __version__,
 )
 from node_service.helpers import Logger
-from node_service.worker import Worker
+from node_service.worker_client import WorkerClient
 
 router = APIRouter()
-
-
-class Container(BaseModel):
-    image: str
-
-    class Config:
-        extra = "ignore"
-
-
-async def get_neighboring_nodes(async_db):
-    status_filter = FieldFilter("status", "==", "RUNNING")
-    job_filter = FieldFilter("current_job", "==", SELF["current_job"])
-    query = async_db.collection("nodes").where(filter=And([status_filter, job_filter]))
-    query = query.order_by(FieldPath.document_id())
-    nodes = [node async for node in query.stream()]
-    current_node_index = None
-    for index, node in enumerate(nodes):
-        if node.id == INSTANCE_NAME:
-            current_node_index = index
-    if current_node_index is None:
-        return []
-    else:
-        return nodes[current_node_index + 1 :] + nodes[:current_node_index]
-
-
-async def load_results_from_worker(
-    worker: Worker, session: aiohttp.ClientSession, ejecting: bool = False
-):
-    all_inputs_sent_to_workers = SELF["all_inputs_uploaded"] and (not SELF["pending_inputs"])
-    url = f"{worker.url}/jobs/{SELF['current_job']}/results?"
-    url += f"ejecting={ejecting}&all_inputs_sent_to_workers={all_inputs_sent_to_workers}"
-    async with session.get(url) as http_response:
-        if http_response.status == 500:
-            worker.log_debug_info()
-        http_response.raise_for_status()
-
-        response_content = await http_response.content.read()
-        response = pickle.loads(response_content)
-        for result in response["results"]:
-            SELF["results_queue"].put(result, len(result[2]))
-            SELF["num_results_received"] += 1
-
-        if response.get("udf_start_latency"):
-            SELF["udf_start_latency"] = response["udf_start_latency"]
-        if response.get("all_packages_installed"):
-            SELF["all_packages_installed"] = response["all_packages_installed"]
-
-        worker.is_idle = response["is_idle"]
-        worker.is_empty = response["is_empty"]
-        worker.currently_installing_package = response["currently_installing_package"]
-
-
-async def get_inputs_from_worker(session, worker, min_reply_size):
-    job_id = SELF["current_job"]
-    url = f"{worker.url}/jobs/{job_id}/inputs?min_reply_size={min_reply_size}"
-    async with session.get(url, timeout=1) as response:
-        response.raise_for_status()
-        if response.status == 200:
-            return pickle.loads(await response.read())
-        elif response.status == 204:
-            return []
-
-
-async def _post_stop(url, session):
-    async with session.post(f"{url}/jobs/{SELF['current_job']}/stop") as response:
-        response.raise_for_status()
-
-
-async def eject(async_db):
-    async with aiohttp.ClientSession() as session:
-
-        # tell all workers to stop processing
-        await asyncio.gather(*[_post_stop(w.url) for w in SELF["workers"]], return_exceptions=True)
-
-        # load all results from workers into local result queue
-        tasks = [load_results_from_worker(w, session, ejecting=True) for w in SELF["workers"]]
-        await asyncio.gather(*tasks)
-
-        # send all inputs to other nodes
-        neighboring_nodes = get_neighboring_nodes(async_db)
-        for node in neighboring_nodes:
-
-            all_workers_empty = False
-            while not all_workers_empty:
-                # get some inputs
-                # TODO: make update all_workers_empty
-                size = (1_000_000 * 0.5) / len(SELF["workers"])
-                tasks = [get_inputs_from_worker(session, w, size) for w in SELF["workers"]]
-                inputs = [input for inputs in await asyncio.gather(*tasks) for input in inputs]
-                # TODO: send to current neighbor
-                pass
-            pass
-
-        # send remaining results to other nodes:
-        for node in neighboring_nodes:
-            # try sending all to this node and break
-            # if node is full or busy go to next node
-            pass
 
 
 @router.post("/shutdown")
@@ -147,65 +40,26 @@ async def shutdown_node(logger: Logger = Depends(get_logger)):
     We dont need to delete the node here because the only way to call this is to run the shutdown
     script (by deleting the node)
     """
-    start = time()
-    SELF["SHUTTING_DOWN"] = True
     SELF["job_watcher_stop_event"].set()
     SELF["current_parallelism"] = 0
-    logger.log(f"Received shutdown request for node {INSTANCE_NAME}.")
+    await logger.log(f"Received shutdown request for node {INSTANCE_NAME}.")
 
-    # mark failed
     async_db = AsyncClient(project=PROJECT_ID, database="burla")
     doc_ref = async_db.collection("nodes").document(INSTANCE_NAME)
     snapshot = await doc_ref.get()
-    if snapshot.exists:
-        node_dict = snapshot.to_dict()
-        update_fields = {"status": "DELETED", "ended_at": time()}
-        # TODO: `display_in_dashboard` does nothing and is not needed anymore
-        if node_dict.get("status") != "FAILED" and node_dict.get("idle_for_too_long"):
-            update_fields["display_in_dashboard"] = True
-        elif node_dict.get("status") != "FAILED":
-            update_fields["display_in_dashboard"] = False
-        await doc_ref.update(update_fields)
-
-    # send inputs/results to other nodes if preempted
-    try:
-        url = "http://metadata.google.internal/computeMetadata/v1/instance/preempted"
-        async with aiohttp.ClientSession(headers={"Metadata-Flavor": "Google"}) as session:
-            async with session.get(url, timeout=1) as response:
-                response.raise_for_status()
-                preempted = (await response.text()).strip() == "TRUE"
-    except Exception as e:
-        msg = f"ERROR checking if node {INSTANCE_NAME} was preempted! ASSUMING PREEMPTION ...\n {e}"
-        logger.log(msg, severity="ERROR")
-        preempted = True
-
-    if preempted:
-        logger.log(f"Node {INSTANCE_NAME} was preempted!")
-        seconds_available_for_ejection = 27 - (time() - start)
-        try:
-            await asyncio.wait_for(eject(async_db), timeout=seconds_available_for_ejection)
-        except asyncio.TimeoutError:
-            logger.log("JOB WILL FAIL!! Shutdown eject operation took too long!", severity="ERROR")
-            # TODO: fail job such that it actually stops and tells the user what happened
+    if snapshot.exists and snapshot.to_dict().get("status") != "FAILED":
+        await doc_ref.update({"status": "DELETED", "ended_at": time()})
 
 
 @router.post("/reboot")
-def reboot_containers_endpoint(
-    new_container_config: Optional[list[Container]] = None,
+async def reboot_containers_endpoint(
+    new_container_config: Optional[list[str]] = None,
     logger: Logger = Depends(get_logger),
     add_background_task: Callable = Depends(get_add_background_task_function),
 ):
     if SELF["BOOTING"]:
         return Response("Node already BOOTING, unable to satisfy request.", status_code=409)
-    return reboot_containers(new_container_config, logger, add_background_task)
-
-
-def _call_docker_threadsafe(method, *args, **kwargs):
-    client = docker.APIClient(base_url="unix://var/run/docker.sock")
-    try:
-        getattr(client, method)(*args, **kwargs)
-    finally:
-        client.close()
+    return await reboot_containers(new_container_config, logger, add_background_task)
 
 
 def image_size_GB(image: str):
@@ -228,8 +82,8 @@ def image_size_GB(image: str):
     return round(size / 1_000_000_000, 2)
 
 
-def _LOCAL_DEV_ONLY_pull_image_if_missing(
-    image: str, logger: Logger, docker_client: docker.APIClient
+async def _LOCAL_DEV_ONLY_pull_image_if_missing(
+    image: str, logger: Logger, docker: aiodocker.Docker
 ):
     """
     Cannot pull using cli in local dev mode because this is already running in a docker container
@@ -237,69 +91,78 @@ def _LOCAL_DEV_ONLY_pull_image_if_missing(
     It dosent use this in prod because it's unreliable, `docker_client.pull` often fails silently.
     """
     try:
-        docker_client.inspect_image(image)
-    except docker.errors.ImageNotFound:
+        await docker.images.inspect(image)
+    except aiodocker.DockerError as e:
+        if e.status != 404:
+            raise
 
         try:
-            logger.log(f"Pulling image {image} ({image_size_GB(image)} GB) ...")
+            await logger.log(f"Pulling image {image} ({image_size_GB(image)} GB) ...")
         except Exception:
-            logger.log(f"Pulling image {image} ...")
+            await logger.log(f"Pulling image {image} ...")
 
         try:
-            docker_client.pull(image)
-        except APIError as e:
+            await docker.images.pull(image)
+        except aiodocker.DockerError as e:
             if "Unauthenticated request" in str(e):
                 print("Image is not public, trying again with credentials ...")
                 CREDENTIALS.refresh(Request())
                 auth_config = {"username": "oauth2accesstoken", "password": CREDENTIALS.token}
-                docker_client.pull(image, auth_config=auth_config)
+                await docker.images.pull(image, auth=auth_config)
             else:
                 raise
         # ODDLY, if docker_client.pull fails to pull the image, it will NOT throw any error >:(
         # check here that the image was actually pulled and exists on disk,
         try:
-            docker_client.inspect_image(image)
-        except docker.errors.ImageNotFound:
-            msg = f"Image {image} not found after pulling!\nDid vm run out of disk space?"
-            raise Exception(msg)
+            await docker.images.inspect(image)
+        except aiodocker.DockerError as e:
+            if e.status == 404:
+                raise Exception(
+                    f"Image {image} not found after pulling!\nDid vm run out of disk space?"
+                )
+            raise
 
 
-def _pull_image_if_missing(image: str, logger: Logger, docker_client: docker.APIClient):
+async def _pull_image_if_missing(image: str, logger: Logger, docker: aiodocker.Docker):
     # Use CLI instead of python api because that api just generally horrible and broken.
     # I already tried using it correctly, it wasnt worth it.
 
     if IN_LOCAL_DEV_MODE:
-        return _LOCAL_DEV_ONLY_pull_image_if_missing(image, logger, docker_client)
+        return await _LOCAL_DEV_ONLY_pull_image_if_missing(image, logger, docker)
 
-    def _run_command(command, raise_error=True):
-        result = subprocess.run(command, shell=True, capture_output=True)
-        if result.returncode != 0 and raise_error:
+    async def _run_command(command, raise_error=True):
+        process = await asyncio.create_subprocess_shell(
+            command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await process.communicate()
+        if process.returncode != 0 and raise_error:
             print("")
-            raise Exception(command, result.stderr)
-        else:
-            return result
+            raise Exception(command, stderr)
+        return process.returncode, stdout, stderr
 
     attempt = 0
     while True:
         attempt += 1
 
         try:
-            logger.log(f"Pulling image {image} ({image_size_GB(image)} GB) ...")
+            await logger.log(f"Pulling image {image} ({image_size_GB(image)} GB) ...")
         except Exception:
-            logger.log(f"Pulling image {image} ...")
+            await logger.log(f"Pulling image {image} ...")
 
-        result = _run_command(f"docker pull {image}", raise_error=False)
-        text_output = result.stderr.decode() + result.stdout.decode()
-        no_transient_error = not (result.returncode != 0 and "unexpected EOF" in text_output)
+        returncode, stdout, stderr = await _run_command(f"docker pull {image}", raise_error=False)
+        text_output = stderr.decode() + stdout.decode()
+        no_transient_error = not (returncode != 0 and "unexpected EOF" in text_output)
 
         if no_transient_error or attempt > 5:
             break
         else:
-            logger.log(f"`Unexpected EOF` error detected, retrying... (attempt {attempt})")
-            sleep(3)
+            await logger.log(f"`Unexpected EOF` error detected, retrying... (attempt {attempt})")
+            await asyncio.sleep(3)
 
-    docker_pull_failed = result.returncode != 0
-    docker_pull_stderr = result.stderr.decode()
+    docker_pull_failed = returncode != 0
+    docker_pull_stderr = stderr.decode()
     not_hosted_in_google_artifact_registry = "docker.pkg.dev" not in image
 
     if docker_pull_failed and not_hosted_in_google_artifact_registry:
@@ -310,7 +173,7 @@ def _pull_image_if_missing(image: str, logger: Logger, docker_client: docker.API
         svc_email = getattr(CREDENTIALS, "service_account_email", "<no svc account email found>")
         msg = f"Failed to pull image: {image}\n"
         msg += "Trying again using the service account credentials attached to this VM:\n"
-        logger.log(f"{msg}\n{svc_email}")
+        await logger.log(f"{msg}\n{svc_email}")
 
         if image.startswith("https://"):
             host = f'https://{image.split("/")[2]}'
@@ -319,51 +182,74 @@ def _pull_image_if_missing(image: str, logger: Logger, docker_client: docker.API
 
         CREDENTIALS.refresh(Request())
         login_cmd = f"docker login {host} -u oauth2accesstoken --password {CREDENTIALS.token}"
-        result = _run_command(login_cmd, raise_error=False)
-        if result.returncode != 0:
+        returncode, stdout, stderr = await _run_command(login_cmd, raise_error=False)
+        if returncode != 0:
             msg = f"CMD `docker pull {image}` failed with error:\n{docker_pull_stderr}\n"
             msg += f"Following attempt to login to {host} using service account: "
-            msg += f"`{svc_email}` also failed with error:\n{result.stderr}\n"
+            msg += f"`{svc_email}` also failed with error:\n{stderr}\n"
             raise Exception(msg)
 
-        _run_command(f"docker pull {image}")
+        await _run_command(f"docker pull {image}")
 
     # sanity check, not positive this is necessary with cli, but was with python api.
-    result = _run_command(f"docker inspect {image}", raise_error=False)
-    if result.returncode != 0:
+    returncode, stdout, stderr = await _run_command(f"docker inspect {image}", raise_error=False)
+    if returncode != 0:
         msg = f"CMD: `docker pull {image}` succeeded, but subsequent `docker inspect ...` failed!\n"
-        msg += f"`docker inspect` stderr:\n{result.stderr}\n"
+        msg += f"`docker inspect` stderr:\n{stderr}\n"
         raise Exception(msg)
 
 
 # Removing large GPU containers can take several minutes. The node should not block on the full
 # deletion – it only needs the process to be gone. A quick `kill` is enough for that. We then
-# queue the slower `remove_container` call as a FastAPI background task when available. When the
-# reboot function is executed outside of a request context (e.g. during lifespan startup), it
-# falls back to running the removal in a daemon thread so behaviour remains unchanged.
-def _remove_container_task(container_id: str, logger: Logger):
-    client = docker.APIClient(base_url="unix://var/run/docker.sock", timeout=600)
+# queue the slower `remove_container` call as a background task.
+async def _remove_container(container_id: str, logger: Logger):
+    docker = aiodocker.Docker()
     try:
-        client.remove_container(container=container_id, force=True)
+        container = docker.containers.container(container_id)
+        await container.delete(force=True)
     except Exception as e:
-        logger.log(f"Failed to remove container {container_id}: {e}", severity="WARNING")
+        await logger.log(f"Failed to remove container {container_id}: {e}", severity="WARNING")
     finally:
-        client.close()
+        await docker.close()
 
 
 def _schedule_container_removal(
     container_id: str, logger: Logger, add_background_task: Optional[Callable] = None
 ):
     if add_background_task is not None:
-        add_background_task(_remove_container_task, container_id, logger)
+        add_background_task(_remove_container, container_id, logger)
     else:
-        threading.Thread(
-            target=_remove_container_task, args=(container_id, logger), daemon=True
-        ).start()
+        asyncio.create_task(_remove_container(container_id, logger))
 
 
-def reboot_containers(
-    new_container_config: Optional[list[Container]] = None,
+RESERVATION_ASSIGNMENT_TIMEOUT_SEC = 60
+RESERVATION_POLL_INTERVAL_SEC = 2
+
+
+async def _watch_reservation(job_id: str):
+    """
+    Wait until this node is assigned to `job_id`, or until the reservation is no longer valid.
+    A reservation is no longer valid if the job is not RUNNING, or if the assignment never
+    arrives within `RESERVATION_ASSIGNMENT_TIMEOUT_SEC`. In either case, clear the reservation
+    so another job can use this node.
+    """
+    job_ref = ASYNC_DB.collection("jobs").document(job_id)
+    deadline = time() + RESERVATION_ASSIGNMENT_TIMEOUT_SEC
+
+    while time() < deadline and SELF["reserved_for_job"] == job_id:
+        status = (await job_ref.get()).to_dict()["status"]
+        if status != "RUNNING":
+            break
+        await asyncio.sleep(RESERVATION_POLL_INTERVAL_SEC)
+
+    if SELF["reserved_for_job"] == job_id:
+        SELF["reserved_for_job"] = None
+        node_doc = ASYNC_DB.collection("nodes").document(INSTANCE_NAME)
+        await node_doc.update({"reserved_for_job": None})
+
+
+async def reboot_containers(
+    new_container_config: Optional[list[str]] = None,
     logger: Logger = Depends(get_logger),
     add_background_task: Optional[Callable] = None,
 ):
@@ -375,12 +261,14 @@ def reboot_containers(
     # but watcher breaks sometimes if it's not set right away.
     SELF["job_watcher_stop_event"].set()
 
-    # important to delete or workers wont install packages
-    ENV_IS_READY_PATH.unlink(missing_ok=True)
-
     try:
         db = firestore.Client(project=PROJECT_ID, database="burla")
         node_doc = db.collection("nodes").document(INSTANCE_NAME)
+
+        current_status = node_doc.get().to_dict().get("status")
+        if current_status in ("DELETED", "FAILED"):
+            raise Exception(f"Node marked {current_status} before boot started.")
+
         node_doc.update(
             {
                 "status": "BOOTING",
@@ -394,8 +282,11 @@ def reboot_containers(
 
         # reset state of the node service, except current_container_config, and the job_watcher.
         current_container_config = SELF["current_container_config"]
+        reserved_for_job = SELF["reserved_for_job"]
         REINIT_SELF(SELF)
+        SELF["BOOTING"] = True
         SELF["current_container_config"] = current_container_config
+        SELF["reserved_for_job"] = reserved_for_job
         if new_container_config:
             SELF["current_container_config"] = new_container_config
 
@@ -406,82 +297,82 @@ def reboot_containers(
         response.raise_for_status()
         SELF["authorized_users"] = response.json()["authorized_users"]
 
-        futures = []
-        executor = concurrent.futures.ThreadPoolExecutor()
-        docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
-        if IN_LOCAL_DEV_MODE:
-            # Remove all "old" worker containers.
-            # Mark all existing workers as "old".
-            all_containers = docker_client.containers(all=True)
-            worker_containers = [c for c in all_containers if "worker" in c["Names"][0]]
-            for container in worker_containers:
-                is_old = container["Names"][0][1:].startswith("OLD")
-                belongs_to_current_node = f"node_{INSTANCE_NAME[11:]}" in container["Names"][0]
-
-                if is_old and belongs_to_current_node:
-                    try:
-                        docker_client.kill(container["Id"])
-                    except Exception:
-                        pass  # container might already be stopped
-                    _schedule_container_removal(container["Id"], logger, add_background_task)
-
-                elif belongs_to_current_node:
-                    args = (container["Id"], f"OLD--{container['Names'][0][1:]}")
-                    futures.append(executor.submit(_call_docker_threadsafe, "rename", *args))
-                    kwargs = dict(container=container["Id"], timeout=0)
-                    futures.append(executor.submit(_call_docker_threadsafe, "stop", **kwargs))
-        else:
-            # remove all worker containers
-            for container in docker_client.containers():
-                if "worker" in container["Names"][0]:
-                    try:
-                        docker_client.kill(container["Id"])
-                    except Exception:
-                        pass
-                    _schedule_container_removal(container["Id"], logger, add_background_task)
-
-        # Wait until all workers have been removed/marked old before starting new ones.
+        docker = aiodocker.Docker()
         try:
-            [future.result() for future in futures]
-        except docker.errors.APIError as e:
-            if "already in progress" not in str(e):
-                raise e
+            if IN_LOCAL_DEV_MODE:
+                # Remove all "old" worker containers.
+                # Mark all existing workers as "old".
+                all_containers = await docker.containers.list(all=True)
+                worker_containers = [
+                    c for c in all_containers if "worker" in c._container["Names"][0]
+                ]
+                tasks = []
+                for container in worker_containers:
+                    name = container._container["Names"][0][1:]
+                    is_old = name.startswith("OLD")
+                    belongs_to_current_node = f"node_{INSTANCE_NAME[11:]}" in name
 
-        # doing this inside the worker creates thundering herd.
-        url = "https://pypi.org/pypi/burla/json"
-        latest_burla_version = requests.get(url).json()["info"]["version"]
+                    if is_old and belongs_to_current_node:
+                        try:
+                            await container.kill()
+                        except Exception:
+                            pass
+                        _schedule_container_removal(container.id, logger, add_background_task)
 
-        # start new workers.
-        futures = []
-        for spec in SELF["current_container_config"]:
-            _pull_image_if_missing(spec.image, logger, docker_client)
-            docker_client.close()
-            num_workers = INSTANCE_N_CPUS if NUM_GPUS == 0 else NUM_GPUS
+                    elif belongs_to_current_node:
+                        tasks.append(container.rename(f"OLD--{name}"))
+                        tasks.append(container.stop(t=0))
 
-            msg = f"Image {spec.image} pulled successfully.\nWaiting for {num_workers} workers to start ..."
-            logger.log(msg)
+                try:
+                    await asyncio.gather(*tasks)
+                except aiodocker.DockerError as e:
+                    if "already in progress" not in str(e):
+                        raise
+            else:
+                # remove all worker containers
+                all_containers = await docker.containers.list()
+                for container in all_containers:
+                    if "worker" in container._container["Names"][0]:
+                        try:
+                            await container.kill()
+                        except Exception:
+                            pass
+                        _schedule_container_removal(container.id, logger, add_background_task)
 
-            for i in range(num_workers):
-                # have just one worker install the worker svc, then share through docker volume
-                # (too many will ddoss github / be slow)
-                install_worker = i == 0
-                futures.append(
-                    executor.submit(
-                        Worker, spec.image, latest_burla_version, elected_installer=install_worker
-                    )
-                )
+            # start new workers.
+            workers = []
+            for image in SELF["current_container_config"]:
+                await _pull_image_if_missing(image, logger, docker)
+                num_workers = INSTANCE_N_CPUS if NUM_GPUS == 0 else NUM_GPUS
 
-        try:
-            completed_future_generator = concurrent.futures.as_completed(futures)
-            workers = [f.result() for f in completed_future_generator]
-        except Exception as e:
-            executor.shutdown(wait=False, cancel_futures=True)
-            raise e
-        else:
-            executor.shutdown(wait=True)
-            SELF["workers"] = workers
+                msg = f"Image {image} pulled successfully.\nWaiting for {num_workers} workers to start ..."
+                await logger.log(msg)
+
+                for _ in range(num_workers):
+                    workers.append(WorkerClient(image))
+        finally:
+            await docker.close()
+
+        SELF["workers"] = workers
+        # boot only one first so it downloads uv / sets up env
+        # then others use that env instead of setting up themself.
+        await workers[0].boot()
+        await asyncio.gather(*[worker.boot() for worker in workers[1:]])
         SELF["BOOTING"] = False
+
+        # main_service writes the host field after creating the VM/container.
+        # Wait for that before marking READY so clients never see READY with host=None.
+        while node_doc.get().to_dict().get("host") is None:
+            await asyncio.sleep(1)
+
+        current_status = node_doc.get().to_dict().get("status")
+        if current_status in ("DELETED", "FAILED"):
+            raise Exception(f"Node marked {current_status} during boot.")
+
         node_doc.update({"status": "READY"})
+
+        if SELF["reserved_for_job"]:
+            asyncio.create_task(_watch_reservation(SELF["reserved_for_job"]))
 
     except Exception as parent_exception:
         SELF["FAILED"] = True
@@ -511,4 +402,4 @@ def reboot_containers(
             raise e from parent_exception
         raise parent_exception
 
-    logger.log(f"Done booting {len(SELF['workers'])} workers, {INSTANCE_NAME} is READY!")
+    await logger.log(f"Done booting {len(SELF['workers'])} workers, {INSTANCE_NAME} is READY!")

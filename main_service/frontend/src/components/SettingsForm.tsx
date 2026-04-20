@@ -301,20 +301,15 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
                                 <div className="flex flex-col space-y-2">
                                     <label className={labelClass}>Quantity</label>
                                     <Input
-                                        type="number"
+                                        type="text"
+                                        inputMode="numeric"
                                         disabled={!isEditing}
                                         className="h-9.5 w-full"
-                                        min={1}
-                                        max={1000}
                                         value={settings.machineQuantity || ""}
                                         onChange={(e) => {
-                                            const raw = e.target.value;
-                                            const num = parseInt(raw, 10);
-                                            if (!isNaN(num)) {
-                                                handleInputChange("machineQuantity", num);
-                                            } else if (raw === "") {
-                                                handleInputChange("machineQuantity", 0);
-                                            }
+                                            const digits = e.target.value.replace(/\D/g, "");
+                                            const num = digits === "" ? 0 : parseInt(digits, 10);
+                                            handleInputChange("machineQuantity", num);
                                         }}
                                         onBlur={(e) => {
                                             const val = parseInt(e.target.value, 10);
@@ -388,31 +383,38 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
                                     </Select>
                                 </div>
 
-                                {/* GPUs per VM (hidden when None) */}
-                                {gpuVariant !== "None" ? (
-                                    <div className="flex flex-col space-y-2">
-                                        <label className={labelClass}>GPUs per VM</label>
-                                        <Select
-                                            disabled={!isEditing}
-                                            value={gpusPerVm.toString()}
-                                            onValueChange={(val) => setGpusPerVm(parseInt(val, 10))}
-                                        >
-                                            <SelectTrigger className="w-full h-9.5">
-                                                <SelectValue />
-                                            </SelectTrigger>
-                                            <SelectContent>
-                                                {VARIANT_INFO[gpuVariant].map((n) => (
-                                                    <SelectItem key={n} value={n.toString()}>
-                                                        {n}
-                                                    </SelectItem>
-                                                ))}
-                                            </SelectContent>
-                                        </Select>
-                                    </div>
-                                ) : (
-                                    // placeholder to maintain grid alignment
-                                    <div className="hidden md:block" />
-                                )}
+                                {/* GPUs per VM */}
+                                <div className="flex flex-col space-y-2">
+                                    <label className={labelClass}>GPUs per VM</label>
+                                    <Select
+                                        disabled={!isEditing || gpuVariant === "None"}
+                                        value={gpuVariant === "None" ? "0" : gpusPerVm.toString()}
+                                        onValueChange={(val) => {
+                                            const count = parseInt(val, 10);
+                                            if (count === 0) {
+                                                setGpuVariant("None");
+                                            } else {
+                                                setGpusPerVm(count);
+                                            }
+                                        }}
+                                    >
+                                        <SelectTrigger className="w-full h-9.5">
+                                            <SelectValue>
+                                                {gpuVariant === "None" ? "0" : gpusPerVm.toString()}
+                                            </SelectValue>
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            {(gpuVariant === "None"
+                                                ? [0]
+                                                : [0, ...VARIANT_INFO[gpuVariant]]
+                                            ).map((n) => (
+                                                <SelectItem key={n} value={n.toString()}>
+                                                    {n}
+                                                </SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                </div>
                             </div>
 
                             {/* Second row: two equal columns */}
@@ -421,20 +423,15 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
                                 <div className="flex flex-col space-y-2">
                                     <label className={labelClass}>Disk Size (GB)</label>
                                     <Input
-                                        type="number"
+                                        type="text"
+                                        inputMode="numeric"
                                         disabled={!isEditing}
                                         className="w-full h-9.5"
-                                        min={10}
-                                        max={2000}
                                         value={settings.diskSize || ""}
                                         onChange={(e) => {
-                                            const raw = e.target.value;
-                                            const num = parseInt(raw, 10);
-                                            if (!isNaN(num)) {
-                                                handleInputChange("diskSize", num);
-                                            } else if (raw === "") {
-                                                handleInputChange("diskSize", 0);
-                                            }
+                                            const digits = e.target.value.replace(/\D/g, "");
+                                            const num = digits === "" ? 0 : parseInt(digits, 10);
+                                            handleInputChange("diskSize", num);
                                         }}
                                         onBlur={(e) => {
                                             const val = parseInt(e.target.value, 10);
@@ -485,25 +482,20 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
                                         Inactivity Timeout (minutes)
                                     </label>
                                     <Input
-                                        type="number"
+                                        type="text"
+                                        inputMode="numeric"
                                         disabled={!isEditing}
                                         className="w-full h-9.5"
-                                        min={1}
-                                        max={1440}
-                                        value={settings.inactivityTimeout || ""}
+                                        value={settings.inactivityTimeout ?? ""}
                                         onChange={(e) => {
-                                            const raw = e.target.value;
-                                            const num = parseInt(raw, 10);
-                                            if (!isNaN(num)) {
-                                                handleInputChange("inactivityTimeout", num);
-                                            } else if (raw === "") {
-                                                handleInputChange("inactivityTimeout", 0);
-                                            }
+                                            const digits = e.target.value.replace(/\D/g, "");
+                                            const num = digits === "" ? 0 : parseInt(digits, 10);
+                                            handleInputChange("inactivityTimeout", num);
                                         }}
                                         onBlur={(e) => {
                                             const val = parseInt(e.target.value, 10);
-                                            if (val < 1) {
-                                                handleInputChange("inactivityTimeout", 1);
+                                            if (val < 0) {
+                                                handleInputChange("inactivityTimeout", 0);
                                             } else if (val > 1440) {
                                                 handleInputChange("inactivityTimeout", 1440);
                                             }

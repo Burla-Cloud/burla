@@ -9,3 +9,4 @@ HARD RULES. NEVER VIOLATE.
 3. ONLY create a comment when it would seem unclear to a person WHY the code is doing what it does.
 4. Do not use variable names that are not words, for example: never use abbreviations.
 5. Never use the walrus operator (`:=`) in Python.
+6. Always tell the user when you find pointless code, dead code, or abstractions that do nothing useful.

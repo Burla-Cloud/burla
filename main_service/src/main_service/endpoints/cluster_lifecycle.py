@@ -1,11 +1,12 @@
 import docker
 import math
+from datetime import datetime, timezone
 from time import time
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Request, HTTPException
 from google.cloud.firestore_v1.base_query import FieldFilter
-from google.cloud.compute_v1 import InstancesClient
+from google.cloud.compute_v1 import InstancesClient, MachineTypesClient
 from concurrent.futures import ThreadPoolExecutor
 
 from main_service import (
@@ -82,10 +83,13 @@ def _start_nodes(
     config: dict,
     n_nodes_to_add: int = None,
     node_instance_names: list[str] = None,
+    reserved_for_job: str = None,
 ):
     node_service_port = _current_local_dev_max_node_port()
     futures = []
     executor = ThreadPoolExecutor(max_workers=32)
+    instance_client = InstancesClient()
+    machine_types_client = MachineTypesClient()
 
     def _add_node_logged(**node_start_kwargs):
         return Node.start(**node_start_kwargs).instance_name
@@ -103,12 +107,15 @@ def _start_nodes(
                 gcp_region=node_spec["gcp_region"],
                 containers=[Container.from_dict(c) for c in node_spec["containers"]],
                 auth_headers=auth_headers,
+                instance_client=instance_client,
+                machine_types_client=machine_types_client,
                 service_port=node_service_port,
                 sync_gcs_bucket_name=config["gcs_bucket_name"],
                 as_local_container=IN_LOCAL_DEV_MODE,
                 inactivity_shutdown_time_sec=node_spec.get("inactivity_shutdown_time_sec"),
                 disk_size=node_spec.get("disk_size_gb"),
                 instance_name=instance_name,
+                reserved_for_job=reserved_for_job,
             )
             futures.append(executor.submit(_add_node_logged, **node_start_kwargs))
         if n_nodes_to_add is not None:
@@ -132,6 +139,29 @@ def _start_nodes(
     return node_instance_names
 
 
+def _mark_running_jobs_with_lifecycle_event(event: str, message: str):
+    """
+    Runs synchronously in the restart/shutdown endpoints so clients see a
+    definitive lifecycle signal via their firestore log listener before their
+    nodes start going away and producing infrastructure errors.
+    """
+    status_filter = FieldFilter("status", "==", "RUNNING")
+    running_jobs = list(DB.collection("jobs").where(filter=status_filter).stream())
+    if not running_jobs:
+        return
+    timestamp = datetime.now(timezone.utc)
+    log_doc = {
+        "logs": [{"message": message, "timestamp": timestamp}],
+        "timestamp": timestamp,
+        "is_error": True,
+        "event": event,
+    }
+    for job_snapshot in running_jobs:
+        job_ref = job_snapshot.reference
+        job_ref.collection("logs").add(log_doc)
+        job_ref.update({"status": "CANCELED"})
+
+
 def _restart_cluster(logger: Logger, auth_headers: dict):
     start = time()
 
@@ -153,6 +183,7 @@ def restart_cluster(
     auth_headers: dict = Depends(get_auth_headers),
     add_background_task=Depends(get_add_background_task_function),
 ):
+    _mark_running_jobs_with_lifecycle_event("cluster_restarted", "The cluster was restarted.")
     add_background_task(_restart_cluster, logger, auth_headers)
 
 
@@ -163,6 +194,7 @@ async def shutdown_cluster(
 ):
     start = time()
 
+    _mark_running_jobs_with_lifecycle_event("cluster_shutdown", "The cluster was shut down.")
     log_telemetry("Cluster turned off.", severity="INFO")
     _shutdown_cluster(logger, auth_headers)
 
@@ -180,6 +212,7 @@ async def grow_cluster(
     request_json = await request.json()
     current_cpus = int(request_json["current_cpus"])
     cpu_deficit = int(request_json["missing_cpus"])
+    reserved_for_job = request_json.get("job_id")
 
     max_cpu = LOCAL_DEV_MAX_GROW_CPUS if IN_LOCAL_DEV_MODE else MAX_GROW_CPUS
     max_additional_cpus = max(0, max_cpu - current_cpus)
@@ -199,6 +232,7 @@ async def grow_cluster(
             config,
             n_nodes_to_add,
             node_instance_names,
+            reserved_for_job,
         )
 
     return {"added_node_instance_names": node_instance_names}

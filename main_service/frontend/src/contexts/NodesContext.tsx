@@ -75,6 +75,7 @@ export const NodesProvider = ({ children }: { children: React.ReactNode }) => {
                 typeof data.started_booting_at === "number"
                   ? data.started_booting_at
                   : n.started_booting_at,
+              current_function: data.current_function,
             }
           : n
       );
@@ -165,6 +166,7 @@ const createNewNode = (data: any): BurlaNode => ({
   started_booting_at:
     typeof data.started_booting_at === "number" ? data.started_booting_at : undefined,
   deletedAt: undefined,
+  current_function: data.current_function,
 });
 
 export const useNodes = () => useContext(NodesContext);

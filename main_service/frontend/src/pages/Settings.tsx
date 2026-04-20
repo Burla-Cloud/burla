@@ -228,7 +228,7 @@ const SettingsPage = () => {
                   </span>
                 </Button>
               ) : (
-                <div className="h-9.5" />
+                <div className="h-10" />
               )}
             </div>
           </div>

@@ -87,3 +87,4 @@ RUN uv venv /opt/burla/.venv
 RUN echo 'export UV_PROJECT_ENVIRONMENT=/opt/burla/.venv' >> /root/.bashrc
 ENV UV_PROJECT_ENVIRONMENT=/opt/burla/.venv
 RUN uv pip install -e .
+RUN uv pip install cloudpickle tblib

@@ -1,24 +1,28 @@
-[tool.poetry]
+[project]
 name = "node-service"
-version = "1.5.2"
+version = "1.5.4"
 description = ""
-authors = ["Jacob Zuliani <jake@burla.dev>"]
-packages = [{include = "node_service", from = "src"}]
-
-[tool.poetry.dependencies]
-python = "^3.13"
-docker = "^7.1.0"
-google-cloud-logging = "^3.12.1"
-google-cloud-firestore = "^2.21.0"
-fastapi = "^0.115.12"
-uvicorn = "^0.34.3"
-python-multipart = "^0.0.20"
-aiohttp = "^3.12.11"
-google-cloud-compute = "^1.31.0"
-google-cloud-secret-manager = "^2.24.0"
-psutil = "^7.1.0"
-packaging = "^25.0"
+authors = [{ name = "Jacob Zuliani", email = "jake@burla.dev" }]
+requires-python = ">=3.13,<4.0"
+dependencies = [
+    "aiodocker>=0.26.0,<0.27.0",
+    "google-cloud-logging>=3.12.1,<4.0.0",
+    "google-cloud-firestore>=2.21.0,<3.0.0",
+    "fastapi>=0.115.12,<0.116.0",
+    "uvicorn>=0.34.3,<0.35.0",
+    "python-multipart>=0.0.20,<0.0.21",
+    "aiohttp>=3.12.11,<4.0.0",
+    "google-cloud-compute>=1.31.0,<2.0.0",
+    "google-cloud-secret-manager>=2.24.0,<3.0.0",
+    "psutil>=7.1.0,<8.0.0",
+    "packaging>=25.0,<26.0",
+    "cloudpickle>=3.1.2,<4.0.0",
+    "tblib>=3.2.2,<4.0.0",
+]
 
 [build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/node_service"]

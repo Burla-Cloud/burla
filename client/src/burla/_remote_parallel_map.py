@@ -1,5 +1,6 @@
 import asyncio
 import json
+import random
 import sys
 import traceback
 import base64
@@ -9,7 +10,6 @@ from importlib import metadata
 from queue import Queue
 from threading import Event, Thread
 from time import time
-from types import NoneType
 from typing import Callable, Optional, Union
 from uuid import uuid4
 
@@ -30,20 +30,19 @@ from burla._helpers import (
 )
 from burla._node import (
     AllNodesBusy,
+    ClusterRestarted,
+    ClusterShutdown,
     FirestoreTimeout,
     JobCanceled,
     Node,
     NoCompatibleNodes,
     NoNodes,
+    NodeDisconnected,
     UnauthorizedError,
     VersionMismatch,
     select_nodes_to_assign_to_job,
 )
-from burla._reporting import (
-    RemoteParallelMapReporter,
-    log_job_failure_telemetry,
-    print_timing_event,
-)
+from burla._reporting import RemoteParallelMapReporter, log_job_failure_telemetry
 
 # load on import and reuse because this is very slow in big envs
 PKG_MODULE_MAPPING = metadata.packages_distributions()
@@ -74,6 +73,8 @@ EXEC_TYPES_TO_NOT_ALERT = [
     AllNodesBusy,
     NoCompatibleNodes,
     JobCanceled,
+    ClusterRestarted,
+    ClusterShutdown,
     VersionMismatch,
     FunctionTooBig,
     FirestoreTimeout,
@@ -83,37 +84,29 @@ EXEC_TYPES_TO_NOT_ALERT = [
 
 
 async def _grow_cluster(
-    current_cpus: int, missing_cpus: int, session, async_db, spinner
+    current_cpus: int, missing_cpus: int, job_id: str, session, async_db, spinner
 ) -> list[Node]:
-    request_json = {"current_cpus": current_cpus, "missing_cpus": missing_cpus}
+    request_json = {"current_cpus": current_cpus, "missing_cpus": missing_cpus, "job_id": job_id}
     auth_headers = get_auth_headers()
     main_service_url = json.loads(CONFIG_PATH.read_text())["cluster_dashboard_url"]
-    local_main_service_url = "http://localhost:5001"
-    grow_urls = [f"{main_service_url}/v1/cluster/grow"]
-    if main_service_url != local_main_service_url:
-        grow_urls.append(f"{local_main_service_url}/v1/cluster/grow")
-
-    for index, url in enumerate(grow_urls):
-        request = session.post(url, json=request_json, headers=auth_headers)
-        async with await request as response:
-            if response.status == 200:
-                response_json = await response.json()
-                names = response_json["added_node_instance_names"]
-                if len(names) == 0:
-                    return []
-                target_parallelism_per_node = max(1, missing_cpus // len(names))
-                node_kw = dict(
-                    target_parallelism=target_parallelism_per_node,
-                    session=session,
-                    async_db=async_db,
-                    spinner=spinner,
-                )
-                return [Node.from_booting(name, **node_kw) for name in names]
-            if response.status == 401:
-                raise UnauthorizedError()
-            used_last_url = index == len(grow_urls) - 1
-            if response.status != 405 or used_last_url:
-                raise Exception(f"Failed to grow cluster: {response.status}")
+    url = f"{main_service_url}/v1/cluster/grow"
+    async with await session.post(url, json=request_json, headers=auth_headers) as response:
+        if response.status == 200:
+            response_json = await response.json()
+            names = response_json["added_node_instance_names"]
+            if len(names) == 0:
+                return []
+            target_parallelism_per_node = max(1, missing_cpus // len(names))
+            node_kw = dict(
+                target_parallelism=target_parallelism_per_node,
+                session=session,
+                async_db=async_db,
+                spinner=spinner,
+            )
+            return [Node.from_booting(name, **node_kw) for name in names]
+        if response.status == 401:
+            raise UnauthorizedError()
+        raise Exception(f"Failed to grow cluster: {response.status}")
 
 
 async def _execute_job_wrapped(*args, **kwargs):
@@ -128,7 +121,6 @@ async def _execute_job_wrapped(*args, **kwargs):
         client_session = aiohttp.ClientSession(connector=connector, trust_env=True)
         session = await stack.enter_async_context(client_session)
         reporter = RemoteParallelMapReporter(**kwargs, session=session)
-        reporter.print_timing_event("client_session_ready")
         execute_job_kwargs = dict(kwargs)
         execute_job_kwargs.pop("generator", None)
         await _execute_job(
@@ -161,10 +153,10 @@ async def _execute_job(
     reporter: RemoteParallelMapReporter,
 ):
     dashboard_canceled_message = None
+    cluster_restarted = False
+    cluster_shutdown = False
     auth_headers = get_auth_headers()
     sync_db, async_db = get_db_clients()
-    reporter.print_timing_event("auth_headers_ready")
-    reporter.print_timing_event("db_clients_ready")
 
     if background:
         reporter.print_detach_mode_enabled_message()
@@ -172,13 +164,9 @@ async def _execute_job(
     function_pkl = cloudpickle.dumps(function_)
     function_size_gb = len(function_pkl) / (1024**3)
     reporter.function_size_gb = function_size_gb
-    reporter.print_timing_event(
-        "function_pickled", function_size_mb=round(function_size_gb * 1024, 6)
-    )
     if function_size_gb > 0.1:
         raise FunctionTooBig(function_.__name__)
 
-    reporter.print_timing_event("node_selection_started")
     try:
         nodes, target_parallelism = await select_nodes_to_assign_to_job(
             db=async_db,
@@ -193,6 +181,7 @@ async def _execute_job(
         if not grow:
             raise
 
+    booting_nodes = []
     if grow:
         # assuming static 1:4 cpu/ram ratio, how many more cpus do we need?
         requested_parallelism = min(len(inputs), max_parallelism)
@@ -205,6 +194,7 @@ async def _execute_job(
             booting_nodes = await _grow_cluster(
                 current_cpus,
                 missing_cpus,
+                job_id,
                 session,
                 async_db,
                 spinner,
@@ -214,13 +204,6 @@ async def _execute_job(
                 reporter.set_booting_nodes_message(len(booting_nodes))
             elif len(nodes) == 0:
                 raise NoNodes("Cluster refused to boot required additional nodes ...")
-
-    reporter.print_timing_event(
-        "nodes_ready_for_job",
-        node_count=len(nodes),
-        target_parallelism=target_parallelism,
-        booting_node_count=sum(node.state == "BOOTING" for node in nodes),
-    )
 
     sync_job_ref = sync_db.collection("jobs").document(job_id)
     async_job_ref = async_db.collection("jobs").document(job_id)
@@ -244,16 +227,25 @@ async def _execute_job(
             "fail_reason": [],
         }
     )
-    reporter.print_timing_event("job_registered", node_count=len(nodes))
-
     # start stdout/stderr stream
-    def _on_new_logs_doc(col_snapshot, changes, read_time):
-        nonlocal dashboard_canceled_message
-        for change in changes:
-            log_doc = change.document.to_dict()
+    seen_log_document_ids = set()
+
+    def _print_log_documents(log_documents):
+        nonlocal dashboard_canceled_message, cluster_restarted, cluster_shutdown
+        for log_document in log_documents:
+            if log_document.id in seen_log_document_ids:
+                continue
+            seen_log_document_ids.add(log_document.id)
+            log_doc = log_document.to_dict()
             logs = log_doc.get("logs", [])
             is_error_doc = bool(log_doc.get("is_error"))
 
+            if log_doc.get("event") == "cluster_restarted":
+                cluster_restarted = True
+                continue
+            if log_doc.get("event") == "cluster_shutdown":
+                cluster_shutdown = True
+                continue
             if is_error_doc and sync_job_ref.get().to_dict()["status"] == "CANCELED" and logs:
                 dashboard_canceled_message = logs[-1]["message"]
                 continue
@@ -264,9 +256,11 @@ async def _execute_job(
                 message = log["message"].rstrip("\r\n")
                 spinner.write(message) if spinner else print(message)
 
+    def _on_new_logs_doc(col_snapshot, changes, read_time):
+        _print_log_documents([change.document for change in changes])
+
     log_stream = sync_job_ref.collection("logs").on_snapshot(_on_new_logs_doc)
     session_stack.callback(log_stream.unsubscribe)
-    reporter.print_timing_event("log_stream_ready")
 
     job_start_telemetry_task = create_task(reporter.log_job_start_telemetry(nodes, packages))
     session_stack.callback(job_start_telemetry_task.cancel)
@@ -275,7 +269,9 @@ async def _execute_job(
     node_tasks = []
     n_inputs = len(inputs)  # <- inputs will be popped from so len(inputs) will start changing
     inputs_with_indicies = list(enumerate(inputs))
-    num_ready_nodes = max(1, sum(n.state == "READY" for n in nodes))
+    random.shuffle(inputs_with_indicies)
+    n_ready_nodes = len(nodes) - len(booting_nodes)
+    first_chunk_barrier = asyncio.Barrier(n_ready_nodes) if n_ready_nodes else None
     for node in nodes:
         node_tasks.append(
             create_task(
@@ -287,25 +283,28 @@ async def _execute_job(
                     start_time=start_time,
                     function_pkl=function_pkl,
                     udf_error_event=udf_error_event,
-                    num_ready_nodes=num_ready_nodes,
                     inputs_with_indicies=inputs_with_indicies,
                     return_queue=return_queue,
+                    nodes=nodes,
+                    assigned_node_ids=[n.instance_name for n in nodes],
+                    first_chunk_barrier=first_chunk_barrier,
                 )
             )
         )
-    reporter.print_timing_event("node_tasks_started", node_count=len(node_tasks))
-
     try:
         ping_process = None
         last_status_message_update_time = 0.0
         total_result_count = sum(node.result_count for node in nodes)
-        first_result_received = False
         while total_result_count < n_inputs:
             if (time() - start_time) < 5:
                 await asyncio.sleep(0.0005)
             else:
                 await asyncio.sleep(0.1)
 
+            if cluster_shutdown:
+                raise ClusterShutdown()
+            if cluster_restarted:
+                raise ClusterRestarted()
             if dashboard_canceled_message:
                 raise JobCanceled(f"\n\n{dashboard_canceled_message}\n")
             elif terminal_cancel_event.is_set():
@@ -313,14 +312,28 @@ async def _execute_job(
 
             for task in node_tasks:
                 if task.done() and task.exception():
+                    # Infrastructure failures during a cluster restart/shutdown race the
+                    # firestore listener. Prefer the definitive lifecycle signal when present.
+                    if cluster_shutdown:
+                        raise ClusterShutdown()
+                    if cluster_restarted:
+                        raise ClusterRestarted()
                     raise task.exception()
+
+            for node in nodes:
+                if node.state == "FAILED":
+                    if cluster_shutdown:
+                        raise ClusterShutdown()
+                    if cluster_restarted:
+                        raise ClusterRestarted()
+                    raise NodeDisconnected(f"Node {node.instance_name} failed during job.")
 
             current_time = time()
             if (current_time - last_status_message_update_time) > 0.05:
                 if all([n.state == "BOOTING" for n in nodes]):
                     reporter.set_booting_nodes_message(len(nodes))
-                elif all([n.currently_installing_package for n in nodes]):
-                    reporter.set_installing_package_message(nodes[0].currently_installing_package)
+                elif any([n.installing_packages for n in nodes]):
+                    reporter.set_installing_packages_message()
                 else:
                     total_parallelism = sum((n.current_parallelism for n in nodes))
                     booting_nodes = sum(n.state == "BOOTING" for n in nodes)
@@ -332,7 +345,6 @@ async def _execute_job(
             if len(inputs_with_indicies) == 0 and not inputs_done_event.is_set():
                 inputs_done_event.set()
                 await async_job_ref.update({"all_inputs_uploaded": True})
-                reporter.print_timing_event("all_inputs_uploaded")
                 if background:
                     reporter.print_inputs_done_message()
 
@@ -346,21 +358,14 @@ async def _execute_job(
                 raise Exception(f"Heartbeat process failed!\n{stderr}")
 
             total_result_count = sum(node.result_count for node in nodes)
-            if total_result_count > 0 and not first_result_received:
-                first_result_received = True
-                reporter.print_timing_event(
-                    "first_result_received", result_count=total_result_count
-                )
             if all([task.done() for task in node_tasks]) and total_result_count < n_inputs:
                 raise Exception("Zero nodes working on job and we have not received all results!")
 
-        reporter.print_timing_event("all_results_received", result_count=total_result_count)
         job_success_telemetry_task = create_task(
             reporter.log_job_success_telemetry(time() - start_time)
         )
         session_stack.callback(job_success_telemetry_task.cancel)
         await async_job_ref.update({"client_has_all_results": True})
-        reporter.print_timing_event("client_has_all_results_recorded")
     finally:
         [task.cancel() for task in node_tasks]
 
@@ -426,7 +431,6 @@ def remote_parallel_map(
     inputs = [(i,) if not isinstance(i, tuple) else i for i in inputs]
     if not inputs:
         return iter([]) if generator else []
-    print_timing_event("inputs_normalized", source="client", input_count=len(inputs))
 
     # TODO: rename internally
     background = detach
@@ -437,17 +441,10 @@ def remote_parallel_map(
         return function_(*args_tuple)
 
     wrapped_function_.__name__ = function_.__name__
-    print_timing_event("wrapped_function_ready", source="client")
 
     # Move below code back into `_execute_job` after above todo is done.
     # Needs to operate on function_.__globals__ which cannot be reassigned -> must be done here.
     custom_module_names, package_module_names = get_modules_required_on_remote(function_)
-    print_timing_event(
-        "dependency_scan_done",
-        source="client",
-        custom_module_count=len(custom_module_names),
-        package_module_count=len(package_module_names),
-    )
 
     # temp fix: these are mistetected as PyPI packages but are not!
     if "clim_shift" in package_module_names:
@@ -511,19 +508,6 @@ def remote_parallel_map(
         if "matplotlib" in PKG_MODULE_MAPPING and not ("matplotlib" in packages):
             packages["matplotlib"] = metadata.version("matplotlib")
     # ------------------------------------------------
-    print_timing_event(
-        "package_resolution_done",
-        source="client",
-        package_count=len(packages),
-    )
-
-    print_timing_event(
-        "client_preflight_done",
-        source="client",
-        input_count=len(inputs),
-        package_count=len(packages),
-        custom_module_count=len(custom_module_names),
-    )
 
     max_parallelism = max_parallelism if max_parallelism else len(inputs)
     uid = base64.urlsafe_b64encode(uuid4().bytes[:9]).decode()
@@ -536,13 +520,11 @@ def remote_parallel_map(
             spinner = yaspin(sigmap={})  # <- .start will overwrite my handlers without sigmap={}
             spinner.start()
             spinner.text = f"Preparing to call `{function_.__name__}` on {len(inputs)} inputs ..."
-            print_timing_event("spinner_started", source="client")
         terminal_cancel_event = Event()
         inputs_done_event = Event()
         original_signal_handlers = install_signal_handlers(
             job_id, background, spinner, terminal_cancel_event, inputs_done_event
         )
-        print_timing_event("signal_handlers_ready", source="client")
 
         def execute_job():
             try:
@@ -571,7 +553,6 @@ def remote_parallel_map(
 
         t = Thread(target=execute_job, daemon=True)
         t.start()
-        print_timing_event("worker_thread_started", source="client")
         t.join()
 
         if hasattr(execute_job, "exc_info"):

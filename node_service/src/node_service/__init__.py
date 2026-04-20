@@ -1,9 +1,9 @@
 import os
 import sys
 import json
+import inspect
 import asyncio
 import traceback
-from pathlib import Path
 from uuid import uuid4
 from time import time
 from typing import Callable
@@ -19,18 +19,17 @@ os.environ["GLOG_minloglevel"] = "2"  # 0-INFO, 1-WARNING, 2-ERROR, 3-FATAL
 
 import google.auth
 from google.auth.transport.requests import Request
-from google.cloud import logging, secretmanager, firestore
+from google.cloud import logging, secretmanager
 from google.cloud.compute_v1 import InstancesClient
 from google.cloud.firestore_v1.async_client import AsyncClient
 import aiohttp
-from starlette.concurrency import run_in_threadpool
 from fastapi import FastAPI, Request, BackgroundTasks, Depends
 from fastapi.responses import Response
 from starlette.requests import ClientDisconnect
 from starlette.datastructures import UploadFile
 
 
-__version__ = "1.5.2"
+__version__ = "1.5.4"
 CREDENTIALS, PROJECT_ID = google.auth.default()
 BURLA_BACKEND_URL = "https://backend.burla.dev"
 
@@ -39,12 +38,11 @@ IN_LOCAL_DEV_MODE = os.environ.get("IN_LOCAL_DEV_MODE") == "True"  # Cluster run
 
 NUM_GPUS = int(os.environ.get("NUM_GPUS"))
 INSTANCE_NAME = os.environ["INSTANCE_NAME"]
-INACTIVITY_SHUTDOWN_TIME_SEC = int(os.environ.get("INACTIVITY_SHUTDOWN_TIME_SEC"))
+_raw_inactivity = os.environ.get("INACTIVITY_SHUTDOWN_TIME_SEC")
+INACTIVITY_SHUTDOWN_TIME_SEC = int(_raw_inactivity) if _raw_inactivity is not None else None
+RESERVED_FOR_JOB = os.environ.get("RESERVED_FOR_JOB") or None
 INSTANCE_N_CPUS = 2 if IN_LOCAL_DEV_MODE else os.cpu_count()
 GCL_CLIENT = logging.Client().logger("node_service", labels=dict(INSTANCE_NAME=INSTANCE_NAME))
-
-# must be same path on worker service!
-ENV_IS_READY_PATH = Path("/worker_service_python_env/.ALL_PACKAGES_INSTALLED")
 
 secret_client = secretmanager.SecretManagerServiceClient()
 secret_name = f"projects/{PROJECT_ID}/secrets/burla-cluster-id-token/versions/latest"
@@ -57,32 +55,31 @@ from node_service.helpers import ResultsEndpointFilter, Logger, SizedQueue
 # SELF = state of this current instance of the node service
 def REINIT_SELF(SELF):
     SELF["workers"] = []
-    SELF["index_of_last_worker_given_inputs"] = 0
+    SELF["idle_workers"] = []
+    SELF["inputs_queue"] = SizedQueue()
     SELF["results_queue"] = SizedQueue()
-    SELF["pending_inputs"] = []
     SELF["current_job"] = None
     SELF["current_parallelism"] = 0
     SELF["job_watcher_stop_event"] = Event()
+    SELF["job_watcher_stop_event"].set()  # needs to be default set so it definitely dies on reboot
+    SELF["job_watcher_task"] = None
     SELF["BOOTING"] = False
     SELF["RUNNING"] = False
     SELF["FAILED"] = False
-    SELF["SHUTTING_DOWN"] = False
     SELF["current_container_config"] = []
-    SELF["job_watcher_stop_event"].set()  # needs to be default set so it definitely dies on reboot
+    SELF["auth_headers"] = {}
     SELF["all_inputs_uploaded"] = False
-    SELF["current_input_batch_forwarded"] = True
     SELF["num_results_received"] = 0
-    SELF["return_queue_ram_threshold_gb"] = None
-    SELF["currently_installing_package"] = None
-    SELF["all_packages_installed"] = False
-    SELF["all_packages_installed_sent_to_client"] = False
-    SELF["udf_start_latency"] = None
+    SELF["pending_transfers"] = {}
     SELF["active_client_request_count"] = 0
     SELF["last_client_activity_timestamp"] = time()
+    SELF["reserved_for_job"] = None
+    SELF["SHUTTING_DOWN"] = False
 
 
 SELF = {}
 REINIT_SELF(SELF)
+SELF["reserved_for_job"] = RESERVED_FOR_JOB
 
 # Silence fastapi logs coming from the `/results` endpoint, there are so many it slows stuff down.
 python_logging.getLogger("uvicorn.access").addFilter(ResultsEndpointFilter())
@@ -121,15 +118,18 @@ def get_add_background_task_function(
         tb_details = traceback.format_list(traceback.extract_stack()[:-1])
         parent_traceback = "Traceback (most recent call last):\n" + format_traceback(tb_details)
 
-        def func_logged(*a, **kw):
+        async def func_logged(*a, **kw):
             try:
-                return func(*a, **kw)
+                result = func(*a, **kw)
+                if inspect.isawaitable(result):
+                    return await result
+                return result
             except Exception as e:
                 exc_type, exc_value, exc_traceback = sys.exc_info()
                 tb_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
                 local_traceback_no_title = "\n".join(format_traceback(tb_details).split("\n")[1:])
                 traceback_str = parent_traceback + local_traceback_no_title
-                logger.log(message=str(e), severity="ERROR", traceback=traceback_str)
+                await logger.log(message=str(e), severity="ERROR", traceback=traceback_str)
 
         background_tasks.add_task(func_logged, *a, **kw)
 
@@ -141,7 +141,6 @@ from node_service.job_endpoints import router as job_endpoints_router
 from node_service.lifecycle_endpoints import (
     reboot_containers,
     router as lifecycle_endpoints_router,
-    Container,
 )
 
 
@@ -149,18 +148,27 @@ async def shutdown_if_idle_for_too_long(logger: Logger):
     """WARNING: Errors from this function are completely hidden!"""
 
     time_since_last_activity = 0
-    while time_since_last_activity < INACTIVITY_SHUTDOWN_TIME_SEC or SELF["current_job"]:
+    while (
+        time_since_last_activity <= INACTIVITY_SHUTDOWN_TIME_SEC
+        or SELF["active_client_request_count"] > 0
+        or SELF["current_job"]
+        or SELF["reserved_for_job"]
+        or SELF["BOOTING"]
+    ):
         await asyncio.sleep(5)
         time_since_last_activity = time() - SELF["last_client_activity_timestamp"]
+
+    SELF["SHUTTING_DOWN"] = True
+
+    node_doc = ASYNC_DB.collection("nodes").document(INSTANCE_NAME)
+    snapshot = await node_doc.get()
+    if snapshot.exists and snapshot.to_dict().get("status") != "FAILED":
+        await node_doc.update({"status": "DELETED", "ended_at": time()})
 
     if not IN_LOCAL_DEV_MODE:
         msg = f"Node has been idle for {INACTIVITY_SHUTDOWN_TIME_SEC // 60} minutes.\n"
         msg += f"SHUTTING DOWN NODE {INSTANCE_NAME} DUE TO INACTIVITY."
-        logger.log(msg, severity="WARNING")
-
-        client = firestore.Client(project=PROJECT_ID, database="burla")
-        node_doc = client.collection("nodes").document(INSTANCE_NAME)
-        node_doc.update({"idle_for_too_long": True})
+        await logger.log(msg, severity="WARNING")
 
         instance_client = InstancesClient()
         silly_response = instance_client.aggregated_list(project=PROJECT_ID)
@@ -171,29 +179,28 @@ async def shutdown_if_idle_for_too_long(logger: Logger):
             zone = vm.zone.split("/")[-1]
             instance_client.delete(project=PROJECT_ID, zone=zone, instance=INSTANCE_NAME)
     else:
-        logger.log(f"Would have deleted vm due to inactivity here! {INSTANCE_NAME}")
+        await logger.log(f"Would have deleted vm due to inactivity here! {INSTANCE_NAME}")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger = Logger()
-    logger.log(f"Started node service v{__version__}")
+    await logger.log(f"Started node service v{__version__}")
 
     # In dev all the workers restart everytime I hit save (server is in "reload" mode)
     # This is annoying but you must leave it like this, otherwise stuff won't restart correctly!
     # (you tried skipping the worker restarts here when reloading,
     # this won't work because this whole file re-runs, and SELF is reset when reloading.)
 
-    if INACTIVITY_SHUTDOWN_TIME_SEC:
+    if INACTIVITY_SHUTDOWN_TIME_SEC is not None:
         asyncio.create_task(shutdown_if_idle_for_too_long(logger=logger))
-        logger.log(
-            f"This node will shutdown if idle for {INACTIVITY_SHUTDOWN_TIME_SEC//60} minutes!"
-        )
+        msg = f"This node will shutdown if idle for {INACTIVITY_SHUTDOWN_TIME_SEC//60} minutes!"
+        await logger.log(msg)
 
     # boot containers before accepting any requests.
     # `reboot_containers` will delete VM's if it fails, no need to do that here.
-    containers = [Container(**c) for c in json.loads(os.environ["CONTAINERS"])]
-    await run_in_threadpool(reboot_containers, new_container_config=containers, logger=logger)
+    containers = [c["image"] for c in json.loads(os.environ["CONTAINERS"])]
+    await reboot_containers(new_container_config=containers, logger=logger)
 
     yield
 
@@ -201,12 +208,13 @@ async def lifespan(app: FastAPI):
 async def on_job_start(scope, first_event):
     job_id = scope.get("path", "").split("/jobs/")[-1]
     node_doc = ASYNC_DB.collection("nodes").document(INSTANCE_NAME)
-    await node_doc.update({"status": "RUNNING", "current_job": job_id})
+    await node_doc.update({"status": "RUNNING", "current_job": job_id, "reserved_for_job": None})
     # these must be set after ^
     # used to confirm in execution endpoint that this ran BEFORE setting node back to ready
     # in the case of a failure, it may not have because async.
     SELF["RUNNING"] = True
     SELF["current_job"] = job_id
+    SELF["reserved_for_job"] = None
 
 
 class CallHookOnJobStartMiddleware:
@@ -215,12 +223,16 @@ class CallHookOnJobStartMiddleware:
 
     async def __call__(self, scope, receive, send):
         is_post_request = scope.get("method") == "POST"
-        is_jobs_request = scope.get("path", "").startswith("/jobs/")
-        is_jobs_request = "inputs" not in scope.get("path", "") and is_jobs_request
-        is_job_execution_request = is_post_request and is_jobs_request
+        path_parts = scope.get("path", "").strip("/").split("/")
+        is_job_execution_request = (
+            is_post_request and len(path_parts) == 2 and path_parts[0] == "jobs"
+        )
 
         if is_job_execution_request:
             started = False
+            if SELF["SHUTTING_DOWN"]:
+                msg = "Node is shutting down due to inactivity."
+                return await Response(msg, status_code=503)(scope, receive, send)
             if SELF["RUNNING"] or SELF["BOOTING"]:
                 msg = "Node currently running or booting, request refused."
                 return await Response(msg, status_code=409)(scope, receive, send)
@@ -284,7 +296,7 @@ app.include_router(lifecycle_endpoints_router)
 
 
 @app.get("/")
-def get_status():
+async def get_status():
     if SELF["FAILED"]:
         return {"status": "FAILED"}
     elif SELF["BOOTING"]:
@@ -302,7 +314,9 @@ async def client_heartbeat(request: Request, logger: Logger = Depends(get_logger
         now = time()
         seconds_since_last_ping = now - (last_ping_received_at or now)
         if seconds_since_last_ping > 2:
-            logger.log(f"high heartbeat gap: {seconds_since_last_ping:.3f}s", severity="WARNING")
+            await logger.log(
+                f"high heartbeat gap: {seconds_since_last_ping:.3f}s", severity="WARNING"
+            )
         last_ping_received_at = now
         await asyncio.sleep(0)
     return Response(status_code=204)
@@ -315,6 +329,7 @@ async def handle_errors(request: Request, call_next):
     Catching errors in a `Depends` function will not distinguish
         http errors originating here vs other services.
     """
+    logger = Logger(request)
     try:
         # Important to note that HTTP exceptions do not raise errors here!
         response = await call_next(request)
@@ -326,8 +341,7 @@ async def handle_errors(request: Request, call_next):
         exc_type, exc_value, exc_traceback = sys.exc_info()
         tb_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
         traceback_str = format_traceback(tb_details)
-        logger = Logger(request)
-        logger.log(str(exception), "ERROR", traceback=traceback_str)
+        await logger.log(str(exception), "ERROR", traceback=traceback_str)
 
     # handle response failure/success:
     if response.status_code == 500 and not str(request.url).endswith("/shutdown"):

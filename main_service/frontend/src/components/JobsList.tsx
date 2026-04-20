@@ -116,15 +116,13 @@ export const JobsList = () => {
 
   const getStatusTextClass = (status: string | null) => {
     const statusTextClasses: Record<string, string> = {
-      PENDING: "text-slate-600 dark:text-slate-300",
-      RUNNING: "text-amber-700 dark:text-amber-400",
-      FAILED: "text-rose-600 dark:text-rose-400",
-      CANCELED: "text-rose-600 dark:text-rose-400",
-      COMPLETED: "text-emerald-700 dark:text-emerald-400",
+      PENDING: "text-slate-600",
+      RUNNING: "text-amber-700",
+      FAILED: "text-rose-600",
+      CANCELED: "text-rose-600",
+      COMPLETED: "text-emerald-700",
     };
-    return status
-      ? statusTextClasses[status] || "text-slate-600 dark:text-slate-300"
-      : "text-slate-600 dark:text-slate-300";
+    return status ? statusTextClasses[status] || "text-slate-600" : "text-slate-600";
   };
 
   return (
@@ -138,7 +136,7 @@ export const JobsList = () => {
               <div className="w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin" />
             </div>
           ) : jobs.length === 0 ? (
-            <div className="text-center text-gray-500 dark:text-gray-400 py-4">No jobs</div>
+            <div className="text-center text-gray-500 py-4">No jobs</div>
           ) : (
             <>
               {/* CONTAIN OVERFLOW HERE so the PAGE doesn't get a horizontal scrollbar */}
@@ -157,9 +155,7 @@ export const JobsList = () => {
                           return (
                             <>
                               <span>Started At </span>
-                              <span className="text-s text-gray-500 dark:text-gray-400 font-normal">
-                                ({abbr})
-                              </span>
+                              <span className="text-s text-gray-500 font-normal">({abbr})</span>
                             </>
                           );
                         })()}
@@ -175,7 +171,7 @@ export const JobsList = () => {
                       return (
                         <TableRow
                           key={job.id}
-                          className="cursor-pointer hover:bg-slate-50/60 dark:hover:bg-slate-800/40"
+                          className="cursor-pointer hover:bg-slate-50/60"
                           onClick={() => navigate(`/jobs/${job.id}`)}
                           onKeyDown={(event) => {
                             if (event.key !== "Enter" && event.key !== " ") return;
@@ -198,7 +194,7 @@ export const JobsList = () => {
                           <div className="max-w-[360px] truncate">
                             <span
                               title={job.function_name ?? "Unknown"}
-                              className="text-foreground underline underline-offset-2"
+                              className="text-black underline underline-offset-2"
                             >
                               {job.function_name ?? "Unknown"}
                             </span>
@@ -210,7 +206,7 @@ export const JobsList = () => {
                             <div>
                               {successfulCount.toLocaleString()} / {job.n_inputs.toLocaleString()}
                             </div>
-                            <div className="w-full bg-gray-200 dark:bg-gray-700 rounded h-1.5 overflow-hidden">
+                            <div className="w-full bg-gray-200 rounded h-1.5 overflow-hidden">
                               <div
                                 className="bg-primary h-1.5 transition-all"
                                 style={{
@@ -263,8 +259,8 @@ export const JobsList = () => {
                   onClick={() => setPage(0)}
                   className={`px-3 py-1 rounded text-sm border ${
                     page === 0
-                      ? "bg-primary text-primary-foreground border-primary"
-                      : "bg-card text-foreground hover:bg-muted"
+                      ? "bg-primary text-primary-foreground"
+                      : "bg-white text-gray-700 hover:bg-gray-100"
                   }`}
                 >
                   1
@@ -280,8 +276,8 @@ export const JobsList = () => {
                       onClick={() => setPage(i)}
                       className={`px-3 py-1 rounded text-sm border ${
                         page === i
-                          ? "bg-primary text-primary-foreground border-primary"
-                          : "bg-card text-foreground hover:bg-muted"
+                          ? "bg-primary text-primary-foreground"
+                          : "bg-white text-gray-700 hover:bg-gray-100"
                       }`}
                     >
                       {i + 1}
@@ -295,8 +291,8 @@ export const JobsList = () => {
                     onClick={() => setPage(totalPages - 1)}
                     className={`px-3 py-1 rounded text-sm border ${
                       page === totalPages - 1
-                        ? "bg-primary text-primary-foreground border-primary"
-                        : "bg-card text-foreground hover:bg-muted"
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-white text-gray-700 hover:bg-gray-100"
                     }`}
                   >
                     {totalPages}

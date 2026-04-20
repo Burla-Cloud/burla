@@ -79,7 +79,7 @@ export const ClusterControls = ({
                     "w-32 text-white transition-all duration-300 ease-in-out shadow-md hover:shadow-xl active:shadow transform-gpu hover:-translate-y-0.5 active:translate-y-0 disabled:shadow-none",
                     isStarting || isRebooting
                         ? "bg-primary hover:bg-primary/90"
-                        : "bg-primary hover:bg-primary/90 disabled:bg-gray-400 dark:disabled:bg-gray-600",
+                        : "bg-primary hover:bg-primary/90 disabled:bg-gray-400",
                     highlightStart &&
                         !isOn &&
                         !isStartDisabled &&

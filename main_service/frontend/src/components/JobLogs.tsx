@@ -534,7 +534,7 @@ const JobLogs = ({
         <div className="flex items-center justify-between mb-3">
           <h2 className="text-lg font-semibold text-primary">Logs</h2>
         </div>
-        <div className="text-[14.5px] text-foreground text-center p-4">
+        <div className="text-[14.5px] text-gray-800 text-center p-4">
           Logs are hidden on small screens.
         </div>
       </div>
@@ -543,8 +543,8 @@ const JobLogs = ({
 
   const iconBtnClass = (disabled: boolean) =>
     disabled
-      ? "h-8 w-8 grid place-items-center rounded-md border border-border bg-card opacity-50 cursor-default"
-      : "h-8 w-8 grid place-items-center rounded-md border border-border bg-card hover:bg-muted active:bg-muted/80";
+      ? "h-8 w-8 grid place-items-center rounded-md border border-gray-200 bg-white opacity-50 cursor-default"
+      : "h-8 w-8 grid place-items-center rounded-md border border-gray-200 bg-white hover:bg-gray-50 active:bg-gray-100";
   const failedPosition = useMemo(() => {
     if (!showFailedOnly) return 0;
     const pos = activeFailedIndexes.indexOf(selectedIndex);
@@ -568,12 +568,12 @@ const JobLogs = ({
   ]);
   const failedPillClass =
     !hasLoadedFailedCount
-      ? "border-border bg-card text-foreground"
+      ? "border-gray-200 bg-white text-gray-800"
       : effectiveFailedCount === 0
-      ? "border-border bg-card text-foreground"
+      ? "border-gray-200 bg-white text-gray-800"
       : stepperDisabled
-      ? "border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950/30 text-foreground"
-      : "border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950/30 text-foreground";
+      ? "border-red-200 bg-red-50 text-gray-800"
+      : "border-red-200 bg-red-50 text-gray-800";
   const isHasLogsLoading = showIndexesWithLogsOnly && stepperDisabled;
 
   useEffect(() => {
@@ -581,9 +581,9 @@ const JobLogs = ({
   }, [selectedIndex]);
 
   return (
-    <div className="mt-0 mb-0 flex flex-col flex-1 min-h-0 text-[14.5px] font-normal text-foreground">
-      <div className="flex flex-1 min-h-0 flex-col rounded-lg border border-border bg-card shadow-sm overflow-hidden">
-        <div className="flex items-center justify-between gap-3 border-b border-border bg-muted/30 px-3 py-1.5">
+    <div className="mt-0 mb-0 flex flex-col flex-1 min-h-0 text-[14.5px] font-normal text-gray-800">
+      <div className="flex flex-1 min-h-0 flex-col rounded-lg border border-gray-200 bg-white shadow-sm overflow-hidden">
+        <div className="flex items-center justify-between gap-3 border-b border-gray-200 bg-gray-50 px-3 py-1.5">
           <div className="flex items-center gap-2.5">
             <label className="text-[13px] tabular-nums whitespace-nowrap flex items-center gap-1.5">
               <span>Index</span>
@@ -602,7 +602,7 @@ const JobLogs = ({
                   event.preventDefault();
                   goToCustomIndex();
                 }}
-                className="h-8 rounded-md border border-border bg-background px-1 text-[14.5px] font-normal tabular-nums text-foreground [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                className="h-8 rounded-md border border-gray-200 bg-white px-1 text-[14.5px] font-normal tabular-nums text-gray-800 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
                 style={{ width: `${Math.max(2, totalIndexesCountDigits) + 1}ch` }}
                 aria-label="Current index"
                 disabled={isHasLogsSyncing}
@@ -636,7 +636,7 @@ const JobLogs = ({
               </button>
             </div>
 
-            <div className="h-6 w-px bg-border" aria-hidden="true" />
+            <div className="h-6 w-px bg-gray-200" aria-hidden="true" />
 
             <label className="flex items-center gap-2 text-[13px] select-none">
               <Switch
@@ -662,7 +662,7 @@ const JobLogs = ({
               <span className="whitespace-nowrap">Has logs</span>
             </label>
 
-            <div className="h-6 w-px bg-border" aria-hidden="true" />
+            <div className="h-6 w-px bg-gray-200" aria-hidden="true" />
 
             <label className="flex items-center gap-2 text-[13px] select-none">
               <Switch
@@ -703,12 +703,12 @@ const JobLogs = ({
           </Button>
         )}
 
-      <div className="flex-1 min-h-0 relative font-mono text-[13px] font-normal text-foreground bg-card">
+      <div className="flex-1 min-h-0 relative font-mono text-[13px] font-normal text-gray-800 bg-white">
         {isHasLogsLoading && !isPageLoading && (
-          <div className="absolute inset-0 z-20 flex items-center justify-center bg-card/75">
-            <div className="flex flex-col items-center text-foreground">
+          <div className="absolute inset-0 z-20 flex items-center justify-center bg-white/75">
+            <div className="flex flex-col items-center text-gray-800">
               <div
-                className="h-6 w-6 rounded-full border-2 border-border border-t-primary animate-spin"
+                className="h-6 w-6 rounded-full border-2 border-gray-300 border-t-primary animate-spin"
                 role="status"
                 aria-label="Loading logs"
               />
@@ -718,9 +718,9 @@ const JobLogs = ({
         )}
         {isPageLoading ? (
           <div ref={containerRef} className="h-full w-full flex items-center justify-center">
-            <div className="flex flex-col items-center text-foreground">
+            <div className="flex flex-col items-center text-gray-800">
               <div
-                className="h-6 w-6 rounded-full border-2 border-border border-t-primary animate-spin"
+                className="h-6 w-6 rounded-full border-2 border-gray-300 border-t-primary animate-spin"
                 role="status"
                 aria-label="Loading logs"
               />
@@ -730,13 +730,13 @@ const JobLogs = ({
         ) : (
           <div ref={containerRef} className="text-[13px] h-full relative">
             {isLoadingOlderLogs && (
-              <div className="absolute top-0 left-0 right-0 z-10 flex items-center justify-center gap-2 border-b border-border bg-card/95 py-2">
+              <div className="absolute top-0 left-0 right-0 z-10 flex items-center justify-center gap-2 border-b border-gray-200 bg-white/95 py-2">
                 <div
-                  className="h-4 w-4 rounded-full border-2 border-border border-t-primary animate-spin"
+                  className="h-4 w-4 rounded-full border-2 border-gray-300 border-t-primary animate-spin"
                   role="status"
                   aria-label="Loading older logs"
                 />
-                <span className="text-[13px] text-foreground">Loading older logs…</span>
+                <span className="text-[13px] text-gray-800">Loading older logs…</span>
               </div>
             )}
             <List
@@ -781,11 +781,11 @@ const JobLogs = ({
                       aria-label={`Logs for ${row.label}`}
                     >
                       <div className="w-full flex items-center gap-3 select-none">
-                        <div className="h-px w-full bg-border" aria-hidden="true" />
-                        <span className="shrink-0 text-center text-[13px] font-normal tracking-tight text-foreground">
+                        <div className="h-px w-full bg-gray-200" aria-hidden="true" />
+                        <span className="shrink-0 text-center text-[13px] font-normal tracking-tight text-gray-800">
                           {row.label}
                         </span>
-                        <div className="h-px w-full bg-border" aria-hidden="true" />
+                        <div className="h-px w-full bg-gray-200" aria-hidden="true" />
                       </div>
                     </div>
                   );
@@ -799,7 +799,7 @@ const JobLogs = ({
                   );
                 }
 
-                const background = index % 2 === 0 ? "bg-muted/30" : "";
+                const background = index % 2 === 0 ? "bg-gray-50" : "";
 
                 return (
                   <div key={row.key} style={style}>
@@ -812,7 +812,7 @@ const JobLogs = ({
                           setSizeForKey(row.id, h, index);
                         });
                       }}
-                      className={`grid grid-cols-[8rem,1fr] gap-2 px-4 py-2 border-t border-border transition ${background}`}
+                      className={`grid grid-cols-[8rem,1fr] gap-2 px-4 py-2 border-t border-gray-200 transition ${background}`}
                     >
                       <div className="text-left tabular-nums">
                         {formatTime(row.logTimestamp)}

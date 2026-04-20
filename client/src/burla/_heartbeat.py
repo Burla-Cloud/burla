@@ -1,10 +1,32 @@
 import asyncio
-import aiohttp
-from time import time
+import subprocess
+import sys
+import textwrap
 from asyncio import create_task
+from time import time
+
+import aiohttp
+import cloudpickle
 
 from burla._auth import get_auth_headers
-from burla._helpers import get_db_clients
+from burla._helpers import SuppressNativeStderr, get_db_clients
+
+
+async def run_in_subprocess(func, *args):
+    # I do it like this so it works in google colab, multiprocesing doesn't
+    code = textwrap.dedent(
+        """
+        import sys, cloudpickle
+        func, args = cloudpickle.load(sys.stdin.buffer)
+        func(*args)
+        """
+    )
+    cmd = [sys.executable, "-u", "-c", code]
+    with SuppressNativeStderr():
+        process = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
+    process.stdin.write(cloudpickle.dumps((func, args)))
+    process.stdin.close()
+    return process
 
 
 async def _send_node_pings(session: aiohttp.ClientSession, node_host: str, headers: dict):

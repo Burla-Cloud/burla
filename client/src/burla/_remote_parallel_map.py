@@ -20,13 +20,12 @@ from yaspin import Spinner, yaspin
 
 from burla import CONFIG_PATH, __version__
 from burla._auth import get_auth_headers
-from burla._background_stuff import send_alive_pings
+from burla._heartbeat import run_in_subprocess, send_alive_pings
 from burla._helpers import (
     get_db_clients,
     get_modules_required_on_remote,
     install_signal_handlers,
     restore_signal_handlers,
-    run_in_subprocess,
 )
 from burla._node import (
     AllNodesBusy,

@@ -4,13 +4,11 @@ import sys
 import sysconfig
 import signal
 import subprocess
-import textwrap
 import logging
 import types
 from typing import Union
 from threading import Event
 
-import cloudpickle
 from yaspin import Spinner
 from google.cloud.firestore_v1 import AsyncClient
 
@@ -66,23 +64,6 @@ class SuppressNativeStderr:
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         return self.__exit__(exc_type, exc_val, exc_tb)
-
-
-async def run_in_subprocess(func, *args):
-    # I do it like this so it works in google colab, multiprocesing doesn't
-    code = textwrap.dedent(
-        """
-        import sys, cloudpickle
-        func, args = cloudpickle.load(sys.stdin.buffer)
-        func(*args)
-        """
-    )
-    cmd = [sys.executable, "-u", "-c", code]
-    with SuppressNativeStderr():
-        process = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
-    process.stdin.write(cloudpickle.dumps((func, args)))
-    process.stdin.close()
-    return process
 
 
 def parallelism_capacity(machine_type: str, func_cpu: int, func_ram: int):

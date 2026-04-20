@@ -1,6 +1,7 @@
 import asyncio
 import os
 import pickle
+import signal
 import socket
 import time
 import traceback
@@ -201,6 +202,7 @@ class WorkerClient:
         self.writer = None
         self.process_inputs_task = None
         self.log_writer = None
+        self.worker_host_pid = None
 
     def _worker_server_host_path(self):
         if IN_LOCAL_DEV_MODE:
@@ -240,6 +242,8 @@ class WorkerClient:
 
         host_config["Binds"] = binds
 
+        # Shell loop keeps PID 1 alive so os.killpg against worker_server.py's process group from
+        # the host only restarts Python, not the whole container. sleep 0.1 guards a crash loop.
         command = [
             "sh",
             "-lc",
@@ -247,7 +251,7 @@ class WorkerClient:
                 "export PYTHONUNBUFFERED=1; "
                 "export PYTHONPATH=/worker_service_python_env; "
                 'export PATH="/worker_service_python_env/bin:$PATH"; '
-                f"exec python /opt/burla/worker_server.py {WORKER_INTERNAL_PORT}"
+                f"while true; do python /opt/burla/worker_server.py {WORKER_INTERNAL_PORT}; sleep 0.1; done"
             ),
         ]
 
@@ -268,6 +272,14 @@ class WorkerClient:
                 return int(port_info[0]["HostPort"])
             await asyncio.sleep(0.5)
         raise RuntimeError(f"Failed to get port for container {self.container_name} in 10s")
+
+    async def _get_worker_host_pid(self) -> int:
+        # container.top() returns host PIDs of every process running in the container.
+        top = await self.container.top()
+        for row in top.get("Processes", []):
+            if "worker_server.py" in row[-1]:
+                return int(row[1])
+        raise RuntimeError(f"worker_server.py not found in {self.container_name}")
 
     async def _get_python_version(self):
         for _ in range(20):
@@ -337,6 +349,8 @@ class WorkerClient:
                 await asyncio.sleep(0.1)
         self.is_idle = True
         self.logstream_task = asyncio.create_task(self._handle_container_logs())
+        if not IN_LOCAL_DEV_MODE:
+            self.worker_host_pid = await self._get_worker_host_pid()
 
     async def _raise_if_worker_failed(self):
         for _ in range(10):
@@ -467,9 +481,6 @@ class WorkerClient:
         self.is_idle = True
 
     async def _reconnect(self):
-        # aiodocker caches NetworkSettings; restart reassigns the host port so we force a refresh.
-        await self.container.show()
-        self.port = WORKER_INTERNAL_PORT if IN_LOCAL_DEV_MODE else await self._get_host_port()
         reconnect_started_at = time.perf_counter()
         while True:
             try:
@@ -515,17 +526,22 @@ class WorkerClient:
         if self.log_writer is not None:
             await self.log_writer.stop()
             self.log_writer = None
-        t_before_restart = time.time()
-        await self.container.restart(t=0)
-        t_after_restart = time.time()
+        t_before_kill = time.time()
+        if IN_LOCAL_DEV_MODE:
+            await self.container.restart(t=0)
+        else:
+            os.killpg(self.worker_host_pid, signal.SIGKILL)
+        t_after_kill = time.time()
         await self._reconnect()
         t_after_reconnect = time.time()
+        if not IN_LOCAL_DEV_MODE:
+            self.worker_host_pid = await self._get_worker_host_pid()
         msg = (
             f"[TIMING] _restart_container worker={self.container_name} "
             f"setup={t_before_log_stop - t0:.3f}s "
-            f"log_stop={t_before_restart - t_before_log_stop:.3f}s "
-            f"restart={t_after_restart - t_before_restart:.3f}s "
-            f"reconnect={t_after_reconnect - t_after_restart:.3f}s "
+            f"log_stop={t_before_kill - t_before_log_stop:.3f}s "
+            f"kill={t_after_kill - t_before_kill:.3f}s "
+            f"reconnect={t_after_reconnect - t_after_kill:.3f}s "
             f"total={t_after_reconnect - t0:.3f}s"
         )
         await logger.log(msg)

@@ -46,7 +46,6 @@ if not shutil.which("uv"):
 try:
     import cloudpickle
     from tblib import Traceback
-    import burla
 except ImportError:
     subprocess.run(
         [
@@ -59,7 +58,6 @@ except ImportError:
             "/worker_service_python_env",
             "cloudpickle",
             "tblib",
-            "burla",
         ],
         check=True,
     )

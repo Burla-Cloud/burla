@@ -310,7 +310,6 @@ class WorkerClient:
         await self._start_container()
         self.python_version = await self._get_python_version()
         self.port = WORKER_INTERNAL_PORT if IN_LOCAL_DEV_MODE else await self._get_host_port()
-        await asyncio.sleep(0.5)
         boot_started_at = time.perf_counter()
         while True:
             try:
@@ -467,6 +466,32 @@ class WorkerClient:
             self.log_writer = None
         self.is_idle = True
 
+    async def _reconnect(self):
+        self.port = WORKER_INTERNAL_PORT if IN_LOCAL_DEV_MODE else await self._get_host_port()
+        reconnect_started_at = time.perf_counter()
+        while True:
+            try:
+                connection_host = self.container_name if IN_LOCAL_DEV_MODE else "127.0.0.1"
+                connection_port = WORKER_INTERNAL_PORT if IN_LOCAL_DEV_MODE else self.port
+                self.reader, self.writer = await asyncio.open_connection(
+                    connection_host, connection_port
+                )
+                worker_socket = self.writer.get_extra_info("socket")
+                worker_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                self.writer.write(b"s")
+                await self.writer.drain()
+                await self.reader.readexactly(1)
+                break
+            except (ConnectionRefusedError, ConnectionResetError, asyncio.IncompleteReadError):
+                if self.writer is not None:
+                    self.writer.close()
+                    self.writer = None
+                if time.perf_counter() - reconnect_started_at > 15:
+                    raise _worker_boot_timeout_error(await self._get_logs())
+                await asyncio.sleep(0.05)
+        self.is_idle = True
+        self.logstream_task = asyncio.create_task(self._handle_container_logs())
+
     async def _restart_container(self, logger: Logger):
         t0 = time.time()
         if self.writer is not None:
@@ -488,23 +513,18 @@ class WorkerClient:
         if self.log_writer is not None:
             await self.log_writer.stop()
             self.log_writer = None
-        t_before_delete = time.time()
-        try:
-            await self.container.delete(force=True)
-        except Exception:
-            pass
-        t_after_delete = time.time()
-        self.container = None
-        self.container_id = None
-        await self.boot()
-        t_after_boot = time.time()
+        t_before_restart = time.time()
+        await self.container.restart(t=0)
+        t_after_restart = time.time()
+        await self._reconnect()
+        t_after_reconnect = time.time()
         msg = (
             f"[TIMING] _restart_container worker={self.container_name} "
             f"setup={t_before_log_stop - t0:.3f}s "
-            f"log_stop={t_before_delete - t_before_log_stop:.3f}s "
-            f"delete={t_after_delete - t_before_delete:.3f}s "
-            f"boot={t_after_boot - t_after_delete:.3f}s "
-            f"total={t_after_boot - t0:.3f}s"
+            f"log_stop={t_before_restart - t_before_log_stop:.3f}s "
+            f"restart={t_after_restart - t_before_restart:.3f}s "
+            f"reconnect={t_after_reconnect - t_after_restart:.3f}s "
+            f"total={t_after_reconnect - t0:.3f}s"
         )
         await logger.log(msg)
 

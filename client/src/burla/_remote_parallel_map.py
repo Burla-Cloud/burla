@@ -1,5 +1,4 @@
 import asyncio
-import json
 import random
 import sys
 import traceback
@@ -15,14 +14,12 @@ from uuid import uuid4
 
 import aiohttp
 import cloudpickle
-from google.cloud.firestore import ArrayUnion
 from yaspin import Spinner, yaspin
 
-from burla import CONFIG_PATH, __version__
-from burla._auth import get_auth_headers
+from burla import __version__
+from burla._cluster_client import ClusterClient, NodesBusy, _local_host_from
 from burla._heartbeat import run_in_subprocess, send_alive_pings
 from burla._helpers import (
-    get_db_clients,
     get_modules_required_on_remote,
     install_signal_handlers,
     restore_signal_handlers,
@@ -31,15 +28,15 @@ from burla._node import (
     AllNodesBusy,
     ClusterRestarted,
     ClusterShutdown,
-    FirestoreTimeout,
     JobCanceled,
+    MainServiceTimeout,
     Node,
     NoCompatibleNodes,
     NoNodes,
     NodeDisconnected,
     UnauthorizedError,
     VersionMismatch,
-    select_nodes_to_assign_to_job,
+    wait_for_nodes_to_be_ready,
 )
 from burla._reporting import RemoteParallelMapReporter, log_job_failure_telemetry
 
@@ -47,15 +44,6 @@ from burla._reporting import RemoteParallelMapReporter, log_job_failure_telemetr
 PKG_MODULE_MAPPING = metadata.packages_distributions()
 
 BANNED_PACKAGES = ["ipython", "burla", "google-colab"]
-
-# This is here to remind myself why I SHOULDN'T do it (at least for now):
-# If I warm up the connections on import like below, then RPM calls that are right next to each
-# other, cause GRPC issues. This is possible to fix but not a priority right now.
-# try:
-#     SYNC_DB, ASYNC_DB = get_db_clients()
-# except:
-#     SYNC_DB, ASYNC_DB = None, None
-
 
 class FunctionTooBig(Exception):
     def __init__(self, function_name: str):
@@ -76,36 +64,10 @@ EXEC_TYPES_TO_NOT_ALERT = [
     ClusterShutdown,
     VersionMismatch,
     FunctionTooBig,
-    FirestoreTimeout,
+    MainServiceTimeout,
     UnauthorizedError,
     KeyboardInterrupt,
 ]
-
-
-async def _grow_cluster(
-    current_cpus: int, missing_cpus: int, job_id: str, session, async_db, spinner
-) -> list[Node]:
-    request_json = {"current_cpus": current_cpus, "missing_cpus": missing_cpus, "job_id": job_id}
-    auth_headers = get_auth_headers()
-    main_service_url = json.loads(CONFIG_PATH.read_text())["cluster_dashboard_url"]
-    url = f"{main_service_url}/v1/cluster/grow"
-    async with await session.post(url, json=request_json, headers=auth_headers) as response:
-        if response.status == 200:
-            response_json = await response.json()
-            names = response_json["added_node_instance_names"]
-            if len(names) == 0:
-                return []
-            target_parallelism_per_node = max(1, missing_cpus // len(names))
-            node_kw = dict(
-                target_parallelism=target_parallelism_per_node,
-                session=session,
-                async_db=async_db,
-                spinner=spinner,
-            )
-            return [Node.from_booting(name, **node_kw) for name in names]
-        if response.status == 401:
-            raise UnauthorizedError()
-        raise Exception(f"Failed to grow cluster: {response.status}")
 
 
 async def _execute_job_wrapped(*args, **kwargs):
@@ -151,8 +113,7 @@ async def _execute_job(
     session_stack: AsyncExitStack,
     reporter: RemoteParallelMapReporter,
 ):
-    auth_headers = get_auth_headers()
-    sync_db, async_db = get_db_clients()
+    client = ClusterClient(session)
 
     if background:
         reporter.print_detach_mode_enabled_message()
@@ -163,66 +124,77 @@ async def _execute_job(
     if function_size_gb > 0.1:
         raise FunctionTooBig(function_.__name__)
 
-    try:
-        nodes, target_parallelism = await select_nodes_to_assign_to_job(
-            db=async_db,
-            max_parallelism=max_parallelism,
-            func_cpu=func_cpu,
-            func_ram=func_ram,
-            spinner=spinner,
+    # Single round-trip: picks nodes from the server's in-memory cache,
+    # grows the cluster if `grow=True` and capacity falls short, writes the
+    # job doc, and returns the nodes + booting names. Replaces what used to
+    # be three separate HTTP calls here.
+    start_job_config = {
+        "n_inputs": len(inputs),
+        "func_cpu": func_cpu,
+        "func_ram": func_ram,
+        "max_parallelism": max_parallelism,
+        "packages": packages,
+        "user_python_version": f"3.{sys.version_info.minor}",
+        "burla_client_version": __version__,
+        "function_name": function_.__name__,
+        "function_size_gb": function_size_gb,
+        "started_at": start_time,
+        "is_background_job": background,
+        "grow": grow,
+    }
+    # On 503 nodes_busy, show boot progress via the polling loop then try
+    # once more. Any other known error surfaces as its domain exception
+    # (VersionMismatch, NoCompatibleNodes, NoNodes, UnauthorizedError).
+    for attempt in range(2):
+        try:
+            response = await client.start_job(job_id, start_job_config)
+            break
+        except NodesBusy:
+            if attempt == 1:
+                raise AllNodesBusy()
+            await wait_for_nodes_to_be_ready(client=client, spinner=spinner)
+
+    target_parallelism = int(response.get("target_parallelism") or 0)
+    ready_nodes = [
+        Node.from_ready(
+            instance_name=node_data["instance_name"],
+            host=_local_host_from(node_data["host"]),
+            machine_type=node_data["machine_type"],
+            target_parallelism=int(node_data["target_parallelism"]),
             session=session,
+            client=client,
+            spinner=spinner,
         )
-    except (NoNodes, NoCompatibleNodes, AllNodesBusy):
-        nodes, target_parallelism = [], 0
-        if not grow:
-            raise
+        for node_data in response.get("ready_nodes", [])
+    ]
 
+    booting_names = response.get("booting_node_names", [])
     booting_nodes = []
-    if grow:
-        # assuming static 1:4 cpu/ram ratio, how many more cpus do we need?
-        requested_parallelism = min(len(inputs), max_parallelism)
-        required_cpus_for_ram = (func_ram + 3) // 4
-        required_cpus_per_function_call = max(func_cpu, required_cpus_for_ram)
-        target_cpus = requested_parallelism * required_cpus_per_function_call
-        current_cpus = target_parallelism * required_cpus_per_function_call
-        missing_cpus = max(0, target_cpus - current_cpus)
-        if missing_cpus > 0:
-            booting_nodes = await _grow_cluster(
-                current_cpus,
-                missing_cpus,
-                job_id,
-                session,
-                async_db,
-                spinner,
+    if booting_names:
+        # Growth-budget per booting node: evenly split the remaining parallelism.
+        per_node_parallelism = max(
+            1,
+            (target_parallelism or len(booting_names)) // max(1, len(booting_names)),
+        )
+        booting_nodes = [
+            Node.from_booting(
+                instance_name=name,
+                target_parallelism=per_node_parallelism,
+                session=session,
+                client=client,
+                spinner=spinner,
             )
-            nodes.extend(booting_nodes)
-            if len(booting_nodes) > 0:
-                reporter.set_booting_nodes_message(len(booting_nodes))
-            elif len(nodes) == 0:
-                raise NoNodes("Cluster refused to boot required additional nodes ...")
+            for name in booting_names
+        ]
 
-    sync_job_ref = sync_db.collection("jobs").document(job_id)
-    async_job_ref = async_db.collection("jobs").document(job_id)
-    await async_job_ref.set(
-        {
-            "n_inputs": len(inputs),
-            "func_cpu": func_cpu,
-            "func_ram": func_ram,
-            "packages": packages,
-            "status": "RUNNING",
-            "burla_client_version": __version__,
-            "user_python_version": f"3.{sys.version_info.minor}",
-            "target_parallelism": target_parallelism,  # <- live: n-nodes * target_parallelism/node
-            "user": auth_headers["X-User-Email"],
-            "function_name": function_.__name__,
-            "function_size_gb": function_size_gb,
-            "started_at": start_time,
-            "is_background_job": background,
-            "all_inputs_uploaded": False,
-            "client_has_all_results": False,
-            "fail_reason": [],
-        }
-    )
+    nodes = ready_nodes + booting_nodes
+    if booting_nodes:
+        reporter.set_booting_nodes_message(len(booting_nodes))
+    elif not nodes:
+        # grow=True but main_service returned no booting names (cap hit) AND
+        # no ready nodes - equivalent to the old "Cluster refused to boot"
+        # branch.
+        raise NoNodes("Cluster refused to boot required additional nodes ...")
 
     job_start_telemetry_task = create_task(reporter.log_job_start_telemetry(nodes, packages))
     session_stack.callback(job_start_telemetry_task.cancel)
@@ -267,7 +239,10 @@ async def _execute_job(
                 exception = task.exception() if task.done() else None
                 exception = NodeDisconnected(node) if node.state == "FAILED" else exception
                 if exception:
-                    job_dict = sync_job_ref.get().to_dict() or {}
+                    # Authoritative check via main_service: if main_service has
+                    # already written a lifecycle signal on the job doc, raise
+                    # that instead of the bare infrastructure exception.
+                    job_dict = await client.get_job(job_id) or {}
                     if job_dict.get("cluster_shutdown"):
                         raise ClusterShutdown()
                     if job_dict.get("cluster_restarted"):
@@ -292,7 +267,7 @@ async def _execute_job(
 
             if len(inputs_with_indicies) == 0 and not inputs_done_event.is_set():
                 inputs_done_event.set()
-                await async_job_ref.update({"all_inputs_uploaded": True})
+                await client.patch_job(job_id, {"all_inputs_uploaded": True})
                 if background:
                     reporter.print_inputs_done_message()
 
@@ -313,7 +288,7 @@ async def _execute_job(
             reporter.log_job_success_telemetry(time() - start_time)
         )
         session_stack.callback(job_success_telemetry_task.cancel)
-        await async_job_ref.update({"client_has_all_results": True})
+        await client.patch_job(job_id, {"client_has_all_results": True})
     finally:
         [task.cancel() for task in node_tasks]
 
@@ -532,17 +507,16 @@ def remote_parallel_map(
         if spinner:
             spinner.stop()
 
-        SYNC_DB, _ = get_db_clients()
-
-        # After a `FirestoreTimeout` further attempts to use firestore will take forever then fail.
-        if not (isinstance(e, FirestoreTimeout) or background):
-            try:
-                sync_job_ref = SYNC_DB.collection("jobs").document(job_id)
-                if sync_job_ref.get().to_dict()["status"] != "CANCELED":
-                    msg = f"client exception: {e}"
-                    sync_job_ref.update({"status": "FAILED", "fail_reason": ArrayUnion([msg])})
-            except Exception:
-                pass
+        # Best-effort: record the failure on the job doc via main_service.
+        # main_service's PATCH will apply the FAILED status + ArrayUnion
+        # atomically, so no read-then-write is needed. A MainServiceTimeout
+        # means main_service itself is unreachable, so skip the write.
+        if not (isinstance(e, MainServiceTimeout) or background):
+            ClusterClient.patch_job_sync(
+                job_id,
+                updates={"status": "FAILED"},
+                append_fail_reason=f"client exception: {e}",
+            )
 
         # Report errors back to Burla's cloud.
         if not udf_error_event.is_set():

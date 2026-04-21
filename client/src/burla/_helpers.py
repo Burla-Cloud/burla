@@ -1,80 +1,24 @@
 import json
 import os
 import sys
-import sysconfig
 import signal
 import subprocess
-import logging
 import types
 from typing import Union
 from threading import Event
 
 from yaspin import Spinner
-from google.cloud.firestore_v1 import AsyncClient
 
 from burla import CONFIG_PATH
 
-TOKEN_URI = "https://oauth2.googleapis.com/token"
-
-N_FOUR_STANDARD_CPU_TO_RAM = {1: 4, 2: 8, 4: 16, 8: 32, 16: 64, 32: 128, 48: 192, 64: 256, 80: 320}
 POSIX_SIGNALS_TO_HANDLE = ["SIGINT", "SIGTERM", "SIGHUP", "SIGQUIT"]
 NT_SIGNALS_TO_HANDLE = ["SIGINT", "SIGBREAK"]
 _signal_names_to_handle = POSIX_SIGNALS_TO_HANDLE if os.name == "posix" else NT_SIGNALS_TO_HANDLE
 SIGNALS_TO_HANDLE = [getattr(signal, s) for s in _signal_names_to_handle]
 
-# throws some uncatchable, unimportant, warnings
-logging.getLogger("google.api_core.bidi").setLevel(logging.ERROR)
-# prevent some annoying grpc logs / warnings
-os.environ["GRPC_VERBOSITY"] = "ERROR"  # only log ERROR/FATAL
-os.environ["GLOG_minloglevel"] = "3"  # 0-INFO, 1-WARNING, 2-ERROR, 3-FATAL
-os.environ["GRPC_ENABLE_FORK_SUPPORT"] = "1"  # avoid fork() handler warnings
-
-# needs to be imported after ^
-from google.cloud.firestore import Client
-from google.cloud.firestore import ArrayUnion
-from google.cloud.firestore_v1.async_client import AsyncClient
-from google.oauth2 import service_account
-
 
 class GoogleLoginError(Exception):
     pass
-
-
-class SuppressNativeStderr:
-    """Temporarily silence C/C++ library logs that write directly to stderr.
-
-    Used to suppress one-time gRPC/ALTS noise during Firestore channel setup.
-    """
-
-    def __enter__(self):
-        # Duplicate FD 2 (stderr) directly to tolerate environments without a true sys.stderr fd.
-        self._stderr_fd_copy = os.dup(2)
-        self._devnull = open(os.devnull, "w")
-        os.dup2(self._devnull.fileno(), 2)
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        os.dup2(self._stderr_fd_copy, 2)
-        os.close(self._stderr_fd_copy)
-        self._devnull.close()
-        return False
-
-    async def __aenter__(self):
-        return self.__enter__()
-
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        return self.__exit__(exc_type, exc_val, exc_tb)
-
-
-def parallelism_capacity(machine_type: str, func_cpu: int, func_ram: int):
-    # Max number of workers this machine_type can run a job with the given resource requirements?
-    if machine_type.startswith("n4-standard") and machine_type.split("-")[-1].isdigit():
-        vm_cpu = int(machine_type.split("-")[-1])
-        vm_ram = N_FOUR_STANDARD_CPU_TO_RAM[vm_cpu]
-        return min(vm_cpu // func_cpu, vm_ram // func_ram)
-    elif machine_type.startswith("a") and machine_type.endswith("g"):
-        return 1
-    raise ValueError(f"machine_type must be: n4-standard-X, a3-highgpu-Xg, or a3-ultragpu-8g")
 
 
 def restore_signal_handlers(original_signal_handlers):
@@ -110,21 +54,6 @@ def run_command(command, raise_error=True):
         return result
 
 
-def get_db_clients():
-    config = json.loads(CONFIG_PATH.read_text())
-    key = config["client_svc_account_key"]
-    scopes = ["https://www.googleapis.com/auth/datastore"]
-    credentials = service_account.Credentials.from_service_account_info(key, scopes=scopes)
-
-    # Silence native gRPC setup logs (e.g., ALTS creds ignored) that can appear once per process.
-    # this seems to actually work and is NOT a forgotten failed attempt.
-    with SuppressNativeStderr():
-        kwargs = dict(project=config["project_id"], credentials=credentials, database="burla")
-        async_db = AsyncClient(**kwargs)
-        sync_db = Client(**kwargs)
-    return sync_db, async_db
-
-
 def install_signal_handlers(
     job_id: str,
     background: bool,
@@ -132,6 +61,11 @@ def install_signal_handlers(
     terminal_cancel_event: Event,
     inputs_done_event: Event,
 ):
+    # Lazy import: `_cluster_client` imports `_auth`, which imports `_helpers`
+    # (for `run_command`). Deferring this import to signal-handler install
+    # time sidesteps that cycle.
+    from burla._cluster_client import ClusterClient
+
     def _signal_handler(signum, frame):
         if terminal_cancel_event.is_set():
             return
@@ -146,13 +80,14 @@ def install_signal_handlers(
             fail_reason = "Cancel signal from client."
 
         if job_failed:
-            try:
-                sync_db, _ = get_db_clients()
-                job_doc = sync_db.collection("jobs").document(job_id)
-                if job_doc.get().to_dict()["status"] != "CANCELED":
-                    job_doc.update({"status": "CANCELED", "fail_reason": ArrayUnion([fail_reason])})
-            except Exception:
-                pass
+            # Best effort - if main_service is unreachable the node will still
+            # detect the disconnect via its own job-doc liveness check and the
+            # client exits either way.
+            ClusterClient.patch_job_sync(
+                job_id,
+                updates={"status": "CANCELED"},
+                append_fail_reason=fail_reason,
+            )
 
         if background and inputs_done_event.is_set():
             main_service_url = json.loads(CONFIG_PATH.read_text())["cluster_dashboard_url"]

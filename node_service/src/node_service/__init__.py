@@ -4,6 +4,7 @@ import json
 import inspect
 import asyncio
 import traceback
+from collections import deque
 from uuid import uuid4
 from time import time
 from typing import Callable
@@ -52,6 +53,13 @@ CLUSTER_ID_TOKEN = response.payload.data.decode("UTF-8")
 from node_service.helpers import ResultsEndpointFilter, Logger, SizedQueue
 
 
+# Upper bound on how many UDF log documents we'll buffer in memory
+# between /results polls. If the client stops polling this caps
+# memory usage at ~20k docs (<= 2 GB given the 100 KB per-doc cap
+# enforced in worker_client.py).
+MAX_PENDING_LOGS = 20_000
+
+
 # SELF = state of this current instance of the node service
 def REINIT_SELF(SELF):
     SELF["workers"] = []
@@ -71,7 +79,7 @@ def REINIT_SELF(SELF):
     SELF["all_inputs_uploaded"] = False
     SELF["num_results_received"] = 0
     SELF["pending_transfers"] = {}
-    SELF["pending_logs"] = []
+    SELF["pending_logs"] = deque(maxlen=MAX_PENDING_LOGS)
     SELF["pending_cluster_shutdown"] = False
     SELF["pending_cluster_restarted"] = False
     SELF["pending_dashboard_canceled"] = False
@@ -169,21 +177,18 @@ async def shutdown_if_idle_for_too_long(logger: Logger):
     if snapshot.exists and snapshot.to_dict().get("status") != "FAILED":
         await node_doc.update({"status": "DELETED", "ended_at": time()})
 
-    if not IN_LOCAL_DEV_MODE:
-        msg = f"Node has been idle for {INACTIVITY_SHUTDOWN_TIME_SEC // 60} minutes.\n"
-        msg += f"SHUTTING DOWN NODE {INSTANCE_NAME} DUE TO INACTIVITY."
-        await logger.log(msg, severity="WARNING")
+    msg = f"Node has been idle for {INACTIVITY_SHUTDOWN_TIME_SEC // 60} minutes.\n"
+    msg += f"SHUTTING DOWN NODE {INSTANCE_NAME} DUE TO INACTIVITY."
+    await logger.log(msg, severity="WARNING")
 
-        instance_client = InstancesClient()
-        silly_response = instance_client.aggregated_list(project=PROJECT_ID)
-        vms_per_zone = [getattr(vms_in_zone, "instances", []) for _, vms_in_zone in silly_response]
-        vms = [vm for vms_in_zone in vms_per_zone for vm in vms_in_zone]
-        vm = next((vm for vm in vms if vm.name == INSTANCE_NAME), None)
-        if vm:
-            zone = vm.zone.split("/")[-1]
-            instance_client.delete(project=PROJECT_ID, zone=zone, instance=INSTANCE_NAME)
-    else:
-        await logger.log(f"Would have deleted vm due to inactivity here! {INSTANCE_NAME}")
+    instance_client = InstancesClient()
+    silly_response = instance_client.aggregated_list(project=PROJECT_ID)
+    vms_per_zone = [getattr(vms_in_zone, "instances", []) for _, vms_in_zone in silly_response]
+    vms = [vm for vms_in_zone in vms_per_zone for vm in vms_in_zone]
+    vm = next((vm for vm in vms if vm.name == INSTANCE_NAME), None)
+    if vm:
+        zone = vm.zone.split("/")[-1]
+        instance_client.delete(project=PROJECT_ID, zone=zone, instance=INSTANCE_NAME)
 
 
 @asynccontextmanager
@@ -196,7 +201,7 @@ async def lifespan(app: FastAPI):
     # (you tried skipping the worker restarts here when reloading,
     # this won't work because this whole file re-runs, and SELF is reset when reloading.)
 
-    if INACTIVITY_SHUTDOWN_TIME_SEC is not None:
+    if INACTIVITY_SHUTDOWN_TIME_SEC is not None and not IN_LOCAL_DEV_MODE:
         asyncio.create_task(shutdown_if_idle_for_too_long(logger=logger))
         msg = f"This node will shutdown if idle for {INACTIVITY_SHUTDOWN_TIME_SEC//60} minutes!"
         await logger.log(msg)

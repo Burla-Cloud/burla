@@ -1,4 +1,5 @@
 import pickle
+from datetime import datetime, timezone
 from typing import Optional
 
 import asyncio
@@ -15,6 +16,8 @@ from node_service import (
 )
 from node_service.helpers import Logger
 from node_service.job_watcher import job_watcher_logged
+
+_LOGS_OVERFLOW_MESSAGE = "Logs dequeued due to high volume, see dashboard to view all logs."
 
 router = APIRouter()
 
@@ -102,8 +105,18 @@ async def get_results(job_id: str = Path(...)):
         except asyncio.QueueEmpty:
             break
 
-    drained_logs = SELF["pending_logs"]
-    SELF["pending_logs"] = []
+    at_capacity = len(SELF["pending_logs"]) == SELF["pending_logs"].maxlen
+    drained_logs = list(SELF["pending_logs"])
+    SELF["pending_logs"].clear()
+    if at_capacity:
+        now = datetime.now(timezone.utc)
+        drained_logs.insert(
+            0,
+            {
+                "logs": [{"timestamp": now, "message": _LOGS_OVERFLOW_MESSAGE}],
+                "timestamp": now,
+            },
+        )
 
     response_json = {
         "results": results,

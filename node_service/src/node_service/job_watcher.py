@@ -18,7 +18,14 @@ from node_service.lifecycle_endpoints import reboot_containers
 
 EMPTY_NEIGHBOR_TIMEOUT_SEC = 60
 CLIENT_CONTACT_TIMEOUT_SEC = 5
-JOB_DOC_CONTACT_TIMEOUT_SEC = 4
+# Time we'll tolerate without a fresh `jobs/{id}` update_time before treating
+# the client as disconnected. Client heartbeats fire every 2s and go
+# client -> main_service -> firestore, which can take 100-400ms; 8s gives
+# comfortable headroom against main_service hiccups without meaningfully
+# delaying detection of real client crashes (the direct
+# `/client-heartbeat` path, governed by CLIENT_CONTACT_TIMEOUT_SEC above,
+# is the primary signal).
+JOB_DOC_CONTACT_TIMEOUT_SEC = 8
 ACK_RETRY_TIMEOUT_SEC = 600
 ACK_RETRY_DELAY_SEC = 15
 

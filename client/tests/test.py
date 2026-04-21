@@ -7,14 +7,13 @@ from time import sleep
 import multiprocessing as mp
 import queue
 import io
+import sys
 import contextlib
 import traceback
 import json
 import pytest
+import burla
 from burla import remote_parallel_map
-from burla import _remote_parallel_map
-from burla import _auth
-from burla import _helpers
 
 
 N_INPUTS = 100
@@ -32,14 +31,22 @@ def _run_test_base_in_subprocess(result_queue):
 
     stdout_buffer = io.StringIO()
     try:
-        config_path = _remote_parallel_map.CONFIG_PATH
-        config_json = json.loads(config_path.read_text())
+        config_json = json.loads(burla.CONFIG_PATH.read_text())
         local_dev_config = {**config_json, "cluster_dashboard_url": "http://localhost:5001"}
         temp_config_path = Path("/tmp/burla_local_dev_test_credentials.json")
         temp_config_path.write_text(json.dumps(local_dev_config))
-        _remote_parallel_map.CONFIG_PATH = temp_config_path
-        _auth.CONFIG_PATH = temp_config_path
-        _helpers.CONFIG_PATH = temp_config_path
+
+        # Every burla submodule that does `from burla import CONFIG_PATH`
+        # captures its own reference at import time, so just reassigning
+        # `burla.CONFIG_PATH` does not propagate. Patch every already-imported
+        # burla.* module that holds a `CONFIG_PATH` attribute instead of
+        # enumerating consumers by hand (which has silently rotted before).
+        burla.CONFIG_PATH = temp_config_path
+        for name, module in list(sys.modules.items()):
+            if not name.startswith("burla"):
+                continue
+            if hasattr(module, "CONFIG_PATH"):
+                module.CONFIG_PATH = temp_config_path
 
         with contextlib.redirect_stdout(stdout_buffer):
             outputs = remote_parallel_map(

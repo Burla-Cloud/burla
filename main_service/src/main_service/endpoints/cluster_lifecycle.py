@@ -1,10 +1,8 @@
 import docker
-import math
 from datetime import datetime, timezone
 from time import time
-from uuid import uuid4
 
-from fastapi import APIRouter, Depends, Request, HTTPException
+from fastapi import APIRouter, Depends
 from google.cloud.firestore_v1.base_query import FieldFilter
 from google.cloud.compute_v1 import InstancesClient, MachineTypesClient
 from concurrent.futures import ThreadPoolExecutor
@@ -13,7 +11,6 @@ from main_service import (
     DB,
     IN_LOCAL_DEV_MODE,
     LOCAL_DEV_CONFIG,
-    DEFAULT_CONFIG,
     get_logger,
     get_auth_headers,
     get_add_background_task_function,
@@ -70,11 +67,28 @@ def _current_local_dev_max_node_port():
 
 
 def _get_cluster_config():
-    config_doc = DB.collection("cluster_config").document("cluster_config").get()
-    if not config_doc.exists:
-        config_doc.reference.set(DEFAULT_CONFIG)
-        return DEFAULT_CONFIG
-    return LOCAL_DEV_CONFIG if IN_LOCAL_DEV_MODE else config_doc.to_dict()
+    """
+    Returns the current cluster_config dict.
+
+    Hot path: served from `CLUSTER_CONFIG_CACHE`, kept in sync by a firestore
+    on_snapshot listener started in `lifespan`. Cold path (listener hasn't
+    fired yet): one direct firestore read. The doc is guaranteed to exist
+    by then - main_service seeds it synchronously at module import.
+    """
+    # Importing here to pick up the latest module-level value (the cache is
+    # updated in place by the snapshot thread) and to avoid an import cycle
+    # from __init__.py -> this module at import time.
+    from main_service import CLUSTER_CONFIG_CACHE, _config_cache_lock
+
+    if IN_LOCAL_DEV_MODE:
+        return LOCAL_DEV_CONFIG
+    with _config_cache_lock:
+        cached = CLUSTER_CONFIG_CACHE
+    if cached is not None:
+        return cached
+
+    # First-call fallback while the snapshot listener is still warming up.
+    return DB.collection("cluster_config").document("cluster_config").get().to_dict()
 
 
 def _start_nodes(
@@ -207,37 +221,3 @@ async def shutdown_cluster(
     logger.log(f"Shut down after {duration//60}m {duration%60}s")
 
 
-@router.post("/v1/cluster/grow")
-async def grow_cluster(
-    request: Request,
-    logger: Logger = Depends(get_logger),
-    auth_headers: dict = Depends(get_auth_headers),
-    add_background_task=Depends(get_add_background_task_function),
-):
-    request_json = await request.json()
-    current_cpus = int(request_json["current_cpus"])
-    cpu_deficit = int(request_json["missing_cpus"])
-    reserved_for_job = request_json.get("job_id")
-
-    max_cpu = LOCAL_DEV_MAX_GROW_CPUS if IN_LOCAL_DEV_MODE else MAX_GROW_CPUS
-    max_additional_cpus = max(0, max_cpu - current_cpus)
-    num_cpus_to_add = min(cpu_deficit, max_additional_cpus)
-
-    config = _get_cluster_config()
-    node_spec = config["Nodes"][0]
-    cpu_per_node = _machine_type_cpu_count(node_spec["machine_type"])
-    n_nodes_to_add = math.ceil(num_cpus_to_add / cpu_per_node) if num_cpus_to_add else 0
-    node_instance_names = [f"burla-node-{uuid4().hex[:8]}" for _ in range(n_nodes_to_add)]
-
-    if n_nodes_to_add > 0:
-        add_background_task(
-            _start_nodes,
-            logger,
-            auth_headers,
-            config,
-            n_nodes_to_add,
-            node_instance_names,
-            reserved_for_job,
-        )
-
-    return {"added_node_instance_names": node_instance_names}

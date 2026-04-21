@@ -10,14 +10,12 @@ from time import time
 import aiohttp
 import cloudpickle
 from aiohttp import ClientConnectorError, ClientError, ClientOSError, ClientTimeout
-from google.cloud.firestore import FieldFilter
-from google.cloud.firestore_v1.async_client import AsyncClient
 from tblib import Traceback
 from yaspin import Spinner
 
-from burla import CONFIG_PATH, __version__
+from burla import CONFIG_PATH
 from burla._auth import get_auth_headers
-from burla._helpers import parallelism_capacity
+from burla._cluster_client import ClusterClient, _local_host_from
 from burla._reporting import RemoteParallelMapReporter
 
 
@@ -61,9 +59,13 @@ class NoCompatibleNodes(Exception):
         super().__init__(message)
 
 
-class FirestoreTimeout(Exception):
+class MainServiceTimeout(Exception):
     def __init__(self):
-        message = "\nTimeout waiting for DB.\nPlease run `burla login` and try again.\n"
+        message = (
+            "\nTimeout talking to main_service.\n"
+            "Please check that your cluster's dashboard URL is reachable, "
+            "then run `burla login` and try again.\n"
+        )
         super().__init__(message)
 
 
@@ -82,12 +84,6 @@ class VersionMismatch(Exception):
         msg += f"    pip install burla=={upper_version}\n\n"
         msg += f"-------------------------------------------\n"
         super().__init__(msg)
-
-
-def _parse_version(version_str: str) -> tuple[int, ...]:
-    # Burla versions are always MAJOR.MINOR.PATCH (see client/__init__.py and
-    # main_service/__init__.py). Pure tuple compare is enough.
-    return tuple(int(part) for part in version_str.split("."))
 
 
 class JobCanceled(Exception):
@@ -136,36 +132,24 @@ async def _run_network_request_with_retries(request_function, max_retries=NETWOR
             await asyncio.sleep(NETWORK_RETRY_DELAY_SECONDS)
 
 
-async def num_booting_nodes(db: AsyncClient):
-    filter_ = FieldFilter("status", "==", "BOOTING")
-    nodes_snapshot = await db.collection("nodes").where(filter=filter_).get()
-    return len(nodes_snapshot)
-
-
-async def num_running_nodes(db: AsyncClient):
-    filter_ = FieldFilter("status", "==", "RUNNING")
-    nodes_snapshot = await db.collection("nodes").where(filter=filter_).get()
-    return len(nodes_snapshot)
-
-
-async def get_ready_nodes(db: AsyncClient) -> list[dict]:
-    status_filter = FieldFilter("status", "==", "READY")
-    ready_nodes_coroutine = db.collection("nodes").where(filter=status_filter).get()
+async def _fetch_cluster_state(client: ClusterClient) -> dict:
+    """One main_service call returns booting / running counts + ready-node docs."""
     try:
-        docs = await asyncio.wait_for(ready_nodes_coroutine, timeout=LOGIN_TIMEOUT_SEC)
+        return await asyncio.wait_for(client.get_cluster_state(), timeout=LOGIN_TIMEOUT_SEC)
     except asyncio.TimeoutError:
-        raise FirestoreTimeout()
-    return [
-        document.to_dict() for document in docs if not document.to_dict().get("reserved_for_job")
-    ]
+        raise MainServiceTimeout()
 
 
 async def wait_for_nodes_to_be_ready(
-    db: AsyncClient,
+    client: ClusterClient,
     spinner: bool | Spinner,
 ) -> list[dict]:
-    n_booting_nodes = await num_booting_nodes(db)
-    n_running_nodes = await num_running_nodes(db)
+    # `ready_nodes` from main_service is already filtered to unreserved -
+    # see `cluster_state` in main_service/endpoints/client.py.
+    state = await _fetch_cluster_state(client)
+    n_booting_nodes = state["booting_count"]
+    n_running_nodes = state["running_count"]
+    ready_nodes = state["ready_nodes"]
 
     if n_running_nodes != 0:
         start_time = time()
@@ -175,27 +159,27 @@ async def wait_for_nodes_to_be_ready(
                 msg = f"Waiting for {n_running_nodes} running nodes to become ready..."
                 spinner.text = msg + f" (timeout in {4-time_waiting:.1f}s)"
             await asyncio.sleep(0.01)
-            n_running_nodes = await num_running_nodes(db)
-            ready_nodes = await get_ready_nodes(db)
+            state = await _fetch_cluster_state(client)
+            n_running_nodes = state["running_count"]
+            ready_nodes = state["ready_nodes"]
             time_waiting = time() - start_time
             if time_waiting > 4:
                 raise AllNodesBusy()
     elif n_booting_nodes != 0:
-        ready_nodes = await get_ready_nodes(db)
         while n_booting_nodes != 0:
             if spinner:
                 msg = f"{len(ready_nodes)} Nodes are ready, waiting for remaining {n_booting_nodes}"
                 spinner.text = msg + " to boot before starting ..."
             await asyncio.sleep(0.1)
-            n_booting_nodes = await num_booting_nodes(db)
-            ready_nodes = await get_ready_nodes(db)
+            state = await _fetch_cluster_state(client)
+            n_booting_nodes = state["booting_count"]
+            ready_nodes = state["ready_nodes"]
         if not ready_nodes:
             main_service_url = json.loads(CONFIG_PATH.read_text())["cluster_dashboard_url"]
             msg = "\n\nZero nodes are ready after Booting. Did they fail to boot?\n"
             msg += f"Check your clsuter dashboard at: {main_service_url}\n\n"
             raise NoNodes(msg)
 
-    ready_nodes = await get_ready_nodes(db)
     if n_booting_nodes == 0 and n_running_nodes == 0 and len(ready_nodes) == 0:
         main_service_url = json.loads(CONFIG_PATH.read_text())["cluster_dashboard_url"]
         msg = "\n\nZero nodes are ready. Is your cluster turned on?\n"
@@ -204,64 +188,13 @@ async def wait_for_nodes_to_be_ready(
     return ready_nodes
 
 
-async def select_nodes_to_assign_to_job(
-    db: AsyncClient,
-    max_parallelism: int,
-    func_cpu: int,
-    func_ram: int,
-    spinner: bool | Spinner,
-    session,
-) -> tuple[list["Node"], int]:
-    ready_nodes = await get_ready_nodes(db)
-
-    if not ready_nodes:
-        ready_nodes = await wait_for_nodes_to_be_ready(db=db, spinner=spinner)
-
-    upper_version = ready_nodes[0]["main_svc_version"]
-    lower_version = ready_nodes[0]["min_compatible_client_version"]
-    current_version = __version__
-    lower = _parse_version(lower_version)
-    upper = _parse_version(upper_version)
-    current = _parse_version(current_version)
-    if not lower <= current <= upper:
-        raise VersionMismatch(lower_version, upper_version, current_version)
-
-    planned_initial_job_parallelism = 0
-    nodes_to_assign = []
-    for node_data in ready_nodes:
-        parallelism_deficit = max_parallelism - planned_initial_job_parallelism
-        max_node_parallelism = parallelism_capacity(node_data["machine_type"], func_cpu, func_ram)
-
-        if max_node_parallelism > 0 and parallelism_deficit > 0:
-            node_target_parallelism = max_node_parallelism
-            planned_initial_job_parallelism += node_target_parallelism
-            host = node_data["host"]
-            if host.startswith("http://node_"):
-                host = f"http://localhost:{host.split(':')[-1]}"
-            node = Node.from_ready(
-                instance_name=node_data["instance_name"],
-                host=host,
-                machine_type=node_data["machine_type"],
-                target_parallelism=node_target_parallelism,
-                session=session,
-                async_db=db,
-                spinner=spinner,
-            )
-            nodes_to_assign.append(node)
-
-    if len(nodes_to_assign) == 0:
-        raise NoCompatibleNodes()
-
-    return nodes_to_assign, planned_initial_job_parallelism
-
-
 class Node:
     __init_token = object()
 
-    def __init__(self, init_token, spinner, async_db, session):
+    def __init__(self, init_token, spinner, client: ClusterClient, session):
         if init_token is not Node.__init_token:
             raise RuntimeError("Use classmethods `from_ready` or `from_booting` to construct.")
-        self.async_db = async_db
+        self.client = client
         self.session = session
         self.job_id = None
         self.udf_error_event = None
@@ -304,10 +237,10 @@ class Node:
         machine_type: str,
         target_parallelism: int,
         session,
-        async_db,
+        client: ClusterClient,
         spinner: bool | Spinner,
     ):
-        self = cls(Node.__init_token, spinner, async_db, session)
+        self = cls(Node.__init_token, spinner, client, session)
         self.state = "READY"
         self.instance_name = instance_name
         self.host = host
@@ -321,10 +254,10 @@ class Node:
         instance_name: str,
         target_parallelism: int,
         session,
-        async_db,
+        client: ClusterClient,
         spinner: bool | Spinner,
     ):
-        self = cls(Node.__init_token, spinner, async_db, session)
+        self = cls(Node.__init_token, spinner, client, session)
         self.state = "BOOTING"
         self.instance_name = instance_name
         self.host = None
@@ -333,31 +266,29 @@ class Node:
         return self
 
     async def _update_status(self):
-        node_ref = self.async_db.collection("nodes").document(self.instance_name)
-        node_data = (await node_ref.get()).to_dict()
+        node_data = await self.client.get_node(self.instance_name)
+        if not node_data:
+            return
         self.state = node_data["status"]
         if self.state == "READY":
-            host = node_data["host"]
-            if host.startswith("http://node_"):
-                host = f"http://localhost:{host.split(':')[-1]}"
-            self.host = host
+            self.host = _local_host_from(node_data["host"])
             self.machine_type = node_data["machine_type"]
 
     async def _fail_and_delete(self, message: str):
+        # Fire-and-forget: one main_service call marks the node FAILED,
+        # writes a log subdoc, and triggers VM deletion in the background.
+        # On failure we log the exception (instead of swallowing silently)
+        # so the spinner shows something diagnostic - but we still don't
+        # raise, because the caller's job-fail path should proceed even
+        # if main_service is unreachable (inactivity shutdown will
+        # eventually clean the VM up anyway).
+        self.state = "FAILED"
+        self.spinner_compatible_print(f"Marking Node {self.instance_name} as FAILED: {message}")
         try:
-            self.state = "FAILED"
-            self.spinner_compatible_print(f"Marking Node {self.instance_name} as FAILED: {message}")
-            node_doc = self.async_db.collection("nodes").document(self.instance_name)
-            await node_doc.update({"status": "FAILED"})
-            await node_doc.collection("logs").document().set({"msg": message, "ts": time()})
-            main_service_url = json.loads(CONFIG_PATH.read_text())["cluster_dashboard_url"]
-            url = f"{main_service_url}/v1/cluster/{self.instance_name}"
-            async with self.session.delete(url, headers=self.auth_headers, timeout=1) as response:
-                if response.status != 200:
-                    msg = f"Failed to delete node {self.instance_name}."
-                    self.spinner_compatible_print(msg + f" ignoring: {response.status}")
-        except Exception:
-            pass
+            await self.client.fail_node(self.instance_name, message)
+        except Exception as error:
+            msg = f"Failed to mark node {self.instance_name} as FAILED: {error}"
+            self.spinner_compatible_print(msg)
 
     async def _assign_job(
         self,
@@ -452,8 +383,8 @@ class Node:
                 except UnpicklingError as error:
                     if "Memo value not found at index" not in str(error):
                         raise error
-                    job_ref = self.async_db.collection("jobs").document(self.job_id)
-                    if (await job_ref.get()).to_dict()["status"] == "CANCELED":
+                    job_doc = await self.client.get_job(self.job_id)
+                    if job_doc and job_doc.get("status") == "CANCELED":
                         raise JobCanceled("Job canceled from dashboard.")
                     msg = f"Node {self.instance_name} disconnected while transmitting results.\n"
                     raise NodeDisconnected(self, msg)

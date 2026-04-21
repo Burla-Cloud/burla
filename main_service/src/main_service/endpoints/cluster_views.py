@@ -10,7 +10,11 @@ from fastapi import APIRouter, Depends, Request, HTTPException
 from google.cloud import firestore
 from starlette.responses import StreamingResponse
 
-from main_service import DB, get_logger, get_add_background_task_function
+from main_service import (
+    DB,
+    get_logger,
+    get_add_background_task_function,
+)
 from main_service.helpers import Logger
 from main_service.node import Node
 from main_service.endpoints.usage import _to_epoch_ms

@@ -16,6 +16,33 @@ def log_telemetry(message, severity="INFO", **kwargs):
         pass
 
 
+# CPU -> RAM mapping for the n4-standard family; used to size-check that a
+# node can physically host the requested per-function resources.
+_N_FOUR_STANDARD_CPU_TO_RAM = {
+    1: 4, 2: 8, 4: 16, 8: 32, 16: 64, 32: 128, 48: 192, 64: 256, 80: 320,
+}
+
+
+def parallelism_capacity(machine_type: str, func_cpu: int, func_ram: int) -> int:
+    """How many copies of a UDF with func_cpu/func_ram fit on one node.
+
+    Used by `POST /v1/jobs/{id}/start` to size which cached ready nodes
+    can physically host the requested per-function resources.
+    """
+    if machine_type.startswith("n4-standard") and machine_type.split("-")[-1].isdigit():
+        vm_cpu = int(machine_type.split("-")[-1])
+        vm_ram = _N_FOUR_STANDARD_CPU_TO_RAM[vm_cpu]
+        return min(vm_cpu // func_cpu, vm_ram // func_ram)
+    if machine_type.startswith("a") and machine_type.endswith("g"):
+        return 1
+    raise ValueError("machine_type must be: n4-standard-X, a3-highgpu-Xg, or a3-ultragpu-8g")
+
+
+def parse_version(version_str: str) -> tuple[int, ...]:
+    """Tuple-compare-friendly version parse. Assumes MAJOR.MINOR.PATCH."""
+    return tuple(int(part) for part in version_str.split("."))
+
+
 def format_traceback(traceback_details: list):
     details = ["  ... (detail hidden)\n" if "/pypoetry/" in d else d for d in traceback_details]
     details = [key for key, _ in groupby(details)]  # <- remove consecutive duplicates

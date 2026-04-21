@@ -5,35 +5,13 @@ import requests
 import json
 import tempfile
 from pathlib import Path
-from time import time, sleep
+from time import sleep, time
 
 from yaspin import yaspin
-from google.cloud.firestore import Client
-from google.api_core.exceptions import NotFound
 
 from burla import _BURLA_BACKEND_URL, __version__
 from burla._helpers import run_command, VerboseCalledProcessError
 from burla._reporting import log_telemetry
-
-_python_version = f"{sys.version_info.major}.{sys.version_info.minor}"
-DEFAULT_CLUSTER_CONFIG = {
-    "Nodes": [
-        {
-            "containers": [
-                {
-                    "image": f"python:{_python_version}",
-                    "python_version": _python_version,
-                }
-            ],
-            "inactivity_shutdown_time_sec": 900,
-            "machine_type": "n4-standard-80",
-            "quantity": 13,
-            "disk_size_gb": 50,
-            "gcp_region": "us-central1",
-            "temp_test": "hi",
-        }
-    ]
-}
 
 
 class InstallError(Exception):
@@ -526,11 +504,6 @@ def _create_service_accounts(spinner, PROJECT_ID):
 def _create_firestore_database(spinner, PROJECT_ID):
     spinner.text = "Creating Firestore database ... "
     spinner.start()
-    client = Client(database="burla", project=PROJECT_ID)
-
-    # cannot do this at the top because PROJECT_ID is required
-    DEFAULT_CLUSTER_CONFIG["gcs_bucket_name"] = f"{PROJECT_ID}-burla-shared-workspace"
-
     cmd = "gcloud firestore databases create --database=burla"
     cmd += f" --location=us-central1 --type=firestore-native"
     result = run_command(cmd, raise_error=False)
@@ -541,23 +514,9 @@ def _create_firestore_database(spinner, PROJECT_ID):
         spinner.fail("✗")
         raise VerboseCalledProcessError(cmd, result.stderr)
 
-    try:
-        collection = client.collection("cluster_config")
-        if not collection.document("cluster_config").get().exists:
-            collection.document("cluster_config").set(DEFAULT_CLUSTER_CONFIG)
-    except NotFound as e:
-        # retry until db is ready or 30s
-        start = time()
-        while True:
-            try:
-                collection = client.collection("cluster_config")
-                if not collection.document("cluster_config").get().exists:
-                    collection.document("cluster_config").set(DEFAULT_CLUSTER_CONFIG)
-                break
-            except NotFound as e:
-                sleep(1)
-                if time() - start >= 30:
-                    raise e
+    # cluster_config doc is self-seeded by main_service's `_get_cluster_config`
+    # on first dashboard / cluster-grow request (using DEFAULT_CONFIG in
+    # main_service/__init__.py).
 
     if already_exists:
         spinner.text = "Creating Firestore database ... Database already exists."

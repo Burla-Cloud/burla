@@ -1,11 +1,13 @@
 import sys
 import os
 import json
+import asyncio
+import threading
 import traceback
 import aiohttp
 from uuid import uuid4
 from time import time, sleep
-from typing import Callable
+from typing import Callable, Optional
 from pathlib import Path
 from contextlib import asynccontextmanager
 
@@ -42,13 +44,6 @@ secret_name = f"projects/{PROJECT_ID}/secrets/burla-cluster-id-token/versions/la
 response = secret_client.access_secret_version(request={"name": secret_name})
 CLUSTER_ID_TOKEN = response.payload.data.decode("UTF-8")
 
-LOCAL_DEV_CONFIG = None
-if IN_LOCAL_DEV_MODE:
-    config_doc = DB.collection("cluster_config").document("cluster_config").get()
-    LOCAL_DEV_CONFIG = config_doc.to_dict()
-    LOCAL_DEV_CONFIG["Nodes"][0]["machine_type"] = "n4-standard-2"
-    LOCAL_DEV_CONFIG["Nodes"][0]["quantity"] = 2
-
 DEFAULT_CONFIG = {  # <- config used only when config is missing from firestore
     "Nodes": [
         {
@@ -62,8 +57,96 @@ DEFAULT_CONFIG = {  # <- config used only when config is missing from firestore
             "quantity": 1,
             "inactivity_shutdown_time_sec": 60 * 10,
         }
-    ]
+    ],
+    # Same bucket that `burla install` creates via `gcloud storage buckets create ...`
+    # Used by storage.py and node boot to mount /workspace/shared in every container.
+    "gcs_bucket_name": f"{PROJECT_ID}-burla-shared-workspace",
 }
+
+# `burla install` no longer seeds `cluster_config`, so main_service is the
+# only thing that can guarantee it exists. Seed at startup before anything
+# (LOCAL_DEV_CONFIG below, storage.py at import, etc.) reads it.
+_cluster_config_ref = DB.collection("cluster_config").document("cluster_config")
+if not _cluster_config_ref.get().exists:
+    _cluster_config_ref.set(DEFAULT_CONFIG)
+
+LOCAL_DEV_CONFIG = None
+if IN_LOCAL_DEV_MODE:
+    LOCAL_DEV_CONFIG = _cluster_config_ref.get().to_dict()
+    LOCAL_DEV_CONFIG["Nodes"][0]["machine_type"] = "n4-standard-2"
+    LOCAL_DEV_CONFIG["Nodes"][0]["quantity"] = 2
+
+
+# ------------------------------------------------------------------
+# In-process caches backed by firestore on_snapshot listeners.
+#
+# These kill the per-request firestore query on the burla client's hot path:
+# - NODES_CACHE: `POST /v1/jobs/{id}/start`, `GET /v1/cluster/state`, and
+#                `GET /v1/cluster/nodes/{id}` all answer from this dict.
+# - CLUSTER_CONFIG_CACHE: read by `_get_cluster_config` when sizing growth
+#                         inside `POST /v1/jobs/{id}/start`.
+#
+# The listeners run in firestore's own thread pool (not the asyncio loop).
+# Accessors hold the corresponding threading.Lock briefly when reading or
+# mutating the cache so snapshot callbacks and endpoint handlers can coexist.
+#
+# A listener's first fire delivers every currently-matching doc, so cold
+# start is warm within a few hundred ms of process boot.
+# ------------------------------------------------------------------
+
+# Keyed by instance_name. Holds every node the client might ask about:
+# active (BOOTING/RUNNING/READY) plus FAILED so a client polling a node that
+# fell over between ticks can still see the FAILED status.
+NODES_CACHE: dict[str, dict] = {}
+_nodes_cache_lock = threading.Lock()
+_nodes_cache_watcher = None
+# Set once the nodes listener's first fire completes. Lifespan waits on this
+# so no endpoint request is served while NODES_CACHE is still empty from
+# warm-up and could return spurious "no nodes" 404s.
+_nodes_cache_ready = threading.Event()
+_NODES_CACHE_READY_TIMEOUT_SEC = 10
+
+CLUSTER_CONFIG_CACHE: Optional[dict] = None
+_config_cache_lock = threading.Lock()
+_config_cache_watcher = None
+
+_ACTIVE_NODE_STATUSES = ["BOOTING", "RUNNING", "READY", "FAILED"]
+
+
+def _on_nodes_snapshot(_query_snapshot, changes, _read_time):
+    with _nodes_cache_lock:
+        for change in changes:
+            doc_id = change.document.id
+            data = change.document.to_dict() or {}
+            if change.type.name == "REMOVED":
+                NODES_CACHE.pop(doc_id, None)
+                continue
+            if data.get("status") in _ACTIVE_NODE_STATUSES:
+                NODES_CACHE[doc_id] = data
+            else:
+                NODES_CACHE.pop(doc_id, None)
+    # First fire delivers the full matching set; everything after is deltas.
+    # Either way the cache is now valid to serve.
+    _nodes_cache_ready.set()
+
+
+def _on_config_snapshot(_query_snapshot, changes, _read_time):
+    global CLUSTER_CONFIG_CACHE
+    with _config_cache_lock:
+        for change in changes:
+            if change.document.id == "cluster_config":
+                CLUSTER_CONFIG_CACHE = change.document.to_dict() or {}
+
+
+def _start_caches():
+    global _nodes_cache_watcher, _config_cache_watcher
+    nodes_filter = firestore.FieldFilter("status", "in", _ACTIVE_NODE_STATUSES)
+    _nodes_cache_watcher = (
+        DB.collection("nodes").where(filter=nodes_filter).on_snapshot(_on_nodes_snapshot)
+    )
+    _config_cache_watcher = DB.collection("cluster_config").on_snapshot(_on_config_snapshot)
+
+
 from main_service.helpers import Logger, format_traceback
 
 
@@ -148,6 +231,7 @@ from main_service.endpoints.usage import router as usage_router
 from main_service.endpoints.settings import router as settings_router
 from main_service.endpoints.jobs import router as jobs_router
 from main_service.endpoints.storage import router as storage_router
+from main_service.endpoints.client import router as client_router
 
 
 @asynccontextmanager
@@ -171,7 +255,28 @@ async def lifespan(app: FastAPI):
         else:
             print(f"FAILED to rebuild frontend?, check logs with `Cmd + Shift + U`.")
 
-    yield
+    _start_caches()
+    # Block traffic until the nodes listener has delivered its first fire.
+    # Without this, requests arriving within the ~100-500ms cache warm-up
+    # window see an empty NODES_CACHE and can spuriously 404. If firestore
+    # is unreachable we time out and proceed anyway (degraded to old race
+    # behavior rather than failing startup outright).
+    warmed = await asyncio.to_thread(
+        _nodes_cache_ready.wait, _NODES_CACHE_READY_TIMEOUT_SEC
+    )
+    if not warmed:
+        print(
+            f"NODES_CACHE did not warm within {_NODES_CACHE_READY_TIMEOUT_SEC}s; "
+            "serving with empty cache.",
+            file=sys.stderr,
+        )
+    try:
+        yield
+    finally:
+        if _nodes_cache_watcher is not None:
+            _nodes_cache_watcher.unsubscribe()
+        if _config_cache_watcher is not None:
+            _config_cache_watcher.unsubscribe()
 
 
 app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None)
@@ -181,6 +286,7 @@ app.include_router(usage_router)
 app.include_router(settings_router)
 app.include_router(jobs_router)
 app.include_router(storage_router)
+app.include_router(client_router)
 
 # Allow cross-origin requests for local development and to satisfy Syncfusion preflights
 app.add_middleware(
@@ -279,6 +385,46 @@ async def catch_errors(request: Request, call_next):
         return response
 
 
+# ------------------------------------------------------------------
+# Auth validation cache.
+#
+# The burla client hits main_service many times during a single
+# `remote_parallel_map` (heartbeat every 2 s, plus result polls,
+# node polls, etc.). Without this cache, each one triggers a
+# round-trip to `backend.burla.dev/users:validate` (~100-200 ms), which
+# both slows every client call AND loads up the central auth service.
+#
+# Cache successful validations for a short TTL. A revoked user can
+# still hit main_service for up to TTL seconds after revocation,
+# which we accept in exchange for the latency win.
+# ------------------------------------------------------------------
+
+_AUTH_CACHE_TTL_SEC = 60
+_auth_cache: dict[tuple[str, str], float] = {}  # (email, authorization) -> expires_at
+_auth_cache_lock = threading.Lock()
+
+
+def _cached_auth_ok(email: str, authorization: str) -> bool:
+    key = (email, authorization)
+    with _auth_cache_lock:
+        expires_at = _auth_cache.get(key)
+        if expires_at is None or time() >= expires_at:
+            return False
+        return True
+
+
+def _remember_auth_ok(email: str, authorization: str) -> None:
+    with _auth_cache_lock:
+        _auth_cache[(email, authorization)] = time() + _AUTH_CACHE_TTL_SEC
+        # Lightweight eviction: if the cache grows past a few hundred entries
+        # (unlikely in practice), drop anything already expired.
+        if len(_auth_cache) > 500:
+            now = time()
+            for cached_key, cached_expiry in list(_auth_cache.items()):
+                if cached_expiry <= now:
+                    _auth_cache.pop(cached_key, None)
+
+
 @app.middleware("http")
 async def validate_requests(request: Request, call_next):
     """
@@ -309,6 +455,12 @@ async def validate_requests(request: Request, call_next):
     email = request.session.get("X-User-Email") or request.headers.get("X-User-Email")
     authorization = request.session.get("Authorization") or request.headers.get("Authorization")
     auth_cookie_exists = email and authorization
+
+    # Short-circuit the backend round-trip if we validated this same
+    # (email, auth_token) pair recently.
+    if auth_cookie_exists and not client_id and _cached_auth_ok(email, authorization):
+        return await call_next(request)
+
     async with aiohttp.ClientSession() as session:
         if client_id:
             url = f"{BURLA_BACKEND_URL}/v2/login/dashboard/{client_id}/token"
@@ -336,6 +488,7 @@ async def validate_requests(request: Request, call_next):
             headers = {"Authorization": authorization, "X-User-Email": email}
             async with session.get(url, headers=headers) as response:
                 if response.status == 200:
+                    _remember_auth_ok(email, authorization)
                     return await call_next(request)
                 elif response.status != 401:
                     response.raise_for_status()

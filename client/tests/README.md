@@ -38,8 +38,7 @@ is running, or google-cloud-logging for errors from the `node_service` or `worke
      Open the cluster dashboard and click **Restart** to recreate containers, then
      rerun the test command.
      Treat this as a readiness failure, not a test failure.
-5. If tests fail with auth errors like `invalid_grant`, `Invalid JWT Signature`,
-   or `FirestoreTimeout` during login/DB checks:
+5. If tests fail with auth errors like `invalid_grant` or `Invalid JWT Signature`:
    - run `burla login --no_browser=True`
    - open the printed login URL in browser automation
    - complete login and click the Authorize button
@@ -51,20 +50,4 @@ is running, or google-cloud-logging for errors from the `node_service` or `worke
 7. Hard timeout rule: if test output does not advance to pass/fail within 10 seconds after
    `collected 1 item`, stop the test process and report it as blocked. Never wait longer.
 8. After test run, verify logs for the latest test job show `"hi"` once per input.
-9. Remote-dev test flow (cloud VM validation):
-   - In the dashboard (`http://localhost:5001`), press **Stop** to shut down the local cluster.
-   - Verify no local containers are running, including `main_service`:
-     - `docker ps --format '{{.Names}} {{.Status}}'`
-   - Start remote-dev mode:
-     - `make remote-dev`
-   - In the dashboard, press **Start** to boot cloud nodes.
-   - Wait for readiness gate: at least 13 nodes are `READY` with machine type `n4-standard-80`.
-   - Run remote-dev perf/reliability test:
-     - `uv run --project ./client --group dev pytest client/tests/test_remote_dev_mode.py -s -x --disable-warnings`
-10. When to run remote-dev tests:
-   - Any change to user-function execution boundaries (same-process vs subprocess).
-   - Any change to result polling, timeout/retry, queueing, restart/cancel, or log forwarding paths.
-   - Any change that can affect latency/throughput or reliability under multi-node load.
-   - Always before release when code touched `client/src/burla/_remote_parallel_map.py`,
-     `worker_service/src/worker_service/udf_executor.py`, or worker/node lifecycle endpoints.
 

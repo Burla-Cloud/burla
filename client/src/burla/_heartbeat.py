@@ -9,7 +9,7 @@ import aiohttp
 import cloudpickle
 
 from burla._auth import get_auth_headers
-from burla._helpers import SuppressNativeStderr, get_db_clients
+from burla._cluster_client import ClusterClient
 
 
 async def run_in_subprocess(func, *args):
@@ -22,8 +22,7 @@ async def run_in_subprocess(func, *args):
         """
     )
     cmd = [sys.executable, "-u", "-c", code]
-    with SuppressNativeStderr():
-        process = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
+    process = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
     process.stdin.write(cloudpickle.dumps((func, args)))
     process.stdin.close()
     return process
@@ -44,21 +43,31 @@ async def _send_node_pings(session: aiohttp.ClientSession, node_host: str, heade
 async def send_alive_pings_async(node_hosts: list[str], job_id: str):
     auth_headers = get_auth_headers()
     async with aiohttp.ClientSession() as session:
-
         tasks = []
         for node_host in node_hosts:
             tasks.append(create_task(_send_node_pings(session, node_host, auth_headers)))
 
-        # important to get this after tasks have started, not before, because it takes a sec.
-        job_doc = get_db_clients()[1].collection("jobs").document(job_id)
-
+        # Each PATCH bumps the job doc's `update_time`, which the node's
+        # `_on_job_snapshot` watches to detect a dead client. Interval
+        # leaves headroom under JOB_DOC_CONTACT_TIMEOUT_SEC for a slow PATCH.
+        client = ClusterClient(session)
         while True:
             for task in tasks:
                 if task.done() and task.exception():
                     raise task.exception()
 
-            await job_doc.update({"client_heartbeat_at": time()})
-            await asyncio.sleep(3)
+            try:
+                await client.patch_job(job_id, {"client_heartbeat_at": time()})
+            except Exception as error:
+                # Don't let a transient main_service failure (5xx, network
+                # blip, brief cold start) kill this subprocess - the parent
+                # polling loop checks `ping_process.poll()` and would fail
+                # the whole job. The per-node direct `/client-heartbeat`
+                # path (above) is still running; if main_service is gone
+                # for longer than JOB_DOC_CONTACT_TIMEOUT_SEC the node's
+                # own liveness check will detect it.
+                print(f"heartbeat PATCH failed, retrying: {error}", file=sys.stderr)
+            await asyncio.sleep(2)
 
 
 def send_alive_pings(node_hosts: list[str], job_id: str):

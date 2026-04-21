@@ -96,9 +96,6 @@ remote-dev:
 		"us-docker.pkg.dev/$${PROJECT_ID}/burla-main-service/burla-main-service:latest" \
 	); \
 	$(MAKE) __check-node-service-up-to-date && echo "" || exit 1; \
-	$(BURLA_MAKE_PYTHON) save; \
-	$(BURLA_MAKE_PYTHON) point; \
-	trap '$(BURLA_MAKE_PYTHON) restore' EXIT; \
 	docker run --rm -it \
 		--name main_service \
 		-v $(PWD)/main_service:/burla/main_service \

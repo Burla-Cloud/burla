@@ -266,6 +266,11 @@ class Node:
                 f"{os.environ['HOST_PWD']}/_shared_workspace": "/workspace/shared",
                 f"{os.environ['HOST_PWD']}/_worker_service_python_env": "/worker_service_python_env",
                 f"{os.environ['HOST_PWD']}/_python_version_marker": "/python_version_marker",
+                # Shared with every worker container this node spawns at
+                # /root/.config/burla, which is what burla's CONFIG_PATH
+                # resolves to inside those containers. Lets nested
+                # remote_parallel_map calls authenticate without a login.
+                f"{os.environ['HOST_PWD']}/_node_auth": "/opt/burla/node_auth",
                 "/var/run/docker.sock": "/var/run/docker.sock",
             },
         )

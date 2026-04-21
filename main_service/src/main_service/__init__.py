@@ -25,7 +25,7 @@ from jinja2 import Environment, FileSystemLoader
 os.environ["GRPC_VERBOSITY"] = "ERROR"
 os.environ["GLOG_minloglevel"] = "2"
 
-CURRENT_BURLA_VERSION = "1.5.5"
+CURRENT_BURLA_VERSION = "1.5.6"
 MIN_COMPATIBLE_CLIENT_VERSION = "1.5.5"
 
 # In this mode EVERYTHING runs locally in docker containers.
@@ -271,9 +271,7 @@ async def lifespan(app: FastAPI):
     # window see an empty NODES_CACHE and can spuriously 404. If firestore
     # is unreachable we time out and proceed anyway (degraded to old race
     # behavior rather than failing startup outright).
-    warmed = await asyncio.to_thread(
-        _nodes_cache_ready.wait, _NODES_CACHE_READY_TIMEOUT_SEC
-    )
+    warmed = await asyncio.to_thread(_nodes_cache_ready.wait, _NODES_CACHE_READY_TIMEOUT_SEC)
     if not warmed:
         print(
             f"NODES_CACHE did not warm within {_NODES_CACHE_READY_TIMEOUT_SEC}s; "

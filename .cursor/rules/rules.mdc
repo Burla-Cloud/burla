@@ -6,6 +6,6 @@ HARD RULES. NEVER VIOLATE.
 
 1. Make your code as simple as you can possibly make it.
 2. NEVER write defensive code of any kind. Always guess/assume types. 
-3. Before writing any comment, ask: "If I delete this comment, would a competent reader still understand WHY the code exists by reading the code itself?" If yes, do not write the comment. Do not narrate bug history, before/after behavior, or your reasoning for the fix — that belongs in the commit message, not the source. Comments like "This exists because of X, otherwise Y would happen" are fine. Comments like "We used to do X but now we do Y because Z" are not.
+3. Comments explain WHY code is there. Never WHAT it does, never history. If the WHY is obvious, skip it.
 4. Never use the walrus operator (`:=`) in Python.
 5. Always tell the user when you find pointless code, dead code, or abstractions that do nothing useful.

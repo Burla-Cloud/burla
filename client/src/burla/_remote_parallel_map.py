@@ -345,7 +345,9 @@ def remote_parallel_map(
         image (str, optional):
             If provided, only nodes running this container image are eligible. When
             `grow=True` and no matching nodes are available, newly booted nodes will
-            run this image. Defaults to None (no image filter).
+            run this image. Defaults to None. When `grow=True` and `image` is None,
+            defaults to the stock `python:X.Y` image matching your local Python
+            version (e.g. `python:3.12`) so new nodes can run your pickled function.
         grow (bool, optional):
             If True, adds nodes to the cluster (grows) to complete the job as quickly
             as possible. Adds up to 2560 cpus.
@@ -376,6 +378,9 @@ def remote_parallel_map(
     inputs = [(i,) if not isinstance(i, tuple) else i for i in inputs]
     if not inputs:
         return iter([]) if generator else []
+
+    if grow and image is None:
+        image = f"python:3.{sys.version_info.minor}"
 
     # TODO: rename internally
     background = detach

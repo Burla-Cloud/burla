@@ -46,6 +46,7 @@ from main_service.helpers import (
 )
 from main_service.node import Node
 from main_service.endpoints.cluster_lifecycle import (
+    GROW_INACTIVITY_SHUTDOWN_TIME_SEC,
     LOCAL_DEV_MAX_GROW_CPUS,
     MAX_GROW_CPUS,
     _get_cluster_config,
@@ -254,6 +255,7 @@ def _grow_if_needed(
         job_id,
         node_machine_types,
         containers_override,
+        GROW_INACTIVITY_SHUTDOWN_TIME_SEC,
     )
     return [
         {

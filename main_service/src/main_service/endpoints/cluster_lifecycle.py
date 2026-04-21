@@ -1,6 +1,7 @@
 import docker
 from datetime import datetime, timezone
 from time import time
+from typing import Optional
 
 from fastapi import APIRouter, Depends
 from google.cloud.firestore_v1.base_query import FieldFilter
@@ -21,6 +22,11 @@ from main_service.helpers import Logger, log_telemetry
 router = APIRouter()
 MAX_GROW_CPUS = 2560
 LOCAL_DEV_MAX_GROW_CPUS = 4
+
+# Nodes booted by /v1/cluster/grow always get a short inactivity timeout
+# regardless of the cluster-config value, so a burst-scaled job doesn't leave
+# expensive hardware sitting idle long after the job finishes.
+GROW_INACTIVITY_SHUTDOWN_TIME_SEC = 60
 
 # Priced n4-standard sizes the dashboard exposes, largest first. n4-standard-48
 # is intentionally omitted to match `main_service/frontend/src/types/constants.ts`
@@ -125,6 +131,7 @@ def _start_nodes(
     reserved_for_job: str = None,
     node_machine_types: list[str] = None,
     containers_override: list[dict] = None,
+    inactivity_shutdown_time_sec_override: Optional[int] = None,
 ):
     node_service_port = _current_local_dev_max_node_port()
     futures = []
@@ -147,6 +154,11 @@ def _start_nodes(
                 if node_machine_types is not None
                 else node_spec["machine_type"]
             )
+            inactivity_timeout = (
+                inactivity_shutdown_time_sec_override
+                if inactivity_shutdown_time_sec_override is not None
+                else node_spec.get("inactivity_shutdown_time_sec")
+            )
             node_start_kwargs = dict(
                 db=DB,
                 logger=logger,
@@ -159,7 +171,7 @@ def _start_nodes(
                 service_port=node_service_port,
                 sync_gcs_bucket_name=config["gcs_bucket_name"],
                 as_local_container=IN_LOCAL_DEV_MODE,
-                inactivity_shutdown_time_sec=node_spec.get("inactivity_shutdown_time_sec"),
+                inactivity_shutdown_time_sec=inactivity_timeout,
                 disk_size=node_spec.get("disk_size_gb"),
                 instance_name=instance_name,
                 reserved_for_job=reserved_for_job,

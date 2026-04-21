@@ -202,4 +202,5 @@ _worker_service_python_env/*
 _shared_workspace/*
 main_service/src/main_service/static/assets/*
 _python_version_marker/*
+_node_auth/*
 .cursor/

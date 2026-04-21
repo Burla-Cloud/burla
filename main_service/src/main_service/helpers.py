@@ -60,6 +60,44 @@ def parallelism_capacity(machine_type: str, func_cpu: int, func_ram: int) -> int
     raise ValueError("machine_type must be: n4-standard-X, a3-highgpu-Xg, or a3-ultragpu-8g")
 
 
+# Maps the `func_gpu` strings users pass to `remote_parallel_map` to the
+# smallest GCP machine_type with that GPU. Only single-GPU-per-function-call
+# is supported; filtering by GPU family prefix lets larger variants
+# (e.g. `a2-highgpu-2g`) still serve a `func_gpu="A100"` request.
+_GPU_MACHINE_TYPES = {
+    "A100": "a2-highgpu-1g",
+    "A100_40G": "a2-highgpu-1g",
+    "A100_80G": "a2-ultragpu-1g",
+    "H100": "a3-highgpu-1g",
+    "H100_80G": "a3-highgpu-1g",
+}
+
+
+def gpu_machine_type(func_gpu: Optional[str]) -> Optional[str]:
+    """Resolve a user-facing `func_gpu` string to its target GCP machine_type.
+
+    Returns None when `func_gpu` is None (no GPU requested).
+    Raises ValueError for unknown strings.
+    """
+    if func_gpu is None:
+        return None
+    if func_gpu not in _GPU_MACHINE_TYPES:
+        raise ValueError(f"func_gpu must be one of {sorted(_GPU_MACHINE_TYPES)}")
+    return _GPU_MACHINE_TYPES[func_gpu]
+
+
+def gpu_machine_prefix(func_gpu: Optional[str]) -> Optional[str]:
+    """Return the GPU-family prefix (e.g. `a2-highgpu-`) for a `func_gpu` string.
+
+    Used to filter existing ready nodes so an `a2-highgpu-2g`/`4g`/`8g` node
+    can serve a `func_gpu="A100"` request.
+    """
+    machine_type = gpu_machine_type(func_gpu)
+    if machine_type is None:
+        return None
+    return machine_type.rsplit("-", 1)[0] + "-"
+
+
 def parse_version(version_str: str) -> tuple[int, ...]:
     """Tuple-compare-friendly version parse. Assumes MAJOR.MINOR.PATCH."""
     return tuple(int(part) for part in version_str.split("."))

@@ -10,7 +10,9 @@ from importlib import metadata
 from queue import Queue
 from threading import Event, Thread
 from time import time
-from typing import Callable, Optional, Union
+from typing import Callable, Literal, Optional, Union
+
+FuncGpu = Literal["A100", "A100_40G", "A100_80G", "H100", "H100_80G"]
 from uuid import uuid4
 
 import aiohttp
@@ -117,6 +119,8 @@ async def _execute_job(
     start_time: float,
     udf_error_event: Event,
     grow: bool,
+    image: Optional[str],
+    func_gpu: Optional[FuncGpu],
     session: aiohttp.ClientSession,
     session_stack: AsyncExitStack,
     reporter: RemoteParallelMapReporter,
@@ -149,6 +153,8 @@ async def _execute_job(
         "started_at": start_time,
         "is_background_job": background,
         "grow": grow,
+        "image": image,
+        "func_gpu": func_gpu,
     }
     # On 503 nodes_busy, show boot progress via the polling loop then try
     # once more. Any other known error surfaces as its domain exception
@@ -305,11 +311,13 @@ def remote_parallel_map(
     inputs: list,
     func_cpu: int = 1,
     func_ram: int = 4,
+    func_gpu: Optional[FuncGpu] = None,
+    image: Optional[str] = None,
+    grow: bool = False,
+    max_parallelism: Optional[int] = None,
     detach: bool = False,
     generator: bool = False,
     spinner: bool = True,
-    max_parallelism: Optional[int] = None,
-    grow: bool = False,
 ):
     """
     Run a Python function on many remote computers in parallel.
@@ -331,6 +339,19 @@ def remote_parallel_map(
             The number of CPUs allocated for each instance of `function_`. Defaults to 1.
         func_ram (int, optional):
             The amount of RAM (in GB) allocated for each instance of `function_`. Defaults to 4.
+        func_gpu (str, optional):
+            Allocate one GPU per function call. One of: "A100" / "A100_40G",
+            "A100_80G", "H100" / "H100_80G". Defaults to None (no GPU).
+        image (str, optional):
+            If provided, only nodes running this container image are eligible. When
+            `grow=True` and no matching nodes are available, newly booted nodes will
+            run this image. Defaults to None (no image filter).
+        grow (bool, optional):
+            If True, adds nodes to the cluster (grows) to complete the job as quickly
+            as possible. Adds up to 2560 cpus.
+        max_parallelism (int, optional):
+            The maximum number of `function_` instances allowed to be running at the same time.
+            Defaults to the number of provided inputs.
         detach (bool, optional):
             If True, job will continue running on cluster, when canceled locally.
             Defaults to False.
@@ -339,12 +360,6 @@ def remote_parallel_map(
             returns a list of outputs once all have been processed. Defaults to False.
         spinner (bool, optional):
             If set to False, disables the display of the status indicator/spinner. Defaults to True.
-        max_parallelism (int, optional):
-            The maximum number of `function_` instances allowed to be running at the same time.
-            Defaults to the number of provided inputs.
-        grow (bool, optional):
-            If True, adds nodes to the cluster (grows) to complete the job as quickly
-            as possible. Adds up to 2560 cpus.
 
     Returns:
         List[Any] or Generator[Any, None, None]:
@@ -477,6 +492,8 @@ def remote_parallel_map(
                         generator=generator,
                         udf_error_event=udf_error_event,
                         grow=grow,
+                        image=image,
+                        func_gpu=func_gpu,
                     )
                 )
             except Exception:

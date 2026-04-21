@@ -124,6 +124,7 @@ def _start_nodes(
     node_instance_names: list[str] = None,
     reserved_for_job: str = None,
     node_machine_types: list[str] = None,
+    containers_override: list[dict] = None,
 ):
     node_service_port = _current_local_dev_max_node_port()
     futures = []
@@ -136,6 +137,7 @@ def _start_nodes(
 
     for node_spec in config["Nodes"]:
         quantity = node_spec["quantity"] if n_nodes_to_add is None else n_nodes_to_add
+        spec_containers = containers_override or node_spec["containers"]
         for index in range(quantity):
             if IN_LOCAL_DEV_MODE:
                 node_service_port += 1
@@ -150,7 +152,7 @@ def _start_nodes(
                 logger=logger,
                 machine_type=machine_type,
                 gcp_region=node_spec["gcp_region"],
-                containers=[Container.from_dict(c) for c in node_spec["containers"]],
+                containers=[Container.from_dict(c) for c in spec_containers],
                 auth_headers=auth_headers,
                 instance_client=instance_client,
                 machine_types_client=machine_types_client,

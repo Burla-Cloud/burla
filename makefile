@@ -64,6 +64,10 @@ local-dev:
 	rm -rf ./_shared_workspace; \
 	mkdir -p ./_shared_workspace; \
 	chmod 777 ./_shared_workspace; \
+	echo "Removing _node_auth"; \
+	rm -rf ./_node_auth; \
+	mkdir -p ./_node_auth; \
+	chmod 777 ./_node_auth; \
 	echo "Starting local dev"; \
 	docker network create local-burla-cluster 2>/dev/null || true; \
 	gcloud auth print-access-token > .temp_token.txt; \

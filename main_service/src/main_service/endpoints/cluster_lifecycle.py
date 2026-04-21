@@ -219,7 +219,9 @@ def _mark_running_jobs_with_lifecycle_event(event: str, message: str):
     # /results (see Node._gather_results), so write it on the same update as the
     # status change. Writes happen before VM teardown in _shutdown_cluster, so
     # the doc is authoritative if a node vanishes mid-poll.
-    extra = {"cluster_restarted": True} if event == "cluster_restarted" else {"cluster_shutdown": True}
+    extra = (
+        {"cluster_restarted": True} if event == "cluster_restarted" else {"cluster_shutdown": True}
+    )
     for job_snapshot in running_jobs:
         job_ref = job_snapshot.reference
         job_ref.collection("logs").add(log_doc)
@@ -264,5 +266,3 @@ async def shutdown_cluster(
 
     duration = time() - start
     logger.log(f"Shut down after {duration//60}m {duration%60}s")
-
-

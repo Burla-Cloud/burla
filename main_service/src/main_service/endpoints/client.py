@@ -132,29 +132,36 @@ def _select_ready_nodes_from_cache(
     requested per-function resources, up to `max_parallelism` total slots.
     When `image` is set, only nodes running that container are eligible.
     When `func_gpu` is set, only nodes on a matching GPU family are eligible.
-    Returns (selected_nodes, total_parallelism, ready_nodes).
+
+    Returns `(selected, total_parallelism, ready_after_filters,
+    ready_after_image, unfiltered_ready)`. The three list-tail values let
+    `start_job` tell "cluster is empty", "ready nodes exist but none have
+    the image", "ready nodes have the image but none match the GPU", and
+    "ready nodes match image+GPU but are too small" apart.
     """
     machine_prefix = gpu_machine_prefix(func_gpu)
     with _nodes_cache_lock:
         all_nodes = list(NODES_CACHE.values())
-    ready_nodes = [
+    unfiltered_ready = [
         n for n in all_nodes
         if n.get("status") == "READY" and not n.get("reserved_for_job")
     ]
+    ready_after_image = unfiltered_ready
     if image:
-        ready_nodes = [
-            n for n in ready_nodes
+        ready_after_image = [
+            n for n in unfiltered_ready
             if image in [c["image"] for c in n.get("containers") or []]
         ]
+    ready_after_filters = ready_after_image
     if machine_prefix:
-        ready_nodes = [
-            n for n in ready_nodes
+        ready_after_filters = [
+            n for n in ready_after_image
             if (n.get("machine_type") or "").startswith(machine_prefix)
         ]
 
     selected = []
     total_parallelism = 0
-    for node_data in ready_nodes:
+    for node_data in ready_after_filters:
         deficit = max_parallelism - total_parallelism
         if deficit <= 0:
             break
@@ -172,7 +179,13 @@ def _select_ready_nodes_from_cache(
             }
         )
         total_parallelism += node_parallelism
-    return selected, total_parallelism, ready_nodes
+    return (
+        selected,
+        total_parallelism,
+        ready_after_filters,
+        ready_after_image,
+        unfiltered_ready,
+    )
 
 
 def _grow_if_needed(
@@ -293,11 +306,17 @@ async def start_job(
         }
 
     Error responses:
-        409 {"detail": "version_mismatch", "lower_version", "upper_version",
-             "current_version"}  - client is outside compatible range
-        409 {"detail": "no_compatible_nodes"}                 - ready nodes exist but none fit
-        503 {"detail": "nodes_busy",                           - no ready nodes, some booting /
-             "booting_count", "running_count"}                   running; client should retry
+        409 {"detail": {"error": "version_mismatch", ...}}    - client is outside compatible range
+        409 {"detail": {"error": "no_compatible_nodes",
+             "reason": "image_mismatch"
+                     | "gpu_mismatch"
+                     | "insufficient_capacity",
+             "requested_image", "requested_func_gpu",
+             "available_images"?, "available_machine_types"?}}
+                                                              - ready nodes exist but none fit
+        503 {"detail": {"error": "nodes_busy",
+             "booting_count", "running_count"}}               - no ready nodes, some booting /
+                                                                running; client should retry
         404 {"detail": "no_nodes"}                            - empty cluster, grow=False
     """
     body = await request.json()
@@ -335,7 +354,13 @@ async def start_job(
         raise HTTPException(status_code=400, detail=str(error))
 
     # --- select from cached ready nodes ---
-    ready, target_parallelism, all_ready = _select_ready_nodes_from_cache(
+    (
+        ready,
+        target_parallelism,
+        all_ready,
+        ready_after_image,
+        unfiltered_ready,
+    ) = _select_ready_nodes_from_cache(
         func_cpu=func_cpu,
         func_ram=func_ram,
         max_parallelism=max_parallelism,
@@ -358,10 +383,35 @@ async def start_job(
                     "running_count": running_count,
                 },
             )
-        if all_ready:
-            # Ready nodes exist but none have enough capacity for this UDF.
-            raise HTTPException(status_code=409, detail="no_compatible_nodes")
-        raise HTTPException(status_code=404, detail="no_nodes")
+        if not unfiltered_ready:
+            raise HTTPException(status_code=404, detail="no_nodes")
+        # Ready nodes exist but none are selectable for this job. Pick the
+        # most specific reason so the client can tell the user what to do.
+        if image and not ready_after_image:
+            reason = "image_mismatch"
+        elif func_gpu and ready_after_image and not all_ready:
+            reason = "gpu_mismatch"
+        else:
+            reason = "insufficient_capacity"
+        detail: dict = {
+            "error": "no_compatible_nodes",
+            "reason": reason,
+            "requested_image": image,
+            "requested_func_gpu": func_gpu,
+        }
+        if reason == "image_mismatch":
+            detail["available_images"] = sorted({
+                c["image"]
+                for n in unfiltered_ready
+                for c in (n.get("containers") or [])
+            })
+        elif reason == "gpu_mismatch":
+            detail["available_machine_types"] = sorted({
+                n.get("machine_type")
+                for n in ready_after_image
+                if n.get("machine_type")
+            })
+        raise HTTPException(status_code=409, detail=detail)
 
     # --- grow, if requested and short on capacity ---
     booting_nodes: list[dict] = []
@@ -395,6 +445,7 @@ async def start_job(
         "burla_client_version": client_version,
         "user_python_version": body["user_python_version"],
         "target_parallelism": target_parallelism,
+        "max_parallelism": max_parallelism,
         "user": auth_headers["X-User-Email"],
         "function_name": body["function_name"],
         "function_size_gb": float(body.get("function_size_gb") or 0.0),

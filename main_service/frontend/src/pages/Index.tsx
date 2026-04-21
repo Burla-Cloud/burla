@@ -25,7 +25,7 @@ const Dashboard = () => {
     });
 
     const [welcomeVisible, setWelcomeVisible] = useState(
-        () => localStorage.getItem("welcomeMessageHidden") !== "true" 
+        () => localStorage.getItem("welcomeMessageHidden") !== "true",
     );
 
     useEffect(() => {
@@ -78,7 +78,7 @@ const Dashboard = () => {
                 const cpus = node.cpus ?? extractCpuCount(node.type) ?? 0;
                 return sum + cpus;
             }, 0),
-        [countedNodes]
+        [countedNodes],
     );
 
     const parseRamGB = (ram: string): number => {
@@ -116,7 +116,7 @@ const Dashboard = () => {
                 const ramStr = node.memory || parseRamDisplay(node.type);
                 return sum + parseRamGB(ramStr);
             }, 0),
-        [countedNodes]
+        [countedNodes],
     );
 
     const totalRam = totalRamGB > 0 ? `${totalRamGB}G` : "-";
@@ -237,28 +237,48 @@ const Dashboard = () => {
                                     <thead>
                                         <tr>
                                             <th className="w-8 pl-6 pr-4 py-2" />
-                                            <th className="w-24 pl-6 pr-4 py-2 text-left"><Skeleton className="h-3 w-12" /></th>
-                                            <th className="w-48 pl-6 pr-4 py-2 text-left"><Skeleton className="h-3 w-10" /></th>
-                                            <th className="w-24 pl-6 pr-4 py-2 text-left"><Skeleton className="h-3 w-12" /></th>
-                                            <th className="w-24 pl-6 pr-4 py-2 text-left"><Skeleton className="h-3 w-10" /></th>
-                                            <th className="w-24 pl-6 pr-4 py-2 text-left"><Skeleton className="h-3 w-12" /></th>
+                                            <th className="w-24 pl-6 pr-4 py-2 text-left">
+                                                <Skeleton className="h-3 w-12" />
+                                            </th>
+                                            <th className="w-48 pl-6 pr-4 py-2 text-left">
+                                                <Skeleton className="h-3 w-10" />
+                                            </th>
+                                            <th className="w-24 pl-6 pr-4 py-2 text-left">
+                                                <Skeleton className="h-3 w-12" />
+                                            </th>
+                                            <th className="w-24 pl-6 pr-4 py-2 text-left">
+                                                <Skeleton className="h-3 w-10" />
+                                            </th>
+                                            <th className="w-24 pl-6 pr-4 py-2 text-left">
+                                                <Skeleton className="h-3 w-12" />
+                                            </th>
                                             <th className="w-8 pl-6 pr-2 py-2" />
                                         </tr>
                                     </thead>
                                     <tbody>
                                         {[...Array(3)].map((_, i) => (
                                             <tr key={i}>
-                                                <td className="w-8 pl-6 pr-4 py-2"><Skeleton className="h-4 w-4" /></td>
+                                                <td className="w-8 pl-6 pr-4 py-2">
+                                                    <Skeleton className="h-4 w-4" />
+                                                </td>
                                                 <td className="w-24 pl-6 pr-4 py-2">
                                                     <div className="flex items-center gap-2">
                                                         <Skeleton className="w-2 h-2 rounded-full" />
                                                         <Skeleton className="h-4 w-14" />
                                                     </div>
                                                 </td>
-                                                <td className="w-48 pl-6 pr-4 py-2"><Skeleton className="h-4 w-36" /></td>
-                                                <td className="w-24 pl-6 pr-4 py-2"><Skeleton className="h-4 w-8" /></td>
-                                                <td className="w-24 pl-6 pr-4 py-2"><Skeleton className="h-4 w-10" /></td>
-                                                <td className="w-24 pl-6 pr-4 py-2"><Skeleton className="h-4 w-20" /></td>
+                                                <td className="w-48 pl-6 pr-4 py-2">
+                                                    <Skeleton className="h-4 w-36" />
+                                                </td>
+                                                <td className="w-24 pl-6 pr-4 py-2">
+                                                    <Skeleton className="h-4 w-8" />
+                                                </td>
+                                                <td className="w-24 pl-6 pr-4 py-2">
+                                                    <Skeleton className="h-4 w-10" />
+                                                </td>
+                                                <td className="w-24 pl-6 pr-4 py-2">
+                                                    <Skeleton className="h-4 w-20" />
+                                                </td>
                                                 <td className="w-8 pl-6 pr-2 py-2" />
                                             </tr>
                                         ))}

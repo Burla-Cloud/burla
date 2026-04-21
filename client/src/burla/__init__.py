@@ -6,7 +6,7 @@ from fire import Fire
 from platformdirs import user_config_dir
 
 # needed so main_service can associate a client version with a request
-__version__ = "1.5.6"
+__version__ = "1.5.7"
 _BURLA_BACKEND_URL = "https://backend.burla.dev"
 
 _appdata_dir = Path(user_config_dir(appname="burla", appauthor="burla"))

@@ -227,7 +227,6 @@ def _schedule_container_removal(
 
 
 RESERVATION_ASSIGNMENT_TIMEOUT_SEC = 60
-RESERVATION_POLL_INTERVAL_SEC = 2
 
 
 async def _watch_reservation(job_id: str):
@@ -237,14 +236,27 @@ async def _watch_reservation(job_id: str):
     arrives within `RESERVATION_ASSIGNMENT_TIMEOUT_SEC`. In either case, clear the reservation
     so another job can use this node.
     """
-    job_ref = ASYNC_DB.collection("jobs").document(job_id)
-    deadline = time() + RESERVATION_ASSIGNMENT_TIMEOUT_SEC
+    sync_db = firestore.Client(project=PROJECT_ID, database="burla")
+    loop = asyncio.get_running_loop()
+    reservation_ended = asyncio.Event()
 
-    while time() < deadline and SELF["reserved_for_job"] == job_id:
-        status = (await job_ref.get()).to_dict()["status"]
-        if status != "RUNNING":
-            break
-        await asyncio.sleep(RESERVATION_POLL_INTERVAL_SEC)
+    def _on_job_snapshot(doc_snapshot, changes, read_time):
+        for change in changes:
+            data = change.document.to_dict()
+            if data and data.get("status") != "RUNNING":
+                loop.call_soon_threadsafe(reservation_ended.set)
+                return
+
+    watch = sync_db.collection("jobs").document(job_id).on_snapshot(_on_job_snapshot)
+    try:
+        await asyncio.wait_for(
+            reservation_ended.wait(),
+            timeout=RESERVATION_ASSIGNMENT_TIMEOUT_SEC,
+        )
+    except (asyncio.TimeoutError, asyncio.CancelledError):
+        pass
+    finally:
+        watch.unsubscribe()
 
     if SELF["reserved_for_job"] == job_id:
         SELF["reserved_for_job"] = None
@@ -375,7 +387,9 @@ async def reboot_containers(
         node_doc.update({"status": "READY"})
 
         if SELF["reserved_for_job"]:
-            asyncio.create_task(_watch_reservation(SELF["reserved_for_job"]))
+            SELF["watch_reservation_task"] = asyncio.create_task(
+                _watch_reservation(SELF["reserved_for_job"])
+            )
 
     except Exception as parent_exception:
         SELF["FAILED"] = True

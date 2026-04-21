@@ -53,9 +53,27 @@ class AllNodesBusy(Exception):
 
 
 class NoCompatibleNodes(Exception):
-    def __init__(self):
-        message = "No compatible nodes available. Are the machines in your cluster large enough to "
-        message += "support your `func_cpu` and `func_ram` arguments?"
+    def __init__(self, detail: dict | None = None):
+        reason = detail.get("reason") if isinstance(detail, dict) else None
+        if reason == "image_mismatch":
+            requested = detail.get("requested_image")
+            available = detail.get("available_images") or []
+            message = f"\n\nNo ready nodes have the requested image `{requested}`.\n"
+            if available:
+                message += f"Images on currently-ready nodes: {available}.\n"
+            message += "Pass `grow=True` to boot nodes with this image, "
+            message += "or add it to your cluster config.\n"
+        elif reason == "gpu_mismatch":
+            requested = detail.get("requested_func_gpu")
+            available = detail.get("available_machine_types") or []
+            message = f"\n\nNo ready nodes match `func_gpu={requested!r}`.\n"
+            if available:
+                message += f"Machine types on currently-ready nodes: {available}.\n"
+            message += "Pass `grow=True` to boot a GPU node, "
+            message += "or add GPU machines to your cluster config.\n"
+        else:
+            message = "No compatible nodes available. Are the machines in your cluster large enough "
+            message += "to support your `func_cpu` and `func_ram` arguments?"
         super().__init__(message)
 
 
@@ -268,6 +286,8 @@ class Node:
     async def _update_status(self):
         node_data = await self.client.get_node(self.instance_name)
         if not node_data:
+            # 404 means the node was DELETED (evicted from NODES_CACHE).
+            self.state = "FAILED"
             return
         self.state = node_data["status"]
         if self.state == "READY":
@@ -438,11 +458,12 @@ class Node:
         # wait until ready
         if self.state != "READY":
             await asyncio.sleep(max(0, 30 - (time() - start_time)))
-            while self.state != "READY":
+            while self.state == "BOOTING":
                 await self._update_status()
-                if self.state == "READY":
-                    break
-                await asyncio.sleep(random.uniform(2, 6))
+                if self.state == "BOOTING":
+                    await asyncio.sleep(random.uniform(2, 6))
+            if self.state != "READY":
+                return
 
         if packages:
             self.installing_packages = True

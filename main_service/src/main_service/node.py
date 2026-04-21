@@ -79,7 +79,7 @@ def zones_supporting_machine_type(
     name_filter = f"name={machine_type_name}"
     request = AggregatedListMachineTypesRequest(project=PROJECT_ID, filter=name_filter)
     client = machine_types_client or MachineTypesClient()
-    zone_generator = client.aggregated_list(request=request)
+    zone_generator = client.aggregated_list(request=request, retry=GCE_TRANSIENT_RETRY)
     for zone, matches in zone_generator:
         if matches.machine_types and zone.startswith(f"zones/{region_name}"):
             yield zone.split("/")[1]

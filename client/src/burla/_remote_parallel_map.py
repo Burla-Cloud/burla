@@ -222,6 +222,13 @@ async def _execute_job(
         )
     try:
         ping_process = None
+        pinged_hosts: tuple = ()
+
+        def _cleanup_ping_process():
+            if ping_process is not None:
+                ping_process.kill()
+
+        session_stack.callback(_cleanup_ping_process)
         last_status_message_update_time = 0.0
         total_result_count = sum(node.result_count for node in nodes)
         while total_result_count < n_inputs:
@@ -266,10 +273,15 @@ async def _execute_job(
                 if background:
                     reporter.print_inputs_done_message()
 
-            if ping_process is None and (time() - start_time) >= 5:
-                node_hosts = [node.host for node in nodes]
-                ping_process = await run_in_subprocess(send_alive_pings, node_hosts, job_id)
-                session_stack.callback(ping_process.kill)
+            # Respawn the ping subprocess whenever the set of ready hosts changes,
+            # since it captures its host list at spawn time.
+            current_hosts = tuple(sorted(n.host for n in nodes if n.host))
+            hosts_changed = current_hosts != pinged_hosts
+            if (time() - start_time) >= 5 and current_hosts and hosts_changed:
+                if ping_process is not None:
+                    ping_process.kill()
+                ping_process = await run_in_subprocess(send_alive_pings, list(current_hosts), job_id)
+                pinged_hosts = current_hosts
 
             if ping_process and ping_process.poll():
                 stderr = ping_process.stderr.read().decode("utf-8")

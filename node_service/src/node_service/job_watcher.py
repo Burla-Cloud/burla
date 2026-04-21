@@ -156,7 +156,16 @@ async def _job_watcher(
     sync_db = firestore.Client(project=PROJECT_ID, database="burla")
     job_doc = async_db.collection("jobs").document(SELF["current_job"])
     sync_job_doc = sync_db.collection("jobs").document(SELF["current_job"])
-    last_job_doc_update_time = sync_job_doc.get().update_time.timestamp()
+    # main_service writes this doc fire-and-forget, so fast networks can race it.
+    for _ in range(40):
+        snapshot = await job_doc.get()
+        if snapshot.exists:
+            break
+        await asyncio.sleep(0.05)
+    try:
+        last_job_doc_update_time = snapshot.update_time.timestamp()
+    except AttributeError as e:
+        raise RuntimeError(f"Job doc {SELF['current_job']} did not appear after 2s") from e
     node_docs_collection = job_doc.collection("assigned_nodes")
     node_doc = node_docs_collection.document(INSTANCE_NAME)
     await node_doc.set({"current_num_results": 0, "client_contact_last_1s": True})

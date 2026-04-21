@@ -86,7 +86,6 @@ def _get_login_response(client_id, spinner, attempt=0):
             response.json()["email"],
             response.json()["project_id"],
             response.json()["cluster_dashboard_url"],
-            response.json()["client_svc_account_key"],
         )
 
 
@@ -110,8 +109,8 @@ def login(no_browser: bool = False):
 
     with yaspin() as spinner:
         spinner.text = "Waiting for Google login response ..."
-        auth_token, email, project_id, cluster_dashboard_url, client_svc_account_key = (
-            _get_login_response(client_id, spinner)
+        auth_token, email, project_id, cluster_dashboard_url = _get_login_response(
+            client_id, spinner
         )
     cluster_dashboard_url = _cluster_dashboard_url_to_write(cluster_dashboard_url)
 
@@ -125,7 +124,6 @@ def login(no_browser: bool = False):
         "email": email,
         "project_id": project_id,
         "cluster_dashboard_url": cluster_dashboard_url,
-        "client_svc_account_key": client_svc_account_key,
     }
     CONFIG_PATH.write_text(json.dumps(config))
     _get_auth_info.cache_clear()

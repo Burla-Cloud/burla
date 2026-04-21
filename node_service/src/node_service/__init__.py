@@ -347,6 +347,16 @@ async def handle_errors(request: Request, call_next):
         response = await call_next(request)
     except ClientDisconnect:
         response = Response(status_code=499, content="client closed request")
+        # If disconnect hit POST /jobs/{id} before job_watcher started, reset SELF
+        # so the client's retry is accepted instead of being refused with 409.
+        disconnected_mid_assign = (
+            request.method == "POST"
+            and request.url.path == f"/jobs/{SELF['current_job']}"
+            and SELF["job_watcher_task"] is None
+        )
+        if disconnected_mid_assign:
+            SELF["RUNNING"] = False
+            SELF["current_job"] = None
     except Exception as exception:
         # create new response object to return gracefully.
         response = Response(status_code=500, content="Internal server error.")

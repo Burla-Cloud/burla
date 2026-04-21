@@ -83,7 +83,7 @@ export const ClusterControls = ({
                     highlightStart &&
                         !isOn &&
                         !isStartDisabled &&
-                        "bg-blue-700 hover:bg-blue-800 animate-pulse glow-pulse-blue ring-4 ring-blue-500 ring-offset-2 ring-offset-background transition-shadow transform transition-transform hover:scale-105"
+                        "bg-blue-700 hover:bg-blue-800 animate-pulse glow-pulse-blue ring-4 ring-blue-500 ring-offset-2 ring-offset-background transition-shadow transform transition-transform hover:scale-105",
                 )}
             >
                 {startButtonIcon}

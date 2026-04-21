@@ -454,6 +454,19 @@ async def validate_requests(request: Request, call_next):
       - use client_id to get auth info, set auth cookie -> redirect here again but with auth cookie
       - here again with auth cookie -> access granted
     """
+    # Local-dev bypass: the auth middleware normally validates every request
+    # against backend.burla.dev, which requires a Google/Microsoft login. In
+    # local-dev there is no real user flow, so stamp a fake session and let
+    # everything through. NEVER runs in prod because IN_LOCAL_DEV_MODE is only
+    # set by the `make local-dev` target.
+    if IN_LOCAL_DEV_MODE:
+        if not request.session.get("X-User-Email"):
+            request.session["X-User-Email"] = "local-dev@burla.dev"
+            request.session["Authorization"] = "Bearer local-dev"
+            request.session["name"] = "Local Dev"
+            request.session["profile_pic"] = ""
+        return await call_next(request)
+
     # Allow unauthenticated access for storage stub endpoints and resumable signing during development
     # These are non-privileged helpers used by the storage UI.
     if request.url.path.startswith("/api/sf/") or request.url.path == "/signed-resumable":

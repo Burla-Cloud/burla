@@ -445,6 +445,7 @@ async def start_job(
         "burla_client_version": client_version,
         "user_python_version": body["user_python_version"],
         "target_parallelism": target_parallelism,
+        "max_parallelism": max_parallelism,
         "user": auth_headers["X-User-Email"],
         "function_name": body["function_name"],
         "function_size_gb": float(body.get("function_size_gb") or 0.0),

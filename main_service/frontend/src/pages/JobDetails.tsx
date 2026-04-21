@@ -12,6 +12,31 @@ type JobResultStats = {
     n_failed: number;
 };
 
+type JobDoc = {
+    image?: string | null;
+    max_parallelism?: number | null;
+    func_cpu?: number | null;
+    func_ram?: number | null;
+    func_gpu?: string | null;
+};
+
+const Fact = ({
+    label,
+    value,
+    span = 1,
+}: {
+    label: string;
+    value: React.ReactNode;
+    span?: number;
+}) => (
+    <div className="min-w-0" style={{ gridColumn: `span ${span} / span ${span}` }}>
+        <div className="text-[11px] uppercase tracking-[0.08em] font-medium text-gray-500">
+            {label}
+        </div>
+        <div className="mt-1.5 text-[14.5px] leading-snug text-gray-900">{value}</div>
+    </div>
+);
+
 const JobDetails = () => {
     const { jobId } = useParams<{ jobId: string }>();
     const { jobs } = useJobs();
@@ -21,6 +46,7 @@ const JobDetails = () => {
     const [stats, setStats] = useState<JobResultStats | null>(null);
     const [isStatsLoading, setIsStatsLoading] = useState(true);
     const [statsLoadError, setStatsLoadError] = useState(false);
+    const [jobDoc, setJobDoc] = useState<JobDoc | null>(null);
     const hasCompletedInitialStatsLoadRef = useRef(false);
     const [userTimeZone, setUserTimeZone] = useState<string>(() => {
         const stored = typeof window !== "undefined" ? localStorage.getItem("userTimezone") : null;
@@ -107,6 +133,23 @@ const JobDetails = () => {
             day: "numeric",
         });
     };
+
+    const formatStartedAt = (date?: Date): string => {
+        if (!date) return "—";
+        const tz = userTimeZone || Intl.DateTimeFormat().resolvedOptions().timeZone;
+        const time = date.toLocaleTimeString("en-US", {
+            timeZone: tz,
+            hour: "numeric",
+            minute: "2-digit",
+            hour12: true,
+        });
+        const monthDay = date.toLocaleDateString("en-US", {
+            timeZone: tz,
+            month: "short",
+            day: "numeric",
+        });
+        return `${time}, ${monthDay}`;
+    };
     const getStatusBadgeClass = (status: string | null) => {
         const statusClasses: Record<string, string> = {
             PENDING: "border-slate-300 bg-slate-50 text-slate-700",
@@ -170,6 +213,18 @@ const JobDetails = () => {
         setStatsLoadError(false);
         setIsStatsLoading(true);
         hasCompletedInitialStatsLoadRef.current = false;
+    }, [jobId]);
+
+    useEffect(() => {
+        if (!jobId) return;
+        setJobDoc(null);
+        const controller = new AbortController();
+        (async () => {
+            const res = await fetch(`/v1/jobs/${jobId}`, { signal: controller.signal });
+            if (!res.ok) return;
+            setJobDoc(await res.json());
+        })().catch(() => {});
+        return () => controller.abort();
     }, [jobId]);
 
     useEffect(() => {
@@ -289,63 +344,88 @@ const JobDetails = () => {
     return (
         <div className="flex flex-col flex-1 min-h-0 px-12 pt-0">
             <div className="max-w-6xl mx-auto w-full flex flex-col flex-1 min-h-0">
-                <div className="mb-3 rounded-lg border border-gray-200 bg-white px-4 py-3">
-                    <div className="flex flex-row items-start justify-between mb-2">
-                        <h1 className="text-2xl font-bold mt-[-4px] text-primary">
-                            <button
-                                onClick={() => navigate("/jobs")}
-                                className="hover:underline underline-offset-2 decoration-[0.5px] transition text-inherit"
-                            >
-                                Jobs
-                            </button>
-                            <span className="mx-2 text-inherit">›</span>
-                            <span className="text-inherit">{job.id}</span>
-                        </h1>
-                        <Button
-                            variant="destructive"
-                            size="lg"
-                            className="h-11 rounded-lg"
-                            onClick={stopJob}
-                            disabled={
-                                isStopping || (job?.status !== "RUNNING" && job?.status !== "PENDING")
-                            }
-                        >
-                            <PowerOff className="mr-2 h-4 w-4" />
-                            Stop
-                        </Button>
-                    </div>
-
-                    <div className="flex flex-row items-center text-[14.5px] text-gray-800">
-                        <div className="flex items-center space-x-6">
-                            <div className="flex items-center space-x-2">
+                <div className="mb-3 rounded-lg border border-gray-200 bg-white px-6 py-5">
+                    <div className="flex flex-row items-start justify-between gap-4">
+                        <div className="min-w-0">
+                            <div className="flex items-center gap-3 flex-wrap">
+                                <h1 className="text-[24px] font-semibold tracking-tight text-gray-900 truncate">
+                                    {job.function_name ?? "Unknown"}
+                                </h1>
                                 <span
-                                    className={`inline-flex items-center gap-2 rounded-full border px-3 py-0.5 text-[14.5px] font-normal ${getStatusBadgeClass(job.status)}`}
+                                    className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-[13.5px] font-medium ${getStatusBadgeClass(job.status)}`}
                                 >
-                                    <span className={`h-2.5 w-2.5 rounded-full ${getStatusDotClass(job.status)}`} />
-                                    <span>
-                                    {job.status?.toUpperCase() || "UNKNOWN"}
-                                    </span>
+                                    <span className={`h-2 w-2 rounded-full ${getStatusDotClass(job.status)}`} />
+                                    <span>{(job.status ?? "UNKNOWN").toLowerCase().replace(/^./, c => c.toUpperCase())}</span>
                                 </span>
                             </div>
-                            <div className="flex items-baseline">
-                                <span>Function:</span>
-                                <span className="ml-2">{job.function_name ?? "Unknown"}</span>
-                            </div>
-                            <div className="flex items-baseline">
-                                <span>Started At:</span>
-                                <span className="ml-2 flex items-baseline">
-                                    <span className="tabular-nums">
-                                        {formatStartedAtTime(job.started_at)}
-                                    </span>
-                                    <span className="ml-1">
-                                        {formatStartedAtWeekday(job.started_at)}
-                                    </span>
-                                    <span className="ml-1">
-                                        {formatStartedAtMonthDay(job.started_at)}
-                                    </span>
-                                </span>
+                            <div className="mt-1.5 font-mono text-[13px] text-gray-500 truncate">
+                                {job.id}
                             </div>
                         </div>
+                        {(() => {
+                            const canStop = job?.status === "RUNNING" || job?.status === "PENDING";
+                            return (
+                                <Button
+                                    variant={canStop ? "destructive" : "outline"}
+                                    size="sm"
+                                    className="h-9 rounded-md shrink-0"
+                                    onClick={stopJob}
+                                    disabled={isStopping || !canStop}
+                                >
+                                    <PowerOff className="mr-2 h-3.5 w-3.5" />
+                                    Stop
+                                </Button>
+                            );
+                        })()}
+                    </div>
+
+                    <div className="mt-5 pt-5 border-t border-gray-100 grid grid-cols-2 sm:grid-cols-4 gap-x-8 gap-y-5">
+                        <Fact label="Function" value={job.function_name ?? "Unknown"} />
+                        <Fact
+                            label="Started"
+                            value={
+                                <span className="tabular-nums">
+                                    {formatStartedAt(job.started_at)}
+                                </span>
+                            }
+                        />
+                        <Fact
+                            label="Image"
+                            span={2}
+                            value={
+                                <span className="font-mono text-[13px] break-all">
+                                    {jobDoc?.image ?? (jobDoc ? "default" : "—")}
+                                </span>
+                            }
+                        />
+                        <Fact
+                            label="Max parallelism"
+                            value={
+                                <span className="tabular-nums">
+                                    {jobDoc?.max_parallelism ?? "—"}
+                                </span>
+                            }
+                        />
+                        <Fact
+                            label="Function CPU"
+                            value={
+                                <span className="tabular-nums">
+                                    {jobDoc?.func_cpu != null ? `${jobDoc.func_cpu} vCPU` : "—"}
+                                </span>
+                            }
+                        />
+                        <Fact
+                            label="Function RAM"
+                            value={
+                                <span className="tabular-nums">
+                                    {jobDoc?.func_ram != null ? `${jobDoc.func_ram} GB` : "—"}
+                                </span>
+                            }
+                        />
+                        <Fact
+                            label="Function GPU"
+                            value={jobDoc?.func_gpu ?? (jobDoc ? "None" : "—")}
+                        />
                     </div>
                 </div>
 

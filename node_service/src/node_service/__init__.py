@@ -93,6 +93,7 @@ def REINIT_SELF(SELF):
     SELF["active_client_request_count"] = 0
     SELF["last_client_activity_timestamp"] = time()
     SELF["reserved_for_job"] = None
+    SELF["watch_reservation_task"] = None
     SELF["SHUTTING_DOWN"] = False
 
 
@@ -235,6 +236,12 @@ async def on_job_start(scope, first_event):
     SELF["RUNNING"] = True
     SELF["current_job"] = job_id
     SELF["reserved_for_job"] = None
+    # `_watch_reservation` is obsolete once assignment arrives - cancel so its
+    # firestore snapshot listener is torn down without writing a redundant clear
+    # (the node_doc.update below already clears `reserved_for_job`).
+    watch_task = SELF.get("watch_reservation_task")
+    if watch_task and not watch_task.done():
+        watch_task.cancel()
     node_doc = ASYNC_DB.collection("nodes").document(INSTANCE_NAME)
     update_fields = {"status": "RUNNING", "current_job": job_id, "reserved_for_job": None}
     SELF["on_job_start_task"] = asyncio.create_task(node_doc.update(update_fields))

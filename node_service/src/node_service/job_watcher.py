@@ -267,12 +267,11 @@ async def _job_watcher(
         job_completed = False
         all_uploaded = SELF["all_inputs_uploaded"]
         all_inputs_processed = all_uploaded and input_queue_empty and all_workers_idle
-        all_local_work_complete = all_inputs_processed and SELF["results_queue"].empty()
-        if all_local_work_complete and client_disconnected:
+        if all_inputs_processed and client_disconnected:
             node_docs = await node_docs_collection.get()
             result_count = sum(doc.to_dict()["current_num_results"] for doc in node_docs)
             job_completed = n_inputs == result_count
-        elif all_local_work_complete:
+        elif all_inputs_processed and SELF["results_queue"].empty():
             job_completed = (await job_doc.get()).to_dict()["client_has_all_results"]
         if job_completed or JOB_FAILED or JOB_CANCELED:
             steal_task.cancel()

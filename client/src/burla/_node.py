@@ -286,6 +286,8 @@ class Node:
     async def _update_status(self):
         node_data = await self.client.get_node(self.instance_name)
         if not node_data:
+            # 404 means the node was DELETED (evicted from NODES_CACHE).
+            self.state = "FAILED"
             return
         self.state = node_data["status"]
         if self.state == "READY":
@@ -456,11 +458,12 @@ class Node:
         # wait until ready
         if self.state != "READY":
             await asyncio.sleep(max(0, 30 - (time() - start_time)))
-            while self.state != "READY":
+            while self.state == "BOOTING":
                 await self._update_status()
-                if self.state == "READY":
-                    break
-                await asyncio.sleep(random.uniform(2, 6))
+                if self.state == "BOOTING":
+                    await asyncio.sleep(random.uniform(2, 6))
+            if self.state != "READY":
+                return
 
         if packages:
             self.installing_packages = True

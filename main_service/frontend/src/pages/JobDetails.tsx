@@ -379,8 +379,7 @@ const JobDetails = () => {
                         })()}
                     </div>
 
-                    <div className="mt-5 pt-5 border-t border-gray-100 grid grid-cols-2 sm:grid-cols-4 gap-x-8 gap-y-5">
-                        <Fact label="Function" value={job.function_name ?? "Unknown"} />
+                    <div className="mt-5 pt-5 border-t border-gray-100 grid grid-cols-2 sm:grid-cols-3 gap-x-8 gap-y-5">
                         <Fact
                             label="Started"
                             value={
@@ -391,7 +390,6 @@ const JobDetails = () => {
                         />
                         <Fact
                             label="Image"
-                            span={2}
                             value={
                                 <span className="font-mono text-[13px] break-all">
                                     {jobDoc?.image ?? (jobDoc ? "default" : "—")}

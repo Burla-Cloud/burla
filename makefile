@@ -10,12 +10,12 @@ define UV_ZSH_ENV
 	uv python pin --project $(PROJECT_ABS) $(1) >/dev/null 2>&1
 	uv sync --project $(PROJECT_ABS) --group $(2) >/dev/null 2>&1
 	tmp_dir=$$(mktemp -d); \
-	printf 'PROMPT="($(1)-$(2)) %%c %%%% "\n' > $$tmp_dir/.zshrc; \
+	printf 'PROMPT="($(1)-$(2)) %%c %%%% "\nexport BURLA_CLUSTER_DASHBOARD_URL=http://localhost:5001\n' > $$tmp_dir/.zshrc; \
 	trap 'rm -rf $$tmp_dir' EXIT; \
 	ZDOTDIR=$$tmp_dir uv run --project $(PROJECT_ABS) --group $(2) zsh -i
 endef
 
-# make/cluster_dashboard_dev_state.py (save, point, restore, delete_booting_nodes, …)
+# make/cluster_dashboard_dev_state.py (delete_booting_nodes only)
 BURLA_MAKE_PYTHON := uv run --project ./client python make/cluster_dashboard_dev_state.py
 
 .PHONY: 3.11-dev 3.12-dev 3.13-dev 3.14-dev 3.11-jupyter 3.12-jupyter 3.13-jupyter 3.14-jupyter
@@ -64,9 +64,6 @@ local-dev:
 	rm -rf ./_shared_workspace; \
 	mkdir -p ./_shared_workspace; \
 	chmod 777 ./_shared_workspace; \
-	$(BURLA_MAKE_PYTHON) save; \
-	$(BURLA_MAKE_PYTHON) point; \
-	trap '$(BURLA_MAKE_PYTHON) restore' EXIT; \
 	echo "Starting local dev"; \
 	docker network create local-burla-cluster 2>/dev/null || true; \
 	gcloud auth print-access-token > .temp_token.txt; \

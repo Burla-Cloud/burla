@@ -2,17 +2,14 @@
 The tests here assume the cluster is running in "local-dev-mode".
 """
 
-from pathlib import Path
 from time import sleep
 import multiprocessing as mp
+import os
 import queue
 import io
-import sys
 import contextlib
 import traceback
-import json
 import pytest
-import burla
 from burla import remote_parallel_map
 
 
@@ -20,47 +17,27 @@ N_INPUTS = 100
 MAX_RUNTIME_SECONDS_WHEN_READY = 30
 
 
-def _run_test_base_in_subprocess(result_queue):
+def _run_rpm_in_subprocess(result_queue, function_source, inputs):
     function_namespace = {}
-    exec(
-        "def test_function(test_input):\n" "    print('hi')\n" "    return test_input\n",
-        {},
-        function_namespace,
-    )
+    exec(function_source, {}, function_namespace)
     test_function = function_namespace["test_function"]
 
     stdout_buffer = io.StringIO()
     try:
-        config_json = json.loads(burla.CONFIG_PATH.read_text())
-        local_dev_config = {**config_json, "cluster_dashboard_url": "http://localhost:5001"}
-        temp_config_path = Path("/tmp/burla_local_dev_test_credentials.json")
-        temp_config_path.write_text(json.dumps(local_dev_config))
-
-        # Every burla submodule that does `from burla import CONFIG_PATH`
-        # captures its own reference at import time, so just reassigning
-        # `burla.CONFIG_PATH` does not propagate. Patch every already-imported
-        # burla.* module that holds a `CONFIG_PATH` attribute instead of
-        # enumerating consumers by hand (which has silently rotted before).
-        burla.CONFIG_PATH = temp_config_path
-        for name, module in list(sys.modules.items()):
-            if not name.startswith("burla"):
-                continue
-            if hasattr(module, "CONFIG_PATH"):
-                module.CONFIG_PATH = temp_config_path
-
+        os.environ["BURLA_CLUSTER_DASHBOARD_URL"] = "http://localhost:5001"
         with contextlib.redirect_stdout(stdout_buffer):
-            outputs = remote_parallel_map(
-                test_function, list(range(N_INPUTS)), spinner=False, grow=True
-            )
+            outputs = remote_parallel_map(test_function, inputs, spinner=False, grow=True)
         result_queue.put({"ok": True, "stdout": stdout_buffer.getvalue(), "outputs": outputs})
     except Exception:
         result_queue.put({"ok": False, "traceback": traceback.format_exc()})
 
 
-def _run_with_timeout(timeout_seconds):
+def _run_with_timeout(function_source, inputs, timeout_seconds):
     context = mp.get_context("spawn")
     result_queue = context.Queue()
-    process = context.Process(target=_run_test_base_in_subprocess, args=(result_queue,))
+    process = context.Process(
+        target=_run_rpm_in_subprocess, args=(result_queue, function_source, inputs)
+    )
     process.start()
     process.join(timeout_seconds)
 
@@ -84,12 +61,19 @@ def _run_with_timeout(timeout_seconds):
 
 
 def test_base():
-    result = _run_with_timeout(MAX_RUNTIME_SECONDS_WHEN_READY)
+    function_source = "def test_function(test_input):\n    print('hi')\n    return test_input\n"
+    result = _run_with_timeout(function_source, list(range(N_INPUTS)), MAX_RUNTIME_SECONDS_WHEN_READY)
     stdout_lines = [line.strip() for line in result["stdout"].splitlines()]
     hi_count = sum(1 for line in stdout_lines if line == "hi")
     assert len(result["outputs"]) == N_INPUTS
     assert set(result["outputs"]) == set(range(N_INPUTS))
     assert hi_count == N_INPUTS
+
+
+def test_cwd_is_workspace():
+    function_source = "def test_function(_):\n    import os\n    return os.getcwd()\n"
+    result = _run_with_timeout(function_source, [None], MAX_RUNTIME_SECONDS_WHEN_READY)
+    assert result["outputs"] == ["/workspace"]
 
 
 def _test_big_function():

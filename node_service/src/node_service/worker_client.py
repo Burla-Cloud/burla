@@ -235,6 +235,10 @@ class WorkerClient:
                     f"{host_home_dir}/.config/gcloud:/root/.config/gcloud",
                     f"{host_pwd}/_shared_workspace:/workspace/shared",
                     f"{worker_python_environment_dir}:/worker_service_python_env",
+                    # Lets the burla client running inside a UDF find its credentials
+                    # without the worker ever seeing CONFIG_PATH through login. The
+                    # node writes the creds file into this dir at job start.
+                    f"{host_pwd}/_node_auth:/root/.config/burla",
                 ]
             )
         else:
@@ -245,6 +249,8 @@ class WorkerClient:
                 [
                     "/worker_service_python_env:/worker_service_python_env",
                     "/workspace/shared:/workspace/shared",
+                    # See local-dev branch comment above.
+                    "/opt/burla/node_auth:/root/.config/burla",
                 ]
             )
 

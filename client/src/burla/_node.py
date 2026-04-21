@@ -13,7 +13,7 @@ from aiohttp import ClientConnectorError, ClientError, ClientOSError, ClientTime
 from tblib import Traceback
 from yaspin import Spinner
 
-from burla import CONFIG_PATH
+from burla import get_cluster_dashboard_url
 from burla._auth import get_auth_headers
 from burla._cluster_client import ClusterClient, _local_host_from
 from burla._reporting import RemoteParallelMapReporter
@@ -175,13 +175,13 @@ async def wait_for_nodes_to_be_ready(
             n_booting_nodes = state["booting_count"]
             ready_nodes = state["ready_nodes"]
         if not ready_nodes:
-            main_service_url = json.loads(CONFIG_PATH.read_text())["cluster_dashboard_url"]
+            main_service_url = get_cluster_dashboard_url()
             msg = "\n\nZero nodes are ready after Booting. Did they fail to boot?\n"
             msg += f"Check your clsuter dashboard at: {main_service_url}\n\n"
             raise NoNodes(msg)
 
     if n_booting_nodes == 0 and n_running_nodes == 0 and len(ready_nodes) == 0:
-        main_service_url = json.loads(CONFIG_PATH.read_text())["cluster_dashboard_url"]
+        main_service_url = get_cluster_dashboard_url()
         msg = "\n\nZero nodes are ready. Is your cluster turned on?\n"
         msg += f'Go to {main_service_url} and hit "⏻ Start" to turn it on!\n\n'
         raise NoNodes(msg)
@@ -302,6 +302,7 @@ class Node:
             "packages": packages,
             "start_time": start_time,
             "node_ids_expected": assigned_node_ids,
+            "cluster_dashboard_url": self.client._url,
         }
         url = f"{self.host}/jobs/{job_id}"
         timeout = aiohttp.ClientTimeout(120)

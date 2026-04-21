@@ -1,4 +1,3 @@
-import json
 import os
 import sys
 import signal
@@ -9,7 +8,7 @@ from threading import Event
 
 from yaspin import Spinner
 
-from burla import CONFIG_PATH
+from burla import get_cluster_dashboard_url
 
 POSIX_SIGNALS_TO_HANDLE = ["SIGINT", "SIGTERM", "SIGHUP", "SIGQUIT"]
 NT_SIGNALS_TO_HANDLE = ["SIGINT", "SIGBREAK"]
@@ -90,7 +89,7 @@ def install_signal_handlers(
             )
 
         if background and inputs_done_event.is_set():
-            main_service_url = json.loads(CONFIG_PATH.read_text())["cluster_dashboard_url"]
+            main_service_url = get_cluster_dashboard_url()
             job_url = f"{main_service_url}/jobs/{job_id}"
             msg = "Background mode is enabled.\n"
             msg += f"This job will continue running on the cluster, to monitor progress go to:"

@@ -275,13 +275,6 @@ class Node:
             self.machine_type = node_data["machine_type"]
 
     async def _fail_and_delete(self, message: str):
-        # Fire-and-forget: one main_service call marks the node FAILED,
-        # writes a log subdoc, and triggers VM deletion in the background.
-        # On failure we log the exception (instead of swallowing silently)
-        # so the spinner shows something diagnostic - but we still don't
-        # raise, because the caller's job-fail path should proceed even
-        # if main_service is unreachable (inactivity shutdown will
-        # eventually clean the VM up anyway).
         self.state = "FAILED"
         self.spinner_compatible_print(f"Marking Node {self.instance_name} as FAILED: {message}")
         try:
@@ -469,8 +462,13 @@ class Node:
             return
 
         while True:
-            n_ready_nodes = sum(1 for node in nodes if node.state in ("READY", "RUNNING"))
-            input_chunksize = max(self.target_parallelism, n_inputs // n_ready_nodes)
+            total_parallelism = sum(
+                node.target_parallelism for node in nodes if node.state in ("READY", "RUNNING")
+            ) or 1
+            input_chunksize = max(
+                self.target_parallelism,
+                (n_inputs * self.target_parallelism) // total_parallelism,
+            )
             input_chunk = []
             chunk_size_bytes = 0
             while inputs_with_indicies and len(input_chunk) < input_chunksize:

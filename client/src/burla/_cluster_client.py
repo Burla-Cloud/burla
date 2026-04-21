@@ -91,7 +91,8 @@ class ClusterClient:
         """
         One-shot: picks ready nodes from main_service's in-memory cache,
         grows the cluster if `grow=True`, writes the initial job doc, and
-        returns `{ready_nodes, booting_node_names, target_parallelism}`.
+        returns `{ready_nodes, booting_nodes}`. Each list element is a dict
+        with at least `instance_name` and `target_parallelism`.
 
         Replaces the old client-side sequence (fetch cluster state -> locally
         pick ready nodes -> `POST /v1/cluster/grow` -> `POST /v1/jobs/{id}`)

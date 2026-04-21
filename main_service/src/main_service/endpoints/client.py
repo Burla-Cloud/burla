@@ -15,6 +15,7 @@ If you add an endpoint here, its caller should be the burla pypi client; if
 you add a dashboard endpoint, put it in one of the files above.
 """
 
+import asyncio
 import math
 from time import time
 from uuid import uuid4
@@ -46,12 +47,33 @@ from main_service.endpoints.cluster_lifecycle import (
     MAX_GROW_CPUS,
     _get_cluster_config,
     _machine_type_cpu_count,
+    _pack_n4_standard_machines,
     _start_nodes,
 )
 
 router = APIRouter()
 
 ASYNC_DB = firestore.AsyncClient(project=PROJECT_ID, database="burla")
+
+# The initial job-doc write in `start_job` is the single biggest piece of
+# latency in that endpoint (~150-400ms round-trip to firestore). Since the
+# client's very next step is a network hop to each node, there is plenty of
+# time for the write to land before any node actually reads the doc, so we
+# fire it asynchronously and return the response immediately.
+#
+# We keep a strong reference to the scheduled task so the event loop does
+# not GC it mid-flight.
+_in_flight_job_doc_writes: set[asyncio.Task] = set()
+
+
+async def _write_initial_job_doc(job_id: str, job_doc: dict, logger: Logger):
+    try:
+        await ASYNC_DB.collection("jobs").document(job_id).set(job_doc)
+    except Exception as e:
+        logger.log(
+            f"Failed to write initial job doc for job {job_id}: {e}",
+            severity="ERROR",
+        )
 
 
 # ------------------------------------------------------------------
@@ -140,10 +162,10 @@ def _grow_if_needed(
     logger: Logger,
     auth_headers: dict,
     add_background_task,
-) -> list[str]:
-    """Mirror of the client's old grow math in _execute_job. Schedules
-    `_start_nodes` in the background and returns the instance names it
-    reserved for this job (empty list if no growth needed)."""
+) -> list[dict]:
+    """Schedules `_start_nodes` in the background and returns one
+    `{instance_name, target_parallelism}` dict per reserved booting node.
+    Empty list if no growth was needed."""
     requested_parallelism = min(n_inputs, max_parallelism)
     required_cpus_for_ram = (func_ram + 3) // 4
     required_cpus_per_call = max(func_cpu, required_cpus_for_ram)
@@ -161,20 +183,45 @@ def _grow_if_needed(
 
     config = _get_cluster_config()
     node_spec = config["Nodes"][0]
-    cpu_per_node = _machine_type_cpu_count(node_spec["machine_type"])
-    n_nodes_to_add = math.ceil(num_cpus_to_add / cpu_per_node)
-    node_instance_names = [f"burla-node-{uuid4().hex[:8]}" for _ in range(n_nodes_to_add)]
+    configured_machine_type = node_spec["machine_type"]
+
+    # For CPU (n4-standard) clusters, ignore the configured size and pack the
+    # required CPUs into as many n4-standard-80s as fit, with the remainder
+    # covered by the smallest n4-standard that fits. GPU clusters keep using
+    # the configured machine type so GPU jobs still land on GPU hardware.
+    # Local dev stays homogeneous because node containers hard-code 2 workers
+    # regardless of the advertised machine_type (see INSTANCE_N_CPUS).
+    pack_by_size = (
+        not IN_LOCAL_DEV_MODE
+        and configured_machine_type.startswith("n4-standard-")
+    )
+
+    if pack_by_size:
+        node_machine_types = _pack_n4_standard_machines(num_cpus_to_add)
+    else:
+        cpu_per_node = _machine_type_cpu_count(configured_machine_type)
+        n_nodes_to_add = math.ceil(num_cpus_to_add / cpu_per_node)
+        node_machine_types = [configured_machine_type] * n_nodes_to_add
+
+    node_instance_names = [f"burla-node-{uuid4().hex[:8]}" for _ in node_machine_types]
 
     add_background_task(
         _start_nodes,
         logger,
         auth_headers,
         config,
-        n_nodes_to_add,
+        len(node_instance_names),
         node_instance_names,
         job_id,
+        node_machine_types,
     )
-    return node_instance_names
+    return [
+        {
+            "instance_name": name,
+            "target_parallelism": parallelism_capacity(machine_type, func_cpu, func_ram),
+        }
+        for name, machine_type in zip(node_instance_names, node_machine_types)
+    ]
 
 
 @router.post("/v1/jobs/{job_id}/start")
@@ -198,10 +245,9 @@ async def start_job(
 
     Response on success:
         {
-          "ready_nodes": [{"instance_name", "host", "machine_type",
-                           "target_parallelism"}, ...],
-          "booting_node_names": [...],   # populated only when grow triggered growth
-          "target_parallelism": <sum across ready_nodes>,
+          "ready_nodes":   [{"instance_name", "host", "machine_type",
+                             "target_parallelism"}, ...],
+          "booting_nodes": [{"instance_name", "target_parallelism"}, ...],
         }
 
     Error responses:
@@ -264,9 +310,9 @@ async def start_job(
         raise HTTPException(status_code=404, detail="no_nodes")
 
     # --- grow, if requested and short on capacity ---
-    booting_node_names: list[str] = []
+    booting_nodes: list[dict] = []
     if grow:
-        booting_node_names = _grow_if_needed(
+        booting_nodes = _grow_if_needed(
             target_parallelism=target_parallelism,
             n_inputs=n_inputs,
             max_parallelism=max_parallelism,
@@ -278,7 +324,10 @@ async def start_job(
             add_background_task=add_background_task,
         )
 
-    # --- write the job doc ---
+    # --- write the job doc (fire-and-forget) ---
+    # Kicked off on the event loop and tracked in `_in_flight_job_doc_writes`
+    # so the response can return as soon as in-memory work is done. See the
+    # comment on that set above for why this is safe.
     job_doc = {
         "n_inputs": n_inputs,
         "func_cpu": func_cpu,
@@ -297,12 +346,13 @@ async def start_job(
         "client_has_all_results": False,
         "fail_reason": [],
     }
-    await ASYNC_DB.collection("jobs").document(job_id).set(job_doc)
+    write_task = asyncio.create_task(_write_initial_job_doc(job_id, job_doc, logger))
+    _in_flight_job_doc_writes.add(write_task)
+    write_task.add_done_callback(_in_flight_job_doc_writes.discard)
 
     return {
         "ready_nodes": ready,
-        "booting_node_names": booting_node_names,
-        "target_parallelism": target_parallelism,
+        "booting_nodes": booting_nodes,
     }
 
 

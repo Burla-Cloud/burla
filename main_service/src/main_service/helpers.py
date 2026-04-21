@@ -1,11 +1,33 @@
 import sys
 import requests
+import logging as python_logging
 from itertools import groupby
 from typing import Optional
 
 from fastapi import Request
 
 from main_service import PROJECT_ID, BURLA_BACKEND_URL, GCL_CLIENT
+
+
+# Paths the burla pypi client polls heavily during a job:
+#  - `/v1/cluster/state`              ~every 10-100ms while waiting for nodes to boot
+#  - `/v1/cluster/nodes/{instance}`   ~every 2-6s per booting node
+# Without filtering these drown real request logs in both stdout (uvicorn.access)
+# and Cloud Logging (our `log_and_time_requests` middleware).
+_CHATTY_CLIENT_PATH_SUBSTRINGS = ("/v1/cluster/state", "/v1/cluster/nodes/")
+
+
+def is_chatty_client_path(path: str) -> bool:
+    return any(substring in path for substring in _CHATTY_CLIENT_PATH_SUBSTRINGS)
+
+
+class ChattyClientEndpointFilter(python_logging.Filter):
+    """Drop uvicorn access-log records for paths the burla client polls on
+    a tight loop during a job."""
+
+    def filter(self, record):
+        path = record.args[2]
+        return not is_chatty_client_path(path)
 
 
 def log_telemetry(message, severity="INFO", **kwargs):

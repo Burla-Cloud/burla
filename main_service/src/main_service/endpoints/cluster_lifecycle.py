@@ -22,11 +22,36 @@ router = APIRouter()
 MAX_GROW_CPUS = 2560
 LOCAL_DEV_MAX_GROW_CPUS = 4
 
+# Priced n4-standard sizes the dashboard exposes, largest first. n4-standard-48
+# is intentionally omitted to match `main_service/frontend/src/types/constants.ts`
+# (pricing isn't defined for it), so grow never provisions an unpriced size.
+N4_STANDARD_SIZES_DESCENDING = (80, 64, 32, 16, 8, 4, 2)
+
 
 def _machine_type_cpu_count(machine_type: str) -> int:
     if machine_type.startswith("n4-standard-") and machine_type.split("-")[-1].isdigit():
         return int(machine_type.split("-")[-1])
     return 1
+
+
+def _pack_n4_standard_machines(num_cpus: int) -> list[str]:
+    """
+    Pick n4-standard machine types that cover `num_cpus`, greedily using as
+    many of the largest size as possible and covering any remainder with the
+    smallest size that fits. e.g. 95 -> [n4-standard-80, n4-standard-16].
+    """
+    machines = []
+    largest = N4_STANDARD_SIZES_DESCENDING[0]
+    remaining = num_cpus
+    while remaining >= largest:
+        machines.append(f"n4-standard-{largest}")
+        remaining -= largest
+    if remaining > 0:
+        for size in reversed(N4_STANDARD_SIZES_DESCENDING):
+            if size >= remaining:
+                machines.append(f"n4-standard-{size}")
+                break
+    return machines
 
 
 def _shutdown_cluster(logger: Logger, auth_headers: dict):
@@ -98,6 +123,7 @@ def _start_nodes(
     n_nodes_to_add: int = None,
     node_instance_names: list[str] = None,
     reserved_for_job: str = None,
+    node_machine_types: list[str] = None,
 ):
     node_service_port = _current_local_dev_max_node_port()
     futures = []
@@ -114,10 +140,15 @@ def _start_nodes(
             if IN_LOCAL_DEV_MODE:
                 node_service_port += 1
             instance_name = None if node_instance_names is None else node_instance_names[index]
+            machine_type = (
+                node_machine_types[index]
+                if node_machine_types is not None
+                else node_spec["machine_type"]
+            )
             node_start_kwargs = dict(
                 db=DB,
                 logger=logger,
-                machine_type=node_spec["machine_type"],
+                machine_type=machine_type,
                 gcp_region=node_spec["gcp_region"],
                 containers=[Container.from_dict(c) for c in node_spec["containers"]],
                 auth_headers=auth_headers,

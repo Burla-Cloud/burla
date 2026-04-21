@@ -5,6 +5,7 @@ import asyncio
 import threading
 import traceback
 import aiohttp
+import logging as python_logging
 from uuid import uuid4
 from time import time, sleep
 from typing import Callable, Optional
@@ -147,7 +148,16 @@ def _start_caches():
     _config_cache_watcher = DB.collection("cluster_config").on_snapshot(_on_config_snapshot)
 
 
-from main_service.helpers import Logger, format_traceback
+from main_service.helpers import (
+    ChattyClientEndpointFilter,
+    Logger,
+    format_traceback,
+    is_chatty_client_path,
+)
+
+# Silence uvicorn access logs for the two endpoints the burla client polls
+# on a tight loop during every job (cluster state + per-node status).
+python_logging.getLogger("uvicorn.access").addFilter(ChattyClientEndpointFilter())
 
 
 # Converts null-byte probe paths into 404s instead of 500s.
@@ -394,12 +404,19 @@ async def catch_errors(request: Request, call_next):
 # round-trip to `backend.burla.dev/users:validate` (~100-200 ms), which
 # both slows every client call AND loads up the central auth service.
 #
-# Cache successful validations for a short TTL. A revoked user can
-# still hit main_service for up to TTL seconds after revocation,
-# which we accept in exchange for the latency win.
+# A successful validation is trusted for `_AUTH_CACHE_TTL_SEC`. On a cache
+# miss (never validated, or the entry expired) the middleware re-validates
+# against the backend before deciding - so a request that looks "invalid"
+# from cache state alone always gets a fresh backend check first rather
+# than being rejected outright. We only cache successes; a 401 from the
+# backend is never cached, so a user whose access is fixed will get in on
+# their very next request.
+#
+# A revoked user can still hit main_service for up to TTL seconds after
+# revocation, which we accept in exchange for the latency win.
 # ------------------------------------------------------------------
 
-_AUTH_CACHE_TTL_SEC = 60
+_AUTH_CACHE_TTL_SEC = 60 * 60  # 1 hour
 _auth_cache: dict[tuple[str, str], float] = {}  # (email, authorization) -> expires_at
 _auth_cache_lock = threading.Lock()
 
@@ -409,6 +426,11 @@ def _cached_auth_ok(email: str, authorization: str) -> bool:
     with _auth_cache_lock:
         expires_at = _auth_cache.get(key)
         if expires_at is None or time() >= expires_at:
+            # Drop the stale entry so a subsequent successful backend
+            # validation rewrites it cleanly instead of racing against
+            # a dangling expired one.
+            if expires_at is not None:
+                _auth_cache.pop(key, None)
             return False
         return True
 
@@ -518,7 +540,7 @@ async def log_and_time_requests(request: Request, call_next):
 
     response = await call_next(request)
 
-    if not IN_LOCAL_DEV_MODE:
+    if not IN_LOCAL_DEV_MODE and not is_chatty_client_path(request.url.path):
 
         response_contains_background_tasks = getattr(response, "background") is not None
         if not response_contains_background_tasks:

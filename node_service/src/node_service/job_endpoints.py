@@ -163,16 +163,11 @@ async def execute(
             workers_to_leave_idle.append(worker)
 
     if not workers_to_assign:
-        # possible the `on_job_start` in __init__ hasn't run yet because async.
-        # if it runs after this returns node will be stuck running.
-        # switch coroutines until this node is running, then reset back.
-        # using async in `on_job_start` because it's maybe slightly faster ?
-        n = 0
-        while not SELF["RUNNING"]:
-            n += 1
-            if n > 10:
-                raise Exception("this is theoretically impossible")
-            await asyncio.sleep(0)
+        # `on_job_start` kicked the RUNNING firestore write off the critical path
+        # as a background task. Wait for it to land before flipping the node doc
+        # back to READY, otherwise the two writes can race and leave firestore
+        # stuck in RUNNING.
+        await SELF["on_job_start_task"]
 
         SELF["RUNNING"] = False
         SELF["current_job"] = None

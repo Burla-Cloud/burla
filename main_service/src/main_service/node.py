@@ -37,7 +37,6 @@ from main_service import (
     CREDENTIALS,
     IN_LOCAL_DEV_MODE,
     CURRENT_BURLA_VERSION,
-    MIN_COMPATIBLE_CLIENT_VERSION,
 )
 from main_service.helpers import Logger, format_traceback
 
@@ -178,8 +177,6 @@ class Node:
 
         current_state = dict(self.__dict__)  # <- create copy to modify / save
         current_state["status"] = "BOOTING"
-        current_state["main_svc_version"] = CURRENT_BURLA_VERSION
-        current_state["min_compatible_client_version"] = MIN_COMPATIBLE_CLIENT_VERSION
         current_state["containers"] = [container.to_dict() for container in containers]
         attrs_to_not_save = [
             "db",

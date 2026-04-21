@@ -71,6 +71,7 @@ def REINIT_SELF(SELF):
     SELF["job_watcher_stop_event"] = Event()
     SELF["job_watcher_stop_event"].set()  # needs to be default set so it definitely dies on reboot
     SELF["job_watcher_task"] = None
+    SELF["on_job_start_task"] = None
     SELF["BOOTING"] = False
     SELF["RUNNING"] = False
     SELF["FAILED"] = False
@@ -215,15 +216,17 @@ async def lifespan(app: FastAPI):
 
 
 async def on_job_start(scope, first_event):
+    # SELF is set synchronously so the middleware's next-request 409 guard and
+    # the execute endpoint's rollback (which reads SELF, not firestore) see the
+    # new state immediately. The firestore write happens in the background; the
+    # rollback awaits `on_job_start_task` so the two writes cannot race.
     job_id = scope.get("path", "").split("/jobs/")[-1]
-    node_doc = ASYNC_DB.collection("nodes").document(INSTANCE_NAME)
-    await node_doc.update({"status": "RUNNING", "current_job": job_id, "reserved_for_job": None})
-    # these must be set after ^
-    # used to confirm in execution endpoint that this ran BEFORE setting node back to ready
-    # in the case of a failure, it may not have because async.
     SELF["RUNNING"] = True
     SELF["current_job"] = job_id
     SELF["reserved_for_job"] = None
+    node_doc = ASYNC_DB.collection("nodes").document(INSTANCE_NAME)
+    update_fields = {"status": "RUNNING", "current_job": job_id, "reserved_for_job": None}
+    SELF["on_job_start_task"] = asyncio.create_task(node_doc.update(update_fields))
 
 
 class CallHookOnJobStartMiddleware:

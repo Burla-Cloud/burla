@@ -107,12 +107,19 @@ def install_signal_handlers(
     return original_signal_handlers
 
 
-def get_modules_required_on_remote(function_):
-    """
-    Returns all package modules if custom user-defined modules exist.
-    (because I don't want to write code to inspect custom modules for required packages right now)
-    Only returns modules defined in `function_` namespace if there are no user-defined modules.
-    """
+# Cache of the last sys.modules walk, keyed on len(sys.modules). In fat notebook
+# envs the walk itself is 50-200ms per call; repeat `remote_parallel_map`
+# invocations without new imports can reuse the previous result.
+# Layout: (modules_count, custom_module_names, package_module_names, has_custom_modules)
+_sys_modules_scan_cache = None
+
+
+def _scan_sys_modules():
+    global _sys_modules_scan_cache
+    modules_count = len(sys.modules)
+    if _sys_modules_scan_cache and _sys_modules_scan_cache[0] == modules_count:
+        return _sys_modules_scan_cache[1], _sys_modules_scan_cache[2], _sys_modules_scan_cache[3]
+
     has_custom_modules = False
     custom_module_names = set()
     package_module_names = set()
@@ -132,6 +139,26 @@ def get_modules_required_on_remote(function_):
             elif is_custom:
                 custom_module_names.add(module_name)
                 has_custom_modules = True
+    _sys_modules_scan_cache = (
+        modules_count,
+        custom_module_names,
+        package_module_names,
+        has_custom_modules,
+    )
+    return custom_module_names, package_module_names, has_custom_modules
+
+
+def get_modules_required_on_remote(function_):
+    """
+    Returns all package modules if custom user-defined modules exist.
+    (because I don't want to write code to inspect custom modules for required packages right now)
+    Only returns modules defined in `function_` namespace if there are no user-defined modules.
+    """
+    cached_custom, cached_packages, has_custom_modules = _scan_sys_modules()
+    # Caller mutates these (removing temp-fix misdetections, adding xarray deps),
+    # so hand back fresh copies instead of the cached sets.
+    custom_module_names = set(cached_custom)
+    package_module_names = set(cached_packages)
     if not has_custom_modules:
         # If there are NO custom modules, we install only packages that are in the namespace
         # of the users function, because these are the only ones that might be used.

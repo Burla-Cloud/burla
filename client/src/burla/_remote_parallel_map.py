@@ -5,6 +5,7 @@ import traceback
 import base64
 from asyncio import create_task
 from contextlib import AsyncExitStack
+from functools import cache
 from importlib import metadata
 from queue import Queue
 from threading import Event, Thread
@@ -40,8 +41,15 @@ from burla._node import (
 )
 from burla._reporting import RemoteParallelMapReporter, log_job_failure_telemetry
 
-# load on import and reuse because this is very slow in big envs
-PKG_MODULE_MAPPING = metadata.packages_distributions()
+
+# `metadata.packages_distributions()` takes hundreds of ms to multiple seconds in
+# fat notebook envs. Deferring it to first-call time means `import burla` stays
+# fast for users who don't call `remote_parallel_map` right away; repeat calls in
+# the same session share the cached result.
+@cache
+def _pkg_module_mapping():
+    return metadata.packages_distributions()
+
 
 BANNED_PACKAGES = ["ipython", "burla", "google-colab"]
 
@@ -154,7 +162,6 @@ async def _execute_job(
                 raise AllNodesBusy()
             await wait_for_nodes_to_be_ready(client=client, spinner=spinner)
 
-    target_parallelism = int(response.get("target_parallelism") or 0)
     ready_nodes = [
         Node.from_ready(
             instance_name=node_data["instance_name"],
@@ -167,33 +174,21 @@ async def _execute_job(
         )
         for node_data in response.get("ready_nodes", [])
     ]
-
-    booting_names = response.get("booting_node_names", [])
-    booting_nodes = []
-    if booting_names:
-        # Growth-budget per booting node: evenly split the remaining parallelism.
-        per_node_parallelism = max(
-            1,
-            (target_parallelism or len(booting_names)) // max(1, len(booting_names)),
+    booting_nodes = [
+        Node.from_booting(
+            instance_name=node_data["instance_name"],
+            target_parallelism=int(node_data["target_parallelism"]),
+            session=session,
+            client=client,
+            spinner=spinner,
         )
-        booting_nodes = [
-            Node.from_booting(
-                instance_name=name,
-                target_parallelism=per_node_parallelism,
-                session=session,
-                client=client,
-                spinner=spinner,
-            )
-            for name in booting_names
-        ]
+        for node_data in response.get("booting_nodes", [])
+    ]
 
     nodes = ready_nodes + booting_nodes
     if booting_nodes:
         reporter.set_booting_nodes_message(len(booting_nodes))
     elif not nodes:
-        # grow=True but main_service returned no booting names (cap hit) AND
-        # no ready nodes - equivalent to the old "Cluster refused to boot"
-        # branch.
         raise NoNodes("Cluster refused to boot required additional nodes ...")
 
     job_start_telemetry_task = create_task(reporter.log_job_start_telemetry(nodes, packages))
@@ -382,14 +377,15 @@ def remote_parallel_map(
 
     for module_name in custom_module_names:
         cloudpickle.register_pickle_by_value(sys.modules[module_name])
+    pkg_module_mapping = _pkg_module_mapping()
     packages = {}
     for module_name in package_module_names:
         # some of these are unnecessary since we get all that map to the base module
         # example google.cloud.storage -> google -> every installed google package
         # for now we just install more packages than we need to, it's fast enough
-        if not PKG_MODULE_MAPPING.get(module_name):
+        if not pkg_module_mapping.get(module_name):
             continue
-        for package_name in PKG_MODULE_MAPPING.get(module_name):
+        for package_name in pkg_module_mapping.get(module_name):
             packages[package_name] = metadata.version(package_name)
 
     # unnecessary / already installed / will break stuff
@@ -397,38 +393,38 @@ def remote_parallel_map(
         packages.pop(package, None)
 
     # not an official dep
-    if packages.get("SQLAlchemy") and "psycopg2-binary" in PKG_MODULE_MAPPING.get("psycopg2", []):
+    if packages.get("SQLAlchemy") and "psycopg2-binary" in pkg_module_mapping.get("psycopg2", []):
         packages["psycopg2-binary"] = metadata.version("psycopg2-binary")
 
     # manually check for extras until we can support automatic extra detection.
     if packages.get("geopandas"):
-        if "geoalchemy2" in PKG_MODULE_MAPPING and not ("geoalchemy2" in packages):
+        if "geoalchemy2" in pkg_module_mapping and not ("geoalchemy2" in packages):
             packages["geoalchemy2"] = metadata.version("geoalchemy2")
-        if "geopy" in PKG_MODULE_MAPPING and not ("geopy" in packages):
+        if "geopy" in pkg_module_mapping and not ("geopy" in packages):
             packages["geopy"] = metadata.version("geopy")
-        if "matplotlib" in PKG_MODULE_MAPPING and not ("matplotlib" in packages):
+        if "matplotlib" in pkg_module_mapping and not ("matplotlib" in packages):
             packages["matplotlib"] = metadata.version("matplotlib")
-        if "mapclassify" in PKG_MODULE_MAPPING and not ("mapclassify" in packages):
+        if "mapclassify" in pkg_module_mapping and not ("mapclassify" in packages):
             packages["mapclassify"] = metadata.version("mapclassify")
-        if "xyzservices" in PKG_MODULE_MAPPING and not ("xyzservices" in packages):
+        if "xyzservices" in pkg_module_mapping and not ("xyzservices" in packages):
             packages["xyzservices"] = metadata.version("xyzservices")
-        if "folium" in PKG_MODULE_MAPPING and not ("folium" in packages):
+        if "folium" in pkg_module_mapping and not ("folium" in packages):
             packages["folium"] = metadata.version("folium")
-        if "pointpats" in PKG_MODULE_MAPPING and not ("pointpats" in packages):
+        if "pointpats" in pkg_module_mapping and not ("pointpats" in packages):
             packages["pointpats"] = metadata.version("pointpats")
-        if "scipy" in PKG_MODULE_MAPPING and not ("scipy" in packages):
+        if "scipy" in pkg_module_mapping and not ("scipy" in packages):
             packages["scipy"] = metadata.version("scipy")
-        if "pyarrow" in PKG_MODULE_MAPPING and not ("pyarrow" in packages):
+        if "pyarrow" in pkg_module_mapping and not ("pyarrow" in packages):
             packages["pyarrow"] = metadata.version("pyarrow")
-        if "SQLAlchemy" in PKG_MODULE_MAPPING and not ("SQLAlchemy" in packages):
+        if "SQLAlchemy" in pkg_module_mapping and not ("SQLAlchemy" in packages):
             packages["SQLAlchemy"] = metadata.version("SQLAlchemy")
 
     if packages.get("mapclassify"):
-        if "libpysal" in PKG_MODULE_MAPPING and not ("libpysal" in packages):
+        if "libpysal" in pkg_module_mapping and not ("libpysal" in packages):
             packages["libpysal"] = metadata.version("libpysal")
-        if "shapely" in PKG_MODULE_MAPPING and not ("shapely" in packages):
+        if "shapely" in pkg_module_mapping and not ("shapely" in packages):
             packages["shapely"] = metadata.version("shapely")
-        if "matplotlib" in PKG_MODULE_MAPPING and not ("matplotlib" in packages):
+        if "matplotlib" in pkg_module_mapping and not ("matplotlib" in packages):
             packages["matplotlib"] = metadata.version("matplotlib")
     # ------------------------------------------------
 

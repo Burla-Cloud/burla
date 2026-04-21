@@ -137,8 +137,8 @@ class ClusterClient:
                 detail["upper_version"],
                 detail["current_version"],
             )
-        if status == 409 and detail == "no_compatible_nodes":
-            raise NoCompatibleNodes()
+        if status == 409 and isinstance(detail, dict) and detail.get("error") == "no_compatible_nodes":
+            raise NoCompatibleNodes(detail)
         if status == 503 and isinstance(detail, dict) and detail.get("error") == "nodes_busy":
             raise NodesBusy()
         if status == 404:

@@ -266,6 +266,9 @@ class Node:
                 f"{os.environ['HOST_PWD']}/_shared_workspace": "/workspace/shared",
                 f"{os.environ['HOST_PWD']}/_worker_service_python_env": "/worker_service_python_env",
                 f"{os.environ['HOST_PWD']}/_python_version_marker": "/python_version_marker",
+                # Paired with the matching mount in every worker container;
+                # see NODE_AUTH_DIR in node_service/__init__.py.
+                f"{os.environ['HOST_PWD']}/_node_auth": "/opt/burla/node_auth",
                 "/var/run/docker.sock": "/var/run/docker.sock",
             },
         )

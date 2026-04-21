@@ -225,6 +225,9 @@ class WorkerClient:
             "ShmSize": 16 * 1024**3,
         }
 
+        # The node_auth bind is what makes nested remote_parallel_map calls
+        # work: the node writes creds into /opt/burla/node_auth at job start
+        # and they land at burla.CONFIG_PATH inside every worker.
         if IN_LOCAL_DEV_MODE:
             host_pwd = os.environ["HOST_PWD"]
             host_home_dir = os.environ["HOST_HOME_DIR"]
@@ -235,6 +238,7 @@ class WorkerClient:
                     f"{host_home_dir}/.config/gcloud:/root/.config/gcloud",
                     f"{host_pwd}/_shared_workspace:/workspace/shared",
                     f"{worker_python_environment_dir}:/worker_service_python_env",
+                    f"{host_pwd}/_node_auth:/root/.config/burla",
                 ]
             )
         else:
@@ -245,6 +249,7 @@ class WorkerClient:
                 [
                     "/worker_service_python_env:/worker_service_python_env",
                     "/workspace/shared:/workspace/shared",
+                    "/opt/burla/node_auth:/root/.config/burla",
                 ]
             )
 

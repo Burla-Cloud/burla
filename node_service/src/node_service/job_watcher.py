@@ -12,7 +12,13 @@ from google.cloud.firestore_v1.async_client import AsyncClient
 from google.cloud.firestore import FieldFilter, And
 from google.cloud.firestore_v1.field_path import FieldPath
 
-from node_service import PROJECT_ID, SELF, INSTANCE_NAME, REINIT_SELF
+from node_service import (
+    PROJECT_ID,
+    SELF,
+    INSTANCE_NAME,
+    NODE_AUTH_CREDENTIALS_PATH,
+    REINIT_SELF,
+)
 from node_service.helpers import Logger, format_traceback
 from node_service.lifecycle_endpoints import reboot_containers
 
@@ -62,6 +68,8 @@ async def _input_steal_loop(async_db, session, logger, job_started_at, node_ids_
 
     should_steal = lambda: SELF["all_inputs_uploaded"] and (time() - job_started_at > 10)
     neighbor_id, neighbor_host, nodes_might_join = await get_neighbor(async_db, node_ids_expected)
+    if not (neighbor_id or nodes_might_join):
+        return
     neighbor_had_no_inputs_at = None
 
     while not SELF["job_watcher_stop_event"].is_set():
@@ -332,6 +340,8 @@ async def reinit_node(assigned_workers: list, async_db: AsyncClient):
 
 
 async def reset_workers(logger: Logger, async_db: AsyncClient):
+    # Stops idle or reassigned workers from holding creds for a finished job.
+    NODE_AUTH_CREDENTIALS_PATH.unlink(missing_ok=True)
     try:
         await asyncio.gather(*(worker.reset() for worker in SELF["workers"]))
     except Exception as e:

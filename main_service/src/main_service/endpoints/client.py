@@ -18,6 +18,7 @@ you add a dashboard endpoint, put it in one of the files above.
 import asyncio
 import math
 from time import time
+from typing import Optional
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -38,11 +39,14 @@ from main_service import (
 )
 from main_service.helpers import (
     Logger,
+    gpu_machine_prefix,
+    gpu_machine_type,
     parallelism_capacity,
     parse_version,
 )
 from main_service.node import Node
 from main_service.endpoints.cluster_lifecycle import (
+    GROW_INACTIVITY_SHUTDOWN_TIME_SEC,
     LOCAL_DEV_MAX_GROW_CPUS,
     MAX_GROW_CPUS,
     _get_cluster_config,
@@ -117,17 +121,36 @@ async def patch_job_doc(job_id: str, request: Request):
 # ------------------------------------------------------------------
 
 
-def _select_ready_nodes_from_cache(func_cpu: int, func_ram: int, max_parallelism: int):
+def _select_ready_nodes_from_cache(
+    func_cpu: int,
+    func_ram: int,
+    max_parallelism: int,
+    image: Optional[str],
+    func_gpu: Optional[str],
+):
     """Walk the ready-node cache, picking unreserved ones that fit the
     requested per-function resources, up to `max_parallelism` total slots.
-    Returns (selected_nodes, total_parallelism).
+    When `image` is set, only nodes running that container are eligible.
+    When `func_gpu` is set, only nodes on a matching GPU family are eligible.
+    Returns (selected_nodes, total_parallelism, ready_nodes).
     """
+    machine_prefix = gpu_machine_prefix(func_gpu)
     with _nodes_cache_lock:
         all_nodes = list(NODES_CACHE.values())
     ready_nodes = [
         n for n in all_nodes
         if n.get("status") == "READY" and not n.get("reserved_for_job")
     ]
+    if image:
+        ready_nodes = [
+            n for n in ready_nodes
+            if image in [c["image"] for c in n.get("containers") or []]
+        ]
+    if machine_prefix:
+        ready_nodes = [
+            n for n in ready_nodes
+            if (n.get("machine_type") or "").startswith(machine_prefix)
+        ]
 
     selected = []
     total_parallelism = 0
@@ -158,6 +181,8 @@ def _grow_if_needed(
     max_parallelism: int,
     func_cpu: int,
     func_ram: int,
+    image: Optional[str],
+    func_gpu: Optional[str],
     job_id: str,
     logger: Logger,
     auth_headers: dict,
@@ -165,45 +190,60 @@ def _grow_if_needed(
 ) -> list[dict]:
     """Schedules `_start_nodes` in the background and returns one
     `{instance_name, target_parallelism}` dict per reserved booting node.
-    Empty list if no growth was needed."""
+    Empty list if no growth was needed.
+
+    When `func_gpu` is set, each new node is one of the mapped single-GPU
+    machine types and contributes exactly one parallelism slot. When `image`
+    is set, the new nodes run that image instead of the cluster default.
+    """
     requested_parallelism = min(n_inputs, max_parallelism)
-    required_cpus_for_ram = (func_ram + 3) // 4
-    required_cpus_per_call = max(func_cpu, required_cpus_for_ram)
-    target_cpus = requested_parallelism * required_cpus_per_call
-    current_cpus = target_parallelism * required_cpus_per_call
-    missing_cpus = max(0, target_cpus - current_cpus)
-    if missing_cpus <= 0:
-        return []
+    gpu_mt = gpu_machine_type(func_gpu)
 
-    max_cpu = LOCAL_DEV_MAX_GROW_CPUS if IN_LOCAL_DEV_MODE else MAX_GROW_CPUS
-    max_additional_cpus = max(0, max_cpu - current_cpus)
-    num_cpus_to_add = min(missing_cpus, max_additional_cpus)
-    if num_cpus_to_add <= 0:
-        return []
-
-    config = _get_cluster_config()
-    node_spec = config["Nodes"][0]
-    configured_machine_type = node_spec["machine_type"]
-
-    # For CPU (n4-standard) clusters, ignore the configured size and pack the
-    # required CPUs into as many n4-standard-80s as fit, with the remainder
-    # covered by the smallest n4-standard that fits. GPU clusters keep using
-    # the configured machine type so GPU jobs still land on GPU hardware.
-    # Local dev stays homogeneous because node containers hard-code 2 workers
-    # regardless of the advertised machine_type (see INSTANCE_N_CPUS).
-    pack_by_size = (
-        not IN_LOCAL_DEV_MODE
-        and configured_machine_type.startswith("n4-standard-")
-    )
-
-    if pack_by_size:
-        node_machine_types = _pack_n4_standard_machines(num_cpus_to_add)
+    if gpu_mt:
+        missing_nodes = max(0, requested_parallelism - target_parallelism)
+        if missing_nodes <= 0:
+            return []
+        node_machine_types = [gpu_mt] * missing_nodes
+        config = _get_cluster_config()
     else:
-        cpu_per_node = _machine_type_cpu_count(configured_machine_type)
-        n_nodes_to_add = math.ceil(num_cpus_to_add / cpu_per_node)
-        node_machine_types = [configured_machine_type] * n_nodes_to_add
+        required_cpus_for_ram = (func_ram + 3) // 4
+        required_cpus_per_call = max(func_cpu, required_cpus_for_ram)
+        target_cpus = requested_parallelism * required_cpus_per_call
+        current_cpus = target_parallelism * required_cpus_per_call
+        missing_cpus = max(0, target_cpus - current_cpus)
+        if missing_cpus <= 0:
+            return []
+
+        max_cpu = LOCAL_DEV_MAX_GROW_CPUS if IN_LOCAL_DEV_MODE else MAX_GROW_CPUS
+        max_additional_cpus = max(0, max_cpu - current_cpus)
+        num_cpus_to_add = min(missing_cpus, max_additional_cpus)
+        if num_cpus_to_add <= 0:
+            return []
+
+        config = _get_cluster_config()
+        node_spec = config["Nodes"][0]
+        configured_machine_type = node_spec["machine_type"]
+
+        # For CPU (n4-standard) clusters, ignore the configured size and pack the
+        # required CPUs into as many n4-standard-80s as fit, with the remainder
+        # covered by the smallest n4-standard that fits. GPU clusters keep using
+        # the configured machine type so GPU jobs still land on GPU hardware.
+        # Local dev stays homogeneous because node containers hard-code 2 workers
+        # regardless of the advertised machine_type (see INSTANCE_N_CPUS).
+        pack_by_size = (
+            not IN_LOCAL_DEV_MODE
+            and configured_machine_type.startswith("n4-standard-")
+        )
+
+        if pack_by_size:
+            node_machine_types = _pack_n4_standard_machines(num_cpus_to_add)
+        else:
+            cpu_per_node = _machine_type_cpu_count(configured_machine_type)
+            n_nodes_to_add = math.ceil(num_cpus_to_add / cpu_per_node)
+            node_machine_types = [configured_machine_type] * n_nodes_to_add
 
     node_instance_names = [f"burla-node-{uuid4().hex[:8]}" for _ in node_machine_types]
+    containers_override = [{"image": image}] if image else None
 
     add_background_task(
         _start_nodes,
@@ -214,6 +254,8 @@ def _grow_if_needed(
         node_instance_names,
         job_id,
         node_machine_types,
+        containers_override,
+        GROW_INACTIVITY_SHUTDOWN_TIME_SEC,
     )
     return [
         {
@@ -264,6 +306,8 @@ async def start_job(
     n_inputs = int(body["n_inputs"])
     max_parallelism = int(body.get("max_parallelism") or n_inputs)
     grow = bool(body.get("grow"))
+    image = body.get("image")
+    func_gpu = body.get("func_gpu")
     client_version = body["burla_client_version"]
 
     # --- version check ---
@@ -284,9 +328,19 @@ async def start_job(
             },
         )
 
+    # --- validate func_gpu early so both selection and grow can assume it maps cleanly ---
+    try:
+        gpu_machine_type(func_gpu)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+
     # --- select from cached ready nodes ---
     ready, target_parallelism, all_ready = _select_ready_nodes_from_cache(
-        func_cpu=func_cpu, func_ram=func_ram, max_parallelism=max_parallelism
+        func_cpu=func_cpu,
+        func_ram=func_ram,
+        max_parallelism=max_parallelism,
+        image=image,
+        func_gpu=func_gpu,
     )
 
     if not ready and not grow:
@@ -318,6 +372,8 @@ async def start_job(
             max_parallelism=max_parallelism,
             func_cpu=func_cpu,
             func_ram=func_ram,
+            image=image,
+            func_gpu=func_gpu,
             job_id=job_id,
             logger=logger,
             auth_headers=auth_headers,
@@ -332,6 +388,8 @@ async def start_job(
         "n_inputs": n_inputs,
         "func_cpu": func_cpu,
         "func_ram": func_ram,
+        "image": image,
+        "func_gpu": func_gpu,
         "packages": body.get("packages") or {},
         "status": "RUNNING",
         "burla_client_version": client_version,

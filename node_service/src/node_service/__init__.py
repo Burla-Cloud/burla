@@ -5,6 +5,7 @@ import inspect
 import asyncio
 import traceback
 from collections import deque
+from pathlib import Path
 from uuid import uuid4
 from time import time
 from typing import Callable
@@ -30,7 +31,7 @@ from starlette.requests import ClientDisconnect
 from starlette.datastructures import UploadFile
 
 
-__version__ = "1.5.5"
+__version__ = "1.5.6"
 CREDENTIALS, PROJECT_ID = google.auth.default()
 BURLA_BACKEND_URL = "https://backend.burla.dev"
 
@@ -49,6 +50,12 @@ secret_client = secretmanager.SecretManagerServiceClient()
 secret_name = f"projects/{PROJECT_ID}/secrets/burla-cluster-id-token/versions/latest"
 response = secret_client.access_secret_version(request={"name": secret_name})
 CLUSTER_ID_TOKEN = response.payload.data.decode("UTF-8")
+
+# Bind-mounted into every worker container at /root/.config/burla (where
+# platformdirs resolves burla.CONFIG_PATH), so a UDF calling
+# remote_parallel_map authenticates without a prior `burla login`.
+NODE_AUTH_DIR = Path("/opt/burla/node_auth")
+NODE_AUTH_CREDENTIALS_PATH = NODE_AUTH_DIR / "burla_credentials.json"
 
 from node_service.helpers import ResultsEndpointFilter, Logger, SizedQueue
 
@@ -196,6 +203,11 @@ async def shutdown_if_idle_for_too_long(logger: Logger):
 async def lifespan(app: FastAPI):
     logger = Logger()
     await logger.log(f"Started node service v{__version__}")
+
+    # Must exist before `reboot_containers` since worker containers bind-mount
+    # this dir. Unlink guards against stale creds from a crashed prior run.
+    NODE_AUTH_DIR.mkdir(parents=True, exist_ok=True)
+    NODE_AUTH_CREDENTIALS_PATH.unlink(missing_ok=True)
 
     # In dev all the workers restart everytime I hit save (server is in "reload" mode)
     # This is annoying but you must leave it like this, otherwise stuff won't restart correctly!

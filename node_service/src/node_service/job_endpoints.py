@@ -1,3 +1,4 @@
+import json
 import pickle
 from datetime import datetime, timezone
 from typing import Optional
@@ -10,6 +11,7 @@ from node_service import (
     SELF,
     PROJECT_ID,
     INSTANCE_NAME,
+    NODE_AUTH_CREDENTIALS_PATH,
     get_request_json,
     get_logger,
     get_request_files,
@@ -183,6 +185,20 @@ async def execute(
         msg += f" - update the cluster to run containers with python{user_python_version}\n"
         msg += f" - update your local python version to be one of {versions}"
         return Response(msg, status_code=409)
+
+    # Must land before `load_function` so the `_process_inputs` task it
+    # spawns can never observe a missing creds file.
+    auth_token = request.headers["Authorization"].removeprefix("Bearer ").strip()
+    NODE_AUTH_CREDENTIALS_PATH.write_text(
+        json.dumps(
+            {
+                "email": request.headers["X-User-Email"],
+                "auth_token": auth_token,
+                "project_id": PROJECT_ID,
+                "cluster_dashboard_url": request_json["cluster_dashboard_url"],
+            }
+        )
+    )
 
     packages = request_json["packages"]
     if packages:

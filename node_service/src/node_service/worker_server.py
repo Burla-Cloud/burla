@@ -122,6 +122,12 @@ with socket.create_server(("0.0.0.0", port)) as listener:
                 if command == b"r":
                     kill_all_other_processes()
                     loaded_function = None
+                    # Worker process persists across jobs, so burla's cached
+                    # creds from the prior job's nested RPM would otherwise
+                    # leak into the next job's user.
+                    auth_module = sys.modules.get("burla._auth")
+                    if auth_module is not None:
+                        auth_module._get_auth_info.cache_clear()
                 if command == b"i":
                     packages = pickle.loads(request_payload)
                     missing_packages = []

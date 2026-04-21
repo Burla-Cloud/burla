@@ -6,13 +6,12 @@ the cluster; firestore is never touched from the client directly.
 Each method maps one-to-one to a main_service endpoint.
 """
 
-import json
 from typing import Optional
 
 import aiohttp
 import requests
 
-from burla import CONFIG_PATH
+from burla import get_cluster_dashboard_url
 from burla._auth import get_auth_headers
 
 
@@ -51,14 +50,13 @@ def _build_patch_job_body(
 class ClusterClient:
     """
     Thin wrapper around main_service HTTP endpoints. Construction is free -
-    only reads the cluster dashboard URL from CONFIG_PATH; every call goes
-    over the provided `aiohttp.ClientSession`.
+    only resolves the cluster dashboard URL; every call goes over the
+    provided `aiohttp.ClientSession`.
     """
 
     def __init__(self, session: aiohttp.ClientSession):
-        config = json.loads(CONFIG_PATH.read_text())
         self.session = session
-        self._url = config["cluster_dashboard_url"].rstrip("/")
+        self._url = get_cluster_dashboard_url()
 
     async def _request(
         self,
@@ -170,8 +168,7 @@ class ClusterClient:
         an event loop is not available. Swallows any failure - if
         main_service is unreachable the cancel flow still proceeds locally.
         """
-        config = json.loads(CONFIG_PATH.read_text())
-        url = f"{config['cluster_dashboard_url'].rstrip('/')}/v1/jobs/{job_id}"
+        url = f"{get_cluster_dashboard_url()}/v1/jobs/{job_id}"
         body = _build_patch_job_body(updates, append_fail_reason)
         try:
             requests.patch(url, json=body, headers=get_auth_headers(), timeout=10)

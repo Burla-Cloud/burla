@@ -27,14 +27,8 @@ class NodesBusy(Exception):
 
 
 def _local_host_from(host: str) -> str:
-    """
-    Rewrite docker-compose internal hostnames (`http://node_...`) back to
-    `http://localhost:PORT` so the client can reach nodes in local-dev mode.
-    No-op for real cluster hosts. Also no-op when the caller itself is on the
-    local-burla-cluster docker network (i.e. a nested remote_parallel_map
-    running inside a worker container), since that caller can reach
-    `node_xxx:PORT` directly and localhost would point at its own container.
-    """
+    # Rewrite is for local-dev clients on the host; callers on the docker
+    # network (a nested RPM inside a worker) reach node_xxx directly.
     if host.startswith("http://node_") and not _on_local_cluster_network():
         return f"http://localhost:{host.split(':')[-1]}"
     return host

@@ -225,9 +225,7 @@ class WorkerClient:
             "ShmSize": 16 * 1024**3,
         }
 
-        # The node_auth bind is what makes nested remote_parallel_map calls
-        # work: the node writes creds into /opt/burla/node_auth at job start
-        # and they land at burla.CONFIG_PATH inside every worker.
+        # node_auth bind: see NODE_AUTH_DIR in node_service/__init__.py.
         if IN_LOCAL_DEV_MODE:
             host_pwd = os.environ["HOST_PWD"]
             host_home_dir = os.environ["HOST_HOME_DIR"]

@@ -130,10 +130,7 @@ def _scan_sys_modules():
                 "site-packages" in origin
                 or "dist-packages" in origin
                 or r"\Lib" in origin
-                # Worker containers install pip packages into this non-standard
-                # dir (see node_service.worker_client), so nested
-                # remote_parallel_map calls inside a UDF don't misclassify
-                # every installed package as user code.
+                # Worker containers install pip packages here, not site-packages.
                 or "/worker_service_python_env/" in origin
             )
             is_builtin = (

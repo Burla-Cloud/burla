@@ -51,9 +51,8 @@ secret_name = f"projects/{PROJECT_ID}/secrets/burla-cluster-id-token/versions/la
 response = secret_client.access_secret_version(request={"name": secret_name})
 CLUSTER_ID_TOKEN = response.payload.data.decode("UTF-8")
 
-# Bind-mounted into every worker container at /root/.config/burla (where
-# platformdirs resolves burla.CONFIG_PATH), so a UDF calling
-# remote_parallel_map authenticates without a prior `burla login`.
+# Bind-mounted into every worker at burla.CONFIG_PATH so a UDF's nested
+# remote_parallel_map call finds its creds without a prior `burla login`.
 NODE_AUTH_DIR = Path("/opt/burla/node_auth")
 NODE_AUTH_CREDENTIALS_PATH = NODE_AUTH_DIR / "burla_credentials.json"
 

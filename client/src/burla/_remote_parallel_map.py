@@ -1,11 +1,11 @@
 import asyncio
-import json
 import random
 import sys
 import traceback
 import base64
 from asyncio import create_task
 from contextlib import AsyncExitStack
+from functools import cache
 from importlib import metadata
 from queue import Queue
 from threading import Event, Thread
@@ -15,48 +15,43 @@ from uuid import uuid4
 
 import aiohttp
 import cloudpickle
-from google.cloud.firestore import ArrayUnion
 from yaspin import Spinner, yaspin
 
-from burla import CONFIG_PATH, __version__
-from burla._auth import get_auth_headers
-from burla._background_stuff import send_alive_pings
+from burla import __version__
+from burla._cluster_client import ClusterClient, NodesBusy, _local_host_from
+from burla._heartbeat import run_in_subprocess, send_alive_pings
 from burla._helpers import (
-    get_db_clients,
     get_modules_required_on_remote,
     install_signal_handlers,
     restore_signal_handlers,
-    run_in_subprocess,
 )
 from burla._node import (
     AllNodesBusy,
     ClusterRestarted,
     ClusterShutdown,
-    FirestoreTimeout,
     JobCanceled,
+    MainServiceTimeout,
     Node,
     NoCompatibleNodes,
     NoNodes,
     NodeDisconnected,
     UnauthorizedError,
     VersionMismatch,
-    select_nodes_to_assign_to_job,
+    wait_for_nodes_to_be_ready,
 )
 from burla._reporting import RemoteParallelMapReporter, log_job_failure_telemetry
 
-# load on import and reuse because this is very slow in big envs
-PKG_MODULE_MAPPING = metadata.packages_distributions()
+
+# `metadata.packages_distributions()` takes hundreds of ms to multiple seconds in
+# fat notebook envs. Deferring it to first-call time means `import burla` stays
+# fast for users who don't call `remote_parallel_map` right away; repeat calls in
+# the same session share the cached result.
+@cache
+def _pkg_module_mapping():
+    return metadata.packages_distributions()
+
 
 BANNED_PACKAGES = ["ipython", "burla", "google-colab"]
-
-# This is here to remind myself why I SHOULDN'T do it (at least for now):
-# If I warm up the connections on import like below, then RPM calls that are right next to each
-# other, cause GRPC issues. This is possible to fix but not a priority right now.
-# try:
-#     SYNC_DB, ASYNC_DB = get_db_clients()
-# except:
-#     SYNC_DB, ASYNC_DB = None, None
-
 
 class FunctionTooBig(Exception):
     def __init__(self, function_name: str):
@@ -77,43 +72,17 @@ EXEC_TYPES_TO_NOT_ALERT = [
     ClusterShutdown,
     VersionMismatch,
     FunctionTooBig,
-    FirestoreTimeout,
+    MainServiceTimeout,
     UnauthorizedError,
     KeyboardInterrupt,
 ]
 
 
-async def _grow_cluster(
-    current_cpus: int, missing_cpus: int, job_id: str, session, async_db, spinner
-) -> list[Node]:
-    request_json = {"current_cpus": current_cpus, "missing_cpus": missing_cpus, "job_id": job_id}
-    auth_headers = get_auth_headers()
-    main_service_url = json.loads(CONFIG_PATH.read_text())["cluster_dashboard_url"]
-    url = f"{main_service_url}/v1/cluster/grow"
-    async with await session.post(url, json=request_json, headers=auth_headers) as response:
-        if response.status == 200:
-            response_json = await response.json()
-            names = response_json["added_node_instance_names"]
-            if len(names) == 0:
-                return []
-            target_parallelism_per_node = max(1, missing_cpus // len(names))
-            node_kw = dict(
-                target_parallelism=target_parallelism_per_node,
-                session=session,
-                async_db=async_db,
-                spinner=spinner,
-            )
-            return [Node.from_booting(name, **node_kw) for name in names]
-        if response.status == 401:
-            raise UnauthorizedError()
-        raise Exception(f"Failed to grow cluster: {response.status}")
-
-
 async def _execute_job_wrapped(*args, **kwargs):
     async with AsyncExitStack() as stack:
         connector = aiohttp.TCPConnector(
-            limit=500,
-            limit_per_host=100,
+            limit=300,
+            limit_per_host=50,
             keepalive_timeout=60,
             enable_cleanup_closed=True,
             use_dns_cache=True,
@@ -152,11 +121,7 @@ async def _execute_job(
     session_stack: AsyncExitStack,
     reporter: RemoteParallelMapReporter,
 ):
-    dashboard_canceled_message = None
-    cluster_restarted = False
-    cluster_shutdown = False
-    auth_headers = get_auth_headers()
-    sync_db, async_db = get_db_clients()
+    client = ClusterClient(session)
 
     if background:
         reporter.print_detach_mode_enabled_message()
@@ -167,100 +132,64 @@ async def _execute_job(
     if function_size_gb > 0.1:
         raise FunctionTooBig(function_.__name__)
 
-    try:
-        nodes, target_parallelism = await select_nodes_to_assign_to_job(
-            db=async_db,
-            max_parallelism=max_parallelism,
-            func_cpu=func_cpu,
-            func_ram=func_ram,
-            spinner=spinner,
+    # Single round-trip: picks nodes from the server's in-memory cache,
+    # grows the cluster if `grow=True` and capacity falls short, writes the
+    # job doc, and returns the nodes + booting names. Replaces what used to
+    # be three separate HTTP calls here.
+    start_job_config = {
+        "n_inputs": len(inputs),
+        "func_cpu": func_cpu,
+        "func_ram": func_ram,
+        "max_parallelism": max_parallelism,
+        "packages": packages,
+        "user_python_version": f"3.{sys.version_info.minor}",
+        "burla_client_version": __version__,
+        "function_name": function_.__name__,
+        "function_size_gb": function_size_gb,
+        "started_at": start_time,
+        "is_background_job": background,
+        "grow": grow,
+    }
+    # On 503 nodes_busy, show boot progress via the polling loop then try
+    # once more. Any other known error surfaces as its domain exception
+    # (VersionMismatch, NoCompatibleNodes, NoNodes, UnauthorizedError).
+    for attempt in range(2):
+        try:
+            response = await client.start_job(job_id, start_job_config)
+            break
+        except NodesBusy:
+            if attempt == 1:
+                raise AllNodesBusy()
+            await wait_for_nodes_to_be_ready(client=client, spinner=spinner)
+
+    ready_nodes = [
+        Node.from_ready(
+            instance_name=node_data["instance_name"],
+            host=_local_host_from(node_data["host"]),
+            machine_type=node_data["machine_type"],
+            target_parallelism=int(node_data["target_parallelism"]),
             session=session,
+            client=client,
+            spinner=spinner,
         )
-    except (NoNodes, NoCompatibleNodes, AllNodesBusy):
-        nodes, target_parallelism = [], 0
-        if not grow:
-            raise
+        for node_data in response.get("ready_nodes", [])
+    ]
+    booting_nodes = [
+        Node.from_booting(
+            instance_name=node_data["instance_name"],
+            target_parallelism=int(node_data["target_parallelism"]),
+            session=session,
+            client=client,
+            spinner=spinner,
+        )
+        for node_data in response.get("booting_nodes", [])
+    ]
 
-    booting_nodes = []
-    if grow:
-        # assuming static 1:4 cpu/ram ratio, how many more cpus do we need?
-        requested_parallelism = min(len(inputs), max_parallelism)
-        required_cpus_for_ram = (func_ram + 3) // 4
-        required_cpus_per_function_call = max(func_cpu, required_cpus_for_ram)
-        target_cpus = requested_parallelism * required_cpus_per_function_call
-        current_cpus = target_parallelism * required_cpus_per_function_call
-        missing_cpus = max(0, target_cpus - current_cpus)
-        if missing_cpus > 0:
-            booting_nodes = await _grow_cluster(
-                current_cpus,
-                missing_cpus,
-                job_id,
-                session,
-                async_db,
-                spinner,
-            )
-            nodes.extend(booting_nodes)
-            if len(booting_nodes) > 0:
-                reporter.set_booting_nodes_message(len(booting_nodes))
-            elif len(nodes) == 0:
-                raise NoNodes("Cluster refused to boot required additional nodes ...")
-
-    sync_job_ref = sync_db.collection("jobs").document(job_id)
-    async_job_ref = async_db.collection("jobs").document(job_id)
-    await async_job_ref.set(
-        {
-            "n_inputs": len(inputs),
-            "func_cpu": func_cpu,
-            "func_ram": func_ram,
-            "packages": packages,
-            "status": "RUNNING",
-            "burla_client_version": __version__,
-            "user_python_version": f"3.{sys.version_info.minor}",
-            "target_parallelism": target_parallelism,  # <- live: n-nodes * target_parallelism/node
-            "user": auth_headers["X-User-Email"],
-            "function_name": function_.__name__,
-            "function_size_gb": function_size_gb,
-            "started_at": start_time,
-            "is_background_job": background,
-            "all_inputs_uploaded": False,
-            "client_has_all_results": False,
-            "fail_reason": [],
-        }
-    )
-    # start stdout/stderr stream
-    seen_log_document_ids = set()
-
-    def _print_log_documents(log_documents):
-        nonlocal dashboard_canceled_message, cluster_restarted, cluster_shutdown
-        for log_document in log_documents:
-            if log_document.id in seen_log_document_ids:
-                continue
-            seen_log_document_ids.add(log_document.id)
-            log_doc = log_document.to_dict()
-            logs = log_doc.get("logs", [])
-            is_error_doc = bool(log_doc.get("is_error"))
-
-            if log_doc.get("event") == "cluster_restarted":
-                cluster_restarted = True
-                continue
-            if log_doc.get("event") == "cluster_shutdown":
-                cluster_shutdown = True
-                continue
-            if is_error_doc and sync_job_ref.get().to_dict()["status"] == "CANCELED" and logs:
-                dashboard_canceled_message = logs[-1]["message"]
-                continue
-            if is_error_doc or udf_error_event.is_set():
-                continue
-
-            for log in logs:
-                message = log["message"].rstrip("\r\n")
-                spinner.write(message) if spinner else print(message)
-
-    def _on_new_logs_doc(col_snapshot, changes, read_time):
-        _print_log_documents([change.document for change in changes])
-
-    log_stream = sync_job_ref.collection("logs").on_snapshot(_on_new_logs_doc)
-    session_stack.callback(log_stream.unsubscribe)
+    nodes = ready_nodes + booting_nodes
+    if booting_nodes:
+        reporter.set_booting_nodes_message(len(booting_nodes))
+    elif not nodes:
+        raise NoNodes("Cluster refused to boot required additional nodes ...")
 
     job_start_telemetry_task = create_task(reporter.log_job_start_telemetry(nodes, packages))
     session_stack.callback(job_start_telemetry_task.cancel)
@@ -293,40 +222,36 @@ async def _execute_job(
         )
     try:
         ping_process = None
+        pinged_hosts: tuple = ()
+
+        def _cleanup_ping_process():
+            if ping_process is not None:
+                ping_process.kill()
+
+        session_stack.callback(_cleanup_ping_process)
         last_status_message_update_time = 0.0
         total_result_count = sum(node.result_count for node in nodes)
         while total_result_count < n_inputs:
-            if (time() - start_time) < 5:
-                await asyncio.sleep(0.0005)
-            else:
-                await asyncio.sleep(0.1)
+            await asyncio.sleep(0.05)
 
-            if cluster_shutdown:
-                raise ClusterShutdown()
-            if cluster_restarted:
-                raise ClusterRestarted()
-            if dashboard_canceled_message:
-                raise JobCanceled(f"\n\n{dashboard_canceled_message}\n")
-            elif terminal_cancel_event.is_set():
+            if terminal_cancel_event.is_set():
                 return
 
-            for task in node_tasks:
-                if task.done() and task.exception():
-                    # Infrastructure failures during a cluster restart/shutdown race the
-                    # firestore listener. Prefer the definitive lifecycle signal when present.
-                    if cluster_shutdown:
+            for task, node in zip(node_tasks, nodes):
+                exception = task.exception() if task.done() else None
+                exception = NodeDisconnected(node) if node.state == "FAILED" else exception
+                if exception:
+                    # Authoritative check via main_service: if main_service has
+                    # already written a lifecycle signal on the job doc, raise
+                    # that instead of the bare infrastructure exception.
+                    job_dict = await client.get_job(job_id) or {}
+                    if job_dict.get("cluster_shutdown"):
                         raise ClusterShutdown()
-                    if cluster_restarted:
+                    if job_dict.get("cluster_restarted"):
                         raise ClusterRestarted()
-                    raise task.exception()
-
-            for node in nodes:
-                if node.state == "FAILED":
-                    if cluster_shutdown:
-                        raise ClusterShutdown()
-                    if cluster_restarted:
-                        raise ClusterRestarted()
-                    raise NodeDisconnected(f"Node {node.instance_name} failed during job.")
+                    if job_dict.get("dashboard_canceled"):
+                        raise JobCanceled("\n\nJob canceled from dashboard.\n")
+                    raise exception
 
             current_time = time()
             if (current_time - last_status_message_update_time) > 0.05:
@@ -344,14 +269,19 @@ async def _execute_job(
 
             if len(inputs_with_indicies) == 0 and not inputs_done_event.is_set():
                 inputs_done_event.set()
-                await async_job_ref.update({"all_inputs_uploaded": True})
+                await client.patch_job(job_id, {"all_inputs_uploaded": True})
                 if background:
                     reporter.print_inputs_done_message()
 
-            if ping_process is None and (time() - start_time) >= 5:
-                node_hosts = [node.host for node in nodes]
-                ping_process = await run_in_subprocess(send_alive_pings, node_hosts, job_id)
-                session_stack.callback(ping_process.kill)
+            # Respawn the ping subprocess whenever the set of ready hosts changes,
+            # since it captures its host list at spawn time.
+            current_hosts = tuple(sorted(n.host for n in nodes if n.host))
+            hosts_changed = current_hosts != pinged_hosts
+            if (time() - start_time) >= 5 and current_hosts and hosts_changed:
+                if ping_process is not None:
+                    ping_process.kill()
+                ping_process = await run_in_subprocess(send_alive_pings, list(current_hosts), job_id)
+                pinged_hosts = current_hosts
 
             if ping_process and ping_process.poll():
                 stderr = ping_process.stderr.read().decode("utf-8")
@@ -365,7 +295,7 @@ async def _execute_job(
             reporter.log_job_success_telemetry(time() - start_time)
         )
         session_stack.callback(job_success_telemetry_task.cancel)
-        await async_job_ref.update({"client_has_all_results": True})
+        await client.patch_job(job_id, {"client_has_all_results": True})
     finally:
         [task.cancel() for task in node_tasks]
 
@@ -459,14 +389,15 @@ def remote_parallel_map(
 
     for module_name in custom_module_names:
         cloudpickle.register_pickle_by_value(sys.modules[module_name])
+    pkg_module_mapping = _pkg_module_mapping()
     packages = {}
     for module_name in package_module_names:
         # some of these are unnecessary since we get all that map to the base module
         # example google.cloud.storage -> google -> every installed google package
         # for now we just install more packages than we need to, it's fast enough
-        if not PKG_MODULE_MAPPING.get(module_name):
+        if not pkg_module_mapping.get(module_name):
             continue
-        for package_name in PKG_MODULE_MAPPING.get(module_name):
+        for package_name in pkg_module_mapping.get(module_name):
             packages[package_name] = metadata.version(package_name)
 
     # unnecessary / already installed / will break stuff
@@ -474,38 +405,38 @@ def remote_parallel_map(
         packages.pop(package, None)
 
     # not an official dep
-    if packages.get("SQLAlchemy") and "psycopg2-binary" in PKG_MODULE_MAPPING.get("psycopg2", []):
+    if packages.get("SQLAlchemy") and "psycopg2-binary" in pkg_module_mapping.get("psycopg2", []):
         packages["psycopg2-binary"] = metadata.version("psycopg2-binary")
 
     # manually check for extras until we can support automatic extra detection.
     if packages.get("geopandas"):
-        if "geoalchemy2" in PKG_MODULE_MAPPING and not ("geoalchemy2" in packages):
+        if "geoalchemy2" in pkg_module_mapping and not ("geoalchemy2" in packages):
             packages["geoalchemy2"] = metadata.version("geoalchemy2")
-        if "geopy" in PKG_MODULE_MAPPING and not ("geopy" in packages):
+        if "geopy" in pkg_module_mapping and not ("geopy" in packages):
             packages["geopy"] = metadata.version("geopy")
-        if "matplotlib" in PKG_MODULE_MAPPING and not ("matplotlib" in packages):
+        if "matplotlib" in pkg_module_mapping and not ("matplotlib" in packages):
             packages["matplotlib"] = metadata.version("matplotlib")
-        if "mapclassify" in PKG_MODULE_MAPPING and not ("mapclassify" in packages):
+        if "mapclassify" in pkg_module_mapping and not ("mapclassify" in packages):
             packages["mapclassify"] = metadata.version("mapclassify")
-        if "xyzservices" in PKG_MODULE_MAPPING and not ("xyzservices" in packages):
+        if "xyzservices" in pkg_module_mapping and not ("xyzservices" in packages):
             packages["xyzservices"] = metadata.version("xyzservices")
-        if "folium" in PKG_MODULE_MAPPING and not ("folium" in packages):
+        if "folium" in pkg_module_mapping and not ("folium" in packages):
             packages["folium"] = metadata.version("folium")
-        if "pointpats" in PKG_MODULE_MAPPING and not ("pointpats" in packages):
+        if "pointpats" in pkg_module_mapping and not ("pointpats" in packages):
             packages["pointpats"] = metadata.version("pointpats")
-        if "scipy" in PKG_MODULE_MAPPING and not ("scipy" in packages):
+        if "scipy" in pkg_module_mapping and not ("scipy" in packages):
             packages["scipy"] = metadata.version("scipy")
-        if "pyarrow" in PKG_MODULE_MAPPING and not ("pyarrow" in packages):
+        if "pyarrow" in pkg_module_mapping and not ("pyarrow" in packages):
             packages["pyarrow"] = metadata.version("pyarrow")
-        if "SQLAlchemy" in PKG_MODULE_MAPPING and not ("SQLAlchemy" in packages):
+        if "SQLAlchemy" in pkg_module_mapping and not ("SQLAlchemy" in packages):
             packages["SQLAlchemy"] = metadata.version("SQLAlchemy")
 
     if packages.get("mapclassify"):
-        if "libpysal" in PKG_MODULE_MAPPING and not ("libpysal" in packages):
+        if "libpysal" in pkg_module_mapping and not ("libpysal" in packages):
             packages["libpysal"] = metadata.version("libpysal")
-        if "shapely" in PKG_MODULE_MAPPING and not ("shapely" in packages):
+        if "shapely" in pkg_module_mapping and not ("shapely" in packages):
             packages["shapely"] = metadata.version("shapely")
-        if "matplotlib" in PKG_MODULE_MAPPING and not ("matplotlib" in packages):
+        if "matplotlib" in pkg_module_mapping and not ("matplotlib" in packages):
             packages["matplotlib"] = metadata.version("matplotlib")
     # ------------------------------------------------
 
@@ -584,17 +515,16 @@ def remote_parallel_map(
         if spinner:
             spinner.stop()
 
-        SYNC_DB, _ = get_db_clients()
-
-        # After a `FirestoreTimeout` further attempts to use firestore will take forever then fail.
-        if not (isinstance(e, FirestoreTimeout) or background):
-            try:
-                sync_job_ref = SYNC_DB.collection("jobs").document(job_id)
-                if sync_job_ref.get().to_dict()["status"] != "CANCELED":
-                    msg = f"client exception: {e}"
-                    sync_job_ref.update({"status": "FAILED", "fail_reason": ArrayUnion([msg])})
-            except Exception:
-                pass
+        # Best-effort: record the failure on the job doc via main_service.
+        # main_service's PATCH will apply the FAILED status + ArrayUnion
+        # atomically, so no read-then-write is needed. A MainServiceTimeout
+        # means main_service itself is unreachable, so skip the write.
+        if not (isinstance(e, MainServiceTimeout) or background):
+            ClusterClient.patch_job_sync(
+                job_id,
+                updates={"status": "FAILED"},
+                append_fail_reason=f"client exception: {e}",
+            )
 
         # Report errors back to Burla's cloud.
         if not udf_error_event.is_set():

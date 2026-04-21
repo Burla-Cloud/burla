@@ -18,7 +18,14 @@ from node_service.lifecycle_endpoints import reboot_containers
 
 EMPTY_NEIGHBOR_TIMEOUT_SEC = 60
 CLIENT_CONTACT_TIMEOUT_SEC = 5
-JOB_DOC_CONTACT_TIMEOUT_SEC = 4
+# Time we'll tolerate without a fresh `jobs/{id}` update_time before treating
+# the client as disconnected. Client heartbeats fire every 2s and go
+# client -> main_service -> firestore, which can take 100-400ms; 8s gives
+# comfortable headroom against main_service hiccups without meaningfully
+# delaying detection of real client crashes (the direct
+# `/client-heartbeat` path, governed by CLIENT_CONTACT_TIMEOUT_SEC above,
+# is the primary signal).
+JOB_DOC_CONTACT_TIMEOUT_SEC = 8
 ACK_RETRY_TIMEOUT_SEC = 600
 ACK_RETRY_DELAY_SEC = 15
 
@@ -149,7 +156,16 @@ async def _job_watcher(
     sync_db = firestore.Client(project=PROJECT_ID, database="burla")
     job_doc = async_db.collection("jobs").document(SELF["current_job"])
     sync_job_doc = sync_db.collection("jobs").document(SELF["current_job"])
-    last_job_doc_update_time = sync_job_doc.get().update_time.timestamp()
+    # main_service writes this doc fire-and-forget, so fast networks can race it.
+    for _ in range(40):
+        snapshot = await job_doc.get()
+        if snapshot.exists:
+            break
+        await asyncio.sleep(0.05)
+    try:
+        last_job_doc_update_time = snapshot.update_time.timestamp()
+    except AttributeError as e:
+        raise RuntimeError(f"Job doc {SELF['current_job']} did not appear after 2s") from e
     node_docs_collection = job_doc.collection("assigned_nodes")
     node_doc = node_docs_collection.document(INSTANCE_NAME)
     await node_doc.set({"current_num_results": 0, "client_contact_last_1s": True})
@@ -164,6 +180,12 @@ async def _job_watcher(
             job_dict = change.document.to_dict()
             if job_dict["all_inputs_uploaded"] == True:
                 SELF["all_inputs_uploaded"] = True
+            if job_dict.get("cluster_shutdown"):
+                SELF["pending_cluster_shutdown"] = True
+            if job_dict.get("cluster_restarted"):
+                SELF["pending_cluster_restarted"] = True
+            if job_dict.get("dashboard_canceled"):
+                SELF["pending_dashboard_canceled"] = True
             if job_dict["status"] == "FAILED":
                 JOB_FAILED = True
                 break
@@ -313,6 +335,12 @@ async def reset_workers(logger: Logger, async_db: AsyncClient):
     try:
         await asyncio.gather(*(worker.reset() for worker in SELF["workers"]))
     except Exception as e:
+        # dont throw errors if node deleting
+        node_doc = async_db.collection("nodes").document(INSTANCE_NAME)
+        current_status = (await node_doc.get()).to_dict().get("status")
+        if current_status in ("DELETED", "FAILED"):
+            return
+
         await logger.log(f"Error resetting workers: {e}", severity="ERROR")
         await logger.log("Some workers failed to reset, rebooting containers ...")
         await reboot_containers(logger=logger)

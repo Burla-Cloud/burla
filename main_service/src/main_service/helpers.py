@@ -1,5 +1,6 @@
 import sys
 import requests
+import logging as python_logging
 from itertools import groupby
 from typing import Optional
 
@@ -8,12 +9,60 @@ from fastapi import Request
 from main_service import PROJECT_ID, BURLA_BACKEND_URL, GCL_CLIENT
 
 
+# Paths the burla pypi client polls heavily during a job:
+#  - `/v1/cluster/state`              ~every 10-100ms while waiting for nodes to boot
+#  - `/v1/cluster/nodes/{instance}`   ~every 2-6s per booting node
+# Without filtering these drown real request logs in both stdout (uvicorn.access)
+# and Cloud Logging (our `log_and_time_requests` middleware).
+_CHATTY_CLIENT_PATH_SUBSTRINGS = ("/v1/cluster/state", "/v1/cluster/nodes/")
+
+
+def is_chatty_client_path(path: str) -> bool:
+    return any(substring in path for substring in _CHATTY_CLIENT_PATH_SUBSTRINGS)
+
+
+class ChattyClientEndpointFilter(python_logging.Filter):
+    """Drop uvicorn access-log records for paths the burla client polls on
+    a tight loop during a job."""
+
+    def filter(self, record):
+        path = record.args[2]
+        return not is_chatty_client_path(path)
+
+
 def log_telemetry(message, severity="INFO", **kwargs):
     try:
         payload = {"project_id": PROJECT_ID, "message": message, **kwargs}
         requests.post(f"{BURLA_BACKEND_URL}/v1/telemetry/log/{severity}", json=payload, timeout=1)
     except Exception:
         pass
+
+
+# CPU -> RAM mapping for the n4-standard family; used to size-check that a
+# node can physically host the requested per-function resources.
+_N_FOUR_STANDARD_CPU_TO_RAM = {
+    1: 4, 2: 8, 4: 16, 8: 32, 16: 64, 32: 128, 48: 192, 64: 256, 80: 320,
+}
+
+
+def parallelism_capacity(machine_type: str, func_cpu: int, func_ram: int) -> int:
+    """How many copies of a UDF with func_cpu/func_ram fit on one node.
+
+    Used by `POST /v1/jobs/{id}/start` to size which cached ready nodes
+    can physically host the requested per-function resources.
+    """
+    if machine_type.startswith("n4-standard") and machine_type.split("-")[-1].isdigit():
+        vm_cpu = int(machine_type.split("-")[-1])
+        vm_ram = _N_FOUR_STANDARD_CPU_TO_RAM[vm_cpu]
+        return min(vm_cpu // func_cpu, vm_ram // func_ram)
+    if machine_type.startswith("a") and machine_type.endswith("g"):
+        return 1
+    raise ValueError("machine_type must be: n4-standard-X, a3-highgpu-Xg, or a3-ultragpu-8g")
+
+
+def parse_version(version_str: str) -> tuple[int, ...]:
+    """Tuple-compare-friendly version parse. Assumes MAJOR.MINOR.PATCH."""
+    return tuple(int(part) for part in version_str.split("."))
 
 
 def format_traceback(traceback_details: list):

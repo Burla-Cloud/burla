@@ -1,10 +1,8 @@
 import docker
-import math
 from datetime import datetime, timezone
 from time import time
-from uuid import uuid4
 
-from fastapi import APIRouter, Depends, Request, HTTPException
+from fastapi import APIRouter, Depends
 from google.cloud.firestore_v1.base_query import FieldFilter
 from google.cloud.compute_v1 import InstancesClient, MachineTypesClient
 from concurrent.futures import ThreadPoolExecutor
@@ -13,7 +11,6 @@ from main_service import (
     DB,
     IN_LOCAL_DEV_MODE,
     LOCAL_DEV_CONFIG,
-    DEFAULT_CONFIG,
     get_logger,
     get_auth_headers,
     get_add_background_task_function,
@@ -25,11 +22,36 @@ router = APIRouter()
 MAX_GROW_CPUS = 2560
 LOCAL_DEV_MAX_GROW_CPUS = 4
 
+# Priced n4-standard sizes the dashboard exposes, largest first. n4-standard-48
+# is intentionally omitted to match `main_service/frontend/src/types/constants.ts`
+# (pricing isn't defined for it), so grow never provisions an unpriced size.
+N4_STANDARD_SIZES_DESCENDING = (80, 64, 32, 16, 8, 4, 2)
+
 
 def _machine_type_cpu_count(machine_type: str) -> int:
     if machine_type.startswith("n4-standard-") and machine_type.split("-")[-1].isdigit():
         return int(machine_type.split("-")[-1])
     return 1
+
+
+def _pack_n4_standard_machines(num_cpus: int) -> list[str]:
+    """
+    Pick n4-standard machine types that cover `num_cpus`, greedily using as
+    many of the largest size as possible and covering any remainder with the
+    smallest size that fits. e.g. 95 -> [n4-standard-80, n4-standard-16].
+    """
+    machines = []
+    largest = N4_STANDARD_SIZES_DESCENDING[0]
+    remaining = num_cpus
+    while remaining >= largest:
+        machines.append(f"n4-standard-{largest}")
+        remaining -= largest
+    if remaining > 0:
+        for size in reversed(N4_STANDARD_SIZES_DESCENDING):
+            if size >= remaining:
+                machines.append(f"n4-standard-{size}")
+                break
+    return machines
 
 
 def _shutdown_cluster(logger: Logger, auth_headers: dict):
@@ -70,11 +92,28 @@ def _current_local_dev_max_node_port():
 
 
 def _get_cluster_config():
-    config_doc = DB.collection("cluster_config").document("cluster_config").get()
-    if not config_doc.exists:
-        config_doc.reference.set(DEFAULT_CONFIG)
-        return DEFAULT_CONFIG
-    return LOCAL_DEV_CONFIG if IN_LOCAL_DEV_MODE else config_doc.to_dict()
+    """
+    Returns the current cluster_config dict.
+
+    Hot path: served from `CLUSTER_CONFIG_CACHE`, kept in sync by a firestore
+    on_snapshot listener started in `lifespan`. Cold path (listener hasn't
+    fired yet): one direct firestore read. The doc is guaranteed to exist
+    by then - main_service seeds it synchronously at module import.
+    """
+    # Importing here to pick up the latest module-level value (the cache is
+    # updated in place by the snapshot thread) and to avoid an import cycle
+    # from __init__.py -> this module at import time.
+    from main_service import CLUSTER_CONFIG_CACHE, _config_cache_lock
+
+    if IN_LOCAL_DEV_MODE:
+        return LOCAL_DEV_CONFIG
+    with _config_cache_lock:
+        cached = CLUSTER_CONFIG_CACHE
+    if cached is not None:
+        return cached
+
+    # First-call fallback while the snapshot listener is still warming up.
+    return DB.collection("cluster_config").document("cluster_config").get().to_dict()
 
 
 def _start_nodes(
@@ -84,6 +123,7 @@ def _start_nodes(
     n_nodes_to_add: int = None,
     node_instance_names: list[str] = None,
     reserved_for_job: str = None,
+    node_machine_types: list[str] = None,
 ):
     node_service_port = _current_local_dev_max_node_port()
     futures = []
@@ -100,10 +140,15 @@ def _start_nodes(
             if IN_LOCAL_DEV_MODE:
                 node_service_port += 1
             instance_name = None if node_instance_names is None else node_instance_names[index]
+            machine_type = (
+                node_machine_types[index]
+                if node_machine_types is not None
+                else node_spec["machine_type"]
+            )
             node_start_kwargs = dict(
                 db=DB,
                 logger=logger,
-                machine_type=node_spec["machine_type"],
+                machine_type=machine_type,
                 gcp_region=node_spec["gcp_region"],
                 containers=[Container.from_dict(c) for c in node_spec["containers"]],
                 auth_headers=auth_headers,
@@ -156,10 +201,15 @@ def _mark_running_jobs_with_lifecycle_event(event: str, message: str):
         "is_error": True,
         "event": event,
     }
+    # The client raises the matching exception the moment it sees the bool on
+    # /results (see Node._gather_results), so write it on the same update as the
+    # status change. Writes happen before VM teardown in _shutdown_cluster, so
+    # the doc is authoritative if a node vanishes mid-poll.
+    extra = {"cluster_restarted": True} if event == "cluster_restarted" else {"cluster_shutdown": True}
     for job_snapshot in running_jobs:
         job_ref = job_snapshot.reference
         job_ref.collection("logs").add(log_doc)
-        job_ref.update({"status": "CANCELED"})
+        job_ref.update({"status": "CANCELED", **extra})
 
 
 def _restart_cluster(logger: Logger, auth_headers: dict):
@@ -202,37 +252,3 @@ async def shutdown_cluster(
     logger.log(f"Shut down after {duration//60}m {duration%60}s")
 
 
-@router.post("/v1/cluster/grow")
-async def grow_cluster(
-    request: Request,
-    logger: Logger = Depends(get_logger),
-    auth_headers: dict = Depends(get_auth_headers),
-    add_background_task=Depends(get_add_background_task_function),
-):
-    request_json = await request.json()
-    current_cpus = int(request_json["current_cpus"])
-    cpu_deficit = int(request_json["missing_cpus"])
-    reserved_for_job = request_json.get("job_id")
-
-    max_cpu = LOCAL_DEV_MAX_GROW_CPUS if IN_LOCAL_DEV_MODE else MAX_GROW_CPUS
-    max_additional_cpus = max(0, max_cpu - current_cpus)
-    num_cpus_to_add = min(cpu_deficit, max_additional_cpus)
-
-    config = _get_cluster_config()
-    node_spec = config["Nodes"][0]
-    cpu_per_node = _machine_type_cpu_count(node_spec["machine_type"])
-    n_nodes_to_add = math.ceil(num_cpus_to_add / cpu_per_node) if num_cpus_to_add else 0
-    node_instance_names = [f"burla-node-{uuid4().hex[:8]}" for _ in range(n_nodes_to_add)]
-
-    if n_nodes_to_add > 0:
-        add_background_task(
-            _start_nodes,
-            logger,
-            auth_headers,
-            config,
-            n_nodes_to_add,
-            node_instance_names,
-            reserved_for_job,
-        )
-
-    return {"added_node_instance_names": node_instance_names}

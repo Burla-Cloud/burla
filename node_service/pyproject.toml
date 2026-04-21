@@ -1,6 +1,6 @@
 [project]
 name = "node-service"
-version = "1.5.4"
+version = "1.5.5"
 description = ""
 authors = [{ name = "Jacob Zuliani", email = "jake@burla.dev" }]
 requires-python = ">=3.13,<4.0"

@@ -13,7 +13,7 @@ import aiodocker
 import psutil
 from tblib import Traceback
 
-from node_service import SELF, ASYNC_DB, INSTANCE_NAME, IN_LOCAL_DEV_MODE, NUM_GPUS
+from node_service import SELF, ASYNC_DB, INSTANCE_NAME, IN_LOCAL_DEV_MODE, NUM_GPUS, __version__
 
 RESULTS_QUEUE_RAM_LIMIT_BYTES = int(psutil.virtual_memory().total * 0.5)
 
@@ -149,6 +149,10 @@ class JobLogWriter:
             documents = self.pending_documents
             self.pending_documents = []
 
+        for document in documents:
+            if not document.get("is_error"):
+                SELF["pending_logs"].append(document)
+
         batch = ASYNC_DB.batch()
         for document in documents:
             batch.set(self.logs_collection.document(), document)
@@ -255,7 +259,7 @@ class WorkerClient:
                 "export PYTHONUNBUFFERED=1; "
                 "export PYTHONPATH=/worker_service_python_env; "
                 'export PATH="/worker_service_python_env/bin:$PATH"; '
-                f"while true; do python /opt/burla/worker_server.py {WORKER_INTERNAL_PORT}; sleep 0.1; done"
+                f"while true; do python /opt/burla/worker_server.py {WORKER_INTERNAL_PORT} {__version__}; sleep 0.1; done"
             ),
         ]
 

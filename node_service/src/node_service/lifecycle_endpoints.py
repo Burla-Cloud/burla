@@ -208,7 +208,11 @@ async def _remove_container(container_id: str, logger: Logger):
         container = docker.containers.container(container_id)
         await container.delete(force=True)
     except Exception as e:
-        await logger.log(f"Failed to remove container {container_id}: {e}", severity="WARNING")
+        node_doc = ASYNC_DB.collection("nodes").document(INSTANCE_NAME)
+        status = (await node_doc.get()).to_dict().get("status")
+        if status not in ("DELETED", "FAILED"):
+            msg = f"Failed to remove container {container_id}: {e}"
+            await logger.log(msg, severity="WARNING")
     finally:
         await docker.close()
 
@@ -264,10 +268,9 @@ async def reboot_containers(
     try:
         db = firestore.Client(project=PROJECT_ID, database="burla")
         node_doc = db.collection("nodes").document(INSTANCE_NAME)
-
         current_status = node_doc.get().to_dict().get("status")
         if current_status in ("DELETED", "FAILED"):
-            raise Exception(f"Node marked {current_status} before boot started.")
+            return
 
         node_doc.update(
             {
@@ -367,7 +370,7 @@ async def reboot_containers(
 
         current_status = node_doc.get().to_dict().get("status")
         if current_status in ("DELETED", "FAILED"):
-            raise Exception(f"Node marked {current_status} during boot.")
+            return
 
         node_doc.update({"status": "READY"})
 

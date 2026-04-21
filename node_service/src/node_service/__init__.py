@@ -4,6 +4,7 @@ import json
 import inspect
 import asyncio
 import traceback
+from collections import deque
 from uuid import uuid4
 from time import time
 from typing import Callable
@@ -29,7 +30,7 @@ from starlette.requests import ClientDisconnect
 from starlette.datastructures import UploadFile
 
 
-__version__ = "1.5.4"
+__version__ = "1.5.5"
 CREDENTIALS, PROJECT_ID = google.auth.default()
 BURLA_BACKEND_URL = "https://backend.burla.dev"
 
@@ -52,6 +53,13 @@ CLUSTER_ID_TOKEN = response.payload.data.decode("UTF-8")
 from node_service.helpers import ResultsEndpointFilter, Logger, SizedQueue
 
 
+# Upper bound on how many UDF log documents we'll buffer in memory
+# between /results polls. If the client stops polling this caps
+# memory usage at ~20k docs (<= 2 GB given the 100 KB per-doc cap
+# enforced in worker_client.py).
+MAX_PENDING_LOGS = 20_000
+
+
 # SELF = state of this current instance of the node service
 def REINIT_SELF(SELF):
     SELF["workers"] = []
@@ -63,6 +71,7 @@ def REINIT_SELF(SELF):
     SELF["job_watcher_stop_event"] = Event()
     SELF["job_watcher_stop_event"].set()  # needs to be default set so it definitely dies on reboot
     SELF["job_watcher_task"] = None
+    SELF["on_job_start_task"] = None
     SELF["BOOTING"] = False
     SELF["RUNNING"] = False
     SELF["FAILED"] = False
@@ -71,6 +80,10 @@ def REINIT_SELF(SELF):
     SELF["all_inputs_uploaded"] = False
     SELF["num_results_received"] = 0
     SELF["pending_transfers"] = {}
+    SELF["pending_logs"] = deque(maxlen=MAX_PENDING_LOGS)
+    SELF["pending_cluster_shutdown"] = False
+    SELF["pending_cluster_restarted"] = False
+    SELF["pending_dashboard_canceled"] = False
     SELF["active_client_request_count"] = 0
     SELF["last_client_activity_timestamp"] = time()
     SELF["reserved_for_job"] = None
@@ -165,21 +178,18 @@ async def shutdown_if_idle_for_too_long(logger: Logger):
     if snapshot.exists and snapshot.to_dict().get("status") != "FAILED":
         await node_doc.update({"status": "DELETED", "ended_at": time()})
 
-    if not IN_LOCAL_DEV_MODE:
-        msg = f"Node has been idle for {INACTIVITY_SHUTDOWN_TIME_SEC // 60} minutes.\n"
-        msg += f"SHUTTING DOWN NODE {INSTANCE_NAME} DUE TO INACTIVITY."
-        await logger.log(msg, severity="WARNING")
+    msg = f"Node has been idle for {INACTIVITY_SHUTDOWN_TIME_SEC // 60} minutes.\n"
+    msg += f"SHUTTING DOWN NODE {INSTANCE_NAME} DUE TO INACTIVITY."
+    await logger.log(msg, severity="WARNING")
 
-        instance_client = InstancesClient()
-        silly_response = instance_client.aggregated_list(project=PROJECT_ID)
-        vms_per_zone = [getattr(vms_in_zone, "instances", []) for _, vms_in_zone in silly_response]
-        vms = [vm for vms_in_zone in vms_per_zone for vm in vms_in_zone]
-        vm = next((vm for vm in vms if vm.name == INSTANCE_NAME), None)
-        if vm:
-            zone = vm.zone.split("/")[-1]
-            instance_client.delete(project=PROJECT_ID, zone=zone, instance=INSTANCE_NAME)
-    else:
-        await logger.log(f"Would have deleted vm due to inactivity here! {INSTANCE_NAME}")
+    instance_client = InstancesClient()
+    silly_response = instance_client.aggregated_list(project=PROJECT_ID)
+    vms_per_zone = [getattr(vms_in_zone, "instances", []) for _, vms_in_zone in silly_response]
+    vms = [vm for vms_in_zone in vms_per_zone for vm in vms_in_zone]
+    vm = next((vm for vm in vms if vm.name == INSTANCE_NAME), None)
+    if vm:
+        zone = vm.zone.split("/")[-1]
+        instance_client.delete(project=PROJECT_ID, zone=zone, instance=INSTANCE_NAME)
 
 
 @asynccontextmanager
@@ -192,7 +202,7 @@ async def lifespan(app: FastAPI):
     # (you tried skipping the worker restarts here when reloading,
     # this won't work because this whole file re-runs, and SELF is reset when reloading.)
 
-    if INACTIVITY_SHUTDOWN_TIME_SEC is not None:
+    if INACTIVITY_SHUTDOWN_TIME_SEC is not None and not IN_LOCAL_DEV_MODE:
         asyncio.create_task(shutdown_if_idle_for_too_long(logger=logger))
         msg = f"This node will shutdown if idle for {INACTIVITY_SHUTDOWN_TIME_SEC//60} minutes!"
         await logger.log(msg)
@@ -206,15 +216,17 @@ async def lifespan(app: FastAPI):
 
 
 async def on_job_start(scope, first_event):
+    # SELF is set synchronously so the middleware's next-request 409 guard and
+    # the execute endpoint's rollback (which reads SELF, not firestore) see the
+    # new state immediately. The firestore write happens in the background; the
+    # rollback awaits `on_job_start_task` so the two writes cannot race.
     job_id = scope.get("path", "").split("/jobs/")[-1]
-    node_doc = ASYNC_DB.collection("nodes").document(INSTANCE_NAME)
-    await node_doc.update({"status": "RUNNING", "current_job": job_id, "reserved_for_job": None})
-    # these must be set after ^
-    # used to confirm in execution endpoint that this ran BEFORE setting node back to ready
-    # in the case of a failure, it may not have because async.
     SELF["RUNNING"] = True
     SELF["current_job"] = job_id
     SELF["reserved_for_job"] = None
+    node_doc = ASYNC_DB.collection("nodes").document(INSTANCE_NAME)
+    update_fields = {"status": "RUNNING", "current_job": job_id, "reserved_for_job": None}
+    SELF["on_job_start_task"] = asyncio.create_task(node_doc.update(update_fields))
 
 
 class CallHookOnJobStartMiddleware:
@@ -335,6 +347,16 @@ async def handle_errors(request: Request, call_next):
         response = await call_next(request)
     except ClientDisconnect:
         response = Response(status_code=499, content="client closed request")
+        # If disconnect hit POST /jobs/{id} before job_watcher started, reset SELF
+        # so the client's retry is accepted instead of being refused with 409.
+        disconnected_mid_assign = (
+            request.method == "POST"
+            and request.url.path == f"/jobs/{SELF['current_job']}"
+            and SELF["job_watcher_task"] is None
+        )
+        if disconnected_mid_assign:
+            SELF["RUNNING"] = False
+            SELF["current_job"] = None
     except Exception as exception:
         # create new response object to return gracefully.
         response = Response(status_code=500, content="Internal server error.")
@@ -404,8 +426,7 @@ async def validate_requests(request: Request, call_next):
 async def log_and_time_requests(request: Request, call_next):
     start = time()
     request.state.uuid = uuid4().hex
-    not_requesting_udf_results = not str(request.url).endswith("/results")  # too many to log
-    not_requesting_udf_results = True if IN_LOCAL_DEV_MODE else not_requesting_udf_results
+    chatty_endpoint = request.url.path.endswith(("/results", "/ack_transfer", "/get_inputs"))
 
     logger = Logger(request)
     # Don't use this ^ (except in `get_add_background_task_function`) because it logs to firestore
@@ -441,7 +462,7 @@ async def log_and_time_requests(request: Request, call_next):
             yield body
 
         response.body_iterator = body_stream()
-    elif response.status_code == 200 and not_requesting_udf_results and not IN_LOCAL_DEV_MODE:
+    elif response.status_code == 200 and not chatty_endpoint and not IN_LOCAL_DEV_MODE:
         latency = time() - start
         msg = f"{request.method} to {request.url} returned 200 after {latency}s."
         add_background_task(GCL_CLIENT.log_text, msg)

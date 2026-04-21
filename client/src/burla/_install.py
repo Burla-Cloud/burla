@@ -4,36 +4,13 @@ import traceback
 import requests
 import json
 import tempfile
-from pathlib import Path
-from time import time, sleep
+from time import sleep, time
 
 from yaspin import yaspin
-from google.cloud.firestore import Client
-from google.api_core.exceptions import NotFound
 
 from burla import _BURLA_BACKEND_URL, __version__
 from burla._helpers import run_command, VerboseCalledProcessError
 from burla._reporting import log_telemetry
-
-_python_version = f"{sys.version_info.major}.{sys.version_info.minor}"
-DEFAULT_CLUSTER_CONFIG = {
-    "Nodes": [
-        {
-            "containers": [
-                {
-                    "image": f"python:{_python_version}",
-                    "python_version": _python_version,
-                }
-            ],
-            "inactivity_shutdown_time_sec": 900,
-            "machine_type": "n4-standard-80",
-            "quantity": 13,
-            "disk_size_gb": 50,
-            "gcp_region": "us-central1",
-            "temp_test": "hi",
-        }
-    ]
-}
 
 
 class InstallError(Exception):
@@ -130,14 +107,12 @@ def _install(spinner):
         spinner.fail("✗")
         raise VerboseCalledProcessError(cmd, create_cmd_result.stderr)
 
-    # create service accounts: main-service, compute-engine-default, client-user
-    main_svc_account_email, client_svc_account_key = _create_service_accounts(spinner, PROJECT_ID)
+    # create service accounts: main-service, compute-engine-default
+    main_svc_account_email = _create_service_accounts(spinner, PROJECT_ID)
 
     _create_firestore_database(spinner, PROJECT_ID)
 
-    cluster_id_token = _register_cluster_and_save_cluster_id_token(
-        spinner, PROJECT_ID, client_svc_account_key
-    )
+    cluster_id_token = _register_cluster_and_save_cluster_id_token(spinner, PROJECT_ID)
 
     # Deploy dashboard as google cloud run service
     spinner.text = "Deploying burla-main-service to Google Cloud Run ... "
@@ -336,7 +311,7 @@ def _create_gcs_bucket(spinner, PROJECT_ID):
     spinner.ok("✓")
 
 
-def _register_cluster_and_save_cluster_id_token(spinner, PROJECT_ID, client_svc_account_key):
+def _register_cluster_and_save_cluster_id_token(spinner, PROJECT_ID):
     spinner.text = "Creating/Rotating secrets ... "
     spinner.start()
 
@@ -354,8 +329,7 @@ def _register_cluster_and_save_cluster_id_token(spinner, PROJECT_ID, client_svc_
         cluster_id_token = result.stdout.decode().strip()
 
     # register cluster
-    cluster_info = {"client_svc_account_key": client_svc_account_key}
-    response = requests.post(f"{_BURLA_BACKEND_URL}/v1/clusters/{PROJECT_ID}", json=cluster_info)
+    response = requests.post(f"{_BURLA_BACKEND_URL}/v1/clusters/{PROJECT_ID}")
     if response.status_code == 403:
         spinner.fail("✗")
         raise AuthError()
@@ -365,18 +339,13 @@ def _register_cluster_and_save_cluster_id_token(spinner, PROJECT_ID, client_svc_
         spinner.fail("✗")
         raise Exception(f"Error registering cluster: {response.status_code} {response.text}")
 
-    # rotate cluster token / service account key
+    # rotate cluster token
     headers = {"Authorization": f"Bearer {cluster_id_token}"}
     url = f"{_BURLA_BACKEND_URL}/v1/clusters/{PROJECT_ID}/token"
     response = requests.get(url, headers=headers)
     response.raise_for_status()
     cluster_id_token = response.json()["token"]
-    # rotate client key
-    headers = {"Authorization": f"Bearer {cluster_id_token}"}  # dont remove this, look closer first
-    cluster_info = {"client_svc_account_key": client_svc_account_key}
-    url = f"{_BURLA_BACKEND_URL}/v1/clusters/{PROJECT_ID}/client_key"
-    response = requests.post(url, json=cluster_info, headers=headers)
-    response.raise_for_status()
+    headers = {"Authorization": f"Bearer {cluster_id_token}"}
 
     # save/update token as secret
     cmd = f'printf "%s" "{cluster_id_token}" | gcloud secrets versions add burla-cluster-id-token --data-file=-'
@@ -411,31 +380,17 @@ def _create_service_accounts(spinner, PROJECT_ID):
     else:
         main_svc_svc_account_already_exists = False
 
-    # initiate create CLIENT USER svc account
-    client_svc_account_name = "burla-client-user"
-    client_svc_email = f"{client_svc_account_name}@{PROJECT_ID}.iam.gserviceaccount.com"
-    cmd = f"gcloud iam service-accounts create {client_svc_account_name} "
-    cmd += f" --display-name='{client_svc_account_name}'"
-    result = run_command(cmd, raise_error=False)
-    if result.returncode != 0 and "already exists" in result.stderr.decode():
-        client_svc_account_already_exists = True
-    elif result.returncode != 0:
-        spinner.fail("✗")
-        raise VerboseCalledProcessError(cmd, result.stderr)
-    else:
-        client_svc_account_already_exists = False
-
     # Get reference to COMPUTE ENGINE service-account (GCP project num)
     result = run_command(f"gcloud projects describe {PROJECT_ID} --format='value(projectNumber)'")
     gcp_project_num = result.stdout.decode().strip()
     compute_engine_email = f"{gcp_project_num}-compute@developer.gserviceaccount.com"
 
-    # wait for all 3 service accounts to exist:
+    # wait for both service accounts to exist:
     start = time()
     all_accounts_exist = False
     while not all_accounts_exist:
         sleep(1)
-        for email in [main_svc_email, client_svc_email, compute_engine_email]:
+        for email in [main_svc_email, compute_engine_email]:
             cmd = f"gcloud iam service-accounts describe {email}"
             all_accounts_exist = run_command(cmd, raise_error=False).returncode == 0
         if (time() - start) > 120:
@@ -474,36 +429,6 @@ def _create_service_accounts(spinner, PROJECT_ID):
     cmd += f' --role="roles/secretmanager.secretAccessor"'
     run_command(cmd)
 
-    # apply roles to burla-client-user svc account:
-    condition_title = "Allow Firestore access to burla db only"
-    condition_expression = f'resource.name=="projects/{PROJECT_ID}/databases/burla"'
-    cmd = (
-        f"gcloud projects add-iam-policy-binding {PROJECT_ID} "
-        f"--member=serviceAccount:{client_svc_email} "
-        f"--role=roles/datastore.user "
-        f"--condition='expression={condition_expression},title={condition_title}'"
-    )
-    run_command(cmd)
-
-    # delete any existing keys before creating new one (rotate the keys)
-    cmd = "gcloud iam service-accounts keys list "
-    cmd += f"--iam-account={client_svc_email} --project={PROJECT_ID} --format=json"
-    sa_keys = json.loads(run_command(cmd).stdout.decode() or "[]")
-    key_ids = [k["name"].split("/")[-1] for k in sa_keys if k.get("keyType") == "USER_MANAGED"]
-    for key_id in key_ids:
-        cmd = f"gcloud iam service-accounts keys delete {key_id} "
-        cmd += f"--iam-account={client_svc_email} --project={PROJECT_ID} --quiet"
-        run_command(cmd)
-
-    # issue service account key for burla-client-user
-    with tempfile.TemporaryDirectory() as temporary_directory:
-        key_path = Path(temporary_directory) / "key.json"
-        run_command(
-            f"gcloud iam service-accounts keys create {str(key_path)} "
-            f"--iam-account={client_svc_email} --project={PROJECT_ID}"
-        )
-        client_svc_account_key = json.loads(key_path.read_text())
-
     # allow compute engine service account to use burla token secret
     cmd = f"gcloud secrets add-iam-policy-binding burla-cluster-id-token"
     cmd += f' --member="serviceAccount:{compute_engine_email}"'
@@ -515,22 +440,17 @@ def _create_service_accounts(spinner, PROJECT_ID):
     cmd += f' --role="roles/iam.serviceAccountUser"'
     run_command(cmd)
 
-    if main_svc_svc_account_already_exists and client_svc_account_already_exists:
+    if main_svc_svc_account_already_exists:
         spinner.text = "Creating service accounts ... Accounts already exist."
     else:
         spinner.text = "Creating service accounts ... Done."
     spinner.ok("✓")
-    return main_svc_email, client_svc_account_key
+    return main_svc_email
 
 
 def _create_firestore_database(spinner, PROJECT_ID):
     spinner.text = "Creating Firestore database ... "
     spinner.start()
-    client = Client(database="burla", project=PROJECT_ID)
-
-    # cannot do this at the top because PROJECT_ID is required
-    DEFAULT_CLUSTER_CONFIG["gcs_bucket_name"] = f"{PROJECT_ID}-burla-shared-workspace"
-
     cmd = "gcloud firestore databases create --database=burla"
     cmd += f" --location=us-central1 --type=firestore-native"
     result = run_command(cmd, raise_error=False)
@@ -541,23 +461,9 @@ def _create_firestore_database(spinner, PROJECT_ID):
         spinner.fail("✗")
         raise VerboseCalledProcessError(cmd, result.stderr)
 
-    try:
-        collection = client.collection("cluster_config")
-        if not collection.document("cluster_config").get().exists:
-            collection.document("cluster_config").set(DEFAULT_CLUSTER_CONFIG)
-    except NotFound as e:
-        # retry until db is ready or 30s
-        start = time()
-        while True:
-            try:
-                collection = client.collection("cluster_config")
-                if not collection.document("cluster_config").get().exists:
-                    collection.document("cluster_config").set(DEFAULT_CLUSTER_CONFIG)
-                break
-            except NotFound as e:
-                sleep(1)
-                if time() - start >= 30:
-                    raise e
+    # cluster_config doc is self-seeded by main_service's `_get_cluster_config`
+    # on first dashboard / cluster-grow request (using DEFAULT_CONFIG in
+    # main_service/__init__.py).
 
     if already_exists:
         spinner.text = "Creating Firestore database ... Database already exists."

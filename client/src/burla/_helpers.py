@@ -1,99 +1,24 @@
 import json
 import os
 import sys
-import sysconfig
 import signal
 import subprocess
-import textwrap
-import logging
 import types
 from typing import Union
 from threading import Event
 
-import cloudpickle
 from yaspin import Spinner
-from google.cloud.firestore_v1 import AsyncClient
 
 from burla import CONFIG_PATH
 
-TOKEN_URI = "https://oauth2.googleapis.com/token"
-
-N_FOUR_STANDARD_CPU_TO_RAM = {1: 4, 2: 8, 4: 16, 8: 32, 16: 64, 32: 128, 48: 192, 64: 256, 80: 320}
 POSIX_SIGNALS_TO_HANDLE = ["SIGINT", "SIGTERM", "SIGHUP", "SIGQUIT"]
 NT_SIGNALS_TO_HANDLE = ["SIGINT", "SIGBREAK"]
 _signal_names_to_handle = POSIX_SIGNALS_TO_HANDLE if os.name == "posix" else NT_SIGNALS_TO_HANDLE
 SIGNALS_TO_HANDLE = [getattr(signal, s) for s in _signal_names_to_handle]
 
-# throws some uncatchable, unimportant, warnings
-logging.getLogger("google.api_core.bidi").setLevel(logging.ERROR)
-# prevent some annoying grpc logs / warnings
-os.environ["GRPC_VERBOSITY"] = "ERROR"  # only log ERROR/FATAL
-os.environ["GLOG_minloglevel"] = "3"  # 0-INFO, 1-WARNING, 2-ERROR, 3-FATAL
-os.environ["GRPC_ENABLE_FORK_SUPPORT"] = "1"  # avoid fork() handler warnings
-
-# needs to be imported after ^
-from google.cloud.firestore import Client
-from google.cloud.firestore import ArrayUnion
-from google.cloud.firestore_v1.async_client import AsyncClient
-from google.oauth2 import service_account
-
 
 class GoogleLoginError(Exception):
     pass
-
-
-class SuppressNativeStderr:
-    """Temporarily silence C/C++ library logs that write directly to stderr.
-
-    Used to suppress one-time gRPC/ALTS noise during Firestore channel setup.
-    """
-
-    def __enter__(self):
-        # Duplicate FD 2 (stderr) directly to tolerate environments without a true sys.stderr fd.
-        self._stderr_fd_copy = os.dup(2)
-        self._devnull = open(os.devnull, "w")
-        os.dup2(self._devnull.fileno(), 2)
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        os.dup2(self._stderr_fd_copy, 2)
-        os.close(self._stderr_fd_copy)
-        self._devnull.close()
-        return False
-
-    async def __aenter__(self):
-        return self.__enter__()
-
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        return self.__exit__(exc_type, exc_val, exc_tb)
-
-
-async def run_in_subprocess(func, *args):
-    # I do it like this so it works in google colab, multiprocesing doesn't
-    code = textwrap.dedent(
-        """
-        import sys, cloudpickle
-        func, args = cloudpickle.load(sys.stdin.buffer)
-        func(*args)
-        """
-    )
-    cmd = [sys.executable, "-u", "-c", code]
-    with SuppressNativeStderr():
-        process = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
-    process.stdin.write(cloudpickle.dumps((func, args)))
-    process.stdin.close()
-    return process
-
-
-def parallelism_capacity(machine_type: str, func_cpu: int, func_ram: int):
-    # Max number of workers this machine_type can run a job with the given resource requirements?
-    if machine_type.startswith("n4-standard") and machine_type.split("-")[-1].isdigit():
-        vm_cpu = int(machine_type.split("-")[-1])
-        vm_ram = N_FOUR_STANDARD_CPU_TO_RAM[vm_cpu]
-        return min(vm_cpu // func_cpu, vm_ram // func_ram)
-    elif machine_type.startswith("a") and machine_type.endswith("g"):
-        return 1
-    raise ValueError(f"machine_type must be: n4-standard-X, a3-highgpu-Xg, or a3-ultragpu-8g")
 
 
 def restore_signal_handlers(original_signal_handlers):
@@ -129,21 +54,6 @@ def run_command(command, raise_error=True):
         return result
 
 
-def get_db_clients():
-    config = json.loads(CONFIG_PATH.read_text())
-    key = config["client_svc_account_key"]
-    scopes = ["https://www.googleapis.com/auth/datastore"]
-    credentials = service_account.Credentials.from_service_account_info(key, scopes=scopes)
-
-    # Silence native gRPC setup logs (e.g., ALTS creds ignored) that can appear once per process.
-    # this seems to actually work and is NOT a forgotten failed attempt.
-    with SuppressNativeStderr():
-        kwargs = dict(project=config["project_id"], credentials=credentials, database="burla")
-        async_db = AsyncClient(**kwargs)
-        sync_db = Client(**kwargs)
-    return sync_db, async_db
-
-
 def install_signal_handlers(
     job_id: str,
     background: bool,
@@ -151,6 +61,11 @@ def install_signal_handlers(
     terminal_cancel_event: Event,
     inputs_done_event: Event,
 ):
+    # Lazy import: `_cluster_client` imports `_auth`, which imports `_helpers`
+    # (for `run_command`). Deferring this import to signal-handler install
+    # time sidesteps that cycle.
+    from burla._cluster_client import ClusterClient
+
     def _signal_handler(signum, frame):
         if terminal_cancel_event.is_set():
             return
@@ -165,13 +80,14 @@ def install_signal_handlers(
             fail_reason = "Cancel signal from client."
 
         if job_failed:
-            try:
-                sync_db, _ = get_db_clients()
-                job_doc = sync_db.collection("jobs").document(job_id)
-                if job_doc.get().to_dict()["status"] != "CANCELED":
-                    job_doc.update({"status": "CANCELED", "fail_reason": ArrayUnion([fail_reason])})
-            except Exception:
-                pass
+            # Best effort - if main_service is unreachable the node will still
+            # detect the disconnect via its own job-doc liveness check and the
+            # client exits either way.
+            ClusterClient.patch_job_sync(
+                job_id,
+                updates={"status": "CANCELED"},
+                append_fail_reason=fail_reason,
+            )
 
         if background and inputs_done_event.is_set():
             main_service_url = json.loads(CONFIG_PATH.read_text())["cluster_dashboard_url"]
@@ -191,12 +107,19 @@ def install_signal_handlers(
     return original_signal_handlers
 
 
-def get_modules_required_on_remote(function_):
-    """
-    Returns all package modules if custom user-defined modules exist.
-    (because I don't want to write code to inspect custom modules for required packages right now)
-    Only returns modules defined in `function_` namespace if there are no user-defined modules.
-    """
+# Cache of the last sys.modules walk, keyed on len(sys.modules). In fat notebook
+# envs the walk itself is 50-200ms per call; repeat `remote_parallel_map`
+# invocations without new imports can reuse the previous result.
+# Layout: (modules_count, custom_module_names, package_module_names, has_custom_modules)
+_sys_modules_scan_cache = None
+
+
+def _scan_sys_modules():
+    global _sys_modules_scan_cache
+    modules_count = len(sys.modules)
+    if _sys_modules_scan_cache and _sys_modules_scan_cache[0] == modules_count:
+        return _sys_modules_scan_cache[1], _sys_modules_scan_cache[2], _sys_modules_scan_cache[3]
+
     has_custom_modules = False
     custom_module_names = set()
     package_module_names = set()
@@ -216,6 +139,26 @@ def get_modules_required_on_remote(function_):
             elif is_custom:
                 custom_module_names.add(module_name)
                 has_custom_modules = True
+    _sys_modules_scan_cache = (
+        modules_count,
+        custom_module_names,
+        package_module_names,
+        has_custom_modules,
+    )
+    return custom_module_names, package_module_names, has_custom_modules
+
+
+def get_modules_required_on_remote(function_):
+    """
+    Returns all package modules if custom user-defined modules exist.
+    (because I don't want to write code to inspect custom modules for required packages right now)
+    Only returns modules defined in `function_` namespace if there are no user-defined modules.
+    """
+    cached_custom, cached_packages, has_custom_modules = _scan_sys_modules()
+    # Caller mutates these (removing temp-fix misdetections, adding xarray deps),
+    # so hand back fresh copies instead of the cached sets.
+    custom_module_names = set(cached_custom)
+    package_module_names = set(cached_packages)
     if not has_custom_modules:
         # If there are NO custom modules, we install only packages that are in the namespace
         # of the users function, because these are the only ones that might be used.

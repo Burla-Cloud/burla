@@ -126,7 +126,16 @@ def _scan_sys_modules():
         spec = getattr(module, "__spec__", None)
         origin = getattr(spec, "origin", None)
         if origin:
-            is_package = "site-packages" in origin or "dist-packages" in origin or r"\Lib" in origin
+            is_package = (
+                "site-packages" in origin
+                or "dist-packages" in origin
+                or r"\Lib" in origin
+                # Worker containers install pip packages into this non-standard
+                # dir (see node_service.worker_client), so nested
+                # remote_parallel_map calls inside a UDF don't misclassify
+                # every installed package as user code.
+                or "/worker_service_python_env/" in origin
+            )
             is_builtin = (
                 origin in ("built-in", "frozen") or "lib/python" in origin or r"\DLLs" in origin
             )

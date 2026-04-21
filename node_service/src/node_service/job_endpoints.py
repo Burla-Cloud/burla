@@ -11,6 +11,7 @@ from node_service import (
     SELF,
     PROJECT_ID,
     INSTANCE_NAME,
+    IN_LOCAL_DEV_MODE,
     NODE_AUTH_CREDENTIALS_PATH,
     get_request_json,
     get_logger,
@@ -189,13 +190,19 @@ async def execute(
     # Must land before `load_function` so the `_process_inputs` task it
     # spawns can never observe a missing creds file.
     auth_token = request.headers["Authorization"].removeprefix("Bearer ").strip()
+    cluster_dashboard_url = request_json["cluster_dashboard_url"]
+    # In local-dev the outer client reaches main_service at localhost:5001 via
+    # the port-forward on the dev machine. Worker containers are on the
+    # local-burla-cluster docker network, so they need the container-name URL.
+    if IN_LOCAL_DEV_MODE:
+        cluster_dashboard_url = "http://main_service:5001"
     NODE_AUTH_CREDENTIALS_PATH.write_text(
         json.dumps(
             {
                 "email": request.headers["X-User-Email"],
                 "auth_token": auth_token,
                 "project_id": PROJECT_ID,
-                "cluster_dashboard_url": request_json["cluster_dashboard_url"],
+                "cluster_dashboard_url": cluster_dashboard_url,
             }
         )
     )

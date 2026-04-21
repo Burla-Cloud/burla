@@ -76,6 +76,16 @@ def test_cwd_is_workspace():
     assert result["outputs"] == ["/workspace"]
 
 
+def test_nested_rpm():
+    function_source = (
+        "def test_function(x):\n"
+        "    from burla import remote_parallel_map\n"
+        "    return remote_parallel_map(lambda n: n + 100, [x], spinner=False)[0]\n"
+    )
+    result = _run_with_timeout(function_source, [1], MAX_RUNTIME_SECONDS_WHEN_READY * 4)
+    assert result["outputs"] == [101]
+
+
 def _test_big_function():
 
     big_object = bytes(107 * 1_000_000)

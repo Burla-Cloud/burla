@@ -266,6 +266,7 @@ class WorkerClient:
         config = {
             "Image": self.image,
             "Cmd": command,
+            "WorkingDir": "/workspace",
             "ExposedPorts": {f"{WORKER_INTERNAL_PORT}/tcp": {}},
             "HostConfig": host_config,
         }

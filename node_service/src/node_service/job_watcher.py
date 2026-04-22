@@ -84,8 +84,12 @@ async def _input_steal_loop(async_db, session, logger, job_started_at, node_ids_
             neighbor_id, neighbor_host, nodes_might_join = await _get_neighbor
             if not (neighbor_id or nodes_might_join):
                 return
-            if not neighbor_id:
-                continue
+
+        # The >60s re-fetch only runs after the grace period, so between job
+        # start and then neighbor_id can still be None from the initial
+        # get_neighbor call. Wait for a real neighbor before building a URL.
+        if not neighbor_id:
+            continue
 
         transfer_id = uuid4().hex
         remaining_inputs = SELF["inputs_queue"].qsize()

@@ -528,7 +528,18 @@ class Node:
                     self.udf_error_event.set()
                     log_error = RemoteParallelMapReporter.log_user_function_error_async
                     await log_error(self.job_id, self.session)
-                    raise error_info["exception"].with_traceback(traceback)
+                    exc = error_info["exception"].with_traceback(traceback)
+                    # Preserve the failing input index on the exception so callers
+                    # can identify the bad item in a large batch; add a 3.11+
+                    # note so it is visible in the default traceback. Guarded
+                    # because some exception types disallow attribute writes.
+                    try:
+                        exc.burla_input_index = input_index
+                        if hasattr(exc, "add_note"):
+                            exc.add_note(f"[burla] failed on input index {input_index}")
+                    except Exception:
+                        pass
+                    raise exc
                 else:
                     return_values.append(cloudpickle.loads(result_pkl))
 

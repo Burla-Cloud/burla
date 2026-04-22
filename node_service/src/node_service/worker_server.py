@@ -164,7 +164,7 @@ with socket.create_server(("0.0.0.0", port)) as listener:
                     finally:
                         print(f"{LOG_END_MARKER_PREFIX}{input_index}", flush=True)
                     response_payload = cloudpickle.dumps(return_value)
-            except Exception as e:
+            except BaseException as e:
                 tb_dict = Traceback(e.__traceback__).to_dict()
                 response_payload = pickle.dumps(
                     {"error_info": dict(type=type(e), exception=e, traceback_dict=tb_dict)}

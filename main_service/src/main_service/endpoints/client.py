@@ -524,6 +524,23 @@ async def get_cluster_node(node_id: str):
     return data
 
 
+# Earliest log matching one of these is usually the root cause; later logs
+# ("Startup script failed!", timeout tracebacks) are cascades.
+_FAIL_LOG_TOKENS = ("Error", "error", "failed", "Traceback", "Exception")
+
+
+# 404 on "no match" lets the client distinguish real failure explanations
+# from innocuous info logs and fall back cleanly.
+@router.get("/v1/cluster/nodes/{node_id}/fail_reason")
+async def get_node_fail_reason(node_id: str):
+    logs_ref = ASYNC_DB.collection("nodes").document(node_id).collection("logs")
+    async for doc in logs_ref.order_by("ts").stream():
+        msg = ((doc.to_dict() or {}).get("msg") or "").strip()
+        if msg and any(tok in msg for tok in _FAIL_LOG_TOKENS):
+            return {"reason": msg}
+    raise HTTPException(status_code=404, detail="no failure log for node")
+
+
 @router.post("/v1/cluster/nodes/{node_id}/fail")
 async def fail_cluster_node(
     node_id: str,

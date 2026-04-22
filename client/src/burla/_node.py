@@ -52,6 +52,14 @@ class AllNodesBusy(Exception):
         super().__init__("All nodes are busy, please try again later.")
 
 
+class JobStalled(Exception):
+    """
+    Raised by `_execute_job` when every node task has finished but we still
+    don't have all results. Replaces a bare `Exception` fallback; the message
+    lists each node's terminal state so users can see which nodes died.
+    """
+
+
 class NoCompatibleNodes(Exception):
     def __init__(self, detail: dict | None = None):
         reason = detail.get("reason") if isinstance(detail, dict) else None

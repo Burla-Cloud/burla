@@ -196,11 +196,20 @@ class Node:
                 self.__start_svc_in_vm(disk_image=self.disk_image, disk_size=self.disk_size)
 
             start = time()
+            last_fs_check = start
             status = self.status()
             while status not in ("READY", "RUNNING"):
                 sleep(1)
                 booting_too_long = (time() - start) > NODE_BOOT_TIMEOUT
                 status = self.status()
+
+                # Startup-script trap writes FAILED to Firestore directly,
+                # bypassing the HTTP path self.status() checks.
+                if status == "BOOTING" and (time() - last_fs_check) >= 2:
+                    last_fs_check = time()
+                    fs_status = (self.node_ref.get().to_dict() or {}).get("status")
+                    if fs_status == "FAILED":
+                        status = "FAILED"
 
                 if status == "FAILED" or booting_too_long:
                     msg = f"Node {self.instance_name} Failed to start! (timeout={booting_too_long})"

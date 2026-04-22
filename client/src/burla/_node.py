@@ -232,6 +232,19 @@ class Node:
     def _node_silence_timeout_message(self, action: str):
         return f"Node {self.instance_name} has not replied for over 2 minutes while {action}.\n"
 
+    async def _failure_message(self, base_msg: str | None = None) -> str:
+        """Enrich a `NodeDisconnected` message with the node's own error log
+        when one exists, so the user sees the root cause (e.g. a failed
+        `docker pull`) instead of just "Node X failed during job." Returns
+        the base message unchanged if the node has no error-looking log or
+        the lookup itself fails - the fallback must never make the error
+        worse than today."""
+        base = base_msg or f"Node {self.instance_name} failed during job."
+        reason = await self.client.get_node_fail_reason(self.instance_name)
+        if not reason:
+            return base
+        return f"{base}\n\nLast error reported by the node:\n{reason}"
+
     def _empty_node_results(self):
         return {
             "results": [],
@@ -401,11 +414,11 @@ class Node:
                     if job_doc and job_doc.get("status") == "CANCELED":
                         raise JobCanceled("Job canceled from dashboard.")
                     msg = f"Node {self.instance_name} disconnected while transmitting results.\n"
-                    raise NodeDisconnected(self, msg)
+                    raise NodeDisconnected(self, await self._failure_message(msg))
         except NETWORK_ERROR_TYPES:
             if self._node_silence_timeout_exceeded():
                 msg = self._node_silence_timeout_message("returning results")
-                raise NodeDisconnected(self, msg)
+                raise NodeDisconnected(self, await self._failure_message(msg))
             return self._empty_node_results()
 
         if node_results.get("cluster_shutdown"):
@@ -523,7 +536,7 @@ class Node:
                         msg = f"Worker on node {self.instance_name} failed "
                         msg += "(the cluster may have been restarted):\n\n"
                         msg += error_info["traceback_str"]
-                        raise NodeDisconnected(self, msg)
+                        raise NodeDisconnected(self, await self._failure_message(msg))
                     traceback = Traceback.from_dict(error_info["traceback_dict"]).as_traceback()
                     self.udf_error_event.set()
                     log_error = RemoteParallelMapReporter.log_user_function_error_async

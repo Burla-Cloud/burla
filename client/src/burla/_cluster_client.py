@@ -192,6 +192,19 @@ class ClusterClient:
     async def get_node(self, node_id: str) -> Optional[dict]:
         return await self._request("GET", f"/v1/cluster/nodes/{node_id}")
 
+    async def get_node_fail_reason(self, node_id: str) -> Optional[str]:
+        """Best-guess failure reason from the node's log subcollection, or
+        None if no logs / network failure. Only called on the failure
+        path so this is never in a tight loop."""
+        try:
+            result = await self._request("GET", f"/v1/cluster/nodes/{node_id}/fail_reason")
+        except Exception:
+            return None
+        if not result:
+            return None
+        reason = (result.get("reason") or "").strip()
+        return reason or None
+
     async def fail_node(self, node_id: str, reason: str) -> None:
         await self._request(
             "POST",

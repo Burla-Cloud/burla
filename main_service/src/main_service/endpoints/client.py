@@ -514,6 +514,37 @@ async def get_cluster_node(node_id: str):
     return data
 
 
+# Tokens that mean "this log is explaining a failure". Earliest log matching
+# any of these is usually the root cause; later logs (e.g. "Startup script
+# failed!", timeout tracebacks) are cascades of the same failure.
+_FAIL_LOG_TOKENS = ("Error", "error", "failed", "Traceback", "Exception")
+
+
+@router.get("/v1/cluster/nodes/{node_id}/fail_reason")
+async def get_node_fail_reason(node_id: str):
+    """
+    Best-guess failure message for a FAILED node, so the client can
+    include it in `NodeDisconnected` instead of just the instance name.
+
+    Returns the earliest log entry whose message contains a failure
+    token - that's almost always the root cause. Cascades like
+    "Startup script failed!" and timeout tracebacks come after and are
+    skipped in favor of the first real error.
+
+    Reads the node's `logs` subcollection directly. Cold path - only hit
+    once per failed job, not on the polling loop - so a Firestore round
+    trip here is fine. 404s if there's no error-looking log so callers
+    can tell "genuine failure explanation" apart from "node just has
+    some info logs".
+    """
+    logs_ref = ASYNC_DB.collection("nodes").document(node_id).collection("logs")
+    async for doc in logs_ref.order_by("ts").stream():
+        msg = ((doc.to_dict() or {}).get("msg") or "").strip()
+        if msg and any(tok in msg for tok in _FAIL_LOG_TOKENS):
+            return {"reason": msg}
+    raise HTTPException(status_code=404, detail="no failure log for node")
+
+
 @router.post("/v1/cluster/nodes/{node_id}/fail")
 async def fail_cluster_node(
     node_id: str,

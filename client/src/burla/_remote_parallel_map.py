@@ -245,7 +245,8 @@ async def _execute_job(
 
             for task, node in zip(node_tasks, nodes):
                 exception = task.exception() if task.done() else None
-                exception = NodeDisconnected(node) if node.state == "FAILED" else exception
+                if node.state == "FAILED":
+                    exception = NodeDisconnected(node, await node._failure_message())
                 if exception:
                     # Authoritative check via main_service: if main_service has
                     # already written a lifecycle signal on the job doc, raise

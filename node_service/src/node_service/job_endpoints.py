@@ -178,13 +178,23 @@ async def execute(
         node_doc = async_db.collection("nodes").document(INSTANCE_NAME)
         await node_doc.update({"status": "READY", "current_job": None})
 
-        msg = "No compatible containers.\n"
-        msg += f"User is running python version {user_python_version}, "
-        versions = list(set([e.python_version for e in SELF["workers"]]))
-        msg += f"containers in the cluster are running: {', '.join(versions)}.\n"
-        msg += "To fix this you can either:\n"
-        msg += f" - update the cluster to run containers with python{user_python_version}\n"
-        msg += f" - update your local python version to be one of {versions}"
+        requested_parallelism = request_json["parallelism"]
+        if requested_parallelism <= 0:
+            msg = (
+                f"Node was assigned {requested_parallelism} parallelism slots. "
+                "This usually means the requested func_cpu/func_ram is larger than "
+                "this machine_type can fit."
+            )
+        elif not SELF["workers"]:
+            msg = "Node has no workers loaded yet (still booting)."
+        else:
+            versions = list(set([e.python_version for e in SELF["workers"]]))
+            msg = "No compatible containers.\n"
+            msg += f"User is running python version {user_python_version}, "
+            msg += f"containers in the cluster are running: {', '.join(versions)}.\n"
+            msg += "To fix this you can either:\n"
+            msg += f" - update the cluster to run containers with python{user_python_version}\n"
+            msg += f" - update your local python version to be one of {versions}"
         return Response(msg, status_code=409)
 
     # Must land before `load_function` so the `_process_inputs` task it

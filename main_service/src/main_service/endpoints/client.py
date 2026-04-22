@@ -255,6 +255,16 @@ def _grow_if_needed(
             n_nodes_to_add = math.ceil(num_cpus_to_add / cpu_per_node)
             node_machine_types = [configured_machine_type] * n_nodes_to_add
 
+    # A machine_type whose capacity is 0 for this func_cpu/func_ram would boot a
+    # node that can't run a single call, and the client would then send
+    # parallelism=0 to it, producing a misleading 409 from the node.
+    node_machine_types = [
+        mt for mt in node_machine_types
+        if parallelism_capacity(mt, func_cpu, func_ram) > 0
+    ]
+    if not node_machine_types:
+        return []
+
     node_instance_names = [f"burla-node-{uuid4().hex[:8]}" for _ in node_machine_types]
     containers_override = [{"image": image}] if image else None
 

@@ -17,7 +17,7 @@ DEFAULT_IMAGE_FAMILY="${BURLA_DEV_VM_IMAGE_FAMILY:-ubuntu-2204-lts}"
 DEFAULT_ARTIFACT_LOCATION="${BURLA_DEV_VM_ARTIFACT_LOCATION:-us}"
 DEFAULT_ARTIFACT_REPOSITORY="${BURLA_DEV_VM_ARTIFACT_REPOSITORY:-burla-main-service}"
 DEFAULT_REMOTE_REPO_DIR="${BURLA_DEV_VM_REMOTE_REPO_DIR:-/srv/burla}"
-DEFAULT_REMOTE_LOG_PATH="${BURLA_DEV_VM_REMOTE_LOG_PATH:-/var/log/burla-local-dev.log}"
+DEFAULT_REMOTE_LOG_PATH="${BURLA_DEV_VM_REMOTE_LOG_PATH:-/var/log/burla-dev.log}"
 DEFAULT_BOOTSTRAP_READY_PATH="${BURLA_DEV_VM_BOOTSTRAP_READY_PATH:-/var/lib/burla-vm/bootstrap-ready}"
 DEFAULT_PROJECT_PREFIX="${BURLA_DEV_VM_PROJECT_PREFIX:-burla-agent-}"
 DEFAULT_VM_PREFIX="${BURLA_DEV_VM_VM_PREFIX:-burla-dev-vm-}"
@@ -94,6 +94,34 @@ parse_agent_and_python() {
   [[ -n "$AGENT_ID" ]] || fail "--agent is required."
   [[ -n "$PYTHON_VERSION" ]] || fail "--python is required."
   validate_agent_id "$AGENT_ID"
+}
+
+parse_agent_and_mode() {
+  AGENT_ID=""
+  MODE=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --agent)
+        AGENT_ID="$2"
+        shift 2
+        ;;
+      --mode)
+        MODE="$2"
+        shift 2
+        ;;
+      *)
+        fail "Unknown argument [$1]."
+        ;;
+    esac
+  done
+
+  [[ -n "$AGENT_ID" ]] || fail "--agent is required."
+  [[ -n "$MODE" ]] || fail "--mode is required (local-dev or remote-dev)."
+  validate_agent_id "$AGENT_ID"
+  case "$MODE" in
+    local-dev|remote-dev) ;;
+    *) fail "--mode must be [local-dev] or [remote-dev], got [$MODE]." ;;
+  esac
 }
 
 parse_agent_task_and_base() {

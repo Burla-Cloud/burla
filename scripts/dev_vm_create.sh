@@ -20,7 +20,7 @@ LOCAL_DASHBOARD_PORT="$(dashboard_port_for_agent "$AGENT_ID")"
 LOCAL_VITE_PORT="$(vite_port_for_agent "$AGENT_ID")"
 REMOTE_REPO_DIR="$DEFAULT_REMOTE_REPO_DIR"
 REMOTE_LOG_PATH="$DEFAULT_REMOTE_LOG_PATH"
-REMOTE_TMUX_SESSION="burla-local-dev-${AGENT_ID}"
+REMOTE_TMUX_SESSION="burla-dev-${AGENT_ID}"
 LOCAL_USER="$(id -un)"
 PRIVATE_KEY_PATH="$(private_key_path_for_agent "$AGENT_ID")"
 PUBLIC_KEY_PATH="$(public_key_path_for_agent "$AGENT_ID")"
@@ -92,7 +92,7 @@ gcloud compute instances create "$VM_NAME" \
   --boot-disk-type pd-balanced \
   --service-account "$(main_service_service_account "$PROJECT_ID")" \
   --scopes https://www.googleapis.com/auth/cloud-platform \
-  --labels "burla-agent-id=${AGENT_ID},burla-runtime=local-dev,burla-ephemeral=true" \
+  --labels "burla-agent-id=${AGENT_ID},burla-runtime=ephemeral-dev,burla-ephemeral=true" \
   --metadata "enable-oslogin=FALSE,ssh-keys=${SSH_KEY_VALUE}" \
   --metadata-from-file startup-script="$STARTUP_SCRIPT" \
   >/dev/null

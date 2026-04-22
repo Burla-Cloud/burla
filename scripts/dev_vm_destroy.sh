@@ -25,6 +25,13 @@ if [[ -n "${TUNNEL_PID:-}" ]] && kill -0 "$TUNNEL_PID" >/dev/null 2>&1; then
   wait "$TUNNEL_PID" >/dev/null 2>&1 || true
 fi
 
+# Best-effort graceful shutdown so main_service deletes any worker nodes it
+# created (no-op in local-dev, deletes real GCE workers in remote-dev).
+if [[ -n "${VM_IP:-}" ]] && [[ -n "${PRIVATE_KEY_PATH:-}" ]]; then
+  shutdown_cmd="curl -fsS -m 60 -X POST http://localhost:5001/v1/cluster/shutdown -H 'Content-Type: application/json' -d '{}'"
+  ssh_run "$shutdown_cmd" >/dev/null 2>&1 || true
+fi
+
 if [[ -n "${VM_NAME:-}" ]] && [[ -n "${VM_IP:-}" ]] && [[ -n "${PRIVATE_KEY_PATH:-}" ]] && ssh_run "CLOUDSDK_CORE_PROJECT='$PROJECT_ID' gcloud compute instances delete '$VM_NAME' --zone '${ZONE:-$DEFAULT_ZONE}' --quiet" >/dev/null 2>&1; then
   :
 elif [[ -n "${VM_NAME:-}" ]] && vm_exists "$PROJECT_ID" "${ZONE:-$DEFAULT_ZONE}" "$VM_NAME"; then

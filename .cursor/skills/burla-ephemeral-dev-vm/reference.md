@@ -36,11 +36,11 @@ State and keys are split deliberately: the repo's `.cursor/` folder is a common 
 - `scripts/dev_vm_create.sh`: create or reuse the project slot, create a fresh VM, and write the local state file
 - `scripts/dev_vm_wait_ssh.sh`: wait until SSH works and the startup bootstrap is complete
 - `scripts/dev_vm_sync_repo.sh`: copy the current local repo state to `/srv/burla` on the VM
-- `scripts/dev_vm_start_local_dev.sh`: build the `burla-main-service:latest` image for that project and start `make local-dev` in tmux
+- `scripts/dev_vm_start.sh --mode <local-dev\|remote-dev>`: build the `burla-main-service:latest` image for that project and start `make local-dev` or `make remote-dev` in tmux. Tears down the prior `main_service` container + tmux session first, so repeated invocations with different `--mode` values cleanly switch modes.
 - `scripts/dev_vm_tunnel.sh`: forward local dashboard and Vite ports to the VM
-- `scripts/dev_vm_status.sh`: print the current state plus a coarse health field
+- `scripts/dev_vm_status.sh`: print the current state plus `health`, `running_mode` (detected from `main_service`'s `IN_LOCAL_DEV_MODE` env var), and `last_started_mode` (last value passed to `dev_vm_start.sh`)
 - `scripts/dev_vm_client_shell.sh`: start a local `uv` client shell with `BURLA_CLUSTER_DASHBOARD_URL` pointed at the tunneled dashboard URL
-- `scripts/dev_vm_destroy.sh`: stop the local tunnel and delete the VM; delete the project slot only when explicitly requested
+- `scripts/dev_vm_destroy.sh`: best-effort POST `/v1/cluster/shutdown` to `main_service` (deletes remote-dev worker VMs), stop the local tunnel, delete the dev VM; delete the project slot only when explicitly requested via `--delete-project`
 
 ## Local Client Caveat
 
@@ -74,7 +74,7 @@ These scripts accept optional environment overrides when the defaults are wrong 
 3. Create the VM.
 4. Wait for bootstrap.
 5. Sync the worktree snapshot.
-6. Start local-dev.
+6. Start the main service in the desired mode (`--mode local-dev` or `--mode remote-dev`).
 7. Start the tunnel.
 8. Use the dashboard and local client shell.
 9. Destroy the VM when done.

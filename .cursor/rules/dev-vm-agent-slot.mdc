@@ -1,0 +1,15 @@
+---
+description: Agents must pick any unused agent slot without asking
+alwaysApply: true
+---
+
+# Dev VM Agent Slot Selection
+
+Never ask the user which agent slot / agent ID to use.
+
+Pick any unused two-digit ID (01-99) automatically. A slot is "unused" when BOTH:
+
+- `../burla-worktrees/agent-<id>/` does not exist, AND
+- `.cursor/dev-vm-state/<id>.json` does not exist.
+
+Prefer the lowest free ID. Mention the chosen ID in the response but do not pause for confirmation.

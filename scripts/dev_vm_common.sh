@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 CLIENT_PROJECT="$REPO_ROOT/client"
 STATE_DIR="$REPO_ROOT/.cursor/dev-vm-state"
+KEY_DIR="${BURLA_DEV_VM_KEY_DIR:-${HOME}/.ssh/burla-dev-vm}"
 
 DEFAULT_ORGANIZATION_ID="${BURLA_DEV_VM_ORGANIZATION_ID:-1085197508222}"
 DEFAULT_BILLING_ACCOUNT="${BURLA_DEV_VM_BILLING_ACCOUNT:-014651-7FBBE2-45278D}"
@@ -145,12 +146,12 @@ state_path_for_agent() {
 
 private_key_path_for_agent() {
   local agent_id="$1"
-  echo "$STATE_DIR/${agent_id}_ed25519"
+  echo "$KEY_DIR/${agent_id}_ed25519"
 }
 
 public_key_path_for_agent() {
   local agent_id="$1"
-  echo "$STATE_DIR/${agent_id}_ed25519.pub"
+  echo "$KEY_DIR/${agent_id}_ed25519.pub"
 }
 
 timestamp_utc() {
@@ -166,6 +167,11 @@ ensure_state_dir() {
   mkdir -p "$STATE_DIR"
 }
 
+ensure_key_dir() {
+  mkdir -p "$KEY_DIR"
+  chmod 700 "$KEY_DIR"
+}
+
 ensure_agent_keypair() {
   local agent_id="$1"
   local private_key_path
@@ -177,6 +183,7 @@ ensure_agent_keypair() {
     return
   fi
 
+  ensure_key_dir
   ssh-keygen -t ed25519 -N "" -C "burla-dev-vm-${agent_id}" -f "$private_key_path" >/dev/null
 }
 

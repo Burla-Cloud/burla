@@ -6,12 +6,15 @@
 - VM name: `burla-dev-vm-<id>-<timestamp>`
 - Dashboard port: `15000 + <id>`
 - Vite port: `18000 + <id>`
-- Local state file: `.cursor/dev-vm-state/<id>.json`
+- Local state file (non-sensitive agent metadata): `.cursor/dev-vm-state/<id>.json`
+- SSH keys (private + public): `~/.ssh/burla-dev-vm/<id>_ed25519[.pub]`
 
 Examples:
 
-- Agent `01` -> project `burla-agent-01` -> dashboard `http://localhost:15001`
-- Agent `02` -> project `burla-agent-02` -> dashboard `http://localhost:15002`
+- Agent `01` -> project `burla-agent-01` -> dashboard `http://localhost:15001` -> keys `~/.ssh/burla-dev-vm/01_ed25519`
+- Agent `02` -> project `burla-agent-02` -> dashboard `http://localhost:15002` -> keys `~/.ssh/burla-dev-vm/02_ed25519`
+
+State and keys are split deliberately: the repo's `.cursor/` folder is a common force-commit target, so SSH private keys are kept completely outside the repo tree. The absolute key path is also written into each state file's `private_key_path` / `public_key_path` fields, so any script that's already loaded state via `load_state_vars` can use `$PRIVATE_KEY_PATH` directly. Override `BURLA_DEV_VM_KEY_DIR` if you need a different location.
 
 ## Script Roles
 
@@ -43,6 +46,7 @@ These scripts accept optional environment overrides when the defaults are wrong 
 - `BURLA_DEV_VM_ARTIFACT_REPOSITORY`
 - `BURLA_DEV_VM_REMOTE_REPO_DIR`
 - `BURLA_DEV_VM_REMOTE_LOG_PATH`
+- `BURLA_DEV_VM_KEY_DIR` (default `~/.ssh/burla-dev-vm`)
 
 ## Expected Loop
 

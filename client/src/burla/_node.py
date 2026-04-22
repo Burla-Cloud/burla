@@ -20,6 +20,7 @@ from burla._reporting import RemoteParallelMapReporter
 
 
 NODE_SILENCE_TIMEOUT_SECONDS = 2 * 60
+NODE_BOOT_DEADLINE_SEC = 10 * 60
 LOGIN_TIMEOUT_SEC = 10
 MAX_INPUT_SIZE_BYTES = 1_000_000 * 200  # 200MB
 MAX_CHUNK_SIZE_BYTES = 1_000_000 * 2  # 2MB
@@ -220,6 +221,7 @@ class Node:
         self.installing_packages = False
         self.result_count = 0
         self.last_reply_timestamp = time()
+        self.started_booting_at = time()
         self.auth_headers = get_auth_headers()
         self.spinner_compatible_print = lambda msg: spinner.write(msg) if spinner else print(msg)
 
@@ -285,8 +287,12 @@ class Node:
 
     async def _update_status(self):
         node_data = await self.client.get_node(self.instance_name)
-        if not node_data:
-            # 404 means the node was DELETED (evicted from NODES_CACHE).
+        if node_data is None:
+            # A 404 during BOOTING can race main_service's background write of
+            # the initial firestore doc — the instance_name came back from
+            # /v1/jobs/{id}/start before the doc landed. Not a real eviction.
+            if self.state == "BOOTING":
+                return
             self.state = "FAILED"
             return
         self.state = node_data["status"]
@@ -461,6 +467,9 @@ class Node:
             while self.state == "BOOTING":
                 await self._update_status()
                 if self.state == "BOOTING":
+                    if (time() - self.started_booting_at) > NODE_BOOT_DEADLINE_SEC:
+                        self.state = "FAILED"
+                        break
                     await asyncio.sleep(random.uniform(2, 6))
             if self.state != "READY":
                 return

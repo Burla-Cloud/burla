@@ -1,0 +1,8 @@
+---
+description: Route Burla ephemeral VM and local-dev runtime tasks through the Burla dev VM skill
+alwaysApply: true
+---
+
+# Burla Ephemeral Dev VM
+
+When the user asks about Burla dev VMs, ephemeral GCP runtimes, SSH tunnel dashboards, or isolated local-dev environments, first use the `burla-ephemeral-dev-vm` skill. Prefer the `scripts/dev_vm_*.sh` workflow over ad hoc `gcloud`, `ssh`, or `scp` commands.

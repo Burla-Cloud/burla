@@ -21,7 +21,8 @@ from time import time
 from typing import Optional
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from google.api_core.exceptions import NotFound
 from google.cloud import firestore
 from google.cloud.firestore import ArrayUnion
 
@@ -109,7 +110,13 @@ async def patch_job_doc(job_id: str, request: Request):
         update["fail_reason"] = ArrayUnion([append])
     if not update:
         return
-    await ASYNC_DB.collection("jobs").document(job_id).update(update)
+    try:
+        await ASYNC_DB.collection("jobs").document(job_id).update(update)
+    except NotFound:
+        # Client's final-except patch_job_sync fires even when /start never
+        # created the doc (e.g. grow failed mid-request). Surfacing 500 here
+        # just generates log noise; the caller already swallows failures.
+        return Response(status_code=204)
 
 
 # ------------------------------------------------------------------

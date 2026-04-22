@@ -35,6 +35,7 @@ require_command() {
 
 require_local_prereqs() {
   require_command gcloud
+  require_command git
   require_command python3
   require_command scp
   require_command ssh
@@ -46,6 +47,11 @@ require_local_prereqs() {
 validate_agent_id() {
   local agent_id="$1"
   [[ "$agent_id" =~ ^[0-9]{2}$ ]] || fail "--agent must be a two-digit string like [01]."
+}
+
+validate_task_slug() {
+  local task_slug="$1"
+  [[ "$task_slug" =~ ^[a-z0-9][a-z0-9-]*$ ]] || fail "--task must be lower-case letters, numbers, and hyphens."
 }
 
 parse_agent_only() {
@@ -88,6 +94,37 @@ parse_agent_and_python() {
   [[ -n "$AGENT_ID" ]] || fail "--agent is required."
   [[ -n "$PYTHON_VERSION" ]] || fail "--python is required."
   validate_agent_id "$AGENT_ID"
+}
+
+parse_agent_task_and_base() {
+  AGENT_ID=""
+  TASK_SLUG=""
+  BASE_REF="${BURLA_DEV_WORKTREE_BASE_REF:-main}"
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --agent)
+        AGENT_ID="$2"
+        shift 2
+        ;;
+      --task)
+        TASK_SLUG="$2"
+        shift 2
+        ;;
+      --base)
+        BASE_REF="$2"
+        shift 2
+        ;;
+      *)
+        fail "Unknown argument [$1]."
+        ;;
+    esac
+  done
+
+  [[ -n "$AGENT_ID" ]] || fail "--agent is required."
+  [[ -n "$TASK_SLUG" ]] || fail "--task is required."
+  [[ -n "$BASE_REF" ]] || fail "--base must not be empty."
+  validate_agent_id "$AGENT_ID"
+  validate_task_slug "$TASK_SLUG"
 }
 
 parse_agent_and_destroy_flags() {
@@ -156,6 +193,41 @@ public_key_path_for_agent() {
 
 timestamp_utc() {
   date -u +%Y%m%dt%H%M%S
+}
+
+current_git_toplevel() {
+  git rev-parse --show-toplevel
+}
+
+current_git_branch() {
+  git branch --show-current
+}
+
+primary_checkout_path() {
+  git worktree list --porcelain | awk '/^worktree /{print substr($0, 10); exit}'
+}
+
+branch_name_for_task() {
+  local agent_id="$1"
+  local task_slug="$2"
+  echo "agent/${agent_id}/${task_slug}"
+}
+
+worktree_base_dir() {
+  if [[ -n "${BURLA_DEV_WORKTREE_BASE_DIR:-}" ]]; then
+    echo "$BURLA_DEV_WORKTREE_BASE_DIR"
+    return
+  fi
+
+  local primary_checkout
+  primary_checkout="$(primary_checkout_path)"
+  echo "$(dirname "$primary_checkout")/burla-worktrees"
+}
+
+worktree_path_for_task() {
+  local agent_id="$1"
+  local task_slug="$2"
+  echo "$(worktree_base_dir)/agent-${agent_id}/${task_slug}"
 }
 
 main_service_service_account() {
@@ -329,4 +401,47 @@ rendered = rendered.replace("__REMOTE_LOG_PATH__", os.environ["REMOTE_LOG_PATH"]
 rendered = rendered.replace("__BOOTSTRAP_READY_PATH__", os.environ["BOOTSTRAP_READY_PATH"])
 pathlib.Path(sys.argv[2]).write_text(rendered)
 PY
+}
+
+require_primary_checkout_context() {
+  local current_checkout
+  local primary_checkout
+
+  current_checkout="$(current_git_toplevel)"
+  primary_checkout="$(primary_checkout_path)"
+  [[ "$current_checkout" == "$primary_checkout" ]] || fail "Run this from the primary checkout [$primary_checkout], not from linked worktree [$current_checkout]."
+
+  CURRENT_CHECKOUT_PATH="$current_checkout"
+  PRIMARY_CHECKOUT_PATH="$primary_checkout"
+}
+
+require_agent_worktree_context() {
+  local expected_agent_id="$1"
+  local current_checkout
+  local primary_checkout
+  local branch_name
+  local branch_regex
+
+  current_checkout="$(current_git_toplevel)"
+  primary_checkout="$(primary_checkout_path)"
+  [[ "$current_checkout" != "$primary_checkout" ]] || fail "Run this from a linked worktree, not the primary checkout [$primary_checkout]."
+
+  branch_name="$(current_git_branch)"
+  branch_regex="^agent/${expected_agent_id}/([a-z0-9][a-z0-9-]*)$"
+  [[ "$branch_name" =~ $branch_regex ]] || fail "Current branch [$branch_name] must match [agent/${expected_agent_id}/<task-slug>]."
+
+  CURRENT_CHECKOUT_PATH="$current_checkout"
+  PRIMARY_CHECKOUT_PATH="$primary_checkout"
+  CURRENT_BRANCH_NAME="$branch_name"
+  CURRENT_TASK_SLUG="${BASH_REMATCH[1]}"
+  CURRENT_WORKTREE_PATH="$current_checkout"
+}
+
+validate_loaded_state_against_current_context() {
+  [[ -n "${BRANCH_NAME:-}" ]] || fail "State file [$STATE_PATH] is missing [branch_name]."
+  [[ -n "${TASK_SLUG:-}" ]] || fail "State file [$STATE_PATH] is missing [task_slug]."
+  [[ -n "${WORKTREE_PATH:-}" ]] || fail "State file [$STATE_PATH] is missing [worktree_path]."
+  [[ "$BRANCH_NAME" == "$CURRENT_BRANCH_NAME" ]] || fail "State branch [$BRANCH_NAME] does not match current branch [$CURRENT_BRANCH_NAME]."
+  [[ "$TASK_SLUG" == "$CURRENT_TASK_SLUG" ]] || fail "State task [$TASK_SLUG] does not match current task [$CURRENT_TASK_SLUG]."
+  [[ "$WORKTREE_PATH" == "$CURRENT_WORKTREE_PATH" ]] || fail "State worktree [$WORKTREE_PATH] does not match current worktree [$CURRENT_WORKTREE_PATH]."
 }

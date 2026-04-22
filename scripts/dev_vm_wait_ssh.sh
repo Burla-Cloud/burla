@@ -7,7 +7,9 @@ source "$SCRIPT_DIR/dev_vm_common.sh"
 
 parse_agent_only "$@"
 require_local_prereqs
+require_agent_worktree_context "$AGENT_ID"
 load_state_vars "$AGENT_ID"
+validate_loaded_state_against_current_context
 
 MAX_ATTEMPTS="${BURLA_DEV_VM_WAIT_ATTEMPTS:-120}"
 SLEEP_SECONDS="${BURLA_DEV_VM_WAIT_SLEEP_SECONDS:-5}"

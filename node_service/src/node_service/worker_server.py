@@ -130,12 +130,13 @@ with socket.create_server(("0.0.0.0", port)) as listener:
                 if command == b"i":
                     packages = pickle.loads(request_payload)
                     missing_packages = []
+                    # Reinstalling to match the client's version would silently replace
+                    # pre-baked GPU wheels (CUDA-built torch, ABI-pinned numpy) with
+                    # incompatible ones from PyPI's default index.
                     for package_name, version in packages.items():
                         try:
-                            installed_version = importlib.metadata.version(package_name)
+                            importlib.metadata.version(package_name)
                         except importlib.metadata.PackageNotFoundError:
-                            installed_version = None
-                        if installed_version != version:
                             missing_packages.append(f"{package_name}=={version}")
                     if missing_packages:
                         subprocess.run(

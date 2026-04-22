@@ -501,7 +501,7 @@ def remote_parallel_map(
                         func_gpu=func_gpu,
                     )
                 )
-            except Exception:
+            except BaseException:
                 execute_job.exc_info = sys.exc_info()
 
         t = Thread(target=execute_job, daemon=True)
@@ -533,7 +533,7 @@ def remote_parallel_map(
 
         return _output_generator() if generator else list(_output_generator())
 
-    except Exception as e:
+    except BaseException as e:
         if spinner:
             spinner.stop()
 

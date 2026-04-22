@@ -428,7 +428,9 @@ class WorkerClient:
             try:
                 result_pkl = await self.call_function(input_index, input_pkl)
                 result = (input_index, False, result_pkl)
-            except Exception as error:
+            except asyncio.CancelledError:
+                raise
+            except BaseException as error:
                 if self.log_writer is not None:
                     await self.log_writer.write_error(input_index, self._traceback_string(error))
                 result = (input_index, True, self._serialize_error(error))

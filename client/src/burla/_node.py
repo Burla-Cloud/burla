@@ -233,14 +233,9 @@ class Node:
         return f"Node {self.instance_name} has not replied for over 2 minutes while {action}.\n"
 
     async def _failure_message(self, base_msg: str | None = None) -> str:
-        """Enrich a `NodeDisconnected` message with the node's own error log
-        when one exists, so the user sees the root cause (e.g. a failed
-        `docker pull`) instead of just "Node X failed during job." Returns
-        the base message unchanged if the node has no error-looking log or
-        the lookup itself fails - the fallback must never make the error
-        worse than today."""
         base = base_msg or f"Node {self.instance_name} failed during job."
         reason = await self.client.get_node_fail_reason(self.instance_name)
+        # Fall back to base so enrichment can't produce a worse error than before.
         if not reason:
             return base
         return f"{base}\n\nLast error reported by the node:\n{reason}"

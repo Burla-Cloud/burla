@@ -221,6 +221,7 @@ class Node:
         self.result_count = 0
         self.last_reply_timestamp = time()
         self.auth_headers = get_auth_headers()
+        self.removed_reason = ""
         self.spinner_compatible_print = lambda msg: spinner.write(msg) if spinner else print(msg)
 
     def _seconds_since_last_reply(self):
@@ -347,8 +348,11 @@ class Node:
                 elif response.status == 401:
                     raise UnauthorizedError()
                 elif response.status == 409:
+                    reason = (await response.text()).strip()
                     self.state = "REMOVED"
+                    self.removed_reason = reason
                     msg = f"Node {self.instance_name} refused job assignment, removed from job."
+                    msg += f"\n  Reason from node: {reason}"
                     self.spinner_compatible_print(msg)
                     return
                 elif response.status == 503:

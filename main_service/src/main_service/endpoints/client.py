@@ -142,9 +142,17 @@ def _select_ready_nodes_from_cache(
     machine_prefix = gpu_machine_prefix(func_gpu)
     with _nodes_cache_lock:
         all_nodes = list(NODES_CACHE.values())
+    # A node can have status=READY while still carrying is_booting=True in the
+    # cache (e.g. the doc was written before the boot-finalize update landed,
+    # or a prior job left it in an inconsistent state). Assigning work to such
+    # a node makes `/assign` return HTTP 500, which surfaces on the client as:
+    #   Exception: Failed to assign <node>: 500
+    # Filter them here so only fully-ready nodes are handed out.
     unfiltered_ready = [
         n for n in all_nodes
-        if n.get("status") == "READY" and not n.get("reserved_for_job")
+        if n.get("status") == "READY"
+        and not n.get("reserved_for_job")
+        and not n.get("is_booting")
     ]
     ready_after_image = unfiltered_ready
     if image:
@@ -488,6 +496,13 @@ async def cluster_state():
     ready_nodes = []
     for data in nodes_snapshot:
         status = data.get("status")
+        # A node doc with status=READY and is_booting=True is still in the
+        # process of finalizing boot. Counting it as BOOTING matches how
+        # `_select_ready_nodes_from_cache` treats it (unassignable), and
+        # prevents clients from thinking capacity is available when it is not.
+        if data.get("is_booting") and status in ("BOOTING", "READY"):
+            booting_count += 1
+            continue
         if status == "BOOTING":
             booting_count += 1
         elif status == "RUNNING":

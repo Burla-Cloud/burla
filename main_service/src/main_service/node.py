@@ -212,7 +212,12 @@ class Node:
             self.delete()
             raise e
 
-        self.node_ref.update(dict(host=self.host, zone=self.zone))  # node svc marks itself as ready
+        # Persist is_booting=False alongside host/zone so the firestore doc (and
+        # NODES_CACHE) stop reporting a fully-booted node as "is_booting=True".
+        # Without this, a stale is_booting=True can linger forever in cache and
+        # cause `_select_ready_nodes_from_cache` (and any downstream filter) to
+        # incorrectly treat the node as assignable-but-still-booting.
+        self.node_ref.update(dict(host=self.host, zone=self.zone, is_booting=False))
         self.is_booting = False
         return self
 

@@ -1,0 +1,17 @@
+---
+description: Always surface problems and annoyances with tools back to the user
+alwaysApply: true
+---
+
+# Report Tool Friction
+
+If any tool you use in a session is buggy, confusing, slow, misleading, missing an obvious feature, returns unhelpful output, or otherwise annoys you — tell the user about it.
+
+This covers every tool: shell commands, Cursor built-ins (Read, Grep, Shell, etc.), MCP servers, CLIs, APIs, SDKs, libraries, package managers, dev scripts, whatever.
+
+- Mention it in the turn it happened, not later.
+- Say what you were doing, what the tool did, and why it was a problem.
+- Include the tool/command name and, if useful, a short snippet of the bad output.
+- Don't hide workarounds — if you worked around the problem, say so explicitly.
+
+Don't filter for "is this worth mentioning?" — if it slowed you down or made you second-guess a tool, the user wants to know.

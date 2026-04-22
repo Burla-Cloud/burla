@@ -104,6 +104,20 @@ class VersionMismatch(Exception):
         super().__init__(msg)
 
 
+class PythonVersionMismatch(Exception):
+    def __init__(self, detail: dict):
+        user = detail["user_python_version"]
+        image = detail["image"]
+        image_py = detail["image_python_version"]
+        msg = f"\n\nYour client is running python {user}, "
+        msg += f"but the image `{image}` ships python {image_py}.\n"
+        msg += "Burla requires an exact major.minor match between client and worker.\n\n"
+        msg += "Either:\n"
+        msg += f"  - run your client on python {image_py}, or\n"
+        msg += f"  - pass `image=python:{user}` (or any other image built on python {user}).\n"
+        super().__init__(msg)
+
+
 class JobCanceled(Exception):
     pass
 

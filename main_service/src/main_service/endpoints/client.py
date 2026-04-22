@@ -41,6 +41,7 @@ from main_service.helpers import (
     Logger,
     gpu_machine_prefix,
     gpu_machine_type,
+    image_python_version,
     parallelism_capacity,
     parse_version,
 )
@@ -307,6 +308,11 @@ async def start_job(
 
     Error responses:
         409 {"detail": {"error": "version_mismatch", ...}}    - client is outside compatible range
+        409 {"detail": {"error": "python_version_mismatch",
+             "user_python_version", "image", "image_python_version"}}
+                                                              - provable mismatch between the client's
+                                                                python and the image's tag; caught here
+                                                                to save the boot + pull wait
         409 {"detail": {"error": "no_compatible_nodes",
              "reason": "image_mismatch"
                      | "gpu_mismatch"
@@ -352,6 +358,23 @@ async def start_job(
         gpu_machine_type(func_gpu)
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error))
+
+    # --- precheck python version against parseable image tags ---
+    # The node will 409 on mismatch anyway, but booting + docker-pulling a heavy
+    # image before hitting that costs minutes. Unparseable images (custom tags)
+    # fall through to the existing boot-and-see path.
+    user_python_version = body["user_python_version"]
+    image_py = image_python_version(image)
+    if image_py and image_py != user_python_version:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "python_version_mismatch",
+                "user_python_version": user_python_version,
+                "image": image,
+                "image_python_version": image_py,
+            },
+        )
 
     # --- select from cached ready nodes ---
     (

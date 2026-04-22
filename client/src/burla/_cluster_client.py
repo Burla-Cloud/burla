@@ -109,6 +109,7 @@ class ClusterClient:
         from burla._node import (
             NoCompatibleNodes,
             NoNodes,
+            PythonVersionMismatch,
             UnauthorizedError,
             VersionMismatch,
         )
@@ -139,6 +140,8 @@ class ClusterClient:
             )
         if status == 409 and isinstance(detail, dict) and detail.get("error") == "no_compatible_nodes":
             raise NoCompatibleNodes(detail)
+        if status == 409 and isinstance(detail, dict) and detail.get("error") == "python_version_mismatch":
+            raise PythonVersionMismatch(detail)
         if status == 503 and isinstance(detail, dict) and detail.get("error") == "nodes_busy":
             raise NodesBusy()
         if status == 404:

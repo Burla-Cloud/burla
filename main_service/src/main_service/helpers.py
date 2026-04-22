@@ -103,6 +103,22 @@ def parse_version(version_str: str) -> tuple[int, ...]:
     return tuple(int(part) for part in version_str.split("."))
 
 
+def image_python_version(image: Optional[str]) -> Optional[str]:
+    """Return the 'MAJOR.MINOR' Python version of a `python:...` image tag.
+
+    Returns None for any image we cannot confidently parse (custom images,
+    slim variants without a Python version, etc.). The caller should treat
+    None as 'unknown, don't pre-check'.
+    """
+    if not image or not image.startswith("python:"):
+        return None
+    tag = image.removeprefix("python:").split("-", 1)[0]
+    parts = tag.split(".")
+    if len(parts) < 2 or not all(part.isdigit() for part in parts[:2]):
+        return None
+    return f"{parts[0]}.{parts[1]}"
+
+
 def format_traceback(traceback_details: list):
     details = ["  ... (detail hidden)\n" if "/pypoetry/" in d else d for d in traceback_details]
     details = [key for key, _ in groupby(details)]  # <- remove consecutive duplicates

@@ -368,6 +368,17 @@ def remote_parallel_map(
             A list containing the objects returned by `function_` in no particular order.
             If `generator=True`, returns a generator that yields results as they are produced.
 
+    Raises:
+        Any exception raised by `function_` on a worker is re-raised here on the
+        client. The raised exception has ``exc.burla_input_index`` set to the
+        index (in ``inputs``) of the item that triggered the failure, so you
+        can identify which input broke without wrapping your UDF in try/except:
+
+            try:
+                results = remote_parallel_map(fn, inputs)
+            except Exception as e:
+                bad_input = inputs[e.burla_input_index]
+
     See Also:
         For more info see our overview: https://docs.burla.dev/overview
         or API-Reference: https://docs.burla.dev/api-reference

@@ -1,0 +1,51 @@
+---
+description: Core Burla architecture, services, data flow, and runtime model
+alwaysApply: true
+---
+
+# Burla Architecture
+
+Burla is a distributed compute system with one user-facing function: `remote_parallel_map(function, inputs)`. It runs a Python function across many VMs in the user's GCP project. Self-hosted, GCP-only.
+
+## The four services
+
+| Service | Runtime | Purpose |
+|---------|---------|---------|
+| `client/` (pypi: `burla`) | User's laptop / notebook | Entry point (`remote_parallel_map`). Pickles UDF, picks nodes, uploads inputs, streams results. |
+| `main_service/` | Google Cloud Run (one per GCP project) | Head node. Boots/deletes VMs, hosts the React dashboard, handles auth. |
+| `node_service/` | Runs on each Compute Engine VM | Per-VM orchestrator. Owns input/results queues, spawns workers, runs job watcher. |
+| `worker_service/` (the file `node_service/src/node_service/worker_server.py`) | Inside user's Docker container, one per CPU core | Executes user code. Talks to `node_service` over a raw TCP socket, not HTTP. |
+
+There is no separate `worker_service/` top-level directory — the worker script lives next to `node.py` in the node_service and is mounted into each container at runtime.
+
+## Data flow
+
+- Client → `main_service` (HTTP): grow cluster, auth.
+- Client → `node_service` (HTTP): upload UDF + inputs, poll results.
+- `main_service` → VMs: boot/delete Compute Engine instances.
+- `node_service` → `worker_server.py` (TCP bytes): run UDF.
+- All three services ↔ Firestore (`burla` db): nodes, cluster_config, jobs, status, logs.
+
+Inputs can also move node-to-node mid-job via `/jobs/{job_id}/input_transfer` — nodes with surplus inputs push them to nodes with less, so the cluster self-balances.
+
+## State / coordination
+
+- Firestore database: `burla` (not `(default)`).
+- Key collections: `nodes` (one doc per VM + `logs` subcollection), `cluster_config` (single doc `cluster_config`), `jobs` (job metadata, cancellation flag, counters).
+- In-memory node state lives in the `SELF` dict in [node_service/src/node_service/__init__.py](../../node_service/src/node_service/__init__.py) — reset by `REINIT_SELF`.
+
+## Dev modes
+
+Set via `IN_LOCAL_DEV_MODE` env var.
+
+- **local-dev-mode**: everything runs locally in Docker containers on one machine. `make local-dev`. Uses `LOCAL_DEV_CONFIG` hard-coded in `main_service/__init__.py` (2x n4-standard-2 nodes).
+- **remote-dev-mode**: only `main_service` runs locally, node VMs are real GCP instances.
+- **prod**: `main_service` on Cloud Run, nodes on Compute Engine.
+
+## Version compatibility
+
+`CURRENT_BURLA_VERSION` and `MIN_COMPATIBLE_CLIENT_VERSION` are defined in [main_service/src/main_service/__init__.py](../../main_service/src/main_service/__init__.py). Client version is checked when jobs start; incompatible clients get `VersionMismatch`.
+
+## Deeper context
+
+For subsystem details — end-to-end job lifecycle, node boot / cluster growth, Firestore document shapes, and the full source-file index — use the `burla-deep-dive` skill at [.cursor/skills/burla-deep-dive/SKILL.md](../skills/burla-deep-dive/SKILL.md).

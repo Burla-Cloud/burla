@@ -1,0 +1,13 @@
+---
+description: Bright-line rules that must never be violated
+alwaysApply: true
+---
+
+# Hard Rules
+
+Never violate:
+
+1. Make code as simple as possible.
+2. Comments explain WHY code is there — never WHAT it does, never history. If the WHY is obvious, skip it.
+3. Never use the walrus operator (`:=`) in Python.
+4. Always tell the user when you find pointless code, dead code, or abstractions that do nothing useful.

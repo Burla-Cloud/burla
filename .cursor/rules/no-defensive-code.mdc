@@ -1,0 +1,23 @@
+---
+description: No defensive or speculative code — write for the runtime that exists
+alwaysApply: true
+---
+
+# No Defensive Code
+
+Write the simplest code for the behavior the system actually needs. Do not add guards, fallbacks, retries, feature checks, or special-case handling for conditions you have not personally observed in this codebase.
+
+- **Assume types.** Don't validate input shapes or call `hasattr` unless you've seen the guard trigger.
+- **Don't guard guaranteed APIs.** `worker_service` runs in Linux containers — call `os.setsid()` directly, no platform check.
+- **Don't re-guard invariants.** If earlier code assumes a value, attribute, key, queue, or task exists, keep that direct assumption unless you personally observed it break.
+- **Guaranteed initialization stays unconditional.** Don't turn it into defensive branching.
+- **Only add edge-case handling after seeing the edge case** — in this codebase, this runtime, or this task's evidence.
+
+```python
+# BAD — speculative guard around a task that was created unconditionally
+if hasattr(self, "process_inputs_task") and self.process_inputs_task:
+    await self.process_inputs_task
+
+# GOOD — direct, matches how the task was created
+await self.process_inputs_task
+```

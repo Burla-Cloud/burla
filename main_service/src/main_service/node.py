@@ -185,6 +185,7 @@ class Node:
             "machine_types_client",
             "node_ref",
             "auth_headers",
+            "is_booting",
         ]
         current_state = {k: v for k, v in current_state.items() if k not in attrs_to_not_save}
         self.node_ref.set(current_state)

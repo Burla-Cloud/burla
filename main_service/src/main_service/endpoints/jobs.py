@@ -16,6 +16,9 @@ from main_service import DB, PROJECT_ID
 router = APIRouter()
 ASYNC_DB = firestore.AsyncClient(project=PROJECT_ID, database="burla")
 
+# Cloud Run cuts at 60s and logs "Truncated response body" each cycle; client's EventSource reconnects.
+SSE_MAX_DURATION_SEC = 50
+
 
 async def current_num_results(job_id: str) -> int:
     job_doc = ASYNC_DB.collection("jobs").document(job_id)
@@ -136,8 +139,9 @@ def job_stream(jobs_current_page: firestore.CollectionReference):
     async def event_stream():
         yield "retry: 5000\n\n"
         yield ": init\n\n"
+        stream_started_at = time()
         try:
-            while True:
+            while time() - stream_started_at < SSE_MAX_DURATION_SEC:
                 try:
                     event = await asyncio.wait_for(queue.get(), timeout=10)
                     yield f"data: {json.dumps(event)}\n\n"

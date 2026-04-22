@@ -1,6 +1,7 @@
 import json
 import asyncio
 from datetime import datetime, timedelta
+from time import time
 from typing import Optional
 
 import pytz
@@ -20,6 +21,9 @@ from main_service.node import Node
 from main_service.endpoints.usage import _to_epoch_ms
 
 router = APIRouter()
+
+# Cloud Run cuts at 60s and logs "Truncated response body" each cycle; client's EventSource reconnects.
+SSE_MAX_DURATION_SEC = 50
 
 
 def _require_auth(request: Request) -> dict:
@@ -64,10 +68,11 @@ async def cluster_info(request: Request, logger: Logger = Depends(get_logger)):
                 current_loop.call_soon_threadsafe(queue.put_nowait, event_data)
 
         node_watch = DB.collection("nodes").where(filter=active_filter).on_snapshot(on_snapshot)
+        stream_started_at = time()
         try:
             yield "retry: 5000\n\n"
             yield ": init\n\n"
-            while True:
+            while time() - stream_started_at < SSE_MAX_DURATION_SEC:
                 try:
                     event = await asyncio.wait_for(queue.get(), timeout=2)
                     yield f"data: {json.dumps(event)}\n\n"
@@ -155,10 +160,11 @@ async def node_log_stream(node_id: str, request: Request):
     watch = logs_ref.on_snapshot(on_snapshot)
 
     async def log_generator():
+        stream_started_at = time()
         try:
             yield "retry: 5000\n\n"
             yield ": init\n\n"
-            while True:
+            while time() - stream_started_at < SSE_MAX_DURATION_SEC:
                 try:
                     event = await asyncio.wait_for(queue.get(), timeout=2)
                     yield f"data: {json.dumps(event)}\n\n"

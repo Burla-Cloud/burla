@@ -21,7 +21,8 @@ from time import time
 from typing import Optional
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from google.api_core.exceptions import NotFound
 from google.cloud import firestore
 from google.cloud.firestore import ArrayUnion
 
@@ -109,7 +110,11 @@ async def patch_job_doc(job_id: str, request: Request):
         update["fail_reason"] = ArrayUnion([append])
     if not update:
         return
-    await ASYNC_DB.collection("jobs").document(job_id).update(update)
+    try:
+        await ASYNC_DB.collection("jobs").document(job_id).update(update)
+    except NotFound:
+        # Caller swallows the failure; 500 here is just log noise.
+        return Response(status_code=204)
 
 
 # ------------------------------------------------------------------

@@ -379,7 +379,15 @@ class WorkerClient:
                 await self._log_container_failure()
                 raise RuntimeError("\n\nWorker container stopped unexpectedly.\n")
             await asyncio.sleep(0.1)
-        raise RuntimeError("\n\nWorker connection closed unexpectedly.\n")
+        # Naming the likely causes points users at their own UDF instead of a
+        # suspected cluster or network issue.
+        msg = (
+            "\n\nWorker process ended unexpectedly while the container was still healthy.\n"
+            "This usually means the user function called `os._exit`, `sys.exit`, raised\n"
+            "`SystemExit`/`KeyboardInterrupt`, or crashed a C extension (segfault / OOM of\n"
+            "the worker subprocess specifically). The cluster itself is fine.\n"
+        )
+        raise RuntimeError(msg)
 
     async def _read_response(self):
         try:

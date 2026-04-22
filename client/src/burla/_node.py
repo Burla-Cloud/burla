@@ -557,7 +557,7 @@ class Node:
                     error_info = pickle.loads(result_pkl)
                     if error_info.get("is_infrastructure_error"):
                         msg = f"Worker on node {self.instance_name} failed "
-                        msg += "(the cluster may have been restarted):\n\n"
+                        msg += f"while executing input index {input_index}:\n\n"
                         msg += error_info["traceback_str"]
                         raise NodeDisconnected(self, await self._failure_message(msg))
                     traceback = Traceback.from_dict(error_info["traceback_dict"]).as_traceback()

@@ -74,13 +74,13 @@ local-dev:
 	docker run --rm -it \
 		--name main_service \
 		--network local-burla-cluster \
-		-v $$(PWD)/main_service:/burla/main_service \
+		-v $(PWD)/main_service:/burla/main_service \
 		-v ~/.config/gcloud:/root/.config/gcloud \
 		-v /var/run/docker.sock:/var/run/docker.sock \
 		-e GOOGLE_CLOUD_PROJECT=$${PROJECT_ID} \
 		-e IN_LOCAL_DEV_MODE=True \
 		-e REDIRECT_LOCALLY_ON_LOGIN=True \
-		-e HOST_PWD=$$(PWD) \
+		-e HOST_PWD=$(PWD) \
 		-e HOST_HOME_DIR=$${HOME} \
 		-p 5001:5001 \
 		--entrypoint python \

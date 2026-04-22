@@ -185,6 +185,7 @@ class Node:
             "machine_types_client",
             "node_ref",
             "auth_headers",
+            "is_booting",
         ]
         current_state = {k: v for k, v in current_state.items() if k not in attrs_to_not_save}
         self.node_ref.set(current_state)
@@ -212,10 +213,7 @@ class Node:
             self.delete()
             raise e
 
-        # `is_booting=True` was persisted by the initial node_ref.set(self.__dict__)
-        # above and is cleared nowhere else; clear it here so the doc reflects the
-        # post-boot state instead of staying stuck on the initial value forever.
-        self.node_ref.update(dict(host=self.host, zone=self.zone, is_booting=False))
+        self.node_ref.update(dict(host=self.host, zone=self.zone))  # node svc marks itself as ready
         self.is_booting = False
         return self
 

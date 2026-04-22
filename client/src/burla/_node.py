@@ -529,11 +529,10 @@ class Node:
                     log_error = RemoteParallelMapReporter.log_user_function_error_async
                     await log_error(self.job_id, self.session)
                     exc = error_info["exception"].with_traceback(traceback)
-                    # A batch of 1000 inputs + a bare `ValueError` is useless to
-                    # debug without knowing which input triggered it. Attach the
-                    # index as an attribute (programmatic access) and, on 3.11+,
-                    # as an inline note (visible in the default traceback).
-                    # Guarded because some exception types forbid attr writes.
+                    # Preserve the failing input index on the exception so callers
+                    # can identify the bad item in a large batch; add a 3.11+
+                    # note so it is visible in the default traceback. Guarded
+                    # because some exception types disallow attribute writes.
                     try:
                         exc.burla_input_index = input_index
                         if hasattr(exc, "add_note"):

@@ -32,6 +32,7 @@ from burla._node import (
     ClusterRestarted,
     ClusterShutdown,
     JobCanceled,
+    JobStalled,
     MainServiceTimeout,
     Node,
     NoCompatibleNodes,
@@ -70,6 +71,7 @@ EXEC_TYPES_TO_NOT_ALERT = [
     AllNodesBusy,
     NoCompatibleNodes,
     JobCanceled,
+    JobStalled,
     ClusterRestarted,
     ClusterShutdown,
     VersionMismatch,
@@ -245,7 +247,8 @@ async def _execute_job(
 
             for task, node in zip(node_tasks, nodes):
                 exception = task.exception() if task.done() else None
-                exception = NodeDisconnected(node) if node.state == "FAILED" else exception
+                if node.state == "FAILED":
+                    exception = NodeDisconnected(node, await node._failure_message())
                 if exception:
                     # Authoritative check via main_service: if main_service has
                     # already written a lifecycle signal on the job doc, raise
@@ -295,7 +298,13 @@ async def _execute_job(
 
             total_result_count = sum(node.result_count for node in nodes)
             if all([task.done() for task in node_tasks]) and total_result_count < n_inputs:
-                raise Exception("Zero nodes working on job and we have not received all results!")
+                summary = "\n".join([await n._stall_summary_line() for n in nodes])
+                msg = (
+                    f"Job ended before all results were received "
+                    f"({total_result_count}/{n_inputs}).\n"
+                    f"Final node states:\n{summary}\n"
+                )
+                raise JobStalled(msg)
 
         job_success_telemetry_task = create_task(
             reporter.log_job_success_telemetry(time() - start_time)

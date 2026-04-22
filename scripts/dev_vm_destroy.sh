@@ -7,6 +7,7 @@ source "$SCRIPT_DIR/dev_vm_common.sh"
 
 parse_agent_and_destroy_flags "$@"
 require_local_prereqs
+require_agent_worktree_context "$AGENT_ID"
 
 STATE_PATH="$(state_path_for_agent "$AGENT_ID")"
 PROJECT_ID="$(project_id_for_agent "$AGENT_ID")"
@@ -16,6 +17,7 @@ TUNNEL_PID=""
 
 if [[ -f "$STATE_PATH" ]]; then
   load_state_vars "$AGENT_ID"
+  validate_loaded_state_against_current_context
 fi
 
 if [[ -n "${TUNNEL_PID:-}" ]] && kill -0 "$TUNNEL_PID" >/dev/null 2>&1; then

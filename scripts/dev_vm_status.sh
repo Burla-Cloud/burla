@@ -7,7 +7,9 @@ source "$SCRIPT_DIR/dev_vm_common.sh"
 
 parse_agent_only "$@"
 require_local_prereqs
+require_agent_worktree_context "$AGENT_ID"
 load_state_vars "$AGENT_ID"
+validate_loaded_state_against_current_context
 
 VM_EXISTS="false"
 REMOTE_SESSION_RUNNING="false"
@@ -45,6 +47,10 @@ DASHBOARD_URL="$DASHBOARD_URL" \
 TUNNEL_PID="${TUNNEL_PID:-}" \
 REMOTE_LOG_PATH="$REMOTE_LOG_PATH" \
 REMOTE_TMUX_SESSION="$REMOTE_TMUX_SESSION" \
+BRANCH_NAME="${BRANCH_NAME:-}" \
+TASK_SLUG="${TASK_SLUG:-}" \
+WORKTREE_PATH="${WORKTREE_PATH:-}" \
+PRIMARY_CHECKOUT_PATH="${PRIMARY_CHECKOUT_PATH:-}" \
 LOCAL_USER="$LOCAL_USER" \
 VM_IP="$VM_IP" \
 VM_EXISTS="$VM_EXISTS" \
@@ -70,6 +76,10 @@ print(
             "tunnel_pid": int(os.environ["TUNNEL_PID"]) if os.environ.get("TUNNEL_PID") else None,
             "remote_log_path": os.environ["REMOTE_LOG_PATH"],
             "remote_tmux_session": os.environ["REMOTE_TMUX_SESSION"],
+            "branch_name": os.environ["BRANCH_NAME"],
+            "task_slug": os.environ["TASK_SLUG"],
+            "worktree_path": os.environ["WORKTREE_PATH"],
+            "primary_checkout_path": os.environ["PRIMARY_CHECKOUT_PATH"],
             "local_user": os.environ["LOCAL_USER"],
             "vm_ip": os.environ["VM_IP"],
             "vm_exists": os.environ["VM_EXISTS"] == "true",

@@ -7,6 +7,7 @@ source "$SCRIPT_DIR/dev_vm_common.sh"
 
 parse_agent_only "$@"
 require_local_prereqs
+require_agent_worktree_context "$AGENT_ID"
 ensure_state_dir
 ensure_agent_keypair "$AGENT_ID"
 
@@ -109,6 +110,10 @@ PATCH_JSON="$(
   DASHBOARD_URL="http://localhost:${LOCAL_DASHBOARD_PORT}" \
   REMOTE_LOG_PATH="$REMOTE_LOG_PATH" \
   REMOTE_TMUX_SESSION="$REMOTE_TMUX_SESSION" \
+  BRANCH_NAME="$CURRENT_BRANCH_NAME" \
+  TASK_SLUG="$CURRENT_TASK_SLUG" \
+  WORKTREE_PATH="$CURRENT_WORKTREE_PATH" \
+  PRIMARY_CHECKOUT_PATH="$PRIMARY_CHECKOUT_PATH" \
   LOCAL_USER="$LOCAL_USER" \
   VM_IP="$VM_IP" \
   PRIVATE_KEY_PATH="$PRIVATE_KEY_PATH" \
@@ -131,6 +136,10 @@ print(
             "tunnel_pid": None,
             "remote_log_path": os.environ["REMOTE_LOG_PATH"],
             "remote_tmux_session": os.environ["REMOTE_TMUX_SESSION"],
+            "branch_name": os.environ["BRANCH_NAME"],
+            "task_slug": os.environ["TASK_SLUG"],
+            "worktree_path": os.environ["WORKTREE_PATH"],
+            "primary_checkout_path": os.environ["PRIMARY_CHECKOUT_PATH"],
             "local_user": os.environ["LOCAL_USER"],
             "vm_ip": os.environ["VM_IP"],
             "private_key_path": os.environ["PRIVATE_KEY_PATH"],

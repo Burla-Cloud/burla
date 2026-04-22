@@ -5,29 +5,38 @@ description: Provision and use isolated ephemeral GCP VMs for Burla local-dev. U
 
 # Burla Ephemeral Dev VM
 
-Use the `scripts/dev_vm_*.sh` commands instead of handwritten `gcloud`, `ssh`, or `scp` sequences.
+Use the worktree and VM scripts instead of handwritten `git worktree`, `gcloud`, `ssh`, or `scp` sequences.
 
 ## Defaults
 
-- One active agent task gets one fresh VM.
+- One active agent task gets one fresh linked worktree, one fresh task branch, and one fresh VM.
+- Always edit from the linked worktree, never from the primary checkout.
 - Reuse the dedicated project slot for that agent ID unless the user asks otherwise.
 - Default to `make local-dev` on the VM.
 - Use the script-reported `http://localhost:<port>` URL for browser and client work.
 - Destroy the VM when the task is complete unless the user asked to keep it.
+- Keep the worktree and branch until explicit cleanup so work-in-progress is not lost.
 
 ## Standard Workflow
 
-1. `scripts/dev_vm_create.sh --agent <id>`
-2. `scripts/dev_vm_wait_ssh.sh --agent <id>`
-3. `scripts/dev_vm_sync_repo.sh --agent <id>`
-4. `scripts/dev_vm_start_local_dev.sh --agent <id>`
-5. `scripts/dev_vm_tunnel.sh --agent <id>`
-6. `scripts/dev_vm_status.sh --agent <id>`
-7. For local client work, run `scripts/dev_vm_client_shell.sh --agent <id> --python <version>`
-8. When done, run `scripts/dev_vm_destroy.sh --agent <id>`
+1. From the primary checkout, run `scripts/dev-worktree/create.sh --agent <id> --task <task-slug>`.
+2. `cd` into the printed worktree path.
+3. Make code changes only from that linked worktree.
+4. Run `scripts/dev_vm_create.sh --agent <id>`.
+5. Run `scripts/dev_vm_wait_ssh.sh --agent <id>`.
+6. Run `scripts/dev_vm_sync_repo.sh --agent <id>`.
+7. Run `scripts/dev_vm_start_local_dev.sh --agent <id>`.
+8. Run `scripts/dev_vm_tunnel.sh --agent <id>`.
+9. Run `scripts/dev_vm_status.sh --agent <id>`.
+10. For local client work, run `scripts/dev_vm_client_shell.sh --agent <id> --python <version>`.
+11. When done, run `scripts/dev_vm_destroy.sh --agent <id>`.
+12. Remove the worktree later with `scripts/dev-worktree/remove.sh --agent <id> --task <task-slug>` only when you are done with that branch.
 
 ## Guardrails
 
+- Never edit the primary checkout for an agent task.
+- Never run the `scripts/dev_vm_*.sh` commands from the primary checkout.
+- The current branch must match `agent/<id>/<task-slug>` before VM scripts run.
 - Never share a VM across active agents.
 - Never expose port `5001` publicly.
 - Never assume the dashboard URL is `http://localhost:5001`; always read the state file or status output.

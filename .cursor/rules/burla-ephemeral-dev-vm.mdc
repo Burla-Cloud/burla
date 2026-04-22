@@ -1,0 +1,8 @@
+---
+description: Burla agent tasks must use linked worktrees before using dev VMs
+alwaysApply: true
+---
+
+# Burla Ephemeral Dev VM
+
+For Burla agent tasks, never edit the primary checkout directly. First create or reopen a linked task worktree, move into it, and only then use the `scripts/dev_vm_*.sh` workflow. Prefer the Burla dev-VM skill and the `scripts/dev-worktree/*.sh` helpers over ad hoc `git worktree`, `gcloud`, `ssh`, or `scp` commands.

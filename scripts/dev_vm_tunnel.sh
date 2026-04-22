@@ -7,7 +7,9 @@ source "$SCRIPT_DIR/dev_vm_common.sh"
 
 parse_agent_only "$@"
 require_local_prereqs
+require_agent_worktree_context "$AGENT_ID"
 load_state_vars "$AGENT_ID"
+validate_loaded_state_against_current_context
 
 if [[ -n "${TUNNEL_PID:-}" ]] && kill -0 "$TUNNEL_PID" >/dev/null 2>&1; then
   kill "$TUNNEL_PID" >/dev/null 2>&1 || true

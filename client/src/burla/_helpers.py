@@ -1,7 +1,10 @@
+import ast
+import inspect
 import os
 import sys
 import signal
 import subprocess
+import textwrap
 import types
 from typing import Union
 from threading import Event
@@ -153,6 +156,20 @@ def _scan_sys_modules():
     return custom_module_names, package_module_names, has_custom_modules
 
 
+def _imports_inside_function_body(function_) -> set:
+    try:
+        tree = ast.parse(textwrap.dedent(inspect.getsource(function_)))
+    except (OSError, TypeError, SyntaxError):
+        return set()
+    names = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            names.update(a.name.split(".")[0] for a in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+            names.add(node.module.split(".")[0])
+    return names
+
+
 def get_modules_required_on_remote(function_):
     """
     Returns all package modules if custom user-defined modules exist.
@@ -174,5 +191,6 @@ def get_modules_required_on_remote(function_):
             if is_module or has_module:
                 module_name = var.__name__ if is_module else var.__module__
                 function_module_names.add(module_name.split(".")[0])
+        function_module_names |= _imports_inside_function_body(function_)
         package_module_names = package_module_names.intersection(function_module_names)
     return custom_module_names, package_module_names

@@ -25,8 +25,8 @@ from jinja2 import Environment, FileSystemLoader
 os.environ["GRPC_VERBOSITY"] = "ERROR"
 os.environ["GLOG_minloglevel"] = "2"
 
-CURRENT_BURLA_VERSION = "1.5.7"
-MIN_COMPATIBLE_CLIENT_VERSION = "1.5.7"
+CURRENT_BURLA_VERSION = "1.5.8"
+MIN_COMPATIBLE_CLIENT_VERSION = "1.5.8"
 
 # In this mode EVERYTHING runs locally in docker containers.
 # possible modes: local-dev-mode (everything local), remote-dev-mode (only main-service local), prod

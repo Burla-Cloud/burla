@@ -42,3 +42,23 @@ EOF
 
 ssh_run "$REMOTE_BODY" >/dev/null
 echo "Synced repo to [$VM_NAME:$REMOTE_REPO_DIR]."
+
+# Ship git-ignored frontend env file (Syncfusion license, etc.) so
+# `make build-frontend` bakes VITE_* vars into the bundle. Prefer the
+# worktree copy; fall back to the primary checkout. Silent skip if neither
+# exists. /srv/burla is user-owned after the chown above so plain scp works.
+FRONTEND_ENV_PATH="main_service/frontend/.env.local"
+LOCAL_ENV_FILE=""
+for candidate in \
+  "$CURRENT_WORKTREE_PATH/$FRONTEND_ENV_PATH" \
+  "$PRIMARY_CHECKOUT_PATH/$FRONTEND_ENV_PATH"; do
+  if [[ -f "$candidate" ]]; then
+    LOCAL_ENV_FILE="$candidate"
+    break
+  fi
+done
+
+if [[ -n "$LOCAL_ENV_FILE" ]]; then
+  scp_to_vm "$LOCAL_ENV_FILE" "$REMOTE_REPO_DIR/$FRONTEND_ENV_PATH" >/dev/null
+  echo "Copied [$FRONTEND_ENV_PATH] from [$LOCAL_ENV_FILE] to VM."
+fi

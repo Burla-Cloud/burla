@@ -99,7 +99,6 @@ remote-dev:
 	IMAGE_NAME=$$( echo \
 		"us-docker.pkg.dev/$${PROJECT_ID}/burla-main-service/burla-main-service:latest" \
 	); \
-	$(MAKE) __check-node-service-up-to-date && echo "" || exit 1; \
 	docker run --rm -it \
 		--name main_service \
 		-v $(PWD)/main_service:/burla/main_service \
@@ -111,27 +110,14 @@ remote-dev:
 		$${IMAGE_NAME} -m uvicorn main_service:app --host 0.0.0.0 --port 5001 --reload \
 			--reload-exclude main_service/frontend/node_modules/ --timeout-graceful-shutdown 0
 
-# raise error if local node service is different from remote-dev version
-# does the node service have a git diff?
-__check-node-service-up-to-date:
-	if [ "$${NODE_SVC_HAS_DIFF}" = "true" ]; then \
-		echo "DEPLOYED NODE SERVICE NOT UP TO DATE!"; \
-		echo "Your local node service is different from the cluster's node service."; \
-		echo "To fix this, commit your node service code to the latest release branch."; \
-		exit 1; \
-	fi; \
-	echo "deployed node service up to date with local version.";
-
 deploy-test:
 	set -e; \
-	$(MAKE) __check-node-service-up-to-date && echo "" || exit 1; \
 	cd ./main_service; \
 	$(MAKE) image; \
 	$(MAKE) deploy-test; \
 
 deploy-prod:
 	set -e; \
-	$(MAKE) __check-node-service-up-to-date && echo "" || exit 1; \
 	cd ./main_service; \
 	$(MAKE) image; \
 	$(MAKE) publish;

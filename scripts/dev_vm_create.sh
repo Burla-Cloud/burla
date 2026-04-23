@@ -20,7 +20,7 @@ LOCAL_DASHBOARD_PORT="$(dashboard_port_for_agent "$AGENT_ID")"
 LOCAL_VITE_PORT="$(vite_port_for_agent "$AGENT_ID")"
 REMOTE_REPO_DIR="$DEFAULT_REMOTE_REPO_DIR"
 REMOTE_LOG_PATH="$DEFAULT_REMOTE_LOG_PATH"
-REMOTE_TMUX_SESSION="burla-local-dev-${AGENT_ID}"
+REMOTE_TMUX_SESSION="burla-dev-${AGENT_ID}"
 LOCAL_USER="$(id -un)"
 PRIVATE_KEY_PATH="$(private_key_path_for_agent "$AGENT_ID")"
 PUBLIC_KEY_PATH="$(public_key_path_for_agent "$AGENT_ID")"
@@ -62,6 +62,45 @@ if ! gcloud run services describe burla-main-service --project "$PROJECT_ID" --r
   done
 fi
 
+# `burla install` seeds the cluster doc in the prod backend DB with only the
+# human's email in `authorized_users`. Add the cursor-agent's Google account so
+# it can sign in to the dashboard via the browser without a manual DB edit each
+# time. Idempotent. Empty `BURLA_DEV_VM_AGENT_EMAIL` skips the step; non-jake
+# users will hit a Firestore permission error which we downgrade to a warning.
+AGENT_EMAIL="${BURLA_DEV_VM_AGENT_EMAIL:-jakescursoragent@gmail.com}"
+if [[ -n "$AGENT_EMAIL" ]]; then
+  if ! PROJECT_ID="$PROJECT_ID" AGENT_EMAIL="$AGENT_EMAIL" uv run --project "$CLIENT_PROJECT" --with google-cloud-firestore python3 - <<'PY'
+import os
+import sys
+
+from google.cloud import firestore
+from google.cloud.firestore_v1 import FieldFilter
+
+project_id = os.environ["PROJECT_ID"]
+email = os.environ["AGENT_EMAIL"]
+
+db = firestore.Client(project="burla-prod", database="backend-service")
+snaps = list(
+    db.collection("clusters")
+    .where(filter=FieldFilter("project_id", "==", project_id))
+    .limit(1)
+    .stream()
+)
+if not snaps:
+    sys.exit(f"No cluster doc found for project_id={project_id}.")
+snap = snaps[0]
+authorized_before = snap.to_dict().get("authorized_users") or []
+if email in authorized_before:
+    print(f"{email} already authorized on {project_id}.")
+else:
+    snap.reference.update({"authorized_users": firestore.ArrayUnion([email])})
+    print(f"Authorized {email} on {project_id}.")
+PY
+  then
+    echo "Warning: failed to authorize [$AGENT_EMAIL] on cluster [$PROJECT_ID]." >&2
+  fi
+fi
+
 ensure_artifact_repository "$PROJECT_ID"
 
 for attempt in 1 2 3; do
@@ -92,7 +131,7 @@ gcloud compute instances create "$VM_NAME" \
   --boot-disk-type pd-balanced \
   --service-account "$(main_service_service_account "$PROJECT_ID")" \
   --scopes https://www.googleapis.com/auth/cloud-platform \
-  --labels "burla-agent-id=${AGENT_ID},burla-runtime=local-dev,burla-ephemeral=true" \
+  --labels "burla-agent-id=${AGENT_ID},burla-runtime=ephemeral-dev,burla-ephemeral=true" \
   --metadata "enable-oslogin=FALSE,ssh-keys=${SSH_KEY_VALUE}" \
   --metadata-from-file startup-script="$STARTUP_SCRIPT" \
   >/dev/null

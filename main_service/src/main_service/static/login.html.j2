@@ -188,7 +188,16 @@
     const deferredAuthContent = document.getElementById("deferred-auth-content");
     const redirectLocally = {{ redirect_locally | tojson }};
     const projectId = {{ project_id | tojson }};
-    const queryParams = `?redirect_locally=${redirectLocally}&project_id=${projectId}`;
+    const loginParams = new URLSearchParams({
+      redirect_locally: redirectLocally,
+      project_id: projectId,
+    });
+    // Tell the backend exactly which origin to redirect back to. Needed when the
+    // dashboard is tunneled on a port other than 5001 (e.g. ephemeral dev VMs).
+    if (redirectLocally) {
+      loginParams.set("redirect_to", window.location.origin);
+    }
+    const queryParams = `?${loginParams.toString()}`;
 
     welcomeLogo.addEventListener("load", function () {
       deferredAuthContent.hidden = false;

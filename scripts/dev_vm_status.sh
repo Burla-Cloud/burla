@@ -16,6 +16,7 @@ REMOTE_SESSION_RUNNING="false"
 TUNNEL_RUNNING="false"
 DASHBOARD_REACHABLE="false"
 HEALTH="missing"
+RUNNING_MODE=""
 
 if ssh_run "true" >/dev/null 2>&1; then
   VM_EXISTS="true"
@@ -28,7 +29,21 @@ fi
 
 if [[ "$VM_EXISTS" == "true" ]] && ssh_run "tmux has-session -t '$REMOTE_TMUX_SESSION'" >/dev/null 2>&1; then
   REMOTE_SESSION_RUNNING="true"
-  HEALTH="local_dev_running"
+  HEALTH="main_service_running"
+fi
+
+# Detect which mode main_service was started in by inspecting its container env.
+# Absent container -> empty string; IN_LOCAL_DEV_MODE=True present -> local-dev; else remote-dev.
+if [[ "$VM_EXISTS" == "true" ]]; then
+  inspect_cmd="docker inspect main_service --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null || true"
+  container_env="$(ssh_run "$inspect_cmd" 2>/dev/null || true)"
+  if [[ -n "$container_env" ]]; then
+    if echo "$container_env" | grep -q '^IN_LOCAL_DEV_MODE=True$'; then
+      RUNNING_MODE="local-dev"
+    else
+      RUNNING_MODE="remote-dev"
+    fi
+  fi
 fi
 
 if [[ "$TUNNEL_RUNNING" == "true" ]] && curl -sf "$DASHBOARD_URL" >/dev/null 2>&1; then
@@ -58,10 +73,14 @@ REMOTE_SESSION_RUNNING="$REMOTE_SESSION_RUNNING" \
 TUNNEL_RUNNING="$TUNNEL_RUNNING" \
 DASHBOARD_REACHABLE="$DASHBOARD_REACHABLE" \
 HEALTH="$HEALTH" \
+RUNNING_MODE="$RUNNING_MODE" \
+LAST_STARTED_MODE="${LAST_STARTED_MODE:-}" \
 python3 - <<'PY'
 import json
 import os
 
+running_mode = os.environ["RUNNING_MODE"] or None
+last_started_mode = os.environ["LAST_STARTED_MODE"] or None
 print(
     json.dumps(
         {
@@ -86,6 +105,8 @@ print(
             "remote_session_running": os.environ["REMOTE_SESSION_RUNNING"] == "true",
             "tunnel_running": os.environ["TUNNEL_RUNNING"] == "true",
             "dashboard_reachable": os.environ["DASHBOARD_REACHABLE"] == "true",
+            "running_mode": running_mode,
+            "last_started_mode": last_started_mode,
             "health": os.environ["HEALTH"],
         },
         indent=2,

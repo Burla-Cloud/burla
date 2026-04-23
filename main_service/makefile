@@ -11,7 +11,6 @@ ARTIFACT_PKG_NAME := $(WEBSERVICE_NAME)
 .PHONY: frontend
 build-frontend:
 	set -e; \
-	pgrep -f "rsync -a --delete" >/dev/null && exit 0; \
 	cd ./frontend; \
 	npm i; \
 	npm run build; \

@@ -31,9 +31,20 @@ COPYFILE_DISABLE=1 tar -czf "$SYNC_ARCHIVE" \
 
 scp_to_vm "$SYNC_ARCHIVE" "~/${REMOTE_ARCHIVE}" >/dev/null
 
+# Scratch dirs that `make local-dev` bind-mounts into running node
+# containers. If we `rm -rf` the whole repo dir, those dirs get
+# recreated at a fresh inode and the containers' mounts go stale —
+# the mount still resolves but every write inside the container
+# returns "Directory nonexistent", and every subsequent POST /jobs/{id}
+# 500s on `NODE_AUTH_CREDENTIALS_PATH.write_text()`. Preserve the
+# scratch dirs in place so their inodes survive the sync.
 REMOTE_BODY="$(cat <<EOF
-sudo rm -rf '$REMOTE_REPO_DIR'
 sudo mkdir -p '$REMOTE_REPO_DIR'
+sudo find '$REMOTE_REPO_DIR' -mindepth 1 -maxdepth 1 \\
+  ! -name '_node_auth' \\
+  ! -name '_shared_workspace' \\
+  ! -name '_worker_service_python_env' \\
+  -exec rm -rf {} +
 sudo tar xzf "\$HOME/${REMOTE_ARCHIVE}" -C '$REMOTE_REPO_DIR'
 sudo chown -R "\$(id -un):\$(id -gn)" '$REMOTE_REPO_DIR'
 rm -f "\$HOME/${REMOTE_ARCHIVE}"

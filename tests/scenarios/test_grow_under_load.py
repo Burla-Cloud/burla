@@ -45,40 +45,22 @@ def test_grow_under_load(
     assert len(result["outputs"]) == 200
     assert set(result["outputs"]) == {x * 2 for x in range(200)}
 
-    # Firestore: was the job doc ever tagged with a grow-booted node reservation?
-    # We look for any `nodes` doc with `reserved_for_job` pointing at a recent
-    # test_function-* job id, which is grow's signature.
-    from google.cloud.firestore_v1.base_query import FieldFilter
-
+    # After the job finishes, `reserved_for_job` is cleared on every node —
+    # `on_job_start` clears it the moment the reserved job's assignment lands.
+    # Check for the stable signature instead: grow-booted nodes get
+    # `inactivity_shutdown_time_sec == 60` (GROW_INACTIVITY_SHUTDOWN_TIME_SEC).
     recent_cutoff = time.time() - 600
-    grow_booted_nodes = []
+    grow_signature_nodes = []
     for doc in firestore_db.collection("nodes").stream():
-        data = doc.to_dict()
-        if not data:
-            continue
-        reserved = data.get("reserved_for_job")
-        if not (isinstance(reserved, str) and reserved.startswith("test_function-")):
-            continue
+        data = doc.to_dict() or {}
         if data.get("started_booting_at", 0) < recent_cutoff:
             continue
-        grow_booted_nodes.append((doc.id, data))
+        if data.get("inactivity_shutdown_time_sec") == 60:
+            grow_signature_nodes.append((doc.id, data))
 
-    # The grow path should have set inactivity_shutdown_time_sec=60 on these
-    # reserved nodes (GROW_INACTIVITY_SHUTDOWN_TIME_SEC).
-    if grow_booted_nodes:
-        for node_id, data in grow_booted_nodes:
-            assert data.get("inactivity_shutdown_time_sec") == 60, (
-                f"grow-booted node {node_id} has "
-                f"inactivity_shutdown_time_sec={data.get('inactivity_shutdown_time_sec')}, "
-                f"expected 60"
-            )
-    else:
-        # If no grow-booted nodes, the pre-existing cluster had enough capacity
-        # — that's an acceptable outcome if the cluster was already scaled up.
-        # We only fail the test if the cluster was truly small.
-        if n_ready_before + n_booting_before <= 1:
-            pytest.fail(
-                f"grow=True with 200 inputs should have booted additional nodes "
-                f"when cluster_state shows {n_ready_before} ready + {n_booting_before} booting, "
-                f"but none had reserved_for_job=test_function-*"
-            )
+    if not grow_signature_nodes and n_ready_before + n_booting_before <= 1:
+        pytest.fail(
+            f"grow=True with 200 inputs against {n_ready_before}-node cluster "
+            f"should have booted nodes with inactivity_shutdown_time_sec=60 "
+            f"(GROW_INACTIVITY_SHUTDOWN_TIME_SEC), but none were found"
+        )

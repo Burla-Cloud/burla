@@ -42,7 +42,14 @@ def _port_open(host: str, port: int) -> bool:
 
 
 def _main_service_reachable() -> bool:
-    return _port_open("localhost", 5001)
+    # Honor the DASHBOARD_URL env override so dev-VM tunnels on non-5001
+    # ports (e.g. 15001 for agent 01) satisfy the readiness gate.
+    from urllib.parse import urlparse
+
+    parsed = urlparse(DASHBOARD_URL)
+    host = parsed.hostname or "localhost"
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    return _port_open(host, port)
 
 
 def _resolve_active_gcp_project() -> str | None:
@@ -83,7 +90,8 @@ def local_dev_cluster() -> dict[str, Any]:
     """
     if not _main_service_reachable():
         pytest.skip(
-            "main_service is not running on localhost:5001. Start `make local-dev` first."
+            f"main_service is not reachable at {DASHBOARD_URL}. "
+            "Start `make local-dev` first (or set BURLA_CLUSTER_DASHBOARD_URL if using a tunnel)."
         )
 
     project = _resolve_active_gcp_project()
@@ -112,7 +120,7 @@ def local_dev_cluster() -> dict[str, Any]:
     state = _cluster_state_via_http()
     if not state["ready_nodes"] and state["booting_count"] == 0 and state["running_count"] == 0:
         pytest.skip(
-            "Cluster has zero active nodes. Press Start in the dashboard (http://localhost:5001) "
+            f"Cluster has zero active nodes. Press Start in the dashboard ({DASHBOARD_URL}) "
             "and wait for nodes to be READY before running tests."
         )
 
@@ -462,5 +470,5 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         markers = {m.name for m in item.iter_markers()}
         if markers & requires_cluster and not cluster_up:
             item.add_marker(
-                pytest.mark.skip(reason="local-dev cluster not running on localhost:5001")
+                pytest.mark.skip(reason=f"local-dev cluster not running at {DASHBOARD_URL}")
             )

@@ -32,23 +32,29 @@ BURLA_MAKE_PYTHON := uv run --project ./client python make/cluster_dashboard_dev
 kill-jupyter:
 	pkill -f 'ipykernel|jupyter.*kernel'
 
-# If you are an agent do not run this! go to tests/README.md for instructions.
+# DEV-VM ONLY: every target below except `test-unit` must run on an
+# ephemeral dev VM (see scripts/dev_vm_create.sh and
+# .cursor/skills/burla-ephemeral-dev-vm/). Running `make test*` on a
+# laptop is unsupported — local-dev's Docker-in-Docker, Firestore
+# access, and bind-mount layout only work reliably inside a dev VM.
+# If you are an agent, read client/tests/README.md before invoking.
 test:
 	uv run --project ./client --group dev pytest -s --disable-warnings
 
-# Pure-unit tests (no cluster needed, runs in CI-shaped environments).
+# Pure unit tests — the only tier safe to run outside a dev VM.
 test-unit:
 	uv run --project ./client --group dev pytest -m unit -s --disable-warnings
 
-# Service-level tests (require `make local-dev` running).
+# Service-level tests. DEV VM ONLY. Requires `make local-dev` running on the VM.
 test-service:
 	uv run --project ./client --group dev pytest -m service -s --disable-warnings
 
-# End-to-end tests (require `make local-dev` running, slow).
+# End-to-end tests. DEV VM ONLY. Requires `make local-dev` running on the VM.
 test-e2e:
 	uv run --project ./client --group dev pytest -m e2e -s --disable-warnings
 
-# Chaos tests (require `make local-dev` running, may kill containers).
+# Chaos (destructive) tests. DEV VM ONLY. Run tests one at a time with a
+# cluster reset between; they shut down / restart / mutate the cluster.
 test-chaos:
 	uv run --project ./client --group dev pytest -m chaos -s --disable-warnings
 

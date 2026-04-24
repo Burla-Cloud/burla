@@ -1,50 +1,110 @@
 ### How to run the tests
 
-Four tiers. Only `test-unit` runs without a live cluster.
+**All tiers except `test-unit` must run on a dev VM, not on your laptop.** The
+cluster tests need real Docker-in-Docker, real Firestore, real GCE-style
+networking, and scratch `_node_auth` / `_shared_workspace` directories that get
+wiped between runs — all of which work reliably only on a dev VM. Running
+`make local-dev` on a laptop is unsupported and will break in ways that look
+like test bugs (port collisions, orphaned bind mounts, macOS Docker
+idiosyncrasies, laptop ADC credential expiry mid-run).
 
-- `make test-unit` — pure unit tests. No cluster, no GCP. Fast (~10s).
-- `make test-service` — service-level tests. Requires `make local-dev`.
-- `make test-e2e` — full end-to-end tests against `remote_parallel_map`, including the 5 scenario flows. Requires `make local-dev`.
-- `make test-chaos` — destructive tests that restart or mutate the cluster. Run each test individually with a cluster reset between.
-- `make test` — all non-chaos tiers.
+Four tiers:
+
+- `make test-unit` — pure unit tests. No cluster, no GCP. Fast (~10s). **The
+  only tier safe to run on a laptop.**
+- `make test-service` — service-level tests. **Dev VM only.**
+- `make test-e2e` — full end-to-end tests, including the 5 scenario flows.
+  **Dev VM only.**
+- `make test-chaos` — destructive tests that restart / shut down / mutate the
+  cluster. Each test needs a cluster reset between runs. **Dev VM only.**
+- `make test` — all non-chaos tiers. **Dev VM only.**
 
 Nothing runs in GitHub Actions.
 
-#### Instructions for humans
+#### Running on a dev VM (humans)
 
-Start a local cluster in the worktree you're editing:
+Follow the ephemeral dev-VM workflow (see [`.cursor/skills/burla-ephemeral-dev-vm/SKILL.md`](../../.cursor/skills/burla-ephemeral-dev-vm/SKILL.md)):
 
 ```
-make local-dev       # full cluster in docker on this machine
-# OR
-make remote-dev      # main_service local, node VMs in the cloud
+# From the primary checkout
+scripts/dev-worktree/create.sh --agent <id> --task <task-slug>
+cd ../burla-worktrees/agent-<id>/<task-slug>
+
+scripts/dev_vm_create.sh --agent <id>
+scripts/dev_vm_wait_ssh.sh --agent <id>
+scripts/dev_vm_sync_repo.sh --agent <id>
+scripts/dev_vm_start.sh --agent <id> --mode local-dev
+scripts/dev_vm_tunnel.sh --agent <id>
 ```
 
-Open `http://localhost:5001` and hit **Start** to boot nodes. Then:
+Then SSH into the VM and run tests from there:
+
+```
+ssh -i ~/.ssh/burla-dev-vm/<id>_ed25519 jakezuliani@<vm-ip>
+cd /srv/burla
+curl -sX POST http://localhost:5001/v1/cluster/restart \
+  -H "X-User-Email: jakescursoragent@gmail.com" \
+  -H "Authorization: Bearer <agent-token>"
+# wait for ready_nodes >= 1 at /v1/cluster/state
+BURLA_TEST_PROJECT=burla-agent-<id> \
+  uv run --project ./client --group dev pytest -m "not chaos and not dashboard"
+```
+
+(The VM has the agent credentials pre-provisioned at `~/.config/burla/burla_credentials.json` by `scripts/dev_vm_create.sh`.)
+
+When done:
+
+```
+scripts/dev_vm_destroy.sh --agent <id>
+```
+
+#### Running on a dev VM (agents)
+
+1. **Never run service / e2e / chaos tests on your laptop.** Provision a dev VM.
+   The whole suite is designed and verified against the dev-VM environment.
+2. If no VM exists for your agent ID, run `scripts/dev_vm_create.sh --agent <id>`
+   and follow the sequence above.
+3. Before every service / e2e run, verify: cluster is reachable through the
+   tunnel (`curl http://localhost:<local-dashboard-port>/version` returns 200)
+   and `ready_nodes` in `/v1/cluster/state` is ≥ 1.
+4. Run the tests on the VM (via SSH). The VM has `uv` at `/usr/local/bin/uv`;
+   always invoke pytest via `uv run --project ./client --group dev pytest`.
+5. Set `BURLA_TEST_PROJECT=burla-agent-<id>` so the readiness gate in
+   `conftest.py` matches the active project. On a laptop it defaults to
+   `burla-test`, which is wrong for agent dev VMs.
+6. Readiness gate: if the cluster isn't verifiably READY, stop and investigate.
+   A failure caused by cluster-not-ready is NOT a test failure — do not report
+   it as one.
+7. If the `_node_auth` bind-mount gets orphaned (seen after `dev_vm_sync_repo.sh`
+   blows away `/srv/burla`): recreate the host dirs (`sudo mkdir -p /srv/burla/_node_auth
+   /srv/burla/_shared_workspace /srv/burla/_worker_service_python_env
+   && sudo chmod 777`, then `sudo chown -R $USER /srv/burla`), shut down the
+   cluster, then restart. Otherwise nodes will 500 on `NODE_AUTH_CREDENTIALS_PATH.write_text()`.
+8. Auth errors (`invalid_grant` / `Invalid JWT Signature`) → the VM was
+   provisioned without agent creds. Reinstall them at `~/.config/burla/burla_credentials.json`.
+9. All tests have a 120s default timeout. If output doesn't advance past
+   `collected N items` within 10 seconds, stop and report blocked.
+
+#### Unit tier on a laptop
+
+Only `make test-unit` is safe to run on a laptop. It imports real modules
+and runs real logic for version parsing, signal handlers, exception
+messages, package detection, and `_local_host_from` — no cluster needed:
 
 ```
 uv sync --project ./client --group dev
-make test            # or test-unit / test-service / test-e2e individually
+uv run --project ./client --group dev pytest -m unit
 ```
-
-Errors surface in docker desktop container logs (local-dev) or Google Cloud Logging (remote-dev, for node/worker logs).
-
-#### Instructions for agents
-
-1. Verify the local-dev cluster is running before every service/e2e run: `curl http://localhost:5001/version` must return 200 and `/v1/cluster/state` must show at least one `ready_nodes` entry.
-2. Verify gcloud project: `gcloud config get-value project` must be `burla-test` (or whichever dev-VM project you're working in). If not, `gcloud config set project <project>`.
-3. If local-dev isn't running: `make local-dev`, then open `http://localhost:5001` and press **Start**. Wait for at least one node to be READY.
-4. Credentials: tests read auth headers from `burla login`'s `burla_credentials.json`. On a dev VM the agent credentials (`jakescursoragent@gmail.com`) are pre-provisioned; on your laptop run `burla login --no_browser=True` if the service tier returns 401.
-5. Readiness gate: if the cluster isn't verifiably READY, stop and investigate. A failure caused by cluster-not-ready is NOT a test failure — do not report it as one.
-6. Auth errors (`invalid_grant` / `Invalid JWT Signature`) → `burla login --no_browser=True` and re-authorize.
-7. Always invoke pytest via uv so path/venv issues are handled:
-   - `uv run --project ./client --group dev pytest -m unit`
-   - `uv run --project ./client --group dev pytest -m "service and not chaos"`
-   - `uv run --project ./client --group dev pytest -m "e2e and not chaos"`
-8. All tests have a 120s default timeout. If output doesn't advance past `collected N items` within 10 seconds, stop and report blocked.
 
 #### What changed vs. earlier revisions
 
-- Removed ~130 source-text grep assertions that passed regardless of whether the code they claimed to cover was correct. The remaining suite either imports and exercises the code under test, or drives it over HTTP against the live cluster.
-- Added 5 end-to-end scenarios in `tests/scenarios/` that cover full user journeys: `test_full_job_lifecycle`, `test_cluster_restart_mid_job`, `test_grow_under_load`, `test_udf_error_propagation`, `test_detach_and_complete_async`.
-- Deleted the Playwright dashboard-UI tests — backend coverage catches regressions that matter; UI smoke tests are out of scope.
+- Removed ~130 source-text grep assertions that passed regardless of whether
+  the code they claimed to cover was correct. The remaining suite either
+  imports and exercises the code under test, or drives it over HTTP against
+  the live cluster.
+- Added 5 end-to-end scenarios in `tests/scenarios/` that cover full user
+  journeys: `test_full_job_lifecycle`, `test_cluster_restart_mid_job`,
+  `test_grow_under_load`, `test_udf_error_propagation`,
+  `test_detach_and_complete_async`.
+- Deleted the Playwright dashboard-UI tests — backend coverage catches
+  regressions that matter; UI smoke tests are out of scope.

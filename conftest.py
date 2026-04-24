@@ -91,7 +91,12 @@ def local_dev_cluster() -> dict[str, Any]:
     if not _main_service_reachable():
         pytest.skip(
             f"main_service is not reachable at {DASHBOARD_URL}. "
-            "Start `make local-dev` first (or set BURLA_CLUSTER_DASHBOARD_URL if using a tunnel)."
+            "These tests must run on a dev VM, not your laptop — see "
+            "client/tests/README.md. Start the cluster on the VM with "
+            "`scripts/dev_vm_start.sh --agent <id> --mode local-dev`, run "
+            "`scripts/dev_vm_tunnel.sh --agent <id>`, and set "
+            "BURLA_CLUSTER_DASHBOARD_URL to the tunnel URL (or run tests "
+            "directly on the VM, which is recommended)."
         )
 
     project = _resolve_active_gcp_project()

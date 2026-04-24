@@ -1,8 +1,17 @@
 ### main_service tests
 
-These tests run against a live `make local-dev` cluster via `httpx` against
-`http://localhost:5001`. See `client/tests/README.md` for how to start a
-cluster before running them.
+**Run these on a dev VM, not your laptop.** See
+[`client/tests/README.md`](../../client/tests/README.md) for the full
+workflow. The cluster-level tests need real Docker-in-Docker, real
+Firestore access via a service account, and scratch bind-mount
+directories — all of which only work reliably on a dev VM.
 
-Invoke via `make test-service` (all service tests) or
-`uv run --project ./client --group dev pytest main_service/tests`.
+All tests here are service-tier (marked `@pytest.mark.service`). They
+drive the live main_service over HTTP via `httpx`. From inside the dev
+VM:
+
+```
+cd /srv/burla
+BURLA_TEST_PROJECT=burla-agent-<id> \
+  uv run --project ./client --group dev pytest main_service/tests -m "service and not chaos"
+```

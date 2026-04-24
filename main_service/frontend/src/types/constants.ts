@@ -87,3 +87,25 @@ export function getOnDemandHourlyUsdForMachine(machineType: string): number | nu
   const price = GCP_MACHINE_PRICING_MAPPING[mt]?.on_demand_price;
   return typeof price === "number" ? price : null;
 }
+
+// Human-readable "X vCPUs / Y GB RAM" label (or "X GPUs" for GPU families).
+// Used by the GCP quota dialog so the user sees what configuration their
+// save was rejected for.
+const _N4_STANDARD_CPU_TO_RAM: Record<number, number> = {
+  2: 8, 4: 16, 8: 32, 16: 64, 32: 128, 48: 192, 64: 256, 80: 320,
+};
+
+export function getConfigurationLabelForMachineType(machineType: string): string {
+  const mt = String(machineType || "");
+  if (!mt) return "unknown";
+  if (mt.startsWith("n4-standard-")) {
+    const cpus = Number(mt.split("-").pop());
+    const ram = _N4_STANDARD_CPU_TO_RAM[cpus];
+    if (cpus && ram) return `${cpus} vCPUs / ${ram} GB RAM`;
+    if (cpus) return `${cpus} vCPUs`;
+  }
+  const last = mt.split("-").pop() || "";
+  const gpuMatch = last.match(/^(\d+)g$/);
+  if (gpuMatch) return `${gpuMatch[1]} GPUs`;
+  return mt;
+}

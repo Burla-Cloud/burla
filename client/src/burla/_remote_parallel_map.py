@@ -160,7 +160,8 @@ async def _execute_job(
     }
     # On 503 nodes_busy, show boot progress via the polling loop then try
     # once more. Any other known error surfaces as its domain exception
-    # (VersionMismatch, NoCompatibleNodes, NoNodes, UnauthorizedError).
+    # (VersionMismatch, NoCompatibleNodes, NoNodes, UnauthorizedError,
+    # QuotaExceeded).
     for attempt in range(2):
         try:
             response = await client.start_job(job_id, start_job_config)
@@ -169,6 +170,10 @@ async def _execute_job(
             if attempt == 1:
                 raise AllNodesBusy()
             await wait_for_nodes_to_be_ready(client=client, spinner=spinner)
+
+    warnings = response.get("warnings") or []
+    if warnings:
+        reporter.print_quota_warnings(warnings)
 
     ready_nodes = [
         Node.from_ready(

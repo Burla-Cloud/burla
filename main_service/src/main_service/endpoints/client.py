@@ -40,6 +40,7 @@ from main_service import (
 )
 from main_service.helpers import (
     Logger,
+    get_quota_limit,
     gpu_machine_prefix,
     gpu_machine_type,
     parallelism_capacity,
@@ -193,6 +194,72 @@ def _select_ready_nodes_from_cache(
     )
 
 
+def _count_active_nodes_by_machine_type(gcp_region: str) -> dict[str, int]:
+    """How many nodes in `gcp_region` are already BOOTING/RUNNING/READY for
+    each machine_type. Cached view; zero firestore calls."""
+    counts: dict[str, int] = {}
+    active_statuses = {"BOOTING", "RUNNING", "READY"}
+    with _nodes_cache_lock:
+        nodes = list(NODES_CACHE.values())
+    for node in nodes:
+        if node.get("status") not in active_statuses:
+            continue
+        if (node.get("gcp_region") or "") != gcp_region:
+            continue
+        mt = node.get("machine_type")
+        if not mt:
+            continue
+        counts[mt] = counts.get(mt, 0) + 1
+    return counts
+
+
+def _apply_quota_cap(
+    node_machine_types: list[str], gcp_region: str
+) -> tuple[list[str], list[dict]]:
+    """Trim `node_machine_types` so we never ask GCP to boot more VMs of a
+    given (region, machine_type) than the cluster_quota doc allows, counting
+    existing active nodes against the limit. Returns `(kept, caps)` where
+    `caps` has one entry per machine_type that was clipped, including the
+    ones that got clipped to zero (the caller needs those to decide
+    'soft-cap warn' vs 'hard 400'). Projects without a populated
+    cluster_quota doc get `_QUOTA_UNLIMITED` per type, so nothing gets
+    clipped until the backfill script seeds real numbers."""
+    used = _count_active_nodes_by_machine_type(gcp_region)
+    remaining: dict[str, int] = {}
+    limits: dict[str, int] = {}
+    for mt in set(node_machine_types):
+        limits[mt] = get_quota_limit(mt, gcp_region)
+        remaining[mt] = max(0, limits[mt] - used.get(mt, 0))
+
+    kept: list[str] = []
+    requested_counts: dict[str, int] = {}
+    for mt in node_machine_types:
+        requested_counts[mt] = requested_counts.get(mt, 0) + 1
+        if remaining[mt] > 0:
+            kept.append(mt)
+            remaining[mt] -= 1
+
+    allowed_counts: dict[str, int] = {}
+    for mt in kept:
+        allowed_counts[mt] = allowed_counts.get(mt, 0) + 1
+
+    caps: list[dict] = []
+    for mt, requested in requested_counts.items():
+        allowed = allowed_counts.get(mt, 0)
+        if allowed < requested:
+            caps.append(
+                {
+                    "type": "quota_capped",
+                    "machine_type": mt,
+                    "region": gcp_region,
+                    "requested": requested,
+                    "allowed": allowed,
+                    "limit": limits[mt],
+                }
+            )
+    return kept, caps
+
+
 def _grow_if_needed(
     target_parallelism: int,
     n_inputs: int,
@@ -205,10 +272,18 @@ def _grow_if_needed(
     logger: Logger,
     auth_headers: dict,
     add_background_task,
-) -> list[dict]:
-    """Schedules `_start_nodes` in the background and returns one
-    `{instance_name, target_parallelism}` dict per reserved booting node.
-    Empty list if no growth was needed.
+) -> tuple[list[dict], list[dict]]:
+    """Schedules `_start_nodes` in the background and returns a
+    `(booting_nodes, warnings)` tuple. `booting_nodes` has one
+    `{instance_name, target_parallelism}` dict per reserved booting node;
+    `warnings` has one `quota_capped` entry per machine_type that hit the
+    per-(region, machine_type) quota and couldn't be grown all the way.
+    Both empty if no growth was needed.
+
+    Raises `HTTPException(400, quota_exceeded)` when growth was needed but
+    every chosen machine_type is already at its quota limit in the
+    configured region — nothing could boot for this shape, so fail fast
+    instead of silently under-scaling.
 
     When `func_gpu` is set, each new node is one of the mapped single-GPU
     machine types and contributes exactly one parallelism slot. When `image`
@@ -220,7 +295,7 @@ def _grow_if_needed(
     if gpu_mt:
         missing_nodes = max(0, requested_parallelism - target_parallelism)
         if missing_nodes <= 0:
-            return []
+            return [], []
         node_machine_types = [gpu_mt] * missing_nodes
         config = _get_cluster_config()
     else:
@@ -230,13 +305,13 @@ def _grow_if_needed(
         current_cpus = target_parallelism * required_cpus_per_call
         missing_cpus = max(0, target_cpus - current_cpus)
         if missing_cpus <= 0:
-            return []
+            return [], []
 
         max_cpu = LOCAL_DEV_MAX_GROW_CPUS if IN_LOCAL_DEV_MODE else MAX_GROW_CPUS
         max_additional_cpus = max(0, max_cpu - current_cpus)
         num_cpus_to_add = min(missing_cpus, max_additional_cpus)
         if num_cpus_to_add <= 0:
-            return []
+            return [], []
 
         config = _get_cluster_config()
         node_spec = config["Nodes"][0]
@@ -268,7 +343,30 @@ def _grow_if_needed(
         if parallelism_capacity(mt, func_cpu, func_ram) > 0
     ]
     if not node_machine_types:
-        return []
+        return [], []
+
+    gcp_region = config["Nodes"][0]["gcp_region"]
+    node_machine_types, caps = _apply_quota_cap(node_machine_types, gcp_region)
+
+    # Every candidate hit a 0 remaining quota -> client asked to grow but
+    # nothing can boot. Surface a structured 400 instead of silently
+    # returning an empty grow plan; `remote_parallel_map` raises
+    # `QuotaExceeded` from it.
+    if not node_machine_types and caps:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error_code": "quota_exceeded",
+                "region": gcp_region,
+                "caps": caps,
+                "message": (
+                    "Cluster is at its per-machine-type quota in "
+                    f"{gcp_region}; nothing can grow for this job shape."
+                ),
+            },
+        )
+    if not node_machine_types:
+        return [], []
 
     node_instance_names = [f"burla-node-{uuid4().hex[:8]}" for _ in node_machine_types]
     containers_override = [{"image": image}] if image else None
@@ -285,13 +383,14 @@ def _grow_if_needed(
         containers_override,
         GROW_INACTIVITY_SHUTDOWN_TIME_SEC,
     )
-    return [
+    booting_nodes = [
         {
             "instance_name": name,
             "target_parallelism": parallelism_capacity(machine_type, func_cpu, func_ram),
         }
         for name, machine_type in zip(node_instance_names, node_machine_types)
     ]
+    return booting_nodes, caps
 
 
 @router.post("/v1/jobs/{job_id}/start")
@@ -318,9 +417,16 @@ async def start_job(
           "ready_nodes":   [{"instance_name", "host", "machine_type",
                              "target_parallelism"}, ...],
           "booting_nodes": [{"instance_name", "target_parallelism"}, ...],
+          "warnings"?:     [{"type": "quota_capped", "machine_type",
+                             "region", "requested", "allowed", "limit"}, ...]
         }
 
     Error responses:
+        400 {"detail": {"error_code": "quota_exceeded", "region", "caps", "message"}}
+                                                              - grow was requested but every
+                                                                chosen machine_type is already
+                                                                at its per-region quota; nothing
+                                                                would boot for this job shape
         409 {"detail": {"error": "version_mismatch", ...}}    - client is outside compatible range
         409 {"detail": {"error": "no_compatible_nodes",
              "reason": "image_mismatch"
@@ -430,8 +536,9 @@ async def start_job(
 
     # --- grow, if requested and short on capacity ---
     booting_nodes: list[dict] = []
+    warnings: list[dict] = []
     if grow:
-        booting_nodes = _grow_if_needed(
+        booting_nodes, warnings = _grow_if_needed(
             target_parallelism=target_parallelism,
             n_inputs=n_inputs,
             max_parallelism=max_parallelism,
@@ -474,10 +581,13 @@ async def start_job(
     _in_flight_job_doc_writes.add(write_task)
     write_task.add_done_callback(_in_flight_job_doc_writes.discard)
 
-    return {
+    response: dict = {
         "ready_nodes": ready,
         "booting_nodes": booting_nodes,
     }
+    if warnings:
+        response["warnings"] = warnings
+    return response
 
 
 # ------------------------------------------------------------------

@@ -83,6 +83,27 @@ class RemoteParallelMapReporter:
         message += "and inputs have finished uploading.\n-"
         self._write_message(message)
 
+    def print_quota_warnings(self, warnings: list[dict]):
+        quota_caps = [w for w in warnings if w.get("type") == "quota_capped"]
+        if not quota_caps:
+            return
+        region = quota_caps[0].get("region") or "unknown region"
+        lines = [
+            "",
+            f"WARNING: Hit per-machine-type VM quota in {region}. "
+            "Job will run at reduced scale.",
+        ]
+        for cap in quota_caps:
+            mt = cap.get("machine_type", "?")
+            requested = cap.get("requested", "?")
+            allowed = cap.get("allowed", 0)
+            limit = cap.get("limit", "?")
+            lines.append(
+                f"  - {mt}: requested {requested}, booted {allowed} (quota {limit})"
+            )
+        lines.append("")
+        self._write_message("\n".join(lines))
+
     def set_booting_nodes_message(self, number_of_booting_nodes: int):
         if not self.spinner:
             return

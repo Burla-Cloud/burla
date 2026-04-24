@@ -6,7 +6,7 @@ from typing import Optional
 
 from fastapi import Request
 
-from main_service import PROJECT_ID, BURLA_BACKEND_URL, GCL_CLIENT
+from main_service import DB, PROJECT_ID, BURLA_BACKEND_URL, GCL_CLIENT
 
 
 # Paths the burla pypi client polls heavily during a job:
@@ -36,6 +36,32 @@ def log_telemetry(message, severity="INFO", **kwargs):
         requests.post(f"{BURLA_BACKEND_URL}/v1/telemetry/log/{severity}", json=payload, timeout=1)
     except Exception:
         pass
+
+
+# Sentinel for "no quota entry, assume unlimited". Large enough that no
+# realistic cluster config brushes against it. Missing entries return this
+# instead of 0 so fresh projects without a populated cluster_quota doc keep
+# working as before.
+_QUOTA_UNLIMITED = 10**9
+
+
+def get_quota_limit(machine_type: str, gcp_region: str) -> int:
+    """Per-(region, machine_type) VM-count cap from the `cluster_quota` doc.
+
+    Read by the settings-save guard and the grow guard. The doc is populated
+    by `scripts/backfill_cluster_quotas.py` (translated from live GCP
+    Compute Engine quotas). A missing region or machine_type returns
+    `_QUOTA_UNLIMITED` so pre-backfill projects aren't accidentally blocked.
+    A present-but-non-integer limit is treated as 0 (explicitly not allowed).
+    """
+    doc = DB.collection("cluster_quota").document("cluster_quota").get().to_dict() or {}
+    limits = (doc.get(gcp_region) or {}).get("machine_type_limits") or {}
+    if machine_type not in limits:
+        return _QUOTA_UNLIMITED
+    try:
+        return int(limits[machine_type])
+    except (TypeError, ValueError):
+        return 0
 
 
 # CPU -> RAM mapping for the n4-standard family; used to size-check that a

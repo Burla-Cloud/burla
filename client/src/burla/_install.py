@@ -114,6 +114,11 @@ def _install(spinner):
 
     cluster_id_token = _register_cluster_and_save_cluster_id_token(spinner, PROJECT_ID)
 
+    # Copy the node-service image into the user's Artifact Registry so local-dev
+    # (and any Node.start path that references `{PROJECT_ID}/burla-node-service`)
+    # can pull it.
+    _copy_node_service_image_to_user_project(spinner, PROJECT_ID)
+
     # Deploy dashboard as google cloud run service
     spinner.text = "Deploying burla-main-service to Google Cloud Run ... "
     spinner.start()
@@ -446,6 +451,68 @@ def _create_service_accounts(spinner, PROJECT_ID):
         spinner.text = "Creating service accounts ... Done."
     spinner.ok("✓")
     return main_svc_email
+
+
+def _copy_node_service_image_to_user_project(spinner, PROJECT_ID):
+    """
+    `main_service/node.py` pulls node containers from
+    `us-docker.pkg.dev/{PROJECT_ID}/burla-node-service/burla-node-service:latest`.
+    `burla install` used to set up everything for main_service but leave this
+    repo empty, so pressing Start in the dashboard always 500'd with
+    "Repository 'burla-node-service' not found". Create the repo and copy
+    the canonical image from `burla-prod` (same pattern main-service uses —
+    `gcloud run deploy` pulls main-service directly from `burla-prod`).
+    """
+    spinner.text = "Copying burla-node-service image to your project ... "
+    spinner.start()
+
+    # Ensure the target repo exists. artifactregistry.googleapis.com was
+    # enabled upstream via `run.googleapis.com` dependency; calling directly
+    # is idempotent (409 if it already exists).
+    cmd = (
+        f"gcloud artifacts repositories create burla-node-service "
+        f"--project={PROJECT_ID} "
+        f"--repository-format=docker "
+        f"--location=us "
+        f'--description="Burla node service images"'
+    )
+    result = run_command(cmd, raise_error=False)
+    already_exists = result.returncode != 0 and "ALREADY_EXISTS" in result.stderr.decode()
+    if result.returncode != 0 and not already_exists:
+        spinner.fail("✗")
+        raise VerboseCalledProcessError(cmd, result.stderr)
+
+    src = f"us-docker.pkg.dev/burla-prod/burla-node-service/burla-node-service:{__version__}"
+    dst_versioned = (
+        f"us-docker.pkg.dev/{PROJECT_ID}/burla-node-service/burla-node-service:{__version__}"
+    )
+    dst_latest = f"us-docker.pkg.dev/{PROJECT_ID}/burla-node-service/burla-node-service:latest"
+
+    # `gcloud artifacts docker images copy` does the cross-project pull+push
+    # server-side without requiring a local docker daemon. `--overwrite` makes
+    # the command idempotent when re-running `burla install`.
+    copy_versioned_cmd = (
+        f"gcloud artifacts docker images copy {src} {dst_versioned} --overwrite --quiet"
+    )
+    result = run_command(copy_versioned_cmd, raise_error=False)
+    if result.returncode != 0:
+        spinner.fail("✗")
+        raise VerboseCalledProcessError(copy_versioned_cmd, result.stderr)
+
+    # Also tag as `:latest` — that's what main_service/node.py pulls by default.
+    copy_latest_cmd = (
+        f"gcloud artifacts docker images copy {src} {dst_latest} --overwrite --quiet"
+    )
+    result = run_command(copy_latest_cmd, raise_error=False)
+    if result.returncode != 0:
+        spinner.fail("✗")
+        raise VerboseCalledProcessError(copy_latest_cmd, result.stderr)
+
+    if already_exists:
+        spinner.text = "Copying burla-node-service image to your project ... Updated."
+    else:
+        spinner.text = "Copying burla-node-service image to your project ... Done."
+    spinner.ok("✓")
 
 
 def _create_firestore_database(spinner, PROJECT_ID):

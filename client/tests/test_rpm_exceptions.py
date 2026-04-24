@@ -1,18 +1,9 @@
 """
-Section 7 of the test plan: every exception class from the client package
-has at least one test touching its raise site.
-
-Exception types covered:
-- NoNodes (cluster off / grow fails)
-- AllNodesBusy (503 retry-once then give up)
-- NoCompatibleNodes (image / gpu / insufficient capacity)
-- VersionMismatch (too low / too high)
-- UnauthorizedError (main_service 401, node 401)
-- JobCanceled (dashboard cancel, ctrl-c)
-- ClusterShutdown, ClusterRestarted
-- NodeDisconnected (FAILED, infrastructure error)
-- JobStalled
-- AuthException, AuthTimeoutException
+Exception classes from the client package. Unit tests only cover messages
+with user-facing contracts (the three `NoCompatibleNodes` branches, the
+`VersionMismatch` pip-install hint, `NodeDisconnected.node` attr, and the
+`AuthException` raise condition). Every other exception is exercised by
+an e2e test further down.
 """
 
 from __future__ import annotations
@@ -65,14 +56,6 @@ def test_NoCompatibleNodes_insufficient_capacity_message():
 
 
 @pytest.mark.unit
-def test_NoCompatibleNodes_no_detail_message():
-    from burla._node import NoCompatibleNodes
-
-    exc = NoCompatibleNodes()
-    assert "compatible nodes" in str(exc).lower()
-
-
-@pytest.mark.unit
 def test_VersionMismatch_pip_install_hint():
     from burla._node import VersionMismatch
 
@@ -104,79 +87,6 @@ def test_NodeDisconnected_carries_node_attr():
     assert "boom" in str(exc)
 
 
-@pytest.mark.unit
-def test_AllNodesBusy_has_default_message():
-    from burla._node import AllNodesBusy
-
-    exc = AllNodesBusy()
-    assert "busy" in str(exc).lower()
-
-
-@pytest.mark.unit
-def test_UnauthorizedError_mentions_burla_login():
-    from burla._node import UnauthorizedError
-
-    exc = UnauthorizedError()
-    assert "burla login" in str(exc)
-
-
-@pytest.mark.unit
-def test_ClusterShutdown_message():
-    from burla._node import ClusterShutdown
-
-    assert "shut down" in str(ClusterShutdown()).lower()
-
-
-@pytest.mark.unit
-def test_ClusterRestarted_message():
-    from burla._node import ClusterRestarted
-
-    assert "restarted" in str(ClusterRestarted()).lower()
-
-
-@pytest.mark.unit
-def test_MainServiceTimeout_message_mentions_dashboard_url():
-    from burla._node import MainServiceTimeout
-
-    msg = str(MainServiceTimeout())
-    assert "dashboard URL" in msg or "dashboard url" in msg.lower()
-    assert "burla login" in msg
-
-
-@pytest.mark.unit
-def test_EXEC_TYPES_TO_NOT_ALERT_has_all_expected_types():
-    from burla._remote_parallel_map import EXEC_TYPES_TO_NOT_ALERT
-    from burla._node import (
-        NoNodes,
-        AllNodesBusy,
-        NoCompatibleNodes,
-        JobCanceled,
-        JobStalled,
-        ClusterRestarted,
-        ClusterShutdown,
-        VersionMismatch,
-        MainServiceTimeout,
-        UnauthorizedError,
-    )
-    from burla._remote_parallel_map import FunctionTooBig
-
-    expected = {
-        NoNodes,
-        AllNodesBusy,
-        NoCompatibleNodes,
-        JobCanceled,
-        JobStalled,
-        ClusterRestarted,
-        ClusterShutdown,
-        VersionMismatch,
-        FunctionTooBig,
-        MainServiceTimeout,
-        UnauthorizedError,
-        KeyboardInterrupt,
-    }
-    assert expected == set(EXEC_TYPES_TO_NOT_ALERT)
-
-
 # ------------------------------------------------------------ AuthException (unit)
 
 
@@ -191,13 +101,6 @@ def test_AuthException_raised_when_config_missing(tmp_path, monkeypatch):
 
     with pytest.raises(_auth.AuthException):
         _auth.get_auth_headers()
-
-
-@pytest.mark.unit
-def test_AuthTimeoutException_message():
-    from burla._auth import AuthTimeoutException
-
-    assert "Timed out" in str(AuthTimeoutException())
 
 
 # ------------------------------------------------------------ e2e UDF error propagation

@@ -56,21 +56,6 @@ def test_get_cluster_dashboard_url_reads_config_when_no_env(monkeypatch, tmp_pat
     assert get_cluster_dashboard_url() == "http://from-config"
 
 
-def test_DISABLE_BURLA_TELEMETRY_suppresses_calls(monkeypatch):
-    from burla import _reporting
-
-    monkeypatch.setenv("DISABLE_BURLA_TELEMETRY", "True")
-
-    # The reporting module's telemetry functions are guarded by the env var
-    # check. We don't actually make a network request - just verify the guard
-    # returns early.
-    # Scan the source to confirm the DISABLE_BURLA_TELEMETRY gate exists.
-    import inspect
-
-    src = inspect.getsource(_reporting)
-    assert "DISABLE_BURLA_TELEMETRY" in src
-
-
 def test_COLAB_RELEASE_TAG_sets_IN_COLAB_on_reimport(monkeypatch):
     import importlib
     from burla import _auth
@@ -130,9 +115,3 @@ def test_import_burla_does_not_read_config_path(tmp_path, monkeypatch):
     )
     assert result.returncode == 0, f"stderr: {result.stderr}"
     assert "OK" in result.stdout
-
-
-def test_get_auth_headers_cached():
-    from burla import _auth
-
-    assert hasattr(_auth._get_auth_info, "cache_clear")

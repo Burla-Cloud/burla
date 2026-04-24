@@ -70,7 +70,7 @@ On `POST /jobs/{job_id}` arrival, the `CallHookOnJobStartMiddleware` in [node_se
 
 1. If `SELF["SHUTTING_DOWN"]` returns 503.
 2. If `SELF["RUNNING"]` or `SELF["BOOTING"]` returns 409.
-3. Otherwise wraps `receive` so `on_job_start` fires on the first `http.request` event: `SELF["RUNNING"]=True`, `SELF["current_job"]=job_id`, `SELF["reserved_for_job"]=None`, and it schedules (but does **not** await) `node_doc.update({"status":"RUNNING","current_job":job_id,"reserved_for_job":None})` as `SELF["on_job_start_task"]`. SELF is mutated synchronously so the next middleware call sees the state immediately; the Firestore write is kicked off the critical path.
+3. Otherwise fires `on_job_start(scope)` synchronously at middleware entry: `SELF["RUNNING"]=True`, `SELF["current_job"]=job_id`, `SELF["reserved_for_job"]=None`, and it schedules (but does **not** await) `node_doc.update({"status":"RUNNING","current_job":job_id,"reserved_for_job":None})` as `SELF["on_job_start_task"]`. The mutation is synchronous under the asyncio event loop (no `await` between the guard and the flip) so a second concurrent `POST /jobs/{id}` correctly sees `RUNNING=True` and 409s; the Firestore write is kicked off the critical path.
 
 Then the `execute` handler in [node_service/src/node_service/job_endpoints.py](../../../node_service/src/node_service/job_endpoints.py):
 
@@ -149,6 +149,6 @@ There are three ways a job can cancel:
 
 ## Common gotcha: the "started" race
 
-`CallHookOnJobStartMiddleware` wraps `receive` so `on_job_start` runs as soon as the request body starts arriving, not when the handler completes. This exists so uploading a large pickled function doesn't leave the node in `READY` for seconds while the client thinks it's `RUNNING`.
+`CallHookOnJobStartMiddleware` fires `on_job_start` synchronously at middleware entry (right after the SHUTTING_DOWN / RUNNING / BOOTING guard checks), before awaiting the downstream app. This exists so uploading a large pickled function doesn't leave the node in `READY` for seconds while the client thinks it's `RUNNING`, and so concurrent POST /jobs/{id} requests see each other's state flip atomically. Previously the flip was deferred into a `wrapped_receive` callback on the first `http.request` event, which left a race window where two requests could both pass the 409 guard before either had flipped SELF.
 
 If `execute` later finds no matching workers and has to roll back the node to `READY`, it must `await SELF["on_job_start_task"]` before issuing the rollback update — otherwise the pending RUNNING write can land *after* the rollback's READY write and wedge the node. See the `if not workers_to_assign` block in [job_endpoints.py](../../../node_service/src/node_service/job_endpoints.py).

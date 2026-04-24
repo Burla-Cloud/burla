@@ -227,11 +227,14 @@ async def lifespan(app: FastAPI):
     yield
 
 
-async def on_job_start(scope, first_event):
-    # SELF is set synchronously so the middleware's next-request 409 guard and
-    # the execute endpoint's rollback (which reads SELF, not firestore) see the
-    # new state immediately. The firestore write happens in the background; the
-    # rollback awaits `on_job_start_task` so the two writes cannot race.
+def on_job_start(scope):
+    # Called synchronously from `CallHookOnJobStartMiddleware` right after the
+    # guard checks pass, no `await` between check and mutation. Python's
+    # asyncio event loop guarantees no other coroutine runs during this
+    # function, so a second concurrent POST /jobs/{id} will correctly see
+    # RUNNING=True when it re-enters the middleware guard and 409 out.
+    # Firestore write is fire-and-forget; the execute endpoint's rollback
+    # awaits `on_job_start_task` so the writes can't race.
     job_id = scope.get("path", "").split("/jobs/")[-1]
     SELF["RUNNING"] = True
     SELF["current_job"] = job_id
@@ -259,7 +262,6 @@ class CallHookOnJobStartMiddleware:
         )
 
         if is_job_execution_request:
-            started = False
             if SELF["SHUTTING_DOWN"]:
                 msg = "Node is shutting down due to inactivity."
                 return await Response(msg, status_code=503)(scope, receive, send)
@@ -267,17 +269,13 @@ class CallHookOnJobStartMiddleware:
                 msg = "Node currently running or booting, request refused."
                 return await Response(msg, status_code=409)(scope, receive, send)
 
-            async def wrapped_receive():
-                nonlocal started
-                event = await receive()
-                job_starting = event.get("type") == "http.request" and not started
+            # Atomic check-and-set: the state flip must happen here, not
+            # deferred to a wrapped_receive callback, otherwise a second
+            # concurrent POST /jobs/{id} can slip past the same guard and
+            # both requests reach `execute`, both driving the single TCP
+            # worker stream and tripping `readexactly()` concurrency errors.
+            on_job_start(scope)
 
-                if job_starting:
-                    started = True
-                    await on_job_start(scope, event)
-                return event
-
-            return await self.app(scope, wrapped_receive, send)
         return await self.app(scope, receive, send)
 
 

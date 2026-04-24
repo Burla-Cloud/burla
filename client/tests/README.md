@@ -1,53 +1,50 @@
 ### How to run the tests
 
-#### Instructions for Humans:
-These steps assume you're already a contributer with a Google Cloud Project prepared with the required resources to run a burla cluster.  
-Email `jake@burla.dev` if you're interested in contributing, or just [put time on my calendar](https://cal.com/jakez/burla?duration=30) :)   
+Four tiers. Only `test-unit` runs without a live cluster.
 
-&nbsp;
+- `make test-unit` — pure unit tests. No cluster, no GCP. Fast (~10s).
+- `make test-service` — service-level tests. Requires `make local-dev`.
+- `make test-e2e` — full end-to-end tests against `remote_parallel_map`, including the 5 scenario flows. Requires `make local-dev`.
+- `make test-chaos` — destructive tests that restart or mutate the cluster. Run each test individually with a cluster reset between.
+- `make test` — all non-chaos tiers.
 
-1. Start a cluster:
-    - run `make local-dev-cluster` (runs entire cluster on your local machine)
-    - OR: run `make remote-dev-cluster` (main_service runs locally, nodes run in the cloud)
-2. Run `make test`
+Nothing runs in GitHub Actions.
 
-If running in `local-dev-mode` errors will be visible in docker desktop container logs.  
-If running in `remote-dev-mode` errors will be visible in the terminal where the `main_service`
-is running, or google-cloud-logging for errors from the `node_service` or `worker_service`.
+#### Instructions for humans
 
-#### Instructions for Agents:
+Start a local cluster in the worktree you're editing:
 
-1. Before running tests, check if local-dev cluster is already running.
-2. Before starting local-dev, verify active gcloud project is `burla-test`.
-   If not, switch with `gcloud config set project burla-test`.
-3. If local-dev is not running:
-   - start it with `make local-dev`
-   - open `http://localhost:5001` in browser automation
-   - if login page appears, login with:
-     - email: `JakesCursorAgent@gmail.com`
-     - password: Google Cloud Secret `JakesCursorAgent-gmail-password`
-   - press the Start button in the Burla UI
-4. Readiness gate: if you cannot verify local-dev cluster is on and ready, stop.
-   Do not run tests in that state. Investigate why cluster boot failed and report
-   a clear diagnosis (what failed, where it failed, and the likely fix).
-   A run only counts as "running the tests" when this readiness gate is passed.
-   Any failure caused by cluster-not-ready state does not count as a test run.
-   - Local-dev recovery: if tests fail with connection errors (for example
-     `Cannot connect to host localhost:8081`) right after containers were killed,
-     nodes may still be marked ready in Firestore while containers are down.
-     Open the cluster dashboard and click **Restart** to recreate containers, then
-     rerun the test command.
-     Treat this as a readiness failure, not a test failure.
-5. If tests fail with auth errors like `invalid_grant` or `Invalid JWT Signature`:
-   - run `burla login --no_browser=True`
-   - open the printed login URL in browser automation
-   - complete login and click the Authorize button
-   - then rerun the test command
-6. `make test` is not reliable in fresh shells because `pytest` may not be on `PATH`.
-   Always run tests with uv from repo root:
-   - `uv sync --project ./client --group dev`
-   - `uv run --project ./client --group dev pytest client/tests/test.py -s -x --disable-warnings`
-7. Hard timeout rule: if test output does not advance to pass/fail within 10 seconds after
-   `collected 1 item`, stop the test process and report it as blocked. Never wait longer.
-8. After test run, verify logs for the latest test job show `"hi"` once per input.
+```
+make local-dev       # full cluster in docker on this machine
+# OR
+make remote-dev      # main_service local, node VMs in the cloud
+```
 
+Open `http://localhost:5001` and hit **Start** to boot nodes. Then:
+
+```
+uv sync --project ./client --group dev
+make test            # or test-unit / test-service / test-e2e individually
+```
+
+Errors surface in docker desktop container logs (local-dev) or Google Cloud Logging (remote-dev, for node/worker logs).
+
+#### Instructions for agents
+
+1. Verify the local-dev cluster is running before every service/e2e run: `curl http://localhost:5001/version` must return 200 and `/v1/cluster/state` must show at least one `ready_nodes` entry.
+2. Verify gcloud project: `gcloud config get-value project` must be `burla-test` (or whichever dev-VM project you're working in). If not, `gcloud config set project <project>`.
+3. If local-dev isn't running: `make local-dev`, then open `http://localhost:5001` and press **Start**. Wait for at least one node to be READY.
+4. Credentials: tests read auth headers from `burla login`'s `burla_credentials.json`. On a dev VM the agent credentials (`jakescursoragent@gmail.com`) are pre-provisioned; on your laptop run `burla login --no_browser=True` if the service tier returns 401.
+5. Readiness gate: if the cluster isn't verifiably READY, stop and investigate. A failure caused by cluster-not-ready is NOT a test failure — do not report it as one.
+6. Auth errors (`invalid_grant` / `Invalid JWT Signature`) → `burla login --no_browser=True` and re-authorize.
+7. Always invoke pytest via uv so path/venv issues are handled:
+   - `uv run --project ./client --group dev pytest -m unit`
+   - `uv run --project ./client --group dev pytest -m "service and not chaos"`
+   - `uv run --project ./client --group dev pytest -m "e2e and not chaos"`
+8. All tests have a 120s default timeout. If output doesn't advance past `collected N items` within 10 seconds, stop and report blocked.
+
+#### What changed vs. earlier revisions
+
+- Removed ~130 source-text grep assertions that passed regardless of whether the code they claimed to cover was correct. The remaining suite either imports and exercises the code under test, or drives it over HTTP against the live cluster.
+- Added 5 end-to-end scenarios in `tests/scenarios/` that cover full user journeys: `test_full_job_lifecycle`, `test_cluster_restart_mid_job`, `test_grow_under_load`, `test_udf_error_propagation`, `test_detach_and_complete_async`.
+- Deleted the Playwright dashboard-UI tests — backend coverage catches regressions that matter; UI smoke tests are out of scope.

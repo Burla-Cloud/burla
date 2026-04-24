@@ -1,5 +1,8 @@
-### How to test the main service
+### main_service tests
 
-This service has no test suite,  
-To test it we run the integration tests in the burla client (the python package).  
-See `client/tests/README.md` for instructions to run these tests.
+These tests run against a live `make local-dev` cluster via `httpx` against
+`http://localhost:5001`. See `client/tests/README.md` for how to start a
+cluster before running them.
+
+Invoke via `make test-service` (all service tests) or
+`uv run --project ./client --group dev pytest main_service/tests`.

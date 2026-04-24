@@ -34,7 +34,23 @@ kill-jupyter:
 
 # If you are an agent do not run this! go to tests/README.md for instructions.
 test:
-	pytest client/tests/test.py -s -x --disable-warnings
+	uv run --project ./client --group dev pytest -s --disable-warnings
+
+# Pure-unit tests (no cluster needed, runs in CI-shaped environments).
+test-unit:
+	uv run --project ./client --group dev pytest -m unit -s --disable-warnings
+
+# Service-level tests (require `make local-dev` running).
+test-service:
+	uv run --project ./client --group dev pytest -m service -s --disable-warnings
+
+# End-to-end tests (require `make local-dev` running, slow).
+test-e2e:
+	uv run --project ./client --group dev pytest -m e2e -s --disable-warnings
+
+# Chaos tests (require `make local-dev` running, may kill containers).
+test-chaos:
+	uv run --project ./client --group dev pytest -m chaos -s --disable-warnings
 
 # remove all booting nodes from DB (only run in local-dev mode)
 stop:

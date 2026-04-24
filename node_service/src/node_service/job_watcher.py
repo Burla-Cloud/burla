@@ -162,6 +162,10 @@ async def _job_watcher(
     session: aiohttp.ClientSession,
     exit_stack: list,
 ):
+    # Module-global: reset per-job so prior-job state doesn't leak in.
+    global SEC_NEIGHBOR_HAD_NO_INPUTS
+    SEC_NEIGHBOR_HAD_NO_INPUTS = 0
+
     sync_db = firestore.Client(project=PROJECT_ID, database="burla")
     job_doc = async_db.collection("jobs").document(SELF["current_job"])
     sync_job_doc = sync_db.collection("jobs").document(SELF["current_job"])

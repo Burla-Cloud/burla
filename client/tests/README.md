@@ -1,53 +1,110 @@
 ### How to run the tests
 
-#### Instructions for Humans:
-These steps assume you're already a contributer with a Google Cloud Project prepared with the required resources to run a burla cluster.  
-Email `jake@burla.dev` if you're interested in contributing, or just [put time on my calendar](https://cal.com/jakez/burla?duration=30) :)   
+**All tiers except `test-unit` must run on a dev VM, not on your laptop.** The
+cluster tests need real Docker-in-Docker, real Firestore, real GCE-style
+networking, and scratch `_node_auth` / `_shared_workspace` directories that get
+wiped between runs — all of which work reliably only on a dev VM. Running
+`make local-dev` on a laptop is unsupported and will break in ways that look
+like test bugs (port collisions, orphaned bind mounts, macOS Docker
+idiosyncrasies, laptop ADC credential expiry mid-run).
 
-&nbsp;
+Four tiers:
 
-1. Start a cluster:
-    - run `make local-dev-cluster` (runs entire cluster on your local machine)
-    - OR: run `make remote-dev-cluster` (main_service runs locally, nodes run in the cloud)
-2. Run `make test`
+- `make test-unit` — pure unit tests. No cluster, no GCP. Fast (~10s). **The
+  only tier safe to run on a laptop.**
+- `make test-service` — service-level tests. **Dev VM only.**
+- `make test-e2e` — full end-to-end tests, including the 5 scenario flows.
+  **Dev VM only.**
+- `make test-chaos` — destructive tests that restart / shut down / mutate the
+  cluster. Each test needs a cluster reset between runs. **Dev VM only.**
+- `make test` — all non-chaos tiers. **Dev VM only.**
 
-If running in `local-dev-mode` errors will be visible in docker desktop container logs.  
-If running in `remote-dev-mode` errors will be visible in the terminal where the `main_service`
-is running, or google-cloud-logging for errors from the `node_service` or `worker_service`.
+Nothing runs in GitHub Actions.
 
-#### Instructions for Agents:
+#### Running on a dev VM (humans)
 
-1. Before running tests, check if local-dev cluster is already running.
-2. Before starting local-dev, verify active gcloud project is `burla-test`.
-   If not, switch with `gcloud config set project burla-test`.
-3. If local-dev is not running:
-   - start it with `make local-dev`
-   - open `http://localhost:5001` in browser automation
-   - if login page appears, login with:
-     - email: `JakesCursorAgent@gmail.com`
-     - password: Google Cloud Secret `JakesCursorAgent-gmail-password`
-   - press the Start button in the Burla UI
-4. Readiness gate: if you cannot verify local-dev cluster is on and ready, stop.
-   Do not run tests in that state. Investigate why cluster boot failed and report
-   a clear diagnosis (what failed, where it failed, and the likely fix).
-   A run only counts as "running the tests" when this readiness gate is passed.
-   Any failure caused by cluster-not-ready state does not count as a test run.
-   - Local-dev recovery: if tests fail with connection errors (for example
-     `Cannot connect to host localhost:8081`) right after containers were killed,
-     nodes may still be marked ready in Firestore while containers are down.
-     Open the cluster dashboard and click **Restart** to recreate containers, then
-     rerun the test command.
-     Treat this as a readiness failure, not a test failure.
-5. If tests fail with auth errors like `invalid_grant` or `Invalid JWT Signature`:
-   - run `burla login --no_browser=True`
-   - open the printed login URL in browser automation
-   - complete login and click the Authorize button
-   - then rerun the test command
-6. `make test` is not reliable in fresh shells because `pytest` may not be on `PATH`.
-   Always run tests with uv from repo root:
-   - `uv sync --project ./client --group dev`
-   - `uv run --project ./client --group dev pytest client/tests/test.py -s -x --disable-warnings`
-7. Hard timeout rule: if test output does not advance to pass/fail within 10 seconds after
-   `collected 1 item`, stop the test process and report it as blocked. Never wait longer.
-8. After test run, verify logs for the latest test job show `"hi"` once per input.
+Follow the ephemeral dev-VM workflow (see [`.cursor/skills/burla-ephemeral-dev-vm/SKILL.md`](../../.cursor/skills/burla-ephemeral-dev-vm/SKILL.md)):
 
+```
+# From the primary checkout
+scripts/dev-worktree/create.sh --agent <id> --task <task-slug>
+cd ../burla-worktrees/agent-<id>/<task-slug>
+
+scripts/dev_vm_create.sh --agent <id>
+scripts/dev_vm_wait_ssh.sh --agent <id>
+scripts/dev_vm_sync_repo.sh --agent <id>
+scripts/dev_vm_start.sh --agent <id> --mode local-dev
+scripts/dev_vm_tunnel.sh --agent <id>
+```
+
+Then SSH into the VM and run tests from there:
+
+```
+ssh -i ~/.ssh/burla-dev-vm/<id>_ed25519 jakezuliani@<vm-ip>
+cd /srv/burla
+curl -sX POST http://localhost:5001/v1/cluster/restart \
+  -H "X-User-Email: jakescursoragent@gmail.com" \
+  -H "Authorization: Bearer <agent-token>"
+# wait for ready_nodes >= 1 at /v1/cluster/state
+BURLA_TEST_PROJECT=burla-agent-<id> \
+  uv run --project ./client --group dev pytest -m "not chaos and not dashboard"
+```
+
+(The VM has the agent credentials pre-provisioned at `~/.config/burla/burla_credentials.json` by `scripts/dev_vm_create.sh`.)
+
+When done:
+
+```
+scripts/dev_vm_destroy.sh --agent <id>
+```
+
+#### Running on a dev VM (agents)
+
+1. **Never run service / e2e / chaos tests on your laptop.** Provision a dev VM.
+   The whole suite is designed and verified against the dev-VM environment.
+2. If no VM exists for your agent ID, run `scripts/dev_vm_create.sh --agent <id>`
+   and follow the sequence above.
+3. Before every service / e2e run, verify: cluster is reachable through the
+   tunnel (`curl http://localhost:<local-dashboard-port>/version` returns 200)
+   and `ready_nodes` in `/v1/cluster/state` is ≥ 1.
+4. Run the tests on the VM (via SSH). The VM has `uv` at `/usr/local/bin/uv`;
+   always invoke pytest via `uv run --project ./client --group dev pytest`.
+5. Set `BURLA_TEST_PROJECT=burla-agent-<id>` so the readiness gate in
+   `conftest.py` matches the active project. On a laptop it defaults to
+   `burla-test`, which is wrong for agent dev VMs.
+6. Readiness gate: if the cluster isn't verifiably READY, stop and investigate.
+   A failure caused by cluster-not-ready is NOT a test failure — do not report
+   it as one.
+7. If the `_node_auth` bind-mount gets orphaned (seen after `dev_vm_sync_repo.sh`
+   blows away `/srv/burla`): recreate the host dirs (`sudo mkdir -p /srv/burla/_node_auth
+   /srv/burla/_shared_workspace /srv/burla/_worker_service_python_env
+   && sudo chmod 777`, then `sudo chown -R $USER /srv/burla`), shut down the
+   cluster, then restart. Otherwise nodes will 500 on `NODE_AUTH_CREDENTIALS_PATH.write_text()`.
+8. Auth errors (`invalid_grant` / `Invalid JWT Signature`) → the VM was
+   provisioned without agent creds. Reinstall them at `~/.config/burla/burla_credentials.json`.
+9. All tests have a 120s default timeout. If output doesn't advance past
+   `collected N items` within 10 seconds, stop and report blocked.
+
+#### Unit tier on a laptop
+
+Only `make test-unit` is safe to run on a laptop. It imports real modules
+and runs real logic for version parsing, signal handlers, exception
+messages, package detection, and `_local_host_from` — no cluster needed:
+
+```
+uv sync --project ./client --group dev
+uv run --project ./client --group dev pytest -m unit
+```
+
+#### What changed vs. earlier revisions
+
+- Removed ~130 source-text grep assertions that passed regardless of whether
+  the code they claimed to cover was correct. The remaining suite either
+  imports and exercises the code under test, or drives it over HTTP against
+  the live cluster.
+- Added 5 end-to-end scenarios in `tests/scenarios/` that cover full user
+  journeys: `test_full_job_lifecycle`, `test_cluster_restart_mid_job`,
+  `test_grow_under_load`, `test_udf_error_propagation`,
+  `test_detach_and_complete_async`.
+- Deleted the Playwright dashboard-UI tests — backend coverage catches
+  regressions that matter; UI smoke tests are out of scope.

@@ -20,6 +20,7 @@ from burla._reporting import RemoteParallelMapReporter, safe_print, safe_spinner
 
 
 NODE_SILENCE_TIMEOUT_SECONDS = 2 * 60
+RESULT_POLL_SILENCE_TIMEOUT_SECONDS = 10 * 60
 NODE_BOOT_DEADLINE_SEC = 10 * 60
 LOGIN_TIMEOUT_SEC = 10
 MAX_INPUT_SIZE_BYTES = 1_000_000 * 200  # 200MB
@@ -239,8 +240,15 @@ class Node:
     def _node_silence_timeout_exceeded(self):
         return self._seconds_since_last_reply() > NODE_SILENCE_TIMEOUT_SECONDS
 
+    def _result_poll_silence_timeout_exceeded(self):
+        return self._seconds_since_last_reply() > RESULT_POLL_SILENCE_TIMEOUT_SECONDS
+
     def _node_silence_timeout_message(self, action: str):
-        return f"Node {self.instance_name} has not replied for over 2 minutes while {action}.\n"
+        if action == "returning results":
+            timeout_minutes = RESULT_POLL_SILENCE_TIMEOUT_SECONDS // 60
+        else:
+            timeout_minutes = NODE_SILENCE_TIMEOUT_SECONDS // 60
+        return f"Node {self.instance_name} has not replied for over {timeout_minutes} minutes while {action}.\n"
 
     def _diagnostic_summary(self) -> str:
         line = f"Node diagnostics: id={self.instance_name}, state={self.state}"
@@ -451,7 +459,7 @@ class Node:
                     msg = f"Node {self.instance_name} disconnected while transmitting results.\n"
                     raise NodeDisconnected(self, await self._failure_message(msg))
         except NETWORK_ERROR_TYPES:
-            if self._node_silence_timeout_exceeded():
+            if self._result_poll_silence_timeout_exceeded():
                 msg = self._node_silence_timeout_message("returning results")
                 raise NodeDisconnected(self, await self._failure_message(msg))
             return self._empty_node_results()

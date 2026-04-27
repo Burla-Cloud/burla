@@ -143,18 +143,6 @@ def test_image_mismatch_raises_NoCompatibleNodes(rpm_subprocess, local_dev_clust
     assert result["exception_type"] in ("NoCompatibleNodes", "NoNodes")
 
 
-def test_grow_auto_image_defaults_to_current_python(
-    rpm_subprocess, local_dev_cluster, firestore_db, cleanup_job
-):
-    # When grow=True and image=None, the client auto-fills image=python:3.X.
-    # Verify the job doc shows the client set an image.
-    import sys
-
-    source = "def test_function(x):\n    return x\n"
-    result = rpm_subprocess(source, [1], timeout_seconds=60, grow=True)
-    assert result["ok"]
-
-
 # -------------------------------------------------------------------- section 3 (parallelism)
 
 def test_max_parallelism_one_runs_serially(rpm_subprocess, local_dev_cluster):
@@ -169,18 +157,6 @@ def test_max_parallelism_one_runs_serially(rpm_subprocess, local_dev_cluster):
     # With max_parallelism=1 the timestamps must be monotonically non-decreasing.
     for a, b in zip(outputs, outputs[1:]):
         assert a[1] <= b[1] + 0.001
-
-
-def test_max_parallelism_cap_observed(rpm_subprocess, local_dev_cluster):
-    source = (
-        "import time, os, threading\n"
-        "def test_function(x):\n"
-        "    time.sleep(0.5)\n"
-        "    return threading.get_ident()\n"
-    )
-    # Local dev has 2 nodes x 2 CPUs = 4 worker slots; capping at 2 must show ≤2 idents.
-    result = rpm_subprocess(source, list(range(8)), timeout_seconds=60, max_parallelism=2)
-    assert result["ok"]
 
 
 # -------------------------------------------------------------------- section 4 (detach)

@@ -1,6 +1,7 @@
 import asyncio
 import subprocess
 import sys
+import tempfile
 import textwrap
 from asyncio import create_task
 from time import time
@@ -22,7 +23,9 @@ async def run_in_subprocess(func, *args):
         """
     )
     cmd = [sys.executable, "-u", "-c", code]
-    process = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
+    stderr_buffer = tempfile.TemporaryFile()
+    process = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=stderr_buffer)
+    process.stderr_buffer = stderr_buffer
     process.stdin.write(cloudpickle.dumps((func, args)))
     process.stdin.close()
     return process

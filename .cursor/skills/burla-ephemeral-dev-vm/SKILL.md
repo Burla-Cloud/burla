@@ -11,11 +11,20 @@ Use the worktree and VM scripts instead of handwritten `git worktree`, `gcloud`,
 
 - One active agent task gets one fresh linked worktree, one fresh task branch, and one fresh VM.
 - Always edit from the linked worktree, never from the primary checkout.
-- Reuse the dedicated project slot for that agent ID unless the user asks otherwise.
+- Pick the agent slot automatically — never ask the user which slot to use. See "Slot Selection" below.
 - Default to `--mode local-dev` on the VM; switch to `--mode remote-dev` when real GCE worker VMs are needed.
 - Use the script-reported `http://localhost:<port>` URL for browser and client work.
 - Destroy the VM when the task is complete unless the user asked to keep it.
 - Keep the worktree and branch until explicit cleanup so work-in-progress is not lost.
+
+## Slot Selection
+
+Pick the slot without asking the user. Follow this order:
+
+1. List existing slots in `../burla-worktrees/agent-*/`.
+2. A slot is "in use" if its directory contains any task subdirectories. Pick the lowest-numbered slot whose directory is missing or empty.
+3. If every existing slot is in use, create the next sequential slot (e.g. `agent-05` after `agent-04`). The `scripts/dev_vm_create.sh` step provisions the GCP project and SSH key for a new slot automatically.
+4. Slot IDs are zero-padded two-digit strings (`01`, `02`, ...).
 
 ## Standard Workflow
 

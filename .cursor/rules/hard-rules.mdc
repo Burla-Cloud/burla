@@ -1,5 +1,5 @@
 ---
-description: Bright-line rules that must never be violated
+description: 
 alwaysApply: true
 ---
 
@@ -11,3 +11,4 @@ Never violate:
 2. Comments explain WHY code is there — never WHAT it does, never history. If the WHY is obvious, skip it.
 3. Never use the walrus operator (`:=`) in Python.
 4. Always tell the user when you find pointless code, dead code, or abstractions that do nothing useful.
+5. For any browser automation / screenshotting / web QA, always use the gstack browse tools. Never use `cursor-ide-browser`.

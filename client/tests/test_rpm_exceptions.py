@@ -59,9 +59,9 @@ def test_NoCompatibleNodes_insufficient_capacity_message():
 def test_VersionMismatch_pip_install_hint():
     from burla._node import VersionMismatch
 
-    exc = VersionMismatch("1.0.0", "1.5.8", "0.9.0")
+    exc = VersionMismatch("1.0.0", "1.5.9", "0.9.0")
     msg = str(exc)
-    assert "pip install burla==1.5.8" in msg
+    assert "pip install burla==1.5.9" in msg
     assert "0.9.0" in msg
 
 
@@ -175,9 +175,7 @@ def test_udf_error_silences_subsequent_logs(rpm_subprocess, local_dev_cluster):
 
 @pytest.mark.e2e
 @pytest.mark.slow
-def test_NoNodes_raised_when_grow_false_and_no_compatible_node(
-    rpm_subprocess, local_dev_cluster
-):
+def test_NoNodes_raised_when_grow_false_and_no_compatible_node(rpm_subprocess, local_dev_cluster):
     source = "def test_function(x):\n    return x\n"
     result = rpm_subprocess(
         source,

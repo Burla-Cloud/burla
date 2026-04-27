@@ -1,0 +1,45 @@
+---
+description: Require a success-criteria audit before every final answer
+alwaysApply: true
+---
+
+# Success Criteria Verification Loop
+
+For every user request, identify the success criteria and keep working until they pass.
+
+- If the user gives explicit success criteria, use those as the checklist.
+- If the user does not give explicit criteria, infer the smallest checklist that would make the request complete.
+- Do not add extra scope while inferring criteria.
+- Treat the checklist as the stop condition, not the first attempted fix.
+- Verify each criterion with direct evidence: tests, command output, browser evidence, logs, or code inspection.
+- If any criterion fails, diagnose it, fix it, and verify again.
+- Do not give a final answer until every success criterion has evidence, a real blocker is reached, or the user's explicit time budget is exhausted.
+
+For subjective quality bars or comparison targets:
+
+- If the user asks for work to be "better than", "as good as", "incredible", "production quality", or otherwise gives a subjective bar, convert it into an explicit rubric before implementing.
+- If the user names a reference product, site, design, or behavior, inspect the reference and score both the reference and the current work against the rubric.
+- Treat the rubric as success criteria. Do not stop at "good progress", "v1", or "solid direction" unless the user explicitly lowers the bar.
+- Keep iterating until the work honestly passes the rubric, a real blocker is reached, or the user's explicit time budget is exhausted.
+- Final answers for subjective-bar tasks must state whether the original bar was met. If it was not met, do not claim completion; keep working or state the blocker.
+
+Before any final answer, run a Success Criteria Audit:
+
+1. List the explicit or inferred success criteria.
+2. Mark each criterion `PASS`, `FAIL`, or `NOT VERIFIED`.
+3. If any criterion is `FAIL`, keep working until it passes or a blocker is reached.
+4. If any criterion is `NOT VERIFIED`, verify it before answering or state why verification is blocked.
+5. Never say the task is done if the audit contains `FAIL` or `NOT VERIFIED`.
+6. For tiny tasks, perform the audit internally and keep the final answer short.
+
+For long-running tasks:
+
+- If the user asks for extended autonomous work, keep going for up to 10 hours unless all criteria pass or a real blocker stops progress.
+- If no exact budget is given but the task clearly requires sustained work, assume the user wants continued iteration, not a quick partial answer.
+- Maintain a todo list for multi-step work and keep exactly one item in progress.
+- Every 30 minutes, give a brief status update with current criterion, evidence gathered, and next action.
+- After failures, keep looping: inspect evidence, make the smallest useful change, rerun verification.
+- Do not stop because a test failed, a command timed out once, or the first approach was wrong.
+- Stop only for success, explicit user interruption, exhausted time budget, or a blocker that cannot be bypassed without user input.
+
+Final answers must be consistent with the audit. For substantive work, include the passed criteria, evidence, remaining blockers, and any verification that could not be run. For tiny tasks, keep the final answer concise while still doing the audit.

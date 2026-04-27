@@ -1,9 +1,30 @@
 import os
 import json
+import sys
 
 import requests
 
 from burla import CONFIG_PATH, _BURLA_BACKEND_URL
+
+
+def _safe_for_stream(message: str, stream) -> str:
+    encoding = getattr(stream, "encoding", None) or "utf-8"
+    return message.encode(encoding, errors="replace").decode(encoding, errors="replace")
+
+
+def safe_print(message: str):
+    print(_safe_for_stream(message, sys.stdout))
+
+
+def safe_spinner_write(spinner, message: str):
+    stream = getattr(spinner, "_stream", sys.stdout)
+    spinner.write(_safe_for_stream(message, stream))
+
+
+def stdio_supports_unicode() -> bool:
+    stdout_encoding = (getattr(sys.stdout, "encoding", None) or "").lower()
+    stderr_encoding = (getattr(sys.stderr, "encoding", None) or "").lower()
+    return "utf" in stdout_encoding and "utf" in stderr_encoding
 
 
 def _get_project_id():
@@ -71,11 +92,12 @@ class RemoteParallelMapReporter:
         self.session = kwargs["session"]
         self.project_id = _get_project_id()
         self.spinner_enabled = bool(self.spinner)
+
     def _write_message(self, message: str):
         if self.spinner:
-            self.spinner.write(message)
+            safe_spinner_write(self.spinner, message)
         else:
-            print(message)
+            safe_print(message)
 
     def print_detach_mode_enabled_message(self):
         message = f"Calling `{self.function_name}` on {self.input_count} inputs with detach mode enabled!\n"
@@ -165,7 +187,7 @@ class RemoteParallelMapReporter:
         if not self.spinner:
             return
         self.spinner.text = f"Done! {self.input_count} `{self.function_name}` calls completed."
-        self.spinner.ok("✔")
+        self.spinner.ok("OK")
 
     def get_background_cancel_before_upload_message(self) -> str:
         message = "\n\nBackground job canceled before all inputs finished uploading to the cluster!"

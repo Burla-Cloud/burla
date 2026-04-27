@@ -16,10 +16,11 @@ from yaspin import Spinner
 from burla import get_cluster_dashboard_url
 from burla._auth import get_auth_headers
 from burla._cluster_client import ClusterClient, _local_host_from
-from burla._reporting import RemoteParallelMapReporter
+from burla._reporting import RemoteParallelMapReporter, safe_print, safe_spinner_write
 
 
 NODE_SILENCE_TIMEOUT_SECONDS = 2 * 60
+RESULT_POLL_SILENCE_TIMEOUT_SECONDS = 10 * 60
 NODE_BOOT_DEADLINE_SEC = 10 * 60
 LOGIN_TIMEOUT_SEC = 10
 MAX_INPUT_SIZE_BYTES = 1_000_000 * 200  # 200MB
@@ -225,10 +226,13 @@ class Node:
         self.installing_packages = False
         self.result_count = 0
         self.last_reply_timestamp = time()
+        self.last_result_poll_timestamp = None
         self.started_booting_at = time()
         self.auth_headers = get_auth_headers()
         self.removed_reason = ""
-        self.spinner_compatible_print = lambda msg: spinner.write(msg) if spinner else print(msg)
+        self.spinner_compatible_print = (
+            lambda msg: safe_spinner_write(spinner, msg) if spinner else safe_print(msg)
+        )
 
     def _seconds_since_last_reply(self):
         return time() - self.last_reply_timestamp
@@ -236,8 +240,26 @@ class Node:
     def _node_silence_timeout_exceeded(self):
         return self._seconds_since_last_reply() > NODE_SILENCE_TIMEOUT_SECONDS
 
+    def _result_poll_silence_timeout_exceeded(self):
+        return self._seconds_since_last_reply() > RESULT_POLL_SILENCE_TIMEOUT_SECONDS
+
     def _node_silence_timeout_message(self, action: str):
-        return f"Node {self.instance_name} has not replied for over 2 minutes while {action}.\n"
+        if action == "returning results":
+            timeout_minutes = RESULT_POLL_SILENCE_TIMEOUT_SECONDS // 60
+        else:
+            timeout_minutes = NODE_SILENCE_TIMEOUT_SECONDS // 60
+        return f"Node {self.instance_name} has not replied for over {timeout_minutes} minutes while {action}.\n"
+
+    def _diagnostic_summary(self) -> str:
+        line = f"Node diagnostics: id={self.instance_name}, state={self.state}"
+        line += f", result_count={self.result_count}, current_parallelism={self.current_parallelism}"
+        line += f", seconds_since_last_reply={self._seconds_since_last_reply():.1f}"
+        if self.host:
+            line += f", host={self.host}"
+        if self.last_result_poll_timestamp is not None:
+            age = time() - self.last_result_poll_timestamp
+            line += f", seconds_since_last_result_poll={age:.1f}"
+        return line
 
     async def _failure_message(self, base_msg: str | None = None) -> str:
         base = base_msg or f"Node {self.instance_name} failed during job."
@@ -403,6 +425,7 @@ class Node:
 
     async def _gather_results(self):
         url = f"{self.host}/jobs/{self.job_id}/results"
+        self.last_result_poll_timestamp = time()
 
         async def request_function():
             return await self.session.get(
@@ -436,7 +459,7 @@ class Node:
                     msg = f"Node {self.instance_name} disconnected while transmitting results.\n"
                     raise NodeDisconnected(self, await self._failure_message(msg))
         except NETWORK_ERROR_TYPES:
-            if self._node_silence_timeout_exceeded():
+            if self._result_poll_silence_timeout_exceeded():
                 msg = self._node_silence_timeout_message("returning results")
                 raise NodeDisconnected(self, await self._failure_message(msg))
             return self._empty_node_results()

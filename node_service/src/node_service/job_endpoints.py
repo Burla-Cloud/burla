@@ -2,6 +2,7 @@ import json
 import pickle
 from datetime import datetime, timezone
 from typing import Optional
+from uuid import uuid4
 
 import asyncio
 from google.cloud.firestore_v1.async_client import AsyncClient
@@ -23,6 +24,7 @@ from node_service.job_watcher import job_watcher_logged
 _LOGS_OVERFLOW_MESSAGE = "Logs dequeued due to high volume, see dashboard to view all logs."
 MAX_LOGS_RESPONSE_BYTES = 1_000_000
 MAX_LOG_DOCUMENTS_PER_RESULTS_RESPONSE = 500
+MAX_RESULTS_RESPONSE_BYTES = 1_000_000
 
 router = APIRouter()
 
@@ -57,6 +59,28 @@ def _pop_pending_logs() -> list:
         total_bytes += document_size
 
     return drained_logs
+
+
+def _get_result_batch() -> tuple[str | None, list]:
+    for batch_id, results in SELF["pending_result_batches"].items():
+        return batch_id, results
+
+    results = []
+    total_bytes = 0
+    while (not SELF["results_queue"].empty()) and (total_bytes < MAX_RESULTS_RESPONSE_BYTES):
+        try:
+            result = SELF["results_queue"].get_nowait()
+            results.append(result)
+            total_bytes += len(result[2])
+        except asyncio.QueueEmpty:
+            break
+
+    if not results:
+        return None, []
+
+    batch_id = uuid4().hex
+    SELF["pending_result_batches"][batch_id] = results
+    return batch_id, results
 
 
 @router.get("/jobs/{job_id}/get_inputs")
@@ -132,19 +156,11 @@ async def get_results(job_id: str = Path(...)):
         print(f"job {job_id} not found, current job: {SELF['current_job']}")
         return Response("job not found", status_code=404)
 
-    results = []
-    total_bytes = 0
-    while (not SELF["results_queue"].empty()) and (total_bytes < (1_000_000 * 1)):
-        try:
-            result = SELF["results_queue"].get_nowait()
-            results.append(result)
-            total_bytes += len(result[2])
-        except asyncio.QueueEmpty:
-            break
-
+    result_batch_id, results = _get_result_batch()
     drained_logs = _pop_pending_logs()
 
     response_json = {
+        "result_batch_id": result_batch_id,
         "results": results,
         "current_parallelism": SELF["current_parallelism"],
         "logs": drained_logs,
@@ -156,6 +172,15 @@ async def get_results(job_id: str = Path(...)):
     data = pickle.dumps(response_json)
     headers = {"Content-Disposition": 'attachment; filename="results.pkl"'}
     return Response(content=data, media_type="application/octet-stream", headers=headers)
+
+
+@router.post("/jobs/{job_id}/results/ack")
+async def ack_results(job_id: str = Path(...), batch_id: str = Query(...)):
+    if job_id != SELF["current_job"]:
+        return Response("job not found", status_code=404)
+
+    SELF["pending_result_batches"].pop(batch_id, None)
+    return Response(status_code=200)
 
 
 @router.post("/jobs/{job_id}")

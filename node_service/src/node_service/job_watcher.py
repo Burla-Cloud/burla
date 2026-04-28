@@ -226,6 +226,7 @@ async def _job_watcher(
         all_workers_idle = SELF["current_parallelism"] == 0
         slow_poll = input_queue_empty and all_workers_idle and (time() - job_started_at) >= 7
         await asyncio.sleep(0.2 if slow_poll else 0.02)
+        pending_results_empty = not SELF["pending_result_batches"]
 
         # Update num results in db?
         current_num_results = SELF["num_results_received"]
@@ -261,7 +262,7 @@ async def _job_watcher(
 
         # Neighbor had no inputs for too long?
         if SEC_NEIGHBOR_HAD_NO_INPUTS and SEC_NEIGHBOR_HAD_NO_INPUTS > EMPTY_NEIGHBOR_TIMEOUT_SEC:
-            if SELF["results_queue"].empty() and all_workers_idle:
+            if SELF["results_queue"].empty() and pending_results_empty and all_workers_idle:
                 steal_task.cancel()
                 msg = f"Neighbor had no extra inputs for {EMPTY_NEIGHBOR_TIMEOUT_SEC}s"
                 await logger.log(msg + ", done working on job!")
@@ -272,11 +273,11 @@ async def _job_watcher(
         job_completed = False
         all_uploaded = SELF["all_inputs_uploaded"]
         all_inputs_processed = all_uploaded and input_queue_empty and all_workers_idle
-        if all_inputs_processed and client_disconnected:
+        if all_inputs_processed and client_disconnected and pending_results_empty:
             node_docs = await node_docs_collection.get()
             result_count = sum(doc.to_dict()["current_num_results"] for doc in node_docs)
             job_completed = n_inputs == result_count
-        elif all_inputs_processed and SELF["results_queue"].empty():
+        elif all_inputs_processed and SELF["results_queue"].empty() and pending_results_empty:
             job_completed = (await job_doc.get()).to_dict()["client_has_all_results"]
         if job_completed or JOB_FAILED or JOB_CANCELED:
             steal_task.cancel()

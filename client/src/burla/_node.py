@@ -476,9 +476,9 @@ class Node:
         self._print_logs(node_results.get("logs", []))
         return node_results
 
-    async def _ack_result_batch(self, result_batch_id: str | None) -> bool:
+    async def _ack_result_batch(self, result_batch_id: str | None):
         if result_batch_id is None:
-            return True
+            return
 
         url = f"{self.host}/jobs/{self.job_id}/results/ack"
 
@@ -493,54 +493,11 @@ class Node:
         try:
             response = await _run_network_request_with_retries(request_function)
         except NETWORK_ERROR_TYPES:
-            return False
+            return
         async with response:
             self.last_reply_timestamp = time()
             if response.status != 200:
                 raise Exception(f"Result ACK failed for node: {self.instance_name}")
-            return True
-
-    async def _record_result_batch(self, node_results: dict, return_queue: Queue):
-        result_batch_id = node_results.get("result_batch_id")
-        return_values = []
-        for input_index, is_error, result_pkl in node_results["results"]:
-            if input_index in self.received_result_indices:
-                continue
-            if is_error:
-                error_info = pickle.loads(result_pkl)
-                if error_info.get("is_infrastructure_error"):
-                    msg = f"Worker on node {self.instance_name} failed "
-                    msg += f"while executing input index {input_index}:\n\n"
-                    msg += error_info["traceback_str"]
-                    await self._ack_result_batch(result_batch_id)
-                    raise NodeDisconnected(self, await self._failure_message(msg))
-                traceback = Traceback.from_dict(error_info["traceback_dict"]).as_traceback()
-                self.udf_error_event.set()
-                log_error = RemoteParallelMapReporter.log_user_function_error_async
-                await log_error(self.job_id, self.session)
-                exc = error_info["exception"].with_traceback(traceback)
-                # Preserve the failing input index on the exception so callers
-                # can identify the bad item in a large batch; add a 3.11+
-                # note so it is visible in the default traceback. Guarded
-                # because some exception types disallow attribute writes.
-                try:
-                    exc.burla_input_index = input_index
-                    if hasattr(exc, "add_note"):
-                        exc.add_note(f"[burla] failed on input index {input_index}")
-                except Exception:
-                    pass
-                await self._ack_result_batch(result_batch_id)
-                raise exc
-            else:
-                return_values.append((input_index, cloudpickle.loads(result_pkl)))
-
-        self.current_parallelism = node_results["current_parallelism"]
-
-        for input_index, return_value in return_values:
-            return_queue.put_nowait(return_value)
-            self.received_result_indices.add(input_index)
-            self.result_count += 1
-        await self._ack_result_batch(result_batch_id)
 
     async def _upload_input_chunk(self, input_chunk: list):
         data = aiohttp.FormData()
@@ -642,7 +599,46 @@ class Node:
                 first_chunk_barrier = None
 
             node_results = await self._gather_results()
-            await self._record_result_batch(node_results, return_queue)
+            result_batch_id = node_results.get("result_batch_id")
+            return_values = []
+            for input_index, is_error, result_pkl in node_results["results"]:
+                if input_index in self.received_result_indices:
+                    continue
+                if is_error:
+                    error_info = pickle.loads(result_pkl)
+                    if error_info.get("is_infrastructure_error"):
+                        msg = f"Worker on node {self.instance_name} failed "
+                        msg += f"while executing input index {input_index}:\n\n"
+                        msg += error_info["traceback_str"]
+                        await self._ack_result_batch(result_batch_id)
+                        raise NodeDisconnected(self, await self._failure_message(msg))
+                    traceback = Traceback.from_dict(error_info["traceback_dict"]).as_traceback()
+                    self.udf_error_event.set()
+                    log_error = RemoteParallelMapReporter.log_user_function_error_async
+                    await log_error(self.job_id, self.session)
+                    exc = error_info["exception"].with_traceback(traceback)
+                    # Preserve the failing input index on the exception so callers
+                    # can identify the bad item in a large batch; add a 3.11+
+                    # note so it is visible in the default traceback. Guarded
+                    # because some exception types disallow attribute writes.
+                    try:
+                        exc.burla_input_index = input_index
+                        if hasattr(exc, "add_note"):
+                            exc.add_note(f"[burla] failed on input index {input_index}")
+                    except Exception:
+                        pass
+                    await self._ack_result_batch(result_batch_id)
+                    raise exc
+                else:
+                    return_values.append((input_index, cloudpickle.loads(result_pkl)))
+
+            self.current_parallelism = node_results["current_parallelism"]
+
+            for input_index, return_value in return_values:
+                return_queue.put_nowait(return_value)
+                self.received_result_indices.add(input_index)
+                self.result_count += 1
+            await self._ack_result_batch(result_batch_id)
             if self.state == "DONE":
                 return
             await asyncio.sleep(0.05)

@@ -86,7 +86,7 @@ def REINIT_SELF(SELF):
     SELF["all_inputs_uploaded"] = False
     SELF["num_results_received"] = 0
     SELF["pending_transfers"] = {}
-    SELF["pending_result_batches"] = {}
+    SELF["pending_result_batch"] = None
     SELF["pending_logs"] = deque(maxlen=MAX_PENDING_LOGS)
     SELF["pending_cluster_shutdown"] = False
     SELF["pending_cluster_restarted"] = False

@@ -226,7 +226,7 @@ async def _job_watcher(
         all_workers_idle = SELF["current_parallelism"] == 0
         slow_poll = input_queue_empty and all_workers_idle and (time() - job_started_at) >= 7
         await asyncio.sleep(0.2 if slow_poll else 0.02)
-        pending_results_empty = not SELF["pending_result_batches"]
+        pending_results_empty = SELF["pending_result_batch"] is None
 
         # Update num results in db?
         current_num_results = SELF["num_results_received"]

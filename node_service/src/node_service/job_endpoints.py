@@ -69,12 +69,9 @@ def _get_result_batch() -> tuple[str | None, list]:
     results = []
     total_bytes = 0
     while (not SELF["results_queue"].empty()) and (total_bytes < MAX_RESULTS_RESPONSE_BYTES):
-        try:
-            result = SELF["results_queue"].get_nowait()
-            results.append(result)
-            total_bytes += len(result[2])
-        except asyncio.QueueEmpty:
-            break
+        result = SELF["results_queue"].get_nowait()
+        results.append(result)
+        total_bytes += len(result[2])
 
     if not results:
         return None, []

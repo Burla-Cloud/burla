@@ -87,6 +87,62 @@ def test_NodeDisconnected_carries_node_attr():
     assert "boom" in str(exc)
 
 
+@pytest.mark.unit
+def test_assign_job_surfaces_function_load_error(monkeypatch):
+    import asyncio
+    from threading import Event
+    from unittest.mock import MagicMock
+
+    from burla import _node
+    from burla._node import FunctionLoadError, Node
+
+    monkeypatch.setattr(_node, "get_auth_headers", lambda: {"Authorization": "Bearer token"})
+
+    class FakeResponse:
+        status = 422
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def json(self):
+            return {
+                "error": "function_load_failed",
+                "message": "Function failed to load inside the worker.",
+            }
+
+    class FakeSession:
+        def post(self, *args, **kwargs):
+            return FakeResponse()
+
+    node = Node.from_ready(
+        instance_name="burla-node-abc12345",
+        host="http://localhost:9999",
+        machine_type="n4-standard-2",
+        target_parallelism=1,
+        session=FakeSession(),
+        client=MagicMock(_url="http://localhost:5001"),
+        spinner=False,
+    )
+
+    async def run():
+        await node._assign_job(
+            job_id="test-job",
+            background=False,
+            n_inputs=1,
+            packages={},
+            start_time=0,
+            function_pkl=b"not-used",
+            udf_error_event=Event(),
+            assigned_node_ids=["burla-node-abc12345"],
+        )
+
+    with pytest.raises(FunctionLoadError, match="Function failed to load"):
+        asyncio.run(run())
+
+
 # ------------------------------------------------------------ AuthException (unit)
 
 

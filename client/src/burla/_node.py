@@ -282,7 +282,6 @@ class Node:
 
     def _empty_node_results(self):
         return {
-            "result_batch_id": None,
             "results": [],
             "current_parallelism": self.current_parallelism,
             "logs": [],
@@ -476,10 +475,7 @@ class Node:
         self._print_logs(node_results.get("logs", []))
         return node_results
 
-    async def _ack_result_batch(self, result_batch_id: str | None):
-        if result_batch_id is None:
-            return
-
+    async def _ack_result_batch(self, result_batch_id: str):
         url = f"{self.host}/jobs/{self.job_id}/results/ack"
 
         async def request_function():
@@ -610,7 +606,8 @@ class Node:
                         msg = f"Worker on node {self.instance_name} failed "
                         msg += f"while executing input index {input_index}:\n\n"
                         msg += error_info["traceback_str"]
-                        await self._ack_result_batch(result_batch_id)
+                        if result_batch_id:
+                            await self._ack_result_batch(result_batch_id)
                         raise NodeDisconnected(self, await self._failure_message(msg))
                     traceback = Traceback.from_dict(error_info["traceback_dict"]).as_traceback()
                     self.udf_error_event.set()
@@ -627,7 +624,8 @@ class Node:
                             exc.add_note(f"[burla] failed on input index {input_index}")
                     except Exception:
                         pass
-                    await self._ack_result_batch(result_batch_id)
+                    if result_batch_id:
+                        await self._ack_result_batch(result_batch_id)
                     raise exc
                 else:
                     return_values.append((input_index, cloudpickle.loads(result_pkl)))
@@ -638,7 +636,8 @@ class Node:
                 return_queue.put_nowait(return_value)
                 self.received_result_indices.add(input_index)
                 self.result_count += 1
-            await self._ack_result_batch(result_batch_id)
+            if result_batch_id:
+                await self._ack_result_batch(result_batch_id)
             if self.state == "DONE":
                 return
             await asyncio.sleep(0.05)

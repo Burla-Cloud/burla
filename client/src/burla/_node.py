@@ -95,6 +95,10 @@ class NodeDisconnected(Exception):
         super().__init__(message or f"Node {node.instance_name} failed during job.")
 
 
+class FunctionLoadError(Exception):
+    pass
+
+
 class VersionMismatch(Exception):
     def __init__(self, lower_version: str, upper_version: str, current_version: str):
         msg = f"Incompatible cluster and client versions!\n"
@@ -411,6 +415,11 @@ class Node:
                     msg = f"Node {self.instance_name} is shutting down, removed from job."
                     self.spinner_compatible_print(msg)
                     return
+                elif response.status == 422:
+                    error = await response.json()
+                    if error.get("error") == "function_load_failed":
+                        raise FunctionLoadError(error["message"])
+                    raise Exception(error.get("message", "Node rejected job assignment."))
                 else:
                     msg = f"Failed to assign {self.instance_name}: {response.status}"
                     raise Exception(msg)

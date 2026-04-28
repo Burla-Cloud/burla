@@ -1,11 +1,13 @@
 import json
 import pickle
+import traceback
 from datetime import datetime, timezone
 from typing import Optional
 
 import asyncio
 from google.cloud.firestore_v1.async_client import AsyncClient
 from fastapi import APIRouter, Path, Query, Depends, Response, Request
+from fastapi.responses import JSONResponse
 
 from node_service import (
     SELF,
@@ -57,6 +59,31 @@ def _pop_pending_logs() -> list:
         total_bytes += document_size
 
     return drained_logs
+
+
+async def _rollback_failed_assignment(workers_to_assign: list):
+    await SELF["on_job_start_task"]
+    await asyncio.gather(*(w.reset() for w in workers_to_assign))
+
+    SELF["RUNNING"] = False
+    SELF["current_job"] = None
+    async_db = AsyncClient(project=PROJECT_ID, database="burla")
+    node_doc = async_db.collection("nodes").document(INSTANCE_NAME)
+    await node_doc.update({"status": "READY", "current_job": None})
+
+
+def _function_load_failed_response(error: Exception):
+    traceback_str = "".join(traceback.format_exception(type(error), error, error.__traceback__))
+    message = (
+        "Function failed to load inside the worker before any inputs ran.\n"
+        "This usually means the function, one of its globals, or an object captured "
+        "in its closure cannot be deserialized in the worker environment.\n\n"
+        f"{traceback_str}"
+    )
+    return JSONResponse(
+        {"error": "function_load_failed", "message": message},
+        status_code=422,
+    )
 
 
 @router.get("/jobs/{job_id}/get_inputs")
@@ -244,7 +271,14 @@ async def execute(
         await workers_to_assign[0].install_packages(packages)
 
     function_pkl = request_files["function_pkl"]
-    await asyncio.gather(*(w.load_function(function_pkl) for w in workers_to_assign))
+    load_results = await asyncio.gather(
+        *(w.load_function(function_pkl) for w in workers_to_assign),
+        return_exceptions=True,
+    )
+    load_errors = [r for r in load_results if isinstance(r, Exception)]
+    if load_errors:
+        await _rollback_failed_assignment(workers_to_assign)
+        return _function_load_failed_response(load_errors[0])
 
     SELF["workers"] = workers_to_assign
     SELF["idle_workers"] = workers_to_leave_idle

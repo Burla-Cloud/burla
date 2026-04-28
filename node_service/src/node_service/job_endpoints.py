@@ -62,8 +62,9 @@ def _pop_pending_logs() -> list:
 
 
 def _get_result_batch() -> tuple[str | None, list]:
-    for batch_id, results in SELF["pending_result_batches"].items():
-        return batch_id, results
+    if SELF["pending_result_batch"] is not None:
+        batch = SELF["pending_result_batch"]
+        return batch["id"], batch["results"]
 
     results = []
     total_bytes = 0
@@ -79,7 +80,7 @@ def _get_result_batch() -> tuple[str | None, list]:
         return None, []
 
     batch_id = uuid4().hex
-    SELF["pending_result_batches"][batch_id] = results
+    SELF["pending_result_batch"] = {"id": batch_id, "results": results}
     return batch_id, results
 
 
@@ -179,7 +180,9 @@ async def ack_results(job_id: str = Path(...), batch_id: str = Query(...)):
     if job_id != SELF["current_job"]:
         return Response("job not found", status_code=404)
 
-    SELF["pending_result_batches"].pop(batch_id, None)
+    batch = SELF["pending_result_batch"]
+    if batch is not None and batch["id"] == batch_id:
+        SELF["pending_result_batch"] = None
     return Response(status_code=200)
 
 

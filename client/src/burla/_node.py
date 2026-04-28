@@ -21,6 +21,7 @@ from burla._reporting import RemoteParallelMapReporter, safe_print, safe_spinner
 
 NODE_SILENCE_TIMEOUT_SECONDS = 2 * 60
 RESULT_POLL_SILENCE_TIMEOUT_SECONDS = 10 * 60
+RESULT_ACK_TIMEOUT_SECONDS = 10 * 60
 NODE_BOOT_DEADLINE_SEC = 10 * 60
 LOGIN_TIMEOUT_SEC = 10
 MAX_INPUT_SIZE_BYTES = 1_000_000 * 200  # 200MB
@@ -477,6 +478,7 @@ class Node:
 
     async def _ack_result_batch(self, result_batch_id: str):
         url = f"{self.host}/jobs/{self.job_id}/results/ack"
+        deadline = time() + RESULT_ACK_TIMEOUT_SECONDS
 
         async def request_function():
             return await self.session.post(
@@ -486,14 +488,20 @@ class Node:
                 timeout=ClientTimeout(total=15),
             )
 
-        try:
-            response = await _run_network_request_with_retries(request_function)
-        except NETWORK_ERROR_TYPES:
-            return
-        async with response:
-            self.last_reply_timestamp = time()
-            if response.status != 200:
+        while time() < deadline:
+            try:
+                response = await request_function()
+            except NETWORK_ERROR_TYPES:
+                await asyncio.sleep(NETWORK_RETRY_DELAY_SECONDS)
+                continue
+            async with response:
+                self.last_reply_timestamp = time()
+                if response.status == 200:
+                    return
                 raise Exception(f"Result ACK failed for node: {self.instance_name}")
+
+        msg = f"Could not ACK results from node {self.instance_name} after 10 minutes."
+        raise NodeDisconnected(self, await self._failure_message(msg))
 
     async def _upload_input_chunk(self, input_chunk: list):
         data = aiohttp.FormData()

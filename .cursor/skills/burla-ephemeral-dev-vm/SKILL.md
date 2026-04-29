@@ -21,10 +21,15 @@ Use the worktree and VM scripts instead of handwritten `git worktree`, `gcloud`,
 
 Pick the slot without asking the user. Follow this order:
 
-1. List existing slots in `../burla-worktrees/agent-*/`.
-2. A slot is "in use" if its directory contains any task subdirectories. Pick the lowest-numbered slot whose directory is missing or empty.
-3. If every existing slot is in use, create the next sequential slot (e.g. `agent-05` after `agent-04`). The `scripts/dev_vm_create.sh` step provisions the GCP project and SSH key for a new slot automatically.
-4. Slot IDs are zero-padded two-digit strings (`01`, `02`, ...).
+1. Prefer the lowest-numbered slot with an existing GCP project/dev VM setup that is not actively running.
+2. A slot is in use only if its dev VM is running or booting, an active terminal command is using it, or it has an explicit lock file.
+3. Existing task subdirectories do not make a slot unavailable by themselves.
+4. Before reusing a slot with old task subdirectories, check each worktree's git status.
+5. If a worktree is dirty, preserve that work by committing it on its current branch with a clear WIP message unless secrets are present.
+6. Push nothing unless the user explicitly asks.
+7. Remove the old task subdirectory/worktree after the work is preserved.
+8. Only create a new agent slot if every existing slot is actively in use. The `scripts/dev_vm_create.sh` step provisions the GCP project and SSH key for a new slot automatically.
+9. Slot IDs are zero-padded two-digit strings (`01`, `02`, ...).
 
 ## Standard Workflow
 

@@ -26,6 +26,16 @@ class _LogWriter:
         self.errors.append((input_index, message))
 
 
+class _Reader:
+    def __init__(self, chunks):
+        self.chunks = list(chunks)
+
+    async def readexactly(self, byte_count):
+        chunk = self.chunks.pop(0)
+        assert len(chunk) == byte_count
+        return chunk
+
+
 class _Writer:
     def __init__(self):
         self.closed = False
@@ -134,3 +144,23 @@ def test_dynamic_oom_at_one_worker_returns_terminal_error(monkeypatch):
     assert is_error
     assert error_info["is_infrastructure_error"]
     assert "one active worker" in error_info["traceback_str"]
+
+
+@pytest.mark.unit
+def test_worker_error_response_keeps_user_exception_opaque(monkeypatch):
+    module = _load_worker_client_module(monkeypatch)
+    worker = module.WorkerClient.__new__(module.WorkerClient)
+    opaque_error_info = b"not unpickled by node_service"
+    payload = pickle.dumps(
+        {
+            "error_info_pkl": opaque_error_info,
+            "traceback_str": "worker traceback",
+        }
+    )
+    worker.reader = _Reader([b"e", len(payload).to_bytes(8, "big"), payload])
+
+    with pytest.raises(module.WorkerFunctionError) as exc_info:
+        asyncio.run(worker._read_response())
+
+    assert exc_info.value.error_info_pkl == opaque_error_info
+    assert str(exc_info.value) == "worker traceback"

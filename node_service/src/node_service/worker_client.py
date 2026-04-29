@@ -34,6 +34,13 @@ class WorkerOutOfMemoryError(RuntimeError):
     pass
 
 
+class WorkerFunctionError(Exception):
+    def __init__(self, error_info_pkl: bytes, traceback_str: str):
+        self.error_info_pkl = error_info_pkl
+        self.traceback_str = traceback_str
+        super().__init__(traceback_str)
+
+
 def _is_python_version_line(line: str):
     parts = line.split(".")
     return len(parts) == 2 and all(part.isdigit() for part in parts)
@@ -363,6 +370,8 @@ class WorkerClient:
         return self.log_writer
 
     def _traceback_string(self, error: Exception):
+        if isinstance(error, WorkerFunctionError):
+            return error.traceback_str
         error_info = getattr(error, "burla_error_info", None)
         if error_info and error_info.get("traceback_dict"):
             traceback_object = Traceback.from_dict(error_info["traceback_dict"]).as_traceback()
@@ -460,24 +469,14 @@ class WorkerClient:
         if status == b"e":
             error_size = int.from_bytes(await self.reader.readexactly(8), "big")
             error_response = pickle.loads(await self.reader.readexactly(error_size))
-            error_info = error_response["error_info"]
-            exception = error_info["exception"]
-            if error_info.get("traceback_dict"):
-                traceback = Traceback.from_dict(error_info["traceback_dict"]).as_traceback()
-                exception = exception.with_traceback(traceback)
-            exception.burla_error_info = error_info
-            raise exception
+            raise WorkerFunctionError(
+                error_response["error_info_pkl"], error_response["traceback_str"]
+            )
         raise Exception(f"unknown response status: {status}")
 
     def _serialize_error(self, error: Exception):
-        # UDF errors carry `burla_error_info` (set in `_read_response`) and pickle cleanly because
-        # their type comes from user code the client already has. Infrastructure errors (worker
-        # container died, aiodocker failures during cluster shutdown, etc.) may reference modules
-        # like `aiodocker` that the client does not have installed, so we send a traceback string
-        # instead of the raw exception type.
-        error_info = getattr(error, "burla_error_info", None)
-        if error_info is not None:
-            return pickle.dumps(error_info)
+        if isinstance(error, WorkerFunctionError):
+            return error.error_info_pkl
         traceback_str = "".join(traceback.format_exception(type(error), error, error.__traceback__))
         return pickle.dumps({"traceback_str": traceback_str, "is_infrastructure_error": True})
 
@@ -496,6 +495,10 @@ class WorkerClient:
                 result = (input_index, False, result_pkl)
             except asyncio.CancelledError:
                 raise
+            except WorkerFunctionError as error:
+                if self.log_writer is not None:
+                    await self.log_writer.write_error(input_index, error.traceback_str)
+                result = (input_index, True, error.error_info_pkl)
             except WorkerOutOfMemoryError as error:
                 if SELF["dynamic_func_ram"]:
                     result = await self._retire_after_dynamic_oom(input_index, input_pkl, error)

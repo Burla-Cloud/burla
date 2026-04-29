@@ -13,6 +13,7 @@ import shutil
 import socket
 import subprocess
 import tarfile
+import traceback
 import urllib.request
 
 # Do not move. Node assumes first line printed is the Python version.
@@ -167,8 +168,14 @@ with socket.create_server(("0.0.0.0", port)) as listener:
                     response_payload = cloudpickle.dumps(return_value)
             except BaseException as e:
                 tb_dict = Traceback(e.__traceback__).to_dict()
+                error_info = dict(type=type(e), exception=e, traceback_dict=tb_dict)
                 response_payload = pickle.dumps(
-                    {"error_info": dict(type=type(e), exception=e, traceback_dict=tb_dict)}
+                    {
+                        "error_info_pkl": pickle.dumps(error_info),
+                        "traceback_str": "".join(
+                            traceback.format_exception(type(e), e, e.__traceback__)
+                        ),
+                    }
                 )
                 status = b"e"
             else:

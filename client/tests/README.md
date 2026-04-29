@@ -31,10 +31,10 @@ scripts/dev-worktree/create.sh --task <task-slug>
 cd ../burla-worktrees/<task-slug>
 
 scripts/dev_vm_slot_acquire.sh --source "$(pwd)"
+scripts/dev_vm_prepare_slot.sh --slot <slot>
 scripts/dev_vm_create.sh --slot <slot>
 scripts/dev_vm_wait_ssh.sh --slot <slot>
 scripts/dev_vm_sync_repo.sh --slot <slot> --source "$(pwd)"
-scripts/dev_vm_start.sh --slot <slot> --mode local-dev
 scripts/dev_vm_tunnel.sh --slot <slot>
 ```
 
@@ -43,6 +43,21 @@ Then SSH into the VM and run tests from there:
 ```
 ssh -i ~/.ssh/burla-dev-vm/<slot>_ed25519 jakezuliani@<vm-ip>
 cd /srv/burla
+make local-dev
+```
+
+Open the tunneled dashboard in the GStack browser, sign in with the agent
+account, and click Start. Then authorize Burla CLI inside the VM:
+
+```
+cd /srv/burla
+uv run --project ./client --group dev burla login --no_browser=True
+```
+
+Open the printed URL in the same GStack browser session and click authorize.
+Then run tests from the VM:
+
+```
 curl -sX POST http://localhost:5001/v1/cluster/restart \
   -H "X-User-Email: jakescursoragent@gmail.com" \
   -H "Authorization: Bearer <agent-token>"
@@ -50,8 +65,6 @@ curl -sX POST http://localhost:5001/v1/cluster/restart \
 BURLA_TEST_PROJECT=burla-agent-<slot> \
   uv run --project ./client --group dev pytest -m "not chaos and not dashboard"
 ```
-
-(The VM has the agent credentials pre-provisioned at `~/.config/burla/burla_credentials.json` by `scripts/dev_vm_create.sh`.)
 
 When done:
 
@@ -65,6 +78,7 @@ scripts/dev_vm_stop.sh --slot <slot>
 1. **Never run service / e2e / chaos tests on your laptop.** Provision a dev VM.
    The whole suite is designed and verified against the dev-VM environment.
 2. Acquire a slot with `scripts/dev_vm_slot_acquire.sh --source <worktree>`.
+   Run `scripts/dev_vm_prepare_slot.sh --slot <slot>` before first use.
    If no VM exists for that slot, run `scripts/dev_vm_create.sh --slot <slot>`
    and follow the sequence above.
 3. Before every service / e2e run, verify: cluster is reachable through the
@@ -83,8 +97,9 @@ scripts/dev_vm_stop.sh --slot <slot>
    /srv/burla/_shared_workspace /srv/burla/_worker_service_python_env
    && sudo chmod 777`, then `sudo chown -R $USER /srv/burla`), shut down the
    cluster, then restart. Otherwise nodes will 500 on `NODE_AUTH_CREDENTIALS_PATH.write_text()`.
-8. Auth errors (`invalid_grant` / `Invalid JWT Signature`) → the VM was
-   provisioned without agent creds. Reinstall them at `~/.config/burla/burla_credentials.json`.
+8. Auth errors (`invalid_grant` / `Invalid JWT Signature`) → run
+   `uv run --project ./client --group dev burla login --no_browser=True`
+   on the VM and authorize the printed URL in the signed-in GStack browser.
 9. All tests have a 120s default timeout. If output doesn't advance past
    `collected N items` within 10 seconds, stop and report blocked.
 

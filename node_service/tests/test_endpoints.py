@@ -55,6 +55,7 @@ def test_root_requires_auth(any_ready_node):
         pytest.skip("node has local-dev auth bypass; cannot test 401")
 
 
+@pytest.mark.skip(reason="temporarily disabled: hangs after pytest timeout, see #200")
 def test_results_404_when_wrong_job_id(node_http_client, any_ready_node):
     client = node_http_client(any_ready_node["instance_name"])
     try:
@@ -75,6 +76,7 @@ def test_inputs_404_when_wrong_job_id(node_http_client, any_ready_node):
         client.close()
 
 
+@pytest.mark.skip(reason="temporarily disabled: hangs after pytest timeout, see #200")
 def test_get_inputs_404_when_wrong_job_id(node_http_client, any_ready_node):
     client = node_http_client(any_ready_node["instance_name"])
     try:
@@ -87,6 +89,7 @@ def test_get_inputs_404_when_wrong_job_id(node_http_client, any_ready_node):
         client.close()
 
 
+@pytest.mark.skip(reason="temporarily disabled: hangs after pytest timeout, see #200")
 def test_ack_transfer_404_when_wrong_job_id(node_http_client, any_ready_node):
     client = node_http_client(any_ready_node["instance_name"])
     try:

@@ -16,6 +16,7 @@ DEFAULT_IMAGE_PROJECT="${BURLA_DEV_VM_IMAGE_PROJECT:-ubuntu-os-cloud}"
 DEFAULT_IMAGE_FAMILY="${BURLA_DEV_VM_IMAGE_FAMILY:-ubuntu-2204-lts}"
 DEFAULT_ARTIFACT_LOCATION="${BURLA_DEV_VM_ARTIFACT_LOCATION:-us}"
 DEFAULT_ARTIFACT_REPOSITORY="${BURLA_DEV_VM_ARTIFACT_REPOSITORY:-burla-main-service}"
+DEFAULT_NODE_ARTIFACT_REPOSITORY="${BURLA_DEV_VM_NODE_ARTIFACT_REPOSITORY:-burla-node-service}"
 DEFAULT_REMOTE_REPO_DIR="${BURLA_DEV_VM_REMOTE_REPO_DIR:-/srv/burla}"
 DEFAULT_REMOTE_LOG_PATH="${BURLA_DEV_VM_REMOTE_LOG_PATH:-/var/log/burla-dev.log}"
 DEFAULT_BOOTSTRAP_READY_PATH="${BURLA_DEV_VM_BOOTSTRAP_READY_PATH:-/var/lib/burla-vm/bootstrap-ready}"
@@ -313,7 +314,7 @@ primary_checkout_path() {
 
 branch_name_for_task() {
   local task_slug="$1"
-  echo "work/${task_slug}"
+  echo "$task_slug"
 }
 
 worktree_base_dir() {
@@ -335,6 +336,11 @@ worktree_path_for_task() {
 main_service_service_account() {
   local project_id="$1"
   echo "burla-main-service@${project_id}.iam.gserviceaccount.com"
+}
+
+main_service_account_exists() {
+  local project_id="$1"
+  gcloud iam service-accounts describe "$(main_service_service_account "$project_id")" --project "$project_id" >/dev/null 2>&1
 }
 
 ensure_state_dir() {
@@ -452,16 +458,53 @@ vm_external_ip() {
 
 ensure_artifact_repository() {
   local project_id="$1"
-  if gcloud artifacts repositories describe "$DEFAULT_ARTIFACT_REPOSITORY" --project "$project_id" --location "$DEFAULT_ARTIFACT_LOCATION" >/dev/null 2>&1; then
+  local repository="$2"
+  local description="$3"
+  if gcloud artifacts repositories describe "$repository" --project "$project_id" --location "$DEFAULT_ARTIFACT_LOCATION" >/dev/null 2>&1; then
     return
   fi
 
   gcloud services enable artifactregistry.googleapis.com --project "$project_id" >/dev/null
-  gcloud artifacts repositories create "$DEFAULT_ARTIFACT_REPOSITORY" \
+  gcloud artifacts repositories create "$repository" \
     --project "$project_id" \
     --location "$DEFAULT_ARTIFACT_LOCATION" \
     --repository-format docker \
-    --description "Burla main service images" \
+    --description "$description" \
+    >/dev/null
+}
+
+ensure_artifact_repositories() {
+  local project_id="$1"
+  ensure_artifact_repository "$project_id" "$DEFAULT_ARTIFACT_REPOSITORY" "Burla main service images"
+  ensure_artifact_repository "$project_id" "$DEFAULT_NODE_ARTIFACT_REPOSITORY" "Burla node service images"
+}
+
+ensure_artifact_writer_role() {
+  local project_id="$1"
+  for attempt in 1 2 3; do
+    if gcloud projects add-iam-policy-binding "$project_id" \
+      --member="serviceAccount:$(main_service_service_account "$project_id")" \
+      --role=roles/artifactregistry.writer \
+      --condition=None \
+      >/dev/null 2>&1; then
+      return
+    fi
+    sleep $((attempt * 5))
+  done
+  fail "Failed to grant Artifact Registry writer role for project [$project_id]."
+}
+
+ensure_slot_project() {
+  local project_id="$1"
+  if project_exists "$project_id"; then
+    return
+  fi
+  gcloud projects create "$project_id" \
+    --name="$project_id" \
+    --organization="$DEFAULT_ORGANIZATION_ID" \
+    >/dev/null
+  gcloud beta billing projects link "$project_id" \
+    --billing-account="$DEFAULT_BILLING_ACCOUNT" \
     >/dev/null
 }
 

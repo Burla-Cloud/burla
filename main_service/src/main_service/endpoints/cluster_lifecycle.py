@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from time import time
 from typing import Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from google.cloud.firestore_v1.base_query import FieldFilter
 from google.cloud.compute_v1 import InstancesClient, MachineTypesClient
 from concurrent.futures import ThreadPoolExecutor
@@ -12,12 +12,15 @@ from main_service import (
     DB,
     IN_LOCAL_DEV_MODE,
     LOCAL_DEV_CONFIG,
+    NODES_CACHE,
+    _nodes_cache_lock,
     get_logger,
     get_auth_headers,
     get_add_background_task_function,
 )
 from main_service.node import Container, Node
 from main_service.helpers import Logger, log_telemetry
+from main_service.quota import active_machine_types_for_region, cap_boot_machine_types
 
 router = APIRouter()
 MAX_GROW_CPUS = 2560
@@ -58,6 +61,19 @@ def _pack_n4_standard_machines(num_cpus: int) -> list[str]:
                 machines.append(f"n4-standard-{size}")
                 break
     return machines
+
+
+def _configured_machine_types(config: dict) -> list[str]:
+    machine_types = []
+    for node_spec in config["Nodes"]:
+        machine_types.extend([node_spec["machine_type"]] * node_spec["quantity"])
+    return machine_types
+
+
+def _active_machine_types(gcp_region: str) -> list[str]:
+    with _nodes_cache_lock:
+        nodes = list(NODES_CACHE.values())
+    return active_machine_types_for_region(nodes, gcp_region)
 
 
 def _shutdown_cluster(logger: Logger, auth_headers: dict):
@@ -228,16 +244,31 @@ def _mark_running_jobs_with_lifecycle_event(event: str, message: str):
         job_ref.update({"status": "CANCELED", **extra})
 
 
-def _restart_cluster(logger: Logger, auth_headers: dict):
+def _restart_cluster(logger: Logger, auth_headers: dict, node_machine_types: list[str] = None):
     start = time()
 
     _shutdown_cluster(logger, auth_headers)
 
     config = _get_cluster_config()
-    msg = f"Booting {config['Nodes'][0]['quantity']} {config['Nodes'][0]['machine_type']} nodes"
+    node_count = len(node_machine_types) if node_machine_types is not None else config["Nodes"][0]["quantity"]
+    machine_type = (
+        node_machine_types[0]
+        if node_machine_types
+        else config["Nodes"][0]["machine_type"]
+    )
+    msg = f"Booting {node_count} {machine_type} nodes"
     log_telemetry(msg, severity="INFO")
 
-    _start_nodes(logger, auth_headers, config)
+    if node_machine_types is None:
+        _start_nodes(logger, auth_headers, config)
+    elif node_machine_types:
+        _start_nodes(
+            logger,
+            auth_headers,
+            config,
+            n_nodes_to_add=len(node_machine_types),
+            node_machine_types=node_machine_types,
+        )
 
     duration = time() - start
     logger.log(f"Restarted after {duration//60}m {duration%60}s")
@@ -249,8 +280,36 @@ def restart_cluster(
     auth_headers: dict = Depends(get_auth_headers),
     add_background_task=Depends(get_add_background_task_function),
 ):
+    config = _get_cluster_config()
+    gcp_region = config["Nodes"][0]["gcp_region"]
+    requested_machine_types = _configured_machine_types(config)
+    warnings = []
+
+    if not IN_LOCAL_DEV_MODE and not _active_machine_types(gcp_region):
+        quota_plan = cap_boot_machine_types(
+            requested_machine_types,
+            gcp_region,
+            active_machine_types=[],
+        )
+        if not quota_plan.machine_types and quota_plan.caps:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error_code": "quota_exceeded",
+                    "region": gcp_region,
+                    "caps": quota_plan.warnings,
+                    "message": "No machines can boot without exceeding this project's GCP quota.",
+                },
+            )
+        requested_machine_types = quota_plan.machine_types
+        warnings = quota_plan.warnings
+
     _mark_running_jobs_with_lifecycle_event("cluster_restarted", "The cluster was restarted.")
+    if warnings:
+        add_background_task(_restart_cluster, logger, auth_headers, requested_machine_types)
+        return {"warnings": warnings}
     add_background_task(_restart_cluster, logger, auth_headers)
+    return {}
 
 
 @router.post("/v1/cluster/shutdown")

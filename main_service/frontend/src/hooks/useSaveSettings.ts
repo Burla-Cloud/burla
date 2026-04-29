@@ -1,69 +1,44 @@
 // src/hooks/useSaveSettings.ts
 import { Settings } from "@/types/coreTypes";
 
-export interface SaveSettingsResult {
-    ok: boolean;
-    errorCode?: string;
-    errorMessage?: string;
-    limit?: number;
-    requested?: number;
-    machineType?: string;
-    region?: string;
+export interface QuotaWarningDetails {
+    machineType: string;
+    region: string;
+    limit: number;
+    used?: number;
+    available?: number;
+    allowed?: number;
+    countUnit?: string;
+    quota?: string;
+    units?: string;
+    requested: number;
 }
 
-interface ErrorDetail {
-    error_code?: string;
-    message?: string;
-    limit?: number;
-    requested?: number;
-    machine_type?: string;
-    region?: string;
-}
+export type SaveSettingsResult =
+    | { ok: true }
+    | { ok: false; quota?: QuotaWarningDetails; errorMessage?: string };
 
-interface ErrorPayload {
-    detail?: string | ErrorDetail;
-}
-
-const parseErrorResponse = async (
-    res: Response
-): Promise<Omit<SaveSettingsResult, "ok">> => {
-    try {
-        const payload = (await res.json()) as ErrorPayload;
-        if (typeof payload?.detail === "string") {
-            return { errorMessage: payload.detail };
-        }
-        if (payload?.detail && typeof payload.detail === "object") {
-            return {
-                errorCode:
-                    typeof payload.detail.error_code === "string"
-                        ? payload.detail.error_code
-                        : undefined,
-                errorMessage:
-                    typeof payload.detail.message === "string"
-                        ? payload.detail.message
-                        : undefined,
-                limit:
-                    typeof payload.detail.limit === "number"
-                        ? payload.detail.limit
-                        : undefined,
-                requested:
-                    typeof payload.detail.requested === "number"
-                        ? payload.detail.requested
-                        : undefined,
-                machineType:
-                    typeof payload.detail.machine_type === "string"
-                        ? payload.detail.machine_type
-                        : undefined,
-                region:
-                    typeof payload.detail.region === "string"
-                        ? payload.detail.region
-                        : undefined,
-            };
-        }
-    } catch {
-        // fall through to empty result; caller uses its own fallback message
+const parseErrorResponse = async (res: Response): Promise<SaveSettingsResult> => {
+    const { detail } = await res.json();
+    if (detail.error_code === "quota_exceeded") {
+        return {
+            ok: false,
+            quota: {
+                machineType: detail.machine_type,
+                region: detail.region,
+                limit: detail.limit,
+                used: detail.used,
+                available: detail.available,
+                allowed: detail.allowed,
+                countUnit: detail.count_unit,
+                quota: detail.quota,
+                units: detail.units,
+                requested: detail.requested,
+            },
+            errorMessage: detail.message,
+        };
     }
-    return {};
+    return { ok: false, errorMessage: detail.message || detail };
 };
 
 export const useSaveSettings = () => {
@@ -71,16 +46,12 @@ export const useSaveSettings = () => {
         try {
             const res = await fetch("/v1/settings", {
                 method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                    Email: "joe@burla.dev",
-                },
+                headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(settings),
             });
 
             if (!res.ok) {
-                const parsed = await parseErrorResponse(res);
-                return { ok: false, ...parsed };
+                return await parseErrorResponse(res);
             }
             return { ok: true };
         } catch (err) {

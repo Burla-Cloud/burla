@@ -84,23 +84,23 @@ class RemoteParallelMapReporter:
         self._write_message(message)
 
     def print_quota_warnings(self, warnings: list[dict]):
-        quota_caps = [w for w in warnings if w.get("type") == "quota_capped"]
-        if not quota_caps:
-            return
-        region = quota_caps[0].get("region") or "unknown region"
+        region = warnings[0]["region"]
         lines = [
             "",
-            f"WARNING: Hit per-machine-type VM quota in {region}. "
-            "Job will run at reduced scale.",
+            f"WARNING: Hit GCP quota in {region}. Burla will run this job at reduced scale.",
         ]
-        for cap in quota_caps:
-            mt = cap.get("machine_type", "?")
-            requested = cap.get("requested", "?")
-            allowed = cap.get("allowed", 0)
+        for cap in warnings:
+            count_unit = cap.get("count_unit", "machines")
+            quota = cap.get("quota", "GCP quota")
+            used = cap.get("used", 0)
             limit = cap.get("limit", "?")
+            units = cap.get("units", "units")
             lines.append(
-                f"  - {mt}: requested {requested}, booted {allowed} (quota {limit})"
+                f"  - {cap['machine_type']}: requested {cap['requested']} {count_unit}, "
+                f"booting {cap['allowed']} {count_unit} "
+                f"({quota}: {used}/{limit} {units} already in use)"
             )
+        lines.append("Self-hosting? See https://docs.cloud.google.com/docs/quotas/ .")
         lines.append("")
         self._write_message("\n".join(lines))
 

@@ -79,25 +79,26 @@ class NoCompatibleNodes(Exception):
 
 
 class QuotaExceeded(Exception):
-    def __init__(self, detail: dict | None = None):
-        detail = detail or {}
-        region = detail.get("region") or "unknown region"
-        caps = detail.get("caps") or []
+    def __init__(self, detail: dict):
+        region = detail["region"]
+        caps = detail["caps"]
         lines = [
             "",
             "",
-            f"GCP quota exceeded: every machine type this job would have booted "
-            f"in {region} is already at its per-project VM quota.",
+            f"GCP quota exceeded: Burla cannot boot any additional machines "
+            f"for this job in {region} without exceeding quota.",
             "",
         ]
         for cap in caps:
-            mt = cap.get("machine_type", "?")
-            requested = cap.get("requested", "?")
-            allowed = cap.get("allowed", 0)
+            count_unit = cap.get("count_unit", "machines")
+            quota = cap.get("quota", "GCP quota")
+            used = cap.get("used", 0)
             limit = cap.get("limit", "?")
+            units = cap.get("units", "units")
             lines.append(
-                f"  - {mt}: requested {requested}, allowed {allowed} "
-                f"(quota {limit} in {region})"
+                f"  - {cap['machine_type']}: requested {cap['requested']} {count_unit}, "
+                f"allowed {cap['allowed']} {count_unit} "
+                f"({quota}: {used}/{limit} {units} already in use)"
             )
         lines += [
             "",

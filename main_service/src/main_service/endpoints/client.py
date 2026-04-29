@@ -40,7 +40,6 @@ from main_service import (
 )
 from main_service.helpers import (
     Logger,
-    get_quota_limit,
     gpu_machine_prefix,
     gpu_machine_type,
     parallelism_capacity,
@@ -55,6 +54,14 @@ from main_service.endpoints.cluster_lifecycle import (
     _machine_type_cpu_count,
     _pack_n4_standard_machines,
     _start_nodes,
+)
+from main_service.quota import (
+    INSTANCE_BUCKET,
+    N4_CPU_BUCKET,
+    active_machine_types_for_region,
+    cap_boot_machine_types,
+    n4_cpu_count,
+    quota_status,
 )
 
 router = APIRouter()
@@ -194,70 +201,33 @@ def _select_ready_nodes_from_cache(
     )
 
 
-def _count_active_nodes_by_machine_type(gcp_region: str) -> dict[str, int]:
-    """How many nodes in `gcp_region` are already BOOTING/RUNNING/READY for
-    each machine_type. Cached view; zero firestore calls."""
-    counts: dict[str, int] = {}
-    active_statuses = {"BOOTING", "RUNNING", "READY"}
+def _active_machine_types(gcp_region: str) -> list[str]:
     with _nodes_cache_lock:
         nodes = list(NODES_CACHE.values())
-    for node in nodes:
-        if node.get("status") not in active_statuses:
-            continue
-        if (node.get("gcp_region") or "") != gcp_region:
-            continue
-        mt = node.get("machine_type")
-        if not mt:
-            continue
-        counts[mt] = counts.get(mt, 0) + 1
-    return counts
+    return active_machine_types_for_region(nodes, gcp_region)
 
 
-def _apply_quota_cap(
-    node_machine_types: list[str], gcp_region: str
-) -> tuple[list[str], list[dict]]:
-    """Trim `node_machine_types` so we never ask GCP to boot more VMs of a
-    given (region, machine_type) than the cluster_quota doc allows, counting
-    existing active nodes against the limit. Returns `(kept, caps)` where
-    `caps` has one entry per machine_type that was clipped, including the
-    ones that got clipped to zero (the caller needs those to decide
-    'soft-cap warn' vs 'hard 400'). Projects without a populated
-    cluster_quota doc get `_QUOTA_UNLIMITED` per type, so nothing gets
-    clipped until the backfill script seeds real numbers."""
-    used = _count_active_nodes_by_machine_type(gcp_region)
-    remaining: dict[str, int] = {}
-    limits: dict[str, int] = {}
-    for mt in set(node_machine_types):
-        limits[mt] = get_quota_limit(mt, gcp_region)
-        remaining[mt] = max(0, limits[mt] - used.get(mt, 0))
-
-    kept: list[str] = []
-    requested_counts: dict[str, int] = {}
-    for mt in node_machine_types:
-        requested_counts[mt] = requested_counts.get(mt, 0) + 1
-        if remaining[mt] > 0:
-            kept.append(mt)
-            remaining[mt] -= 1
-
-    allowed_counts: dict[str, int] = {}
-    for mt in kept:
-        allowed_counts[mt] = allowed_counts.get(mt, 0) + 1
-
-    caps: list[dict] = []
-    for mt, requested in requested_counts.items():
-        allowed = allowed_counts.get(mt, 0)
-        if allowed < requested:
-            caps.append(
-                {
-                    "type": "quota_capped",
-                    "machine_type": mt,
-                    "region": gcp_region,
-                    "requested": requested,
-                    "allowed": allowed,
-                    "limit": limits[mt],
-                }
-            )
-    return kept, caps
+def _n4_quota_warning(
+    requested_cpus: int,
+    allowed_machine_types: list[str],
+    gcp_region: str,
+    active_machine_types: list[str],
+) -> dict:
+    status = quota_status(N4_CPU_BUCKET, gcp_region, active_machine_types)
+    allowed_cpus = sum(n4_cpu_count(machine_type) for machine_type in allowed_machine_types)
+    return {
+        "type": "quota_capped",
+        "machine_type": "n4-standard",
+        "region": gcp_region,
+        "requested": requested_cpus,
+        "allowed": allowed_cpus,
+        "count_unit": "vCPUs",
+        "limit": status["limit"],
+        "used": status["used"],
+        "available": status["available"],
+        "quota": status["quota"],
+        "units": status["units"],
+    }
 
 
 def _grow_if_needed(
@@ -273,24 +243,9 @@ def _grow_if_needed(
     auth_headers: dict,
     add_background_task,
 ) -> tuple[list[dict], list[dict]]:
-    """Schedules `_start_nodes` in the background and returns a
-    `(booting_nodes, warnings)` tuple. `booting_nodes` has one
-    `{instance_name, target_parallelism}` dict per reserved booting node;
-    `warnings` has one `quota_capped` entry per machine_type that hit the
-    per-(region, machine_type) quota and couldn't be grown all the way.
-    Both empty if no growth was needed.
-
-    Raises `HTTPException(400, quota_exceeded)` when growth was needed but
-    every chosen machine_type is already at its quota limit in the
-    configured region — nothing could boot for this shape, so fail fast
-    instead of silently under-scaling.
-
-    When `func_gpu` is set, each new node is one of the mapped single-GPU
-    machine types and contributes exactly one parallelism slot. When `image`
-    is set, the new nodes run that image instead of the cluster default.
-    """
     requested_parallelism = min(n_inputs, max_parallelism)
     gpu_mt = gpu_machine_type(func_gpu)
+    quota_warnings: list[dict] = []
 
     if gpu_mt:
         missing_nodes = max(0, requested_parallelism - target_parallelism)
@@ -329,7 +284,26 @@ def _grow_if_needed(
         )
 
         if pack_by_size:
-            node_machine_types = _pack_n4_standard_machines(num_cpus_to_add)
+            gcp_region = config["Nodes"][0]["gcp_region"]
+            active_machine_types = _active_machine_types(gcp_region)
+            cpu_status = quota_status(N4_CPU_BUCKET, gcp_region, active_machine_types)
+            instance_status = quota_status(INSTANCE_BUCKET, gcp_region, active_machine_types)
+            quota_limited_cpus = min(num_cpus_to_add, cpu_status["available"])
+            if instance_status["available"] <= 0:
+                quota_limited_cpus = 0
+            node_machine_types = _pack_n4_standard_machines(quota_limited_cpus)
+            node_machine_types = node_machine_types[: instance_status["available"]]
+            if quota_limited_cpus < num_cpus_to_add or len(node_machine_types) < len(
+                _pack_n4_standard_machines(num_cpus_to_add)
+            ):
+                quota_warnings.append(
+                    _n4_quota_warning(
+                        requested_cpus=num_cpus_to_add,
+                        allowed_machine_types=node_machine_types,
+                        gcp_region=gcp_region,
+                        active_machine_types=active_machine_types,
+                    )
+                )
         else:
             cpu_per_node = _machine_type_cpu_count(configured_machine_type)
             n_nodes_to_add = math.ceil(num_cpus_to_add / cpu_per_node)
@@ -346,12 +320,16 @@ def _grow_if_needed(
         return [], []
 
     gcp_region = config["Nodes"][0]["gcp_region"]
-    node_machine_types, caps = _apply_quota_cap(node_machine_types, gcp_region)
+    quota_plan = cap_boot_machine_types(
+        node_machine_types,
+        gcp_region,
+        active_machine_types=_active_machine_types(gcp_region),
+    )
+    node_machine_types = quota_plan.machine_types
+    caps = quota_warnings + quota_plan.warnings
 
-    # Every candidate hit a 0 remaining quota -> client asked to grow but
-    # nothing can boot. Surface a structured 400 instead of silently
-    # returning an empty grow plan; `remote_parallel_map` raises
-    # `QuotaExceeded` from it.
+    if not node_machine_types and caps and target_parallelism > 0:
+        return [], caps
     if not node_machine_types and caps:
         raise HTTPException(
             status_code=400,

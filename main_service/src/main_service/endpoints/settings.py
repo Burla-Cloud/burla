@@ -10,7 +10,7 @@ from main_service import (
     IN_LOCAL_DEV_MODE,
     LOCAL_DEV_CONFIG,
 )
-from main_service.helpers import get_quota_limit
+from main_service.quota import cap_boot_machine_types
 
 router = APIRouter()
 BURLA_BACKEND_URL = "https://backend.burla.dev"
@@ -57,37 +57,40 @@ async def update_settings(request: Request):
 
     requested_machine_type = request_json.get("machineType", node.get("machine_type"))
     requested_region = request_json.get("gcpRegion", node.get("gcp_region"))
-    try:
-        requested_quantity = int(
-            request_json.get("machineQuantity", node.get("quantity")) or 1
-        )
-    except (TypeError, ValueError):
-        requested_quantity = int(node.get("quantity") or 1)
+    requested_quantity = int(request_json.get("machineQuantity", node.get("quantity")) or 1)
 
-    # Block configs above the customer's per-region per-machine-type VM
-    # quota. Without this the save succeeds and then N-1 of the N requested
-    # nodes fail opaquely at boot time. `get_quota_limit` returns
-    # `_QUOTA_UNLIMITED` when the `cluster_quota` doc is missing / doesn't
-    # cover this (region, machine_type) pair, so fresh projects and local
-    # dev aren't blocked until the backfill script has seeded real limits.
-    if requested_machine_type and requested_region:
-        limit = get_quota_limit(requested_machine_type, requested_region)
-        if requested_quantity > limit:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error_code": "quota_exceeded",
-                    "message": (
-                        f"Quota exceeded. Limit for {requested_machine_type} "
-                        f"in {requested_region} is {limit}. "
-                        f"Requested: {requested_quantity}."
-                    ),
-                    "machine_type": requested_machine_type,
-                    "region": requested_region,
-                    "limit": limit,
-                    "requested": requested_quantity,
-                },
-            )
+    if not IN_LOCAL_DEV_MODE:
+        quota_plan = cap_boot_machine_types(
+            [requested_machine_type] * requested_quantity,
+            requested_region,
+            active_machine_types=[],
+        )
+    else:
+        quota_plan = None
+
+    if quota_plan and quota_plan.caps:
+        cap = quota_plan.caps[0]
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error_code": "quota_exceeded",
+                "message": (
+                    f"Quota exceeded. Burla can start {cap.allowed} "
+                    f"{requested_machine_type} machines in {requested_region}, "
+                    f"but you requested {requested_quantity}."
+                ),
+                "machine_type": requested_machine_type,
+                "region": requested_region,
+                "limit": cap.limit,
+                "used": cap.used,
+                "available": cap.available,
+                "allowed": cap.allowed,
+                "count_unit": "machines",
+                "quota": cap.quota,
+                "units": cap.units,
+                "requested": requested_quantity,
+            },
+        )
 
     container.update(
         {

@@ -7,13 +7,14 @@ import { SettingsForm } from "@/components/SettingsForm";
 import UsageSettings from "@/components/UsageSettings";
 
 import { Button } from "@/components/ui/button";
-import { useSaveSettings } from "@/hooks/useSaveSettings";
+import { QuotaWarningDetails, useSaveSettings } from "@/hooks/useSaveSettings";
 import { toast } from "@/components/ui/use-toast";
 import { getConfigurationLabelForMachineType } from "@/types/constants";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { AlertTriangle, Loader2 } from "lucide-react";
+import { Settings } from "@/types/coreTypes";
 import {
   AlertDialog,
   AlertDialogContent,
@@ -22,18 +23,17 @@ import {
   AlertDialogCancel,
 } from "@/components/ui/alert-dialog";
 
-interface QuotaWarningDetails {
-  machineType?: string;
-  region?: string;
-  limit?: number;
-  requested?: number;
-}
-
 interface HardwareSnapshot {
   machineType: string;
-  gcpRegion: string;
+  gcpRegion?: string;
   machineQuantity: number;
 }
+
+const hardwareSnapshot = (source: Settings): HardwareSnapshot => ({
+  machineType: source.machineType,
+  gcpRegion: source.gcpRegion,
+  machineQuantity: source.machineQuantity,
+});
 
 const SettingsPage = () => {
   const navigate = useNavigate();
@@ -54,9 +54,6 @@ const SettingsPage = () => {
 
   const pendingNavRef = useRef<string | null>(null);
   const settingsFormRef = useRef<{ isRegionValid: () => boolean } | null>(null);
-  // Last hardware config the backend accepted. Used to revert on a limit=0
-  // quota rejection (e.g. user chose a region + machine type combo that has
-  // no quota at all) so the form doesn't keep trying to save the bad combo.
   const lastSavedHardwareRef = useRef<HardwareSnapshot | null>(null);
 
   const section = useMemo(() => {
@@ -73,11 +70,7 @@ const SettingsPage = () => {
         const data = await res.json();
         setSettings((prev) => {
           const next = { ...prev, ...data };
-          lastSavedHardwareRef.current = {
-            machineType: next.machineType,
-            gcpRegion: next.gcpRegion || "",
-            machineQuantity: Number(next.machineQuantity) || 1,
-          };
+          lastSavedHardwareRef.current = hardwareSnapshot(next);
           return next;
         });
       } catch {
@@ -154,42 +147,21 @@ const SettingsPage = () => {
         title: "Settings saved successfully",
         variant: "default",
       });
-      lastSavedHardwareRef.current = {
-        machineType: settings.machineType,
-        gcpRegion: settings.gcpRegion || "",
-        machineQuantity: Number(settings.machineQuantity) || 1,
-      };
-    } else if (result.errorCode === "quota_exceeded") {
-      // limit >= 1: cap quantity to the allowed ceiling so the user can
-      // retry with the allowed amount.
-      // limit === 0: the chosen machine type has no quota at all in this
-      // region - snap the whole hardware triple back to the last-saved
-      // snapshot so the form isn't stuck on a config that will never save.
-      if (
-        typeof result.limit === "number" &&
-        Number.isFinite(result.limit) &&
-        result.limit >= 1
-      ) {
+      lastSavedHardwareRef.current = hardwareSnapshot(settings);
+    } else if (result.quota) {
+      if ((result.quota.allowed || 0) > 0) {
         setSettings((prev) => ({
           ...prev,
-          machineQuantity: Math.floor(result.limit as number),
+          machineQuantity: result.quota.allowed || 1,
         }));
         setHasUnsavedChanges(true);
-      } else if (result.limit === 0 && lastSavedHardwareRef.current) {
-        const previous = lastSavedHardwareRef.current;
+      } else {
         setSettings((prev) => ({
           ...prev,
-          machineType: previous.machineType,
-          gcpRegion: previous.gcpRegion,
-          machineQuantity: previous.machineQuantity,
+          ...lastSavedHardwareRef.current!,
         }));
       }
-      setQuotaWarning({
-        machineType: result.machineType,
-        region: result.region,
-        limit: result.limit,
-        requested: result.requested,
-      });
+      setQuotaWarning(result.quota);
     } else {
       toast({
         title: "Failed to save settings",
@@ -202,17 +174,6 @@ const SettingsPage = () => {
     if (result.ok) setHasUnsavedChanges(false);
     return result.ok;
   };
-
-  const quotaRegion = quotaWarning?.region || settings.gcpRegion || "unknown";
-  const quotaMachineType =
-    quotaWarning?.machineType || settings.machineType || "unknown";
-  const quotaConfiguration = getConfigurationLabelForMachineType(quotaMachineType);
-  const quotaRequested =
-    typeof quotaWarning?.requested === "number"
-      ? String(quotaWarning.requested)
-      : "unknown";
-  const quotaLimit =
-    typeof quotaWarning?.limit === "number" ? String(quotaWarning.limit) : "unknown";
 
   const attemptNavigate = (to: string) => {
     if (!hasUnsavedChanges) {
@@ -413,56 +374,68 @@ const SettingsPage = () => {
           if (!open) setQuotaWarning(null);
         }}
       >
-        <AlertDialogContent
-          className="max-w-[670px] mx-auto py-7 px-6 rounded-lg shadow-[0_8px_24px_rgba(0,0,0,0.06)] bg-white"
-          onInteractOutside={(e) => e.preventDefault()}
-          onEscapeKeyDown={(e) => e.preventDefault()}
-        >
-          <div className="space-y-3">
-            <AlertDialogTitle className="text-lg font-semibold text-gray-900">
-              <span className="inline-flex items-center gap-2">
-                <AlertTriangle className="h-4 w-4 text-red-500" />
-                GCP Quota Limit Reached
-              </span>
-            </AlertDialogTitle>
-            <div className="space-y-5 text-base text-gray-800 leading-relaxed">
-              <div className="space-y-1.5">
-                <p className="font-semibold text-gray-900">Requested Cluster</p>
-                <p>
-                  Machine: <span className="font-semibold">{quotaMachineType}</span>
-                </p>
-                <p>
-                  Configuration:{" "}
-                  <span className="font-semibold">{quotaConfiguration}</span>
-                </p>
-                <p>
-                  Region: <span className="font-semibold">{quotaRegion}</span>
-                </p>
-              </div>
+        <AlertDialogContent className="max-w-[670px] mx-auto py-7 px-6 rounded-lg shadow-[0_8px_24px_rgba(0,0,0,0.06)] bg-white">
+          {quotaWarning && (
+            <div className="space-y-3">
+              <AlertDialogTitle className="text-lg font-semibold text-gray-900">
+                <span className="inline-flex items-center gap-2">
+                  <AlertTriangle className="h-4 w-4 text-red-500" />
+                  GCP quota limit reached
+                </span>
+              </AlertDialogTitle>
+              <div className="space-y-5 text-base text-gray-800 leading-relaxed">
+                <div className="space-y-1.5">
+                  <p className="font-semibold text-gray-900">Requested Cluster</p>
+                  <p>
+                    Machine:{" "}
+                    <span className="font-semibold">{quotaWarning.machineType}</span>
+                  </p>
+                  <p>
+                    Configuration:{" "}
+                    <span className="font-semibold">
+                      {getConfigurationLabelForMachineType(quotaWarning.machineType)}
+                    </span>
+                  </p>
+                  <p>
+                    Region: <span className="font-semibold">{quotaWarning.region}</span>
+                  </p>
+                </div>
 
-              <div className="space-y-1.5">
-                <p>
-                  Requested instances:{" "}
-                  <span className="font-semibold">{quotaRequested}</span>
-                </p>
-                <p>
-                  Available quota:{" "}
-                  <span className="font-semibold">{quotaLimit}</span>
-                </p>
-              </div>
+                <div className="space-y-1.5">
+                  <p>
+                    Requested machines:{" "}
+                    <span className="font-semibold">{quotaWarning.requested}</span>
+                  </p>
+                  <p>
+                    Machines Burla can start:{" "}
+                    <span className="font-semibold">{quotaWarning.allowed || 0}</span>
+                  </p>
+                  <p>
+                    Limiting quota:{" "}
+                    <span className="font-semibold">
+                      {quotaWarning.quota || "GCP quota"}
+                    </span>
+                    {quotaWarning.units ? (
+                      <>
+                        {" "}
+                        ({quotaWarning.used || 0}/{quotaWarning.limit}{" "}
+                        {quotaWarning.units} already in use)
+                      </>
+                    ) : null}
+                  </p>
+                </div>
 
-              <p>
-                Contact{" "}
-                <a
-                  href="mailto:jake@burla.dev"
-                  className="text-blue-600 underline hover:text-blue-700"
-                >
-                  jake@burla.dev
-                </a>{" "}
-                to increase your quota.
-              </p>
+                <p>
+                  Contact{" "}
+                  <a
+                    href="mailto:jake@burla.dev"
+                    className="text-blue-600 underline hover:text-blue-700"
+                  >
+                    jake@burla.dev
+                  </a>{" "}
+                  to increase your quota.
+                </p>
 
-              <div className="space-y-1.5">
                 <p>
                   <span className="font-semibold text-gray-900">Self hosting?</span>{" "}
                   Increase quota in{" "}
@@ -473,11 +446,11 @@ const SettingsPage = () => {
                     className="text-blue-600 underline hover:text-blue-700"
                   >
                     GCP
-                  </a>{" "}
+                  </a>
                 </p>
               </div>
             </div>
-          </div>
+          )}
 
           <div className="flex justify-center mt-5">
             <AlertDialogAction

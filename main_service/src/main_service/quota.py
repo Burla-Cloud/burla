@@ -29,12 +29,6 @@ class QuotaRequirement:
 
 
 @dataclass(frozen=True)
-class QuotaLimit:
-    bucket: QuotaBucket
-    limit: int
-
-
-@dataclass(frozen=True)
 class QuotaCap:
     machine_type: str
     region: str
@@ -53,7 +47,7 @@ class QuotaCap:
             "region": self.region,
             "requested": self.requested,
             "allowed": self.allowed,
-                "count_unit": "machines",
+            "count_unit": "machines",
             "limit": self.limit,
             "used": self.used,
             "available": self.available,
@@ -198,7 +192,7 @@ def quota_value_for_dimensions(quota_info: dict, region: str, dimensions: tuple[
     return best_value
 
 
-def fetch_service_usage_quota_limit(bucket: QuotaBucket, region: str) -> QuotaLimit:
+def fetch_service_usage_quota_limit(bucket: QuotaBucket, region: str) -> int:
     encoded_metric = quote(bucket.service_metric or "", safe="")
     url = (
         "https://serviceusage.googleapis.com/v1beta1/"
@@ -208,25 +202,22 @@ def fetch_service_usage_quota_limit(bucket: QuotaBucket, region: str) -> QuotaLi
     response = quota_session().get(url, timeout=5)
     response.raise_for_status()
     value = quota_value_for_dimensions(response.json(), region, bucket.dimensions)
-    return QuotaLimit(bucket, value)
+    return value
 
 
 def fetch_compute_quota_limits(
     buckets: list[QuotaBucket], region: str, regions_client: RegionsClient | None = None
-) -> dict[str, QuotaLimit]:
+) -> dict[str, int]:
     client = regions_client or RegionsClient()
     region_resource = client.get(project=project_id(), region=region)
     quotas = {quota.metric: int(quota.limit) for quota in region_resource.quotas}
-    return {
-        bucket.key: QuotaLimit(bucket, quotas.get(bucket.compute_metric, 0))
-        for bucket in buckets
-    }
+    return {bucket.key: quotas.get(bucket.compute_metric, 0) for bucket in buckets}
 
 
 def fetch_quota_limits(
     buckets: dict[str, QuotaBucket], region: str, regions_client: RegionsClient | None = None
-) -> dict[str, QuotaLimit]:
-    limits: dict[str, QuotaLimit] = {}
+) -> dict[str, int]:
+    limits: dict[str, int] = {}
     compute_buckets = [bucket for bucket in buckets.values() if bucket.source == "compute"]
     if compute_buckets:
         limits.update(fetch_compute_quota_limits(compute_buckets, region, regions_client))
@@ -255,8 +246,8 @@ def cap_boot_machine_types(
     limits = fetch_quota_limits(buckets, region, regions_client)
     used = aggregate_requirements(active_machine_types)
     remaining = {
-        key: max(0, quota_limit.limit - used.get(key, 0))
-        for key, quota_limit in limits.items()
+        key: max(0, limit - used.get(key, 0))
+        for key, limit in limits.items()
     }
 
     kept = []
@@ -279,30 +270,21 @@ def cap_boot_machine_types(
             key=lambda requirement: remaining[requirement.bucket.key] // requirement.amount,
         )
         bucket = limiting_requirements[0].bucket
-        quota_limit = limits[bucket.key]
+        limit = limits[bucket.key]
         caps.append(
             QuotaCap(
                 machine_type=machine_type,
                 region=region,
                 requested=requested_count,
                 allowed=allowed_count,
-                limit=quota_limit.limit,
+                limit=limit,
                 used=used.get(bucket.key, 0),
-                available=max(0, quota_limit.limit - used.get(bucket.key, 0)),
+                available=max(0, limit - used.get(bucket.key, 0)),
                 quota=bucket.display_name,
                 units=bucket.unit_name,
             )
         )
     return QuotaPlan(kept, caps)
-
-
-def available_quota_units(
-    bucket: QuotaBucket,
-    region: str,
-    active_machine_types: list[str],
-    regions_client: RegionsClient | None = None,
-) -> int:
-    return quota_status(bucket, region, active_machine_types, regions_client)["available"]
 
 
 def quota_status(
@@ -316,7 +298,7 @@ def quota_status(
         for requirement in machine_type_requirements(active_machine_type):
             if requirement.bucket.key == bucket.key:
                 buckets[bucket.key] = requirement.bucket
-    limit = fetch_quota_limits(buckets, region, regions_client)[bucket.key].limit
+    limit = fetch_quota_limits(buckets, region, regions_client)[bucket.key]
     used = aggregate_requirements(active_machine_types).get(bucket.key, 0)
     return {
         "limit": limit,

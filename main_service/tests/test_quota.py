@@ -76,14 +76,14 @@ def test_fetch_compute_quota_limits_reads_regional_compute_quotas():
         regions_client,
     )
 
-    assert limits[quota.INSTANCE_BUCKET.key].limit == 10
-    assert limits[quota.A100_GPU_BUCKET.key].limit == 16
+    assert limits[quota.INSTANCE_BUCKET.key] == 10
+    assert limits[quota.A100_GPU_BUCKET.key] == 16
 
 
 def test_cap_boot_machine_types_counts_active_burla_usage():
     def fake_fetch_quota_limits(buckets, region, regions_client=None):
         return {
-            key: quota.QuotaLimit(bucket, 16 if key == quota.H100_GPU_BUCKET.key else 100)
+            key: 16 if key == quota.H100_GPU_BUCKET.key else 100
             for key, bucket in buckets.items()
         }
 

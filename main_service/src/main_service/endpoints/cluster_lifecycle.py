@@ -63,6 +63,16 @@ def _pack_n4_standard_machines(num_cpus: int) -> list[str]:
     return machines
 
 
+def _pack_n4_standard_machines_up_to(num_cpus: int) -> list[str]:
+    machines = []
+    remaining = num_cpus
+    for size in N4_STANDARD_SIZES_DESCENDING:
+        while remaining >= size:
+            machines.append(f"n4-standard-{size}")
+            remaining -= size
+    return machines
+
+
 def _configured_machine_types(config: dict) -> list[str]:
     machine_types = []
     for node_spec in config["Nodes"]:
@@ -70,10 +80,55 @@ def _configured_machine_types(config: dict) -> list[str]:
     return machine_types
 
 
+def _requested_machine_types(
+    config: dict, n_nodes_to_add: int = None, node_machine_types: list[str] = None
+) -> list[str]:
+    if node_machine_types is not None:
+        return node_machine_types
+    if n_nodes_to_add is not None:
+        return [config["Nodes"][0]["machine_type"]] * n_nodes_to_add
+    return _configured_machine_types(config)
+
+
 def _active_machine_types(gcp_region: str) -> list[str]:
     with _nodes_cache_lock:
         nodes = list(NODES_CACHE.values())
     return active_machine_types_for_region(nodes, gcp_region)
+
+
+def _quota_exceeded(region: str, caps: list[dict]):
+    raise HTTPException(
+        status_code=400,
+        detail={
+            "error_code": "quota_exceeded",
+            "region": region,
+            "caps": caps,
+            "message": "No machines can boot without exceeding this project's GCP quota.",
+        },
+    )
+
+
+def _prepare_node_boot_plan(
+    config: dict,
+    requested_machine_types: list[str],
+    active_machine_types: list[str] = None,
+    raise_on_zero: bool = True,
+) -> tuple[list[str], list[dict]]:
+    if IN_LOCAL_DEV_MODE:
+        return requested_machine_types, []
+
+    gcp_region = config["Nodes"][0]["gcp_region"]
+    active_machine_types = (
+        active_machine_types if active_machine_types is not None else _active_machine_types(gcp_region)
+    )
+    quota_plan = cap_boot_machine_types(
+        requested_machine_types,
+        gcp_region,
+        active_machine_types=active_machine_types,
+    )
+    if raise_on_zero and not quota_plan.machine_types and quota_plan.caps:
+        _quota_exceeded(gcp_region, quota_plan.warnings)
+    return quota_plan.machine_types, quota_plan.warnings
 
 
 def _shutdown_cluster(logger: Logger, auth_headers: dict):
@@ -148,7 +203,18 @@ def _start_nodes(
     node_machine_types: list[str] = None,
     containers_override: list[dict] = None,
     inactivity_shutdown_time_sec_override: Optional[int] = None,
+    quota_checked: bool = False,
+    active_machine_types_for_quota: list[str] = None,
 ):
+    if not quota_checked:
+        requested_machine_types = _requested_machine_types(config, n_nodes_to_add, node_machine_types)
+        node_machine_types, _warnings = _prepare_node_boot_plan(
+            config,
+            requested_machine_types,
+            active_machine_types=active_machine_types_for_quota,
+        )
+        n_nodes_to_add = len(node_machine_types)
+
     node_service_port = _current_local_dev_max_node_port()
     futures = []
     executor = ThreadPoolExecutor(max_workers=32)
@@ -268,6 +334,7 @@ def _restart_cluster(logger: Logger, auth_headers: dict, node_machine_types: lis
             config,
             n_nodes_to_add=len(node_machine_types),
             node_machine_types=node_machine_types,
+            quota_checked=True,
         )
 
     duration = time() - start
@@ -283,33 +350,19 @@ def restart_cluster(
     config = _get_cluster_config()
     gcp_region = config["Nodes"][0]["gcp_region"]
     requested_machine_types = _configured_machine_types(config)
-    warnings = []
-
-    if not IN_LOCAL_DEV_MODE and not _active_machine_types(gcp_region):
-        quota_plan = cap_boot_machine_types(
-            requested_machine_types,
-            gcp_region,
-            active_machine_types=[],
-        )
-        if not quota_plan.machine_types and quota_plan.caps:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error_code": "quota_exceeded",
-                    "region": gcp_region,
-                    "caps": quota_plan.warnings,
-                    "message": "No machines can boot without exceeding this project's GCP quota.",
-                },
-            )
-        requested_machine_types = quota_plan.machine_types
-        warnings = quota_plan.warnings
+    active_machine_types = _active_machine_types(gcp_region)
+    # This endpoint is both Start and Restart. If nodes are already active,
+    # _restart_cluster deletes them before booting the replacement batch.
+    quota_active_machine_types = [] if active_machine_types else active_machine_types
+    requested_machine_types, warnings = _prepare_node_boot_plan(
+        config,
+        requested_machine_types,
+        active_machine_types=quota_active_machine_types,
+    )
 
     _mark_running_jobs_with_lifecycle_event("cluster_restarted", "The cluster was restarted.")
-    if warnings:
-        add_background_task(_restart_cluster, logger, auth_headers, requested_machine_types)
-        return {"warnings": warnings}
-    add_background_task(_restart_cluster, logger, auth_headers)
-    return {}
+    add_background_task(_restart_cluster, logger, auth_headers, requested_machine_types)
+    return {"warnings": warnings} if warnings else {}
 
 
 @router.post("/v1/cluster/shutdown")

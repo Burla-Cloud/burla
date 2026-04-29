@@ -53,13 +53,14 @@ from main_service.endpoints.cluster_lifecycle import (
     _get_cluster_config,
     _machine_type_cpu_count,
     _pack_n4_standard_machines,
+    _pack_n4_standard_machines_up_to,
+    _prepare_node_boot_plan,
     _start_nodes,
 )
 from main_service.quota import (
     INSTANCE_BUCKET,
     N4_CPU_BUCKET,
     active_machine_types_for_region,
-    cap_boot_machine_types,
     n4_cpu_count,
     quota_status,
 )
@@ -288,14 +289,19 @@ def _grow_if_needed(
             active_machine_types = _active_machine_types(gcp_region)
             cpu_status = quota_status(N4_CPU_BUCKET, gcp_region, active_machine_types)
             instance_status = quota_status(INSTANCE_BUCKET, gcp_region, active_machine_types)
-            quota_limited_cpus = min(num_cpus_to_add, cpu_status["available"])
-            if instance_status["available"] <= 0:
-                quota_limited_cpus = 0
-            node_machine_types = _pack_n4_standard_machines(quota_limited_cpus)
-            node_machine_types = node_machine_types[: instance_status["available"]]
-            if quota_limited_cpus < num_cpus_to_add or len(node_machine_types) < len(
-                _pack_n4_standard_machines(num_cpus_to_add)
+            requested_machine_types = _pack_n4_standard_machines(num_cpus_to_add)
+            requested_cpus = sum(n4_cpu_count(mt) for mt in requested_machine_types)
+            if (
+                requested_cpus <= cpu_status["available"]
+                and len(requested_machine_types) <= instance_status["available"]
             ):
+                node_machine_types = requested_machine_types
+            else:
+                quota_limited_cpus = min(num_cpus_to_add, cpu_status["available"])
+                node_machine_types = _pack_n4_standard_machines_up_to(quota_limited_cpus)
+                node_machine_types = node_machine_types[: instance_status["available"]]
+            allowed_cpus = sum(n4_cpu_count(mt) for mt in node_machine_types)
+            if allowed_cpus < num_cpus_to_add or len(node_machine_types) < len(requested_machine_types):
                 quota_warnings.append(
                     _n4_quota_warning(
                         requested_cpus=num_cpus_to_add,
@@ -317,16 +323,32 @@ def _grow_if_needed(
         if parallelism_capacity(mt, func_cpu, func_ram) > 0
     ]
     if not node_machine_types:
+        if quota_warnings:
+            gcp_region = config["Nodes"][0]["gcp_region"]
+            if target_parallelism > 0:
+                return [], quota_warnings
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error_code": "quota_exceeded",
+                    "region": gcp_region,
+                    "caps": quota_warnings,
+                    "message": (
+                        "Cluster is at its N4 CPU quota in "
+                        f"{gcp_region}; nothing can grow for this job shape."
+                    ),
+                },
+            )
         return [], []
 
     gcp_region = config["Nodes"][0]["gcp_region"]
-    quota_plan = cap_boot_machine_types(
+    node_machine_types, shared_warnings = _prepare_node_boot_plan(
+        config,
         node_machine_types,
-        gcp_region,
         active_machine_types=_active_machine_types(gcp_region),
+        raise_on_zero=False,
     )
-    node_machine_types = quota_plan.machine_types
-    caps = quota_warnings + quota_plan.warnings
+    caps = quota_warnings + shared_warnings
 
     if not node_machine_types and caps and target_parallelism > 0:
         return [], caps
@@ -360,6 +382,7 @@ def _grow_if_needed(
         node_machine_types,
         containers_override,
         GROW_INACTIVITY_SHUTDOWN_TIME_SEC,
+        quota_checked=True,
     )
     booting_nodes = [
         {

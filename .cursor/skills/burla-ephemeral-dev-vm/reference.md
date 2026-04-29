@@ -2,14 +2,14 @@
 
 ## Worktree Contract
 
-- Default task branch: `work/<task-slug>` unless `--branch` is supplied
+- Default task branch: `<task-slug>` unless `--branch` is supplied
 - Worktree path: `../burla-worktrees/<task-slug>`
 - Create and remove worktrees from the primary checkout
 - Worktrees are not assigned to VM slots; any worktree can be synced to any slot
 
 Examples:
 
-- Task `fix-auth-flow` -> branch `work/fix-auth-flow` -> worktree `../burla-worktrees/fix-auth-flow`
+- Task `fix-auth-flow` -> branch `fix-auth-flow` -> worktree `../burla-worktrees/fix-auth-flow`
 - Task `improve-jobs-ui`, branch `feature/jobs-ui` -> worktree `../burla-worktrees/improve-jobs-ui`
 
 ## VM Slot Naming Contract

@@ -30,6 +30,23 @@ LOG_END_MARKER_PREFIX = "__burla_input_end__:"
 WORKER_BOOT_TIMEOUT_SECONDS = 20
 
 
+class WorkerOutOfMemoryError(RuntimeError):
+    pass
+
+
+def _is_python_version_line(line: str):
+    parts = line.split(".")
+    return len(parts) == 2 and all(part.isdigit() for part in parts)
+
+
+def worker_logs_show_oom(logs: str):
+    lines = [line.strip() for line in logs.splitlines() if line.strip()]
+    for index, line in enumerate(lines):
+        if line == "Killed" and any(_is_python_version_line(row) for row in lines[index + 1 : index + 4]):
+            return True
+    return False
+
+
 class JobLogWriter:
     def __init__(self, job_id: str):
         self.job_id = job_id
@@ -178,10 +195,25 @@ class JobLogWriter:
 
 
 def _worker_oom_error():
-    return RuntimeError(
+    return WorkerOutOfMemoryError(
         "\n\nWorker container was killed by the Linux OOM killer.\n"
         "This usually means the submitted function used more memory than the container had available.\n"
-        "Increase the container memory limit or reduce memory usage inside the function.\n"
+        "Increase `func_ram`, use `func_ram=\"dynamic\"`, or reduce memory usage inside the function.\n"
+    )
+
+
+def _worker_process_oom_error():
+    return WorkerOutOfMemoryError(
+        "\n\nWorker process was killed by the Linux OOM killer while the container stayed healthy.\n"
+        "This usually means this function call used more memory than was available at the current node parallelism.\n"
+        "Increase `func_ram`, use `func_ram=\"dynamic\"`, or reduce memory usage inside the function.\n"
+    )
+
+
+def _dynamic_terminal_oom_error():
+    return WorkerOutOfMemoryError(
+        "\n\nWorker ran out of memory while `func_ram=\"dynamic\"` was already down to one active worker on this node.\n"
+        "Burla cannot give this input more memory on the current machine. Reduce memory usage inside the function or use a larger node.\n"
     )
 
 
@@ -211,6 +243,7 @@ class WorkerClient:
         self.process_inputs_task = None
         self.log_writer = None
         self.worker_host_pid = None
+        self.retired = False
 
     def _worker_server_host_path(self):
         if IN_LOCAL_DEV_MODE:
@@ -379,6 +412,8 @@ class WorkerClient:
                 await self._log_container_failure()
                 raise RuntimeError("\n\nWorker container stopped unexpectedly.\n")
             await asyncio.sleep(0.1)
+        if worker_logs_show_oom(await self._get_logs()):
+            raise _worker_process_oom_error()
         # Naming the likely causes points users at their own UDF instead of a
         # suspected cluster or network issue.
         msg = (
@@ -388,6 +423,28 @@ class WorkerClient:
             "the worker subprocess specifically). The cluster itself is fine.\n"
         )
         raise RuntimeError(msg)
+
+    async def _retire_after_dynamic_oom(self, input_index: int, input_pkl: bytes, error: WorkerOutOfMemoryError):
+        async with SELF["dynamic_ram_lock"]:
+            active_workers = [worker for worker in SELF["workers"] if not worker.retired]
+            if len(active_workers) <= 1:
+                return (input_index, True, self._serialize_error(_dynamic_terminal_oom_error()))
+
+            self.retired = True
+            self.is_idle = True
+            SELF["reboot_containers_after_job"] = True
+            await SELF["inputs_queue"].put((input_index, input_pkl), len(input_pkl))
+
+            if self.log_writer is not None:
+                msg = str(error).strip()
+                msg += "\nRetrying this input with lower node parallelism."
+                await self.log_writer.write_error(input_index, msg)
+
+            if self.writer is not None:
+                self.writer.close()
+                self.writer = None
+                self.reader = None
+            return None
 
     async def _read_response(self):
         try:
@@ -433,11 +490,22 @@ class WorkerClient:
 
             self.is_idle = False
             await self._ensure_log_writer()
+            stop_after_result = False
             try:
                 result_pkl = await self.call_function(input_index, input_pkl)
                 result = (input_index, False, result_pkl)
             except asyncio.CancelledError:
                 raise
+            except WorkerOutOfMemoryError as error:
+                if SELF["dynamic_func_ram"]:
+                    result = await self._retire_after_dynamic_oom(input_index, input_pkl, error)
+                    if result is None:
+                        return
+                else:
+                    if self.log_writer is not None:
+                        await self.log_writer.write_error(input_index, self._traceback_string(error))
+                    result = (input_index, True, self._serialize_error(error))
+                stop_after_result = True
             except BaseException as error:
                 if self.log_writer is not None:
                     await self.log_writer.write_error(input_index, self._traceback_string(error))
@@ -448,6 +516,8 @@ class WorkerClient:
 
             await SELF["results_queue"].put(result, len(result[2]))
             SELF["num_results_received"] += 1
+            if stop_after_result:
+                return
 
     async def install_packages(self, packages: dict):
         try:

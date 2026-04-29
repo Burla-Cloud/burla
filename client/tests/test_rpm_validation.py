@@ -8,6 +8,8 @@ These can run as pure unit tests because `FunctionTooBig` is raised inside
 
 from __future__ import annotations
 
+import inspect
+
 import pytest
 
 
@@ -28,6 +30,14 @@ def test_FunctionTooBig_is_subclass_of_Exception():
     from burla._remote_parallel_map import FunctionTooBig
 
     assert issubclass(FunctionTooBig, Exception)
+
+
+@pytest.mark.unit
+def test_remote_parallel_map_default_func_ram_is_dynamic():
+    from burla import remote_parallel_map
+
+    signature = inspect.signature(remote_parallel_map)
+    assert signature.parameters["func_ram"].default == "dynamic"
 
 
 # ------------------------------------------------ InputTooBig (unit tier)

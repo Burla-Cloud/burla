@@ -44,6 +44,7 @@ from main_service.helpers import (
     gpu_machine_type,
     parallelism_capacity,
     parse_version,
+    scheduling_func_ram,
 )
 from main_service.node import Node
 from main_service.endpoints.cluster_lifecycle import (
@@ -128,7 +129,7 @@ async def patch_job_doc(job_id: str, request: Request):
 
 def _select_ready_nodes_from_cache(
     func_cpu: int,
-    func_ram: int,
+    func_ram: int | str,
     max_parallelism: int,
     image: Optional[str],
     func_gpu: Optional[str],
@@ -198,7 +199,7 @@ def _grow_if_needed(
     n_inputs: int,
     max_parallelism: int,
     func_cpu: int,
-    func_ram: int,
+    func_ram: int | str,
     image: Optional[str],
     func_gpu: Optional[str],
     job_id: str,
@@ -224,7 +225,8 @@ def _grow_if_needed(
         node_machine_types = [gpu_mt] * missing_nodes
         config = _get_cluster_config()
     else:
-        required_cpus_for_ram = (func_ram + 3) // 4
+        func_ram_for_scheduling = scheduling_func_ram(func_ram)
+        required_cpus_for_ram = (func_ram_for_scheduling + 3) // 4
         required_cpus_per_call = max(func_cpu, required_cpus_for_ram)
         target_cpus = requested_parallelism * required_cpus_per_call
         current_cpus = target_parallelism * required_cpus_per_call
@@ -336,7 +338,9 @@ async def start_job(
     """
     body = await request.json()
     func_cpu = int(body["func_cpu"])
-    func_ram = int(body["func_ram"])
+    func_ram = body["func_ram"]
+    if func_ram != "dynamic":
+        func_ram = int(func_ram)
     n_inputs = int(body["n_inputs"])
     max_parallelism = int(body.get("max_parallelism") or n_inputs)
     grow = bool(body.get("grow"))

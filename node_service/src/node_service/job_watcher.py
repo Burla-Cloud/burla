@@ -219,7 +219,9 @@ async def _job_watcher(
     last_reported_client_contact_last_1s = True
     while not SELF["job_watcher_stop_event"].is_set():
 
-        SELF["current_parallelism"] = sum(not worker.is_idle for worker in SELF["workers"])
+        SELF["current_parallelism"] = sum(
+            not worker.is_idle and not worker.retired for worker in SELF["workers"]
+        )
         pending_transfer_count = sum(len(batch) for batch in SELF["pending_transfers"].values())
         remaining_inputs = SELF["inputs_queue"].qsize() + pending_transfer_count
         input_queue_empty = remaining_inputs == 0
@@ -346,6 +348,10 @@ async def reinit_node(assigned_workers: list, async_db: AsyncClient):
 async def reset_workers(logger: Logger, async_db: AsyncClient):
     # Stops idle or reassigned workers from holding creds for a finished job.
     NODE_AUTH_CREDENTIALS_PATH.unlink(missing_ok=True)
+    if SELF["reboot_containers_after_job"]:
+        await logger.log("Rebooting worker containers to restore dynamic RAM capacity ...")
+        await reboot_containers(logger=logger)
+        return
     try:
         await asyncio.gather(*(worker.reset() for worker in SELF["workers"]))
     except Exception as e:

@@ -13,6 +13,7 @@ from time import time
 from typing import Callable, Literal, Optional, Union
 
 FuncGpu = Literal["A100", "A100_40G", "A100_80G", "H100", "H100_80G"]
+FuncRam = Union[int, Literal["dynamic"]]
 from uuid import uuid4
 
 import aiohttp
@@ -160,7 +161,7 @@ async def _execute_job(
     inputs: list,
     packages: dict,
     func_cpu: int,
-    func_ram: int,
+    func_ram: FuncRam,
     max_parallelism: int,
     background: bool,
     spinner: Union[bool, Spinner],
@@ -265,6 +266,7 @@ async def _execute_job(
                     background=background,
                     n_inputs=n_inputs,
                     packages=packages,
+                    func_ram=func_ram,
                     start_time=start_time,
                     function_pkl=function_pkl,
                     udf_error_event=udf_error_event,
@@ -372,7 +374,7 @@ def remote_parallel_map(
     function_: Callable,
     inputs: list,
     func_cpu: int = 1,
-    func_ram: int = 4,
+    func_ram: FuncRam = "dynamic",
     func_gpu: Optional[FuncGpu] = None,
     image: Optional[str] = None,
     grow: bool = False,
@@ -399,8 +401,10 @@ def remote_parallel_map(
             Example: `inputs=[(1, 2)]` -> `function_(1, 2)`
         func_cpu (int, optional):
             The number of CPUs allocated for each instance of `function_`. Defaults to 1.
-        func_ram (int, optional):
-            The amount of RAM (in GB) allocated for each instance of `function_`. Defaults to 4.
+        func_ram (int | "dynamic", optional):
+            The amount of RAM (in GB) allocated for each instance of `function_`.
+            Defaults to "dynamic", which starts with CPU-bound parallelism and retries
+            work at lower node parallelism if workers run out of memory.
         func_gpu (str, optional):
             Allocate one GPU per function call. One of: "A100" / "A100_40G",
             "A100_80G", "H100" / "H100_80G". Defaults to None (no GPU).

@@ -20,7 +20,7 @@ def _base_config(
     n_inputs: int = 1,
     burla_client_version: str = None,
     func_cpu: int = 1,
-    func_ram: int = 4,
+    func_ram: int | str = "dynamic",
     grow: bool = False,
     image: str | None = None,
     func_gpu: str | None = None,
@@ -194,8 +194,26 @@ def test_start_job_writes_job_doc(
     assert doc["function_name"] == "test_function"
     assert doc["n_inputs"] == 3
     assert doc["func_cpu"] == 1
-    assert doc["func_ram"] == 4
+    assert doc["func_ram"] == "dynamic"
     assert "user_python_version" in doc
+
+
+def test_start_job_dynamic_func_ram_writes_raw_setting(
+    main_http_client, local_dev_cluster, isolated_job_id, cleanup_job, firestore_db,
+    wait_for_fixture,
+):
+    job_id = cleanup_job(isolated_job_id())
+    resp = main_http_client.post(f"/v1/jobs/{job_id}/start", json=_base_config(func_ram="dynamic"))
+    if resp.status_code != 200:
+        pytest.skip(f"start_job returned {resp.status_code}")
+
+    def _has_doc():
+        doc = firestore_db.collection("jobs").document(job_id).get()
+        return doc.to_dict() if doc.exists else None
+
+    doc = wait_for_fixture(_has_doc, timeout=10)
+    assert doc["func_ram"] == "dynamic"
+    assert doc["target_parallelism"] >= 1
 
 
 def test_start_job_job_doc_includes_burla_client_version(

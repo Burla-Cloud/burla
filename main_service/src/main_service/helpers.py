@@ -45,12 +45,19 @@ _N_FOUR_STANDARD_CPU_TO_RAM = {
 }
 
 
-def parallelism_capacity(machine_type: str, func_cpu: int, func_ram: int) -> int:
+def scheduling_func_ram(func_ram: int | str) -> int:
+    if func_ram == "dynamic":
+        return 4
+    return int(func_ram)
+
+
+def parallelism_capacity(machine_type: str, func_cpu: int, func_ram: int | str) -> int:
     """How many copies of a UDF with func_cpu/func_ram fit on one node.
 
     Used by `POST /v1/jobs/{id}/start` to size which cached ready nodes
     can physically host the requested per-function resources.
     """
+    func_ram = scheduling_func_ram(func_ram)
     if machine_type.startswith("n4-standard") and machine_type.split("-")[-1].isdigit():
         vm_cpu = int(machine_type.split("-")[-1])
         vm_ram = _N_FOUR_STANDARD_CPU_TO_RAM[vm_cpu]

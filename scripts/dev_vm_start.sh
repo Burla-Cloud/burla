@@ -5,11 +5,10 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=scripts/dev_vm_common.sh
 source "$SCRIPT_DIR/dev_vm_common.sh"
 
-parse_agent_and_mode "$@"
+parse_slot_and_mode "$@"
 require_local_prereqs
-require_agent_worktree_context "$AGENT_ID"
-load_state_vars "$AGENT_ID"
-validate_loaded_state_against_current_context
+load_state_vars "$SLOT_ID"
+validate_loaded_state_for_slot
 
 REMOTE_BODY="$(cat <<EOF
 cat > /tmp/burla-start-dev.sh <<'INNER'

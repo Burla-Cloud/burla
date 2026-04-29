@@ -21,8 +21,42 @@ from node_service.helpers import Logger
 from node_service.job_watcher import job_watcher_logged
 
 _LOGS_OVERFLOW_MESSAGE = "Logs dequeued due to high volume, see dashboard to view all logs."
+MAX_LOGS_RESPONSE_BYTES = 1_000_000
+MAX_LOG_DOCUMENTS_PER_RESULTS_RESPONSE = 500
 
 router = APIRouter()
+
+
+def _log_document_size(log_document: dict) -> int:
+    size = 180
+    for log in log_document.get("logs", []):
+        size += len(log["message"].encode("utf-8")) + 180
+    return size
+
+
+def _pop_pending_logs() -> list:
+    at_capacity = len(SELF["pending_logs"]) == SELF["pending_logs"].maxlen
+    drained_logs = []
+    total_bytes = 0
+
+    if at_capacity:
+        now = datetime.now(timezone.utc)
+        warning_document = {
+            "logs": [{"timestamp": now, "message": _LOGS_OVERFLOW_MESSAGE}],
+            "timestamp": now,
+        }
+        drained_logs.append(warning_document)
+        total_bytes += _log_document_size(warning_document)
+
+    while SELF["pending_logs"] and len(drained_logs) < MAX_LOG_DOCUMENTS_PER_RESULTS_RESPONSE:
+        log_document = SELF["pending_logs"][0]
+        document_size = _log_document_size(log_document)
+        if drained_logs and total_bytes + document_size > MAX_LOGS_RESPONSE_BYTES:
+            break
+        drained_logs.append(SELF["pending_logs"].popleft())
+        total_bytes += document_size
+
+    return drained_logs
 
 
 @router.get("/jobs/{job_id}/get_inputs")
@@ -108,18 +142,7 @@ async def get_results(job_id: str = Path(...)):
         except asyncio.QueueEmpty:
             break
 
-    at_capacity = len(SELF["pending_logs"]) == SELF["pending_logs"].maxlen
-    drained_logs = list(SELF["pending_logs"])
-    SELF["pending_logs"].clear()
-    if at_capacity:
-        now = datetime.now(timezone.utc)
-        drained_logs.insert(
-            0,
-            {
-                "logs": [{"timestamp": now, "message": _LOGS_OVERFLOW_MESSAGE}],
-                "timestamp": now,
-            },
-        )
+    drained_logs = _pop_pending_logs()
 
     response_json = {
         "results": results,

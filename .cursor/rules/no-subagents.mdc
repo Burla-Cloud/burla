@@ -1,0 +1,8 @@
+---
+description: 
+alwaysApply: true
+---
+
+# No Subagents
+
+Never launch subagents or background agents unless the user explicitly asks.

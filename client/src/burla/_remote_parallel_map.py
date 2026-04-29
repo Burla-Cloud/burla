@@ -42,7 +42,11 @@ from burla._node import (
     VersionMismatch,
     wait_for_nodes_to_be_ready,
 )
-from burla._reporting import RemoteParallelMapReporter, log_job_failure_telemetry
+from burla._reporting import (
+    RemoteParallelMapReporter,
+    log_job_failure_telemetry,
+    stdio_supports_unicode,
+)
 
 
 # `metadata.packages_distributions()` takes hundreds of ms to multiple seconds in
@@ -55,6 +59,50 @@ def _pkg_module_mapping():
 
 
 BANNED_PACKAGES = ["ipython", "burla", "google-colab"]
+
+
+def _read_process_stderr(process) -> str:
+    stderr_buffer = getattr(process, "stderr_buffer", None)
+    if stderr_buffer is not None:
+        stderr_buffer.flush()
+        stderr_buffer.seek(0)
+        return stderr_buffer.read().decode("utf-8", errors="replace")
+    if process.stderr is None:
+        return ""
+    return process.stderr.read().decode("utf-8", errors="replace")
+
+
+async def _job_lifecycle_exception(client: ClusterClient, job_id: str):
+    last_error = None
+    for _ in range(3):
+        try:
+            job_dict = await client.get_job(job_id) or {}
+        except Exception as error:
+            last_error = error
+            await asyncio.sleep(1)
+            continue
+        if job_dict.get("cluster_shutdown"):
+            return ClusterShutdown(), None, job_dict
+        if job_dict.get("cluster_restarted"):
+            return ClusterRestarted(), None, job_dict
+        if job_dict.get("dashboard_canceled"):
+            return JobCanceled("\n\nJob canceled from dashboard.\n"), None, job_dict
+        return None, None, job_dict
+    return None, last_error, None
+
+
+def _job_diagnostic_summary(job_dict: dict | None) -> str | None:
+    if job_dict is None:
+        return None
+    heartbeat_at = job_dict.get("client_heartbeat_at")
+    status = job_dict.get("status")
+    all_inputs_uploaded = job_dict.get("all_inputs_uploaded")
+    client_has_all_results = job_dict.get("client_has_all_results")
+    return (
+        f"Job diagnostics: status={status}, client_heartbeat_at={heartbeat_at}, "
+        f"all_inputs_uploaded={all_inputs_uploaded}, client_has_all_results={client_has_all_results}"
+    )
+
 
 class FunctionTooBig(Exception):
     def __init__(self, function_name: str):
@@ -240,6 +288,9 @@ async def _execute_job(
         def _cleanup_ping_process():
             if ping_process is not None:
                 ping_process.kill()
+                stderr_buffer = getattr(ping_process, "stderr_buffer", None)
+                if stderr_buffer is not None:
+                    stderr_buffer.close()
 
         session_stack.callback(_cleanup_ping_process)
         last_status_message_update_time = 0.0
@@ -255,16 +306,18 @@ async def _execute_job(
                 if node.state == "FAILED":
                     exception = NodeDisconnected(node, await node._failure_message())
                 if exception:
-                    # Authoritative check via main_service: if main_service has
-                    # already written a lifecycle signal on the job doc, raise
-                    # that instead of the bare infrastructure exception.
-                    job_dict = await client.get_job(job_id) or {}
-                    if job_dict.get("cluster_shutdown"):
-                        raise ClusterShutdown()
-                    if job_dict.get("cluster_restarted"):
-                        raise ClusterRestarted()
-                    if job_dict.get("dashboard_canceled"):
-                        raise JobCanceled("\n\nJob canceled from dashboard.\n")
+                    exception.add_note(node._diagnostic_summary())
+                    lifecycle_exception, lifecycle_error, job_dict = await _job_lifecycle_exception(
+                        client, job_id
+                    )
+                    if lifecycle_exception is not None:
+                        raise lifecycle_exception
+                    job_note = _job_diagnostic_summary(job_dict)
+                    if job_note is not None:
+                        exception.add_note(job_note)
+                    if lifecycle_error is not None:
+                        note = f"Also failed to read job lifecycle state: {lifecycle_error!r}"
+                        exception.add_note(note)
                     raise exception
 
             current_time = time()
@@ -298,7 +351,7 @@ async def _execute_job(
                 pinged_hosts = current_hosts
 
             if ping_process and ping_process.poll():
-                stderr = ping_process.stderr.read().decode("utf-8")
+                stderr = _read_process_stderr(ping_process)
                 raise Exception(f"Heartbeat process failed!\n{stderr}")
 
             total_result_count = sum(node.result_count for node in nodes)
@@ -492,6 +545,8 @@ def remote_parallel_map(
     return_queue = Queue()
     original_signal_handlers = None
     try:
+        if spinner is True and not stdio_supports_unicode():
+            spinner = False
         if spinner:
             spinner = yaspin(sigmap={})  # <- .start will overwrite my handlers without sigmap={}
             spinner.start()
@@ -554,7 +609,7 @@ def remote_parallel_map(
 
         if spinner:
             spinner.text = f"Done! {len(inputs)} `{function_.__name__}` calls completed."
-            spinner.ok("✔")
+            spinner.ok("OK")
 
         return _output_generator() if generator else list(_output_generator())
 

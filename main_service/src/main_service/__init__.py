@@ -25,8 +25,8 @@ from jinja2 import Environment, FileSystemLoader
 os.environ["GRPC_VERBOSITY"] = "ERROR"
 os.environ["GLOG_minloglevel"] = "2"
 
-CURRENT_BURLA_VERSION = "1.5.8"
-MIN_COMPATIBLE_CLIENT_VERSION = "1.5.8"
+CURRENT_BURLA_VERSION = "1.5.9"
+MIN_COMPATIBLE_CLIENT_VERSION = "1.5.9"
 
 # In this mode EVERYTHING runs locally in docker containers.
 # possible modes: local-dev-mode (everything local), remote-dev-mode (only main-service local), prod
@@ -461,10 +461,18 @@ async def validate_requests(request: Request, call_next):
     # set by the `make local-dev` target.
     if IN_LOCAL_DEV_MODE:
         if not request.session.get("X-User-Email"):
-            request.session["X-User-Email"] = "local-dev@burla.dev"
-            request.session["Authorization"] = "Bearer local-dev"
-            request.session["name"] = "Local Dev"
-            request.session["profile_pic"] = ""
+            header_email = request.headers.get("X-User-Email")
+            header_auth = request.headers.get("Authorization")
+            if header_email and header_auth:
+                request.session["X-User-Email"] = header_email
+                request.session["Authorization"] = header_auth
+                request.session["name"] = header_email
+                request.session["profile_pic"] = ""
+            else:
+                request.session["X-User-Email"] = "local-dev@burla.dev"
+                request.session["Authorization"] = "Bearer local-dev"
+                request.session["name"] = "Local Dev"
+                request.session["profile_pic"] = ""
         return await call_next(request)
 
     # Allow unauthenticated access for storage stub endpoints and resumable signing during development

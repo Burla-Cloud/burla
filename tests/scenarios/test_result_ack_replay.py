@@ -1,6 +1,11 @@
 """
 Scenario: replay a result batch when the first response is lost.
 
+This is a regression test for jobs that stalled after a node finished all
+inputs but the client never received one `/results` response. The client had
+no way to ask for that batch again, because node_service had already removed
+it from `SELF["results_queue"]`.
+
 The fault injection drops one non-empty `/results` response after node_service
 has served it, before the client records or ACKs it. This matches the failure
 mode where the HTTP response disappears after node_service has removed results

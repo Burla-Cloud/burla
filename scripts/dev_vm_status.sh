@@ -5,36 +5,46 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=scripts/dev_vm_common.sh
 source "$SCRIPT_DIR/dev_vm_common.sh"
 
-parse_agent_only "$@"
+parse_slot_only "$@"
 require_local_prereqs
-require_agent_worktree_context "$AGENT_ID"
-load_state_vars "$AGENT_ID"
-validate_loaded_state_against_current_context
+load_state_vars "$SLOT_ID"
+validate_loaded_state_for_slot
 
 VM_EXISTS="false"
+VM_STATUS=""
 REMOTE_SESSION_RUNNING="false"
 TUNNEL_RUNNING="false"
 DASHBOARD_REACHABLE="false"
 HEALTH="missing"
 RUNNING_MODE=""
+LOCK_PATH="$(lock_path_for_slot "$SLOT_ID")"
+LOCKED="false"
+LOCK_JSON="null"
 
-if ssh_run "true" >/dev/null 2>&1; then
+if vm_exists "$PROJECT_ID" "${ZONE:-$DEFAULT_ZONE}" "$VM_NAME"; then
   VM_EXISTS="true"
-  HEALTH="vm_created"
+  VM_STATUS="$(vm_status "$PROJECT_ID" "${ZONE:-$DEFAULT_ZONE}" "$VM_NAME")"
+  if [[ "$VM_STATUS" == "TERMINATED" ]]; then
+    HEALTH="vm_stopped"
+  elif [[ "$VM_STATUS" == "RUNNING" ]] && ssh_run "true" >/dev/null 2>&1; then
+    HEALTH="vm_created"
+  else
+    HEALTH="vm_${VM_STATUS}"
+  fi
 fi
 
 if [[ -n "${TUNNEL_PID:-}" ]] && kill -0 "$TUNNEL_PID" >/dev/null 2>&1; then
   TUNNEL_RUNNING="true"
 fi
 
-if [[ "$VM_EXISTS" == "true" ]] && ssh_run "tmux has-session -t '$REMOTE_TMUX_SESSION'" >/dev/null 2>&1; then
+if [[ "$VM_STATUS" == "RUNNING" ]] && ssh_run "tmux has-session -t '$REMOTE_TMUX_SESSION'" >/dev/null 2>&1; then
   REMOTE_SESSION_RUNNING="true"
   HEALTH="main_service_running"
 fi
 
 # Detect which mode main_service was started in by inspecting its container env.
 # Absent container -> empty string; IN_LOCAL_DEV_MODE=True present -> local-dev; else remote-dev.
-if [[ "$VM_EXISTS" == "true" ]]; then
+if [[ "$VM_STATUS" == "RUNNING" ]]; then
   inspect_cmd="docker inspect main_service --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null || true"
   container_env="$(ssh_run "$inspect_cmd" 2>/dev/null || true)"
   if [[ -n "$container_env" ]]; then
@@ -51,6 +61,19 @@ if [[ "$TUNNEL_RUNNING" == "true" ]] && curl -sf "$DASHBOARD_URL" >/dev/null 2>&
   HEALTH="dashboard_reachable"
 fi
 
+if [[ -f "$LOCK_PATH" ]]; then
+  LOCKED="true"
+  LOCK_JSON="$(python3 - "$LOCK_PATH" <<'PY'
+import json
+import pathlib
+import sys
+
+print(json.dumps(json.loads(pathlib.Path(sys.argv[1]).read_text())))
+PY
+)"
+fi
+
+SLOT_ID="$SLOT_ID" \
 AGENT_ID="$AGENT_ID" \
 PROJECT_ID="$PROJECT_ID" \
 VM_NAME="$VM_NAME" \
@@ -62,28 +85,41 @@ DASHBOARD_URL="$DASHBOARD_URL" \
 TUNNEL_PID="${TUNNEL_PID:-}" \
 REMOTE_LOG_PATH="$REMOTE_LOG_PATH" \
 REMOTE_TMUX_SESSION="$REMOTE_TMUX_SESSION" \
-BRANCH_NAME="${BRANCH_NAME:-}" \
-TASK_SLUG="${TASK_SLUG:-}" \
-WORKTREE_PATH="${WORKTREE_PATH:-}" \
-PRIMARY_CHECKOUT_PATH="${PRIMARY_CHECKOUT_PATH:-}" \
 LOCAL_USER="$LOCAL_USER" \
 VM_IP="$VM_IP" \
 VM_EXISTS="$VM_EXISTS" \
+VM_STATUS="$VM_STATUS" \
 REMOTE_SESSION_RUNNING="$REMOTE_SESSION_RUNNING" \
 TUNNEL_RUNNING="$TUNNEL_RUNNING" \
 DASHBOARD_REACHABLE="$DASHBOARD_REACHABLE" \
 HEALTH="$HEALTH" \
 RUNNING_MODE="$RUNNING_MODE" \
 LAST_STARTED_MODE="${LAST_STARTED_MODE:-}" \
+LAST_SYNCED_SOURCE_PATH="${LAST_SYNCED_SOURCE_PATH:-}" \
+LAST_SYNCED_BRANCH="${LAST_SYNCED_BRANCH:-}" \
+LAST_SYNCED_COMMIT="${LAST_SYNCED_COMMIT:-}" \
+LAST_SYNCED_DIRTY="${LAST_SYNCED_DIRTY:-}" \
+LOCKED="$LOCKED" \
+LOCK_JSON="$LOCK_JSON" \
 python3 - <<'PY'
 import json
 import os
 
 running_mode = os.environ["RUNNING_MODE"] or None
 last_started_mode = os.environ["LAST_STARTED_MODE"] or None
+last_synced_commit = os.environ["LAST_SYNCED_COMMIT"] or None
+last_synced = None
+if os.environ["LAST_SYNCED_SOURCE_PATH"]:
+    last_synced = {
+        "source_path": os.environ["LAST_SYNCED_SOURCE_PATH"],
+        "branch": os.environ["LAST_SYNCED_BRANCH"],
+        "commit": last_synced_commit[:12] if last_synced_commit else None,
+        "dirty": os.environ["LAST_SYNCED_DIRTY"] == "True",
+    }
 print(
     json.dumps(
         {
+            "slot_id": os.environ["SLOT_ID"],
             "agent_id": os.environ["AGENT_ID"],
             "project_id": os.environ["PROJECT_ID"],
             "vm_name": os.environ["VM_NAME"],
@@ -95,18 +131,18 @@ print(
             "tunnel_pid": int(os.environ["TUNNEL_PID"]) if os.environ.get("TUNNEL_PID") else None,
             "remote_log_path": os.environ["REMOTE_LOG_PATH"],
             "remote_tmux_session": os.environ["REMOTE_TMUX_SESSION"],
-            "branch_name": os.environ["BRANCH_NAME"],
-            "task_slug": os.environ["TASK_SLUG"],
-            "worktree_path": os.environ["WORKTREE_PATH"],
-            "primary_checkout_path": os.environ["PRIMARY_CHECKOUT_PATH"],
             "local_user": os.environ["LOCAL_USER"],
             "vm_ip": os.environ["VM_IP"],
             "vm_exists": os.environ["VM_EXISTS"] == "true",
+            "vm_status": os.environ["VM_STATUS"] or None,
             "remote_session_running": os.environ["REMOTE_SESSION_RUNNING"] == "true",
             "tunnel_running": os.environ["TUNNEL_RUNNING"] == "true",
             "dashboard_reachable": os.environ["DASHBOARD_REACHABLE"] == "true",
             "running_mode": running_mode,
             "last_started_mode": last_started_mode,
+            "last_synced": last_synced,
+            "locked": os.environ["LOCKED"] == "true",
+            "lock": json.loads(os.environ["LOCK_JSON"]),
             "health": os.environ["HEALTH"],
         },
         indent=2,

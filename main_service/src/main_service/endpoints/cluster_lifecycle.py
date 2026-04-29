@@ -60,6 +60,21 @@ def _pack_n4_standard_machines(num_cpus: int) -> list[str]:
     return machines
 
 
+def _remove_local_dev_cluster_containers():
+    if not IN_LOCAL_DEV_MODE:
+        return
+
+    docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
+    for container in docker_client.containers(all=True):
+        names = container["Names"]
+        is_cluster_container = any(
+            name.startswith("/node_") or name.startswith("/OLD--") or "worker" in name
+            for name in names
+        )
+        if is_cluster_container:
+            docker_client.remove_container(container["Id"], force=True)
+
+
 def _shutdown_cluster(logger: Logger, auth_headers: dict):
     futures = []
     executor = ThreadPoolExecutor(max_workers=32)
@@ -73,14 +88,7 @@ def _shutdown_cluster(logger: Logger, auth_headers: dict):
     [future.result() for future in futures]
     executor.shutdown(wait=True)
 
-    if IN_LOCAL_DEV_MODE:
-        docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
-        for container in docker_client.containers():
-            name = container["Names"][0]
-            is_node_container = name.startswith("/node")
-            is_worker_container = "worker" in name
-            if is_node_container or is_worker_container:
-                docker_client.remove_container(container["Id"], force=True)
+    _remove_local_dev_cluster_containers()
 
 
 def _current_local_dev_max_node_port():
@@ -232,6 +240,7 @@ def _restart_cluster(logger: Logger, auth_headers: dict):
     start = time()
 
     _shutdown_cluster(logger, auth_headers)
+    _remove_local_dev_cluster_containers()
 
     config = _get_cluster_config()
     msg = f"Booting {config['Nodes'][0]['quantity']} {config['Nodes'][0]['machine_type']} nodes"

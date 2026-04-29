@@ -31,6 +31,7 @@ import pytest
 DASHBOARD_URL = os.environ.get("BURLA_CLUSTER_DASHBOARD_URL", "http://localhost:5001")
 EXPECTED_GCP_PROJECT = os.environ.get("BURLA_TEST_PROJECT", "burla-test")
 READINESS_TIMEOUT_SEC = 30
+CLEAN_CLUSTER_TIMEOUT_SEC = 120
 
 
 def _port_open(host: str, port: int) -> bool:
@@ -80,12 +81,124 @@ def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line("markers", "dashboard: requires Playwright, browser, and dashboard UI")
 
 
-@pytest.fixture(scope="session")
-def local_dev_cluster() -> dict[str, Any]:
+def _active_node_docs(firestore_db) -> list[dict[str, Any]]:
+    from google.cloud.firestore_v1.base_query import FieldFilter
+
+    docs = (
+        firestore_db.collection("nodes")
+        .where(filter=FieldFilter("status", "in", ["READY", "BOOTING", "RUNNING", "FAILED"]))
+        .stream()
+    )
+    return [doc.to_dict() for doc in docs]
+
+
+def _test_runner_node_url(host: str) -> str:
+    if host.startswith("http://node_"):
+        port = host.rsplit(":", 1)[-1]
+        return f"http://localhost:{port}"
+    return host
+
+
+def _ready_nodes_unreachable(state: dict[str, Any], auth_headers: dict[str, str]) -> str | None:
+    import requests
+
+    for node in state["ready_nodes"]:
+        url = _test_runner_node_url(node["host"])
+        try:
+            resp = requests.get(url, headers=auth_headers, timeout=2)
+        except requests.RequestException as e:
+            return f"{node['instance_name']} unreachable at {url}: {e}"
+        if resp.status_code != 200:
+            return f"{node['instance_name']} returned {resp.status_code} at {url}"
+    return None
+
+
+def _expected_ready_node_count(auth_headers: dict[str, str]) -> int:
+    import requests
+
+    resp = requests.get(f"{DASHBOARD_URL}/v1/settings", headers=auth_headers, timeout=5)
+    resp.raise_for_status()
+    return resp.json()["machineQuantity"]
+
+
+def _cluster_dirty_reason(
+    state: dict[str, Any],
+    active_nodes: list[dict[str, Any]],
+    auth_headers: dict[str, str],
+    expected_ready_nodes: int,
+) -> str | None:
+    if state["booting_count"]:
+        return f"{state['booting_count']} node(s) still booting"
+    if state["running_count"]:
+        return f"{state['running_count']} node(s) still running a job"
+    if len(state["ready_nodes"]) < expected_ready_nodes:
+        return f"{len(state['ready_nodes'])}/{expected_ready_nodes} ready nodes"
+
+    dirty_nodes = [
+        node
+        for node in active_nodes
+        if node.get("status") != "READY" or node.get("current_job") or node.get("reserved_for_job")
+    ]
+    if dirty_nodes:
+        summaries = [
+            f"{node.get('instance_name')}:{node.get('status')}"
+            for node in dirty_nodes
+        ]
+        return "dirty node docs: " + ", ".join(summaries)
+
+    active_ready_names = {node["instance_name"] for node in active_nodes}
+    visible_ready_names = {node["instance_name"] for node in state["ready_nodes"]}
+    if active_ready_names != visible_ready_names:
+        return "ready node cache does not match active READY docs"
+
+    reachability_issue = _ready_nodes_unreachable(state, auth_headers)
+    if reachability_issue is not None:
+        return reachability_issue
+
+    return None
+
+
+def _wait_for_clean_cluster(
+    firestore_db,
+    auth_headers: dict[str, str],
+    expected_ready_nodes: int,
+    timeout: float,
+) -> dict[str, Any]:
+    deadline = time.time() + timeout
+    last_reason = "cluster not checked"
+    while time.time() < deadline:
+        state = _cluster_state_via_http()
+        active_nodes = _active_node_docs(firestore_db)
+        last_reason = _cluster_dirty_reason(
+            state,
+            active_nodes,
+            auth_headers,
+            expected_ready_nodes,
+        )
+        if last_reason is None:
+            return state
+        time.sleep(0.5)
+    raise AssertionError(f"cluster did not become clean within {timeout}s: {last_reason}")
+
+
+def _restart_cluster(auth_headers: dict[str, str]) -> None:
+    import requests
+
+    resp = requests.post(
+        f"{DASHBOARD_URL}/v1/cluster/restart",
+        headers=auth_headers,
+        timeout=10,
+    )
+    resp.raise_for_status()
+
+
+@pytest.fixture
+def local_dev_cluster(firestore_db, burla_auth_headers) -> dict[str, Any]:
     """
     Readiness gate for service / e2e / chaos tiers.
 
-    Fails fast with an actionable message when `make local-dev` isn't running.
+    Fails fast with an actionable message when `make local-dev` isn't running,
+    and resets the cluster only when the previous test left dirty state behind.
     Returns basic cluster metadata the rest of the tests need.
     """
     if not _main_service_reachable():
@@ -122,11 +235,21 @@ def local_dev_cluster() -> dict[str, Any]:
     else:
         pytest.skip(f"main_service /version not reachable within {READINESS_TIMEOUT_SEC}s: {last_err}")
 
+    expected_ready_nodes = _expected_ready_node_count(burla_auth_headers)
     state = _cluster_state_via_http()
-    if not state["ready_nodes"] and state["booting_count"] == 0 and state["running_count"] == 0:
-        pytest.skip(
-            f"Cluster has zero active nodes. Press Start in the dashboard ({DASHBOARD_URL}) "
-            "and wait for nodes to be READY before running tests."
+    active_nodes = _active_node_docs(firestore_db)
+    if _cluster_dirty_reason(
+        state,
+        active_nodes,
+        burla_auth_headers,
+        expected_ready_nodes,
+    ) is not None:
+        _restart_cluster(burla_auth_headers)
+        state = _wait_for_clean_cluster(
+            firestore_db,
+            burla_auth_headers,
+            expected_ready_nodes,
+            CLEAN_CLUSTER_TIMEOUT_SEC,
         )
 
     return {
@@ -135,6 +258,13 @@ def local_dev_cluster() -> dict[str, Any]:
         "version": version_info.get("version"),
         "state": state,
     }
+
+
+@pytest.fixture(autouse=True)
+def clean_local_dev_cluster_before_cluster_tests(request):
+    cluster_markers = ("service", "e2e", "chaos")
+    if any(request.node.get_closest_marker(marker) for marker in cluster_markers):
+        request.getfixturevalue("local_dev_cluster")
 
 
 def _cluster_state_via_http() -> dict[str, Any]:

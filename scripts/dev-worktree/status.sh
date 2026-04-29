@@ -5,12 +5,11 @@ THIS_SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=scripts/dev_vm_common.sh
 source "$THIS_SCRIPT_DIR/../dev_vm_common.sh"
 
-parse_agent_task_and_base "$@"
+parse_worktree_task_and_base "$@"
 require_command git
 require_primary_checkout_context
 
-BRANCH_NAME="$(branch_name_for_task "$AGENT_ID" "$TASK_SLUG")"
-WORKTREE_PATH="$(worktree_path_for_task "$AGENT_ID" "$TASK_SLUG")"
+WORKTREE_PATH="$(worktree_path_for_task "$TASK_SLUG")"
 BRANCH_EXISTS="false"
 WORKTREE_EXISTS="false"
 PATH_IS_WORKTREE="false"
@@ -32,7 +31,6 @@ if [[ -d "$WORKTREE_PATH" ]]; then
   fi
 fi
 
-AGENT_ID="$AGENT_ID" \
 TASK_SLUG="$TASK_SLUG" \
 BRANCH_NAME="$BRANCH_NAME" \
 WORKTREE_PATH="$WORKTREE_PATH" \
@@ -49,7 +47,6 @@ import os
 print(
     json.dumps(
         {
-            "agent_id": os.environ["AGENT_ID"],
             "task_slug": os.environ["TASK_SLUG"],
             "branch_name": os.environ["BRANCH_NAME"],
             "worktree_path": os.environ["WORKTREE_PATH"],

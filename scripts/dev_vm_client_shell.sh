@@ -5,12 +5,11 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=scripts/dev_vm_common.sh
 source "$SCRIPT_DIR/dev_vm_common.sh"
 
-parse_agent_and_python "$@"
+parse_slot_and_python "$@"
 require_local_prereqs
 require_command zsh
-require_agent_worktree_context "$AGENT_ID"
-load_state_vars "$AGENT_ID"
-validate_loaded_state_against_current_context
+load_state_vars "$SLOT_ID"
+validate_loaded_state_for_slot
 
 uv python install "$PYTHON_VERSION" >/dev/null 2>&1
 uv python pin --project "$CLIENT_PROJECT" "$PYTHON_VERSION" >/dev/null 2>&1

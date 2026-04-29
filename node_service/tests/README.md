@@ -13,6 +13,6 @@ them over the local docker network on the VM. From inside the dev VM:
 
 ```
 cd /srv/burla
-BURLA_TEST_PROJECT=burla-agent-<id> \
+BURLA_TEST_PROJECT=burla-agent-<slot> \
   uv run --project ./client --group dev pytest node_service/tests -m "service and not chaos"
 ```

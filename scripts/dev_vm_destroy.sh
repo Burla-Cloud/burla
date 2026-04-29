@@ -5,19 +5,18 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=scripts/dev_vm_common.sh
 source "$SCRIPT_DIR/dev_vm_common.sh"
 
-parse_agent_and_destroy_flags "$@"
+parse_slot_and_destroy_flags "$@"
 require_local_prereqs
-require_agent_worktree_context "$AGENT_ID"
 
-STATE_PATH="$(state_path_for_agent "$AGENT_ID")"
-PROJECT_ID="$(project_id_for_agent "$AGENT_ID")"
+STATE_PATH="$(state_path_for_slot "$SLOT_ID")"
+PROJECT_ID="$(project_id_for_slot "$SLOT_ID")"
 ZONE="$DEFAULT_ZONE"
 VM_NAME=""
 TUNNEL_PID=""
 
 if [[ -f "$STATE_PATH" ]]; then
-  load_state_vars "$AGENT_ID"
-  validate_loaded_state_against_current_context
+  load_state_vars "$SLOT_ID"
+  validate_loaded_state_for_slot
 fi
 
 if [[ -n "${TUNNEL_PID:-}" ]] && kill -0 "$TUNNEL_PID" >/dev/null 2>&1; then
@@ -53,4 +52,4 @@ if [[ "$DELETE_PROJECT" == "true" ]] && project_exists "$PROJECT_ID"; then
   gcloud projects delete "$PROJECT_ID" --quiet >/dev/null
 fi
 
-echo "Destroyed resources for agent [$AGENT_ID]."
+echo "Destroyed resources for slot [$SLOT_ID]."

@@ -3,10 +3,12 @@ description: Burla agent tasks must use linked worktrees before using dev VMs
 alwaysApply: true
 ---
 
-# Burla Ephemeral Dev VM
+# Burla Worktrees and Dev VM Slots
 
-For Burla agent tasks, never edit the primary checkout directly. First create or reopen a linked task worktree, move into it, and only then use the `scripts/dev_vm_*.sh` workflow. Prefer the Burla dev-VM skill and the `scripts/dev-worktree/*.sh` helpers over ad hoc `git worktree`, `gcloud`, `ssh`, or `scp` commands.
+For Burla agent tasks, never edit the primary checkout directly. First create or reopen a linked task worktree with `scripts/dev-worktree/create.sh`, move into it, and edit there. Prefer the Burla dev-VM skill and the `scripts/dev-worktree/*.sh` / `scripts/dev_vm_*.sh` helpers over ad hoc `git worktree`, `gcloud`, `ssh`, or `scp` commands.
 
-Never ask the user which agent slot to use. Pick the lowest-numbered slot from `agent-00` through `agent-10` with an existing GCP project/dev VM setup that is not actively running. A slot is in use only if its dev VM is running or booting, an active terminal command is using it, or it has an explicit lock file. Existing task subdirectories do not make a slot unavailable by themselves. You need the user's explicit approval in the current conversation before using any slot above `agent-10`; if slots `agent-00` through `agent-10` are all actively in use, stop and ask.
+Git worktrees and dev VM slots are separate resources. A worktree is named for the task/branch, for example `../burla-worktrees/dev-vm-test-reliability` on branch `work/dev-vm-test-reliability`. It is not assigned to a dev VM slot. Any worktree can be synced to any available slot with `scripts/dev_vm_sync_repo.sh --slot <id> --source <worktree-path>`.
 
-Before reusing a slot with old task subdirectories, check each worktree's git status. If a worktree is dirty, preserve that work by committing it on its current branch with a clear WIP message unless secrets are present; push nothing unless the user explicitly asks. Remove the old task subdirectory/worktree after the work is preserved. Only create a new agent slot if every existing slot is actively in use.
+Never ask the user which dev VM slot to use. Pick the lowest-numbered unlocked slot from `00` through `10` using `scripts/dev_vm_slot_acquire.sh`. A slot is unavailable only if it has an explicit lock, is being created/destroyed, or an active terminal command is using it. Pending work in a git worktree does not reserve any dev VM slot. You need the user's explicit approval in the current conversation before using any slot above `10`; if slots `00` through `10` are all unavailable, stop and ask.
+
+Before removing an old worktree, check its git status. If it is dirty, preserve that work by committing it on its current branch with a clear WIP message unless secrets are present; push nothing unless the user explicitly asks. Remove worktrees only when they are no longer needed for their branch.

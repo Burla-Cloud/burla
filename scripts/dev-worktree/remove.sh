@@ -5,17 +5,20 @@ THIS_SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=scripts/dev_vm_common.sh
 source "$THIS_SCRIPT_DIR/../dev_vm_common.sh"
 
-AGENT_ID=""
 TASK_SLUG=""
+BRANCH_NAME=""
 DELETE_BRANCH="false"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --agent)
-      AGENT_ID="$2"
       shift 2
       ;;
     --task)
       TASK_SLUG="$2"
+      shift 2
+      ;;
+    --branch)
+      BRANCH_NAME="$2"
       shift 2
       ;;
     --delete-branch)
@@ -28,15 +31,16 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-[[ -n "$AGENT_ID" ]] || fail "--agent is required."
 [[ -n "$TASK_SLUG" ]] || fail "--task is required."
-validate_agent_id "$AGENT_ID"
 validate_task_slug "$TASK_SLUG"
+if [[ -z "$BRANCH_NAME" ]]; then
+  BRANCH_NAME="$(branch_name_for_task "$TASK_SLUG")"
+fi
+validate_branch_name "$BRANCH_NAME"
 require_command git
 require_primary_checkout_context
 
-BRANCH_NAME="$(branch_name_for_task "$AGENT_ID" "$TASK_SLUG")"
-WORKTREE_PATH="$(worktree_path_for_task "$AGENT_ID" "$TASK_SLUG")"
+WORKTREE_PATH="$(worktree_path_for_task "$TASK_SLUG")"
 REMOVED_WORKTREE="false"
 DELETED_BRANCH="false"
 
@@ -50,7 +54,6 @@ if [[ "$DELETE_BRANCH" == "true" ]] && git show-ref --verify --quiet "refs/heads
   DELETED_BRANCH="true"
 fi
 
-AGENT_ID="$AGENT_ID" \
 TASK_SLUG="$TASK_SLUG" \
 BRANCH_NAME="$BRANCH_NAME" \
 WORKTREE_PATH="$WORKTREE_PATH" \
@@ -64,7 +67,6 @@ import os
 print(
     json.dumps(
         {
-            "agent_id": os.environ["AGENT_ID"],
             "task_slug": os.environ["TASK_SLUG"],
             "branch_name": os.environ["BRANCH_NAME"],
             "worktree_path": os.environ["WORKTREE_PATH"],

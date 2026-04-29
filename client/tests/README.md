@@ -27,26 +27,27 @@ Follow the ephemeral dev-VM workflow (see [`.cursor/skills/burla-ephemeral-dev-v
 
 ```
 # From the primary checkout
-scripts/dev-worktree/create.sh --agent <id> --task <task-slug>
-cd ../burla-worktrees/agent-<id>/<task-slug>
+scripts/dev-worktree/create.sh --task <task-slug>
+cd ../burla-worktrees/<task-slug>
 
-scripts/dev_vm_create.sh --agent <id>
-scripts/dev_vm_wait_ssh.sh --agent <id>
-scripts/dev_vm_sync_repo.sh --agent <id>
-scripts/dev_vm_start.sh --agent <id> --mode local-dev
-scripts/dev_vm_tunnel.sh --agent <id>
+scripts/dev_vm_slot_acquire.sh --source "$(pwd)"
+scripts/dev_vm_create.sh --slot <slot>
+scripts/dev_vm_wait_ssh.sh --slot <slot>
+scripts/dev_vm_sync_repo.sh --slot <slot> --source "$(pwd)"
+scripts/dev_vm_start.sh --slot <slot> --mode local-dev
+scripts/dev_vm_tunnel.sh --slot <slot>
 ```
 
 Then SSH into the VM and run tests from there:
 
 ```
-ssh -i ~/.ssh/burla-dev-vm/<id>_ed25519 jakezuliani@<vm-ip>
+ssh -i ~/.ssh/burla-dev-vm/<slot>_ed25519 jakezuliani@<vm-ip>
 cd /srv/burla
 curl -sX POST http://localhost:5001/v1/cluster/restart \
   -H "X-User-Email: jakescursoragent@gmail.com" \
   -H "Authorization: Bearer <agent-token>"
 # wait for ready_nodes >= 1 at /v1/cluster/state
-BURLA_TEST_PROJECT=burla-agent-<id> \
+BURLA_TEST_PROJECT=burla-agent-<slot> \
   uv run --project ./client --group dev pytest -m "not chaos and not dashboard"
 ```
 
@@ -55,21 +56,23 @@ BURLA_TEST_PROJECT=burla-agent-<id> \
 When done:
 
 ```
-scripts/dev_vm_destroy.sh --agent <id>
+scripts/dev_vm_slot_release.sh --slot <slot>
+scripts/dev_vm_destroy.sh --slot <slot>
 ```
 
 #### Running on a dev VM (agents)
 
 1. **Never run service / e2e / chaos tests on your laptop.** Provision a dev VM.
    The whole suite is designed and verified against the dev-VM environment.
-2. If no VM exists for your agent ID, run `scripts/dev_vm_create.sh --agent <id>`
+2. Acquire a slot with `scripts/dev_vm_slot_acquire.sh --source <worktree>`.
+   If no VM exists for that slot, run `scripts/dev_vm_create.sh --slot <slot>`
    and follow the sequence above.
 3. Before every service / e2e run, verify: cluster is reachable through the
    tunnel (`curl http://localhost:<local-dashboard-port>/version` returns 200)
    and `ready_nodes` in `/v1/cluster/state` is ≥ 1.
 4. Run the tests on the VM (via SSH). The VM has `uv` at `/usr/local/bin/uv`;
    always invoke pytest via `uv run --project ./client --group dev pytest`.
-5. Set `BURLA_TEST_PROJECT=burla-agent-<id>` so the readiness gate in
+5. Set `BURLA_TEST_PROJECT=burla-agent-<slot>` so the readiness gate in
    `conftest.py` matches the active project. On a laptop it defaults to
    `burla-test`, which is wrong for agent dev VMs.
 6. Readiness gate: if the cluster isn't verifiably READY, stop and investigate.

@@ -5,46 +5,44 @@ description: Provision and use isolated ephemeral GCP VMs for Burla local-dev or
 
 # Burla Ephemeral Dev VM
 
-Use the worktree and VM scripts instead of handwritten `git worktree`, `gcloud`, `ssh`, or `scp` sequences.
+Use the worktree and VM scripts instead of handwritten `git worktree`, `gcloud`, `ssh`, or `scp` sequences. Git worktrees and dev VM slots are separate resources: a worktree holds code, while a slot is reusable compute that can run any synced worktree.
 
 ## Defaults
 
-- One active agent task gets one fresh linked worktree, one fresh task branch, and one fresh VM.
+- One active task gets one linked worktree and branch. It can use any available dev VM slot when it needs runtime verification.
 - Always edit from the linked worktree, never from the primary checkout.
-- Pick the agent slot automatically — never ask the user which slot to use. See "Slot Selection" below.
+- Pick the dev VM slot automatically — never ask the user which slot to use. See "Slot Selection" below.
 - Default to `--mode local-dev` on the VM; switch to `--mode remote-dev` when real GCE worker VMs are needed.
 - Use the script-reported `http://localhost:<port>` URL for browser and client work.
-- Destroy the VM when the task is complete unless the user asked to keep it.
+- Release the slot lock when done. Destroy the VM when the task is complete unless the user asked to keep it warm.
 - Keep the worktree and branch until explicit cleanup so work-in-progress is not lost.
 
 ## Slot Selection
 
 Pick the slot without asking the user. Follow this order:
 
-1. Prefer the lowest-numbered slot with an existing GCP project/dev VM setup that is not actively running.
-2. A slot is in use only if its dev VM is running or booting, an active terminal command is using it, or it has an explicit lock file.
-3. Existing task subdirectories do not make a slot unavailable by themselves.
-4. Before reusing a slot with old task subdirectories, check each worktree's git status.
-5. If a worktree is dirty, preserve that work by committing it on its current branch with a clear WIP message unless secrets are present.
-6. Push nothing unless the user explicitly asks.
-7. Remove the old task subdirectory/worktree after the work is preserved.
-8. Only create a new agent slot if every existing slot is actively in use. The `scripts/dev_vm_create.sh` step provisions the GCP project and SSH key for a new slot automatically.
-9. Slot IDs are zero-padded two-digit strings (`01`, `02`, ...).
+1. Run `scripts/dev_vm_slot_acquire.sh --source <worktree-path>` from any checkout. It picks the lowest unlocked slot from `00` through `10`.
+2. A slot is unavailable only if it has an explicit lock, is being created/destroyed, or an active terminal command is using it.
+3. Pending work in a git worktree does not reserve any dev VM slot.
+4. You need the user's explicit approval in the current conversation before using any slot above `10`.
+5. Slot IDs are zero-padded two-digit strings (`01`, `02`, ...).
 
 ## Standard Workflow
 
-1. From the primary checkout, run `scripts/dev-worktree/create.sh --agent <id> --task <task-slug>`.
+1. From the primary checkout, run `scripts/dev-worktree/create.sh --task <task-slug>` or include `--branch <branch-name>`.
 2. `cd` into the printed worktree path.
 3. Make code changes only from that linked worktree.
-4. Run `scripts/dev_vm_create.sh --agent <id>`.
-5. Run `scripts/dev_vm_wait_ssh.sh --agent <id>`.
-6. Run `scripts/dev_vm_sync_repo.sh --agent <id>`.
-7. Run `scripts/dev_vm_start.sh --agent <id> --mode <local-dev|remote-dev>`.
-8. Run `scripts/dev_vm_tunnel.sh --agent <id>`.
-9. Run `scripts/dev_vm_status.sh --agent <id>`.
-10. For local client work, run `scripts/dev_vm_client_shell.sh --agent <id> --python <version>`.
-11. When done, run `scripts/dev_vm_destroy.sh --agent <id>`.
-12. Remove the worktree later with `scripts/dev-worktree/remove.sh --agent <id> --task <task-slug>` only when you are done with that branch.
+4. Acquire a slot: `scripts/dev_vm_slot_acquire.sh --source "$(pwd)"`.
+5. Create the VM if needed: `scripts/dev_vm_create.sh --slot <id>`.
+6. Wait for bootstrap: `scripts/dev_vm_wait_ssh.sh --slot <id>`.
+7. Sync the current worktree: `scripts/dev_vm_sync_repo.sh --slot <id> --source "$(pwd)"`.
+8. Start the synced code: `scripts/dev_vm_start.sh --slot <id> --mode <local-dev|remote-dev>`.
+9. Run `scripts/dev_vm_tunnel.sh --slot <id>`.
+10. Run `scripts/dev_vm_status.sh --slot <id>`.
+11. For local client work, run `scripts/dev_vm_client_shell.sh --slot <id> --python <version>`.
+12. When done, run `scripts/dev_vm_slot_release.sh --slot <id>`.
+13. Destroy the VM with `scripts/dev_vm_destroy.sh --slot <id>` unless the user asked to keep it warm.
+14. Remove the worktree later with `scripts/dev-worktree/remove.sh --task <task-slug>` only when you are done with that branch.
 
 Switching modes on a running VM: re-run step 7 with the other `--mode`. The start script tears down the previous `main_service` container and tmux session before starting the new mode, so only one mode runs at a time.
 
@@ -64,9 +62,9 @@ Caveats for `remote-dev`:
 ## Guardrails
 
 - Never edit the primary checkout for an agent task.
-- Never run the `scripts/dev_vm_*.sh` commands from the primary checkout.
-- The current branch must match `agent/<id>/<task-slug>` before VM scripts run.
-- Never share a VM across active agents.
+- Never edit from the primary checkout.
+- Never sync a different worktree than the one you intend to test.
+- Never share a locked VM slot across active agents.
 - Never expose port `5001` publicly.
 - Never assume the dashboard URL is `http://localhost:5001`; always read the state file or status output.
 - Sync the repo before starting or restarting the main service if local code changed.

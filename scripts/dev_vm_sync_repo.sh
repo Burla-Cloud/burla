@@ -5,14 +5,35 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=scripts/dev_vm_common.sh
 source "$SCRIPT_DIR/dev_vm_common.sh"
 
-parse_agent_only "$@"
-require_local_prereqs
-require_agent_worktree_context "$AGENT_ID"
-load_state_vars "$AGENT_ID"
-validate_loaded_state_against_current_context
+SOURCE_PATH=""
+parse_slot_only_args=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --source)
+      SOURCE_PATH="$2"
+      shift 2
+      ;;
+    *)
+      parse_slot_only_args+=("$1")
+      shift
+      ;;
+  esac
+done
 
-SYNC_ARCHIVE="$(mktemp "/tmp/burla-dev-vm-${AGENT_ID}-XXXXXX.tgz")"
-REMOTE_ARCHIVE="burla-dev-vm-${AGENT_ID}.tgz"
+parse_slot_only "${parse_slot_only_args[@]}"
+require_local_prereqs
+load_state_vars "$SLOT_ID"
+validate_loaded_state_for_slot
+
+if [[ -z "$SOURCE_PATH" ]]; then
+  SOURCE_PATH="$(current_git_toplevel)"
+fi
+SOURCE_PATH="$(cd "$SOURCE_PATH" && pwd)"
+SOURCE_TOPLEVEL="$(git -C "$SOURCE_PATH" rev-parse --show-toplevel 2>/dev/null)" || fail "Source path [$SOURCE_PATH] is not inside a git checkout."
+[[ "$SOURCE_TOPLEVEL" == "$SOURCE_PATH" ]] || fail "Source path [$SOURCE_PATH] must be a git checkout root, got [$SOURCE_TOPLEVEL]."
+
+SYNC_ARCHIVE="$(mktemp "/tmp/burla-dev-vm-${SLOT_ID}-XXXXXX.tgz")"
+REMOTE_ARCHIVE="burla-dev-vm-${SLOT_ID}.tgz"
 trap 'rm -f "$SYNC_ARCHIVE"' EXIT
 
 COPYFILE_DISABLE=1 tar -czf "$SYNC_ARCHIVE" \
@@ -27,7 +48,7 @@ COPYFILE_DISABLE=1 tar -czf "$SYNC_ARCHIVE" \
   --exclude='_node_auth' \
   --exclude='__pycache__' \
   --exclude='*/__pycache__' \
-  -C "$REPO_ROOT" .
+  -C "$SOURCE_PATH" .
 
 scp_to_vm "$SYNC_ARCHIVE" "~/${REMOTE_ARCHIVE}" >/dev/null
 
@@ -43,6 +64,9 @@ EOF
 ssh_run "$REMOTE_BODY" >/dev/null
 echo "Synced repo to [$VM_NAME:$REMOTE_REPO_DIR]."
 
+SOURCE_PATCH_JSON="$(source_git_metadata_json "$SOURCE_PATH")"
+merge_state_json "$STATE_PATH" "$SOURCE_PATCH_JSON" >/dev/null
+
 # Ship git-ignored frontend env file (Syncfusion license, etc.) so
 # `make build-frontend` bakes VITE_* vars into the bundle. Prefer the
 # worktree copy; fall back to the primary checkout. Silent skip if neither
@@ -50,8 +74,8 @@ echo "Synced repo to [$VM_NAME:$REMOTE_REPO_DIR]."
 FRONTEND_ENV_PATH="main_service/frontend/.env.local"
 LOCAL_ENV_FILE=""
 for candidate in \
-  "$CURRENT_WORKTREE_PATH/$FRONTEND_ENV_PATH" \
-  "$PRIMARY_CHECKOUT_PATH/$FRONTEND_ENV_PATH"; do
+  "$SOURCE_PATH/$FRONTEND_ENV_PATH" \
+  "$(primary_checkout_path)/$FRONTEND_ENV_PATH"; do
   if [[ -f "$candidate" ]]; then
     LOCAL_ENV_FILE="$candidate"
     break

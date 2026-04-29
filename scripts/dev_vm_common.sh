@@ -44,9 +44,13 @@ require_local_prereqs() {
   require_command uv
 }
 
+validate_slot_id() {
+  local slot_id="$1"
+  [[ "$slot_id" =~ ^[0-9]{2}$ ]] || fail "--slot must be a two-digit string like [01]."
+}
+
 validate_agent_id() {
-  local agent_id="$1"
-  [[ "$agent_id" =~ ^[0-9]{2}$ ]] || fail "--agent must be a two-digit string like [01]."
+  validate_slot_id "$1"
 }
 
 validate_task_slug() {
@@ -54,12 +58,18 @@ validate_task_slug() {
   [[ "$task_slug" =~ ^[a-z0-9][a-z0-9-]*$ ]] || fail "--task must be lower-case letters, numbers, and hyphens."
 }
 
-parse_agent_only() {
-  AGENT_ID=""
+validate_branch_name() {
+  local branch_name="$1"
+  [[ -n "$branch_name" ]] || fail "--branch must not be empty."
+  [[ "$branch_name" != *" "* ]] || fail "--branch must not contain spaces."
+}
+
+parse_slot_only() {
+  SLOT_ID=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --agent)
-        AGENT_ID="$2"
+      --slot|--agent)
+        SLOT_ID="$2"
         shift 2
         ;;
       *)
@@ -68,17 +78,22 @@ parse_agent_only() {
     esac
   done
 
-  [[ -n "$AGENT_ID" ]] || fail "--agent is required."
-  validate_agent_id "$AGENT_ID"
+  [[ -n "$SLOT_ID" ]] || fail "--slot is required."
+  validate_slot_id "$SLOT_ID"
+  AGENT_ID="$SLOT_ID"
 }
 
-parse_agent_and_python() {
-  AGENT_ID=""
+parse_agent_only() {
+  parse_slot_only "$@"
+}
+
+parse_slot_and_python() {
+  SLOT_ID=""
   PYTHON_VERSION=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --agent)
-        AGENT_ID="$2"
+      --slot|--agent)
+        SLOT_ID="$2"
         shift 2
         ;;
       --python)
@@ -91,18 +106,23 @@ parse_agent_and_python() {
     esac
   done
 
-  [[ -n "$AGENT_ID" ]] || fail "--agent is required."
+  [[ -n "$SLOT_ID" ]] || fail "--slot is required."
   [[ -n "$PYTHON_VERSION" ]] || fail "--python is required."
-  validate_agent_id "$AGENT_ID"
+  validate_slot_id "$SLOT_ID"
+  AGENT_ID="$SLOT_ID"
 }
 
-parse_agent_and_mode() {
-  AGENT_ID=""
+parse_agent_and_python() {
+  parse_slot_and_python "$@"
+}
+
+parse_slot_and_mode() {
+  SLOT_ID=""
   MODE=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --agent)
-        AGENT_ID="$2"
+      --slot|--agent)
+        SLOT_ID="$2"
         shift 2
         ;;
       --mode)
@@ -115,27 +135,35 @@ parse_agent_and_mode() {
     esac
   done
 
-  [[ -n "$AGENT_ID" ]] || fail "--agent is required."
+  [[ -n "$SLOT_ID" ]] || fail "--slot is required."
   [[ -n "$MODE" ]] || fail "--mode is required (local-dev or remote-dev)."
-  validate_agent_id "$AGENT_ID"
+  validate_slot_id "$SLOT_ID"
   case "$MODE" in
     local-dev|remote-dev) ;;
     *) fail "--mode must be [local-dev] or [remote-dev], got [$MODE]." ;;
   esac
+  AGENT_ID="$SLOT_ID"
 }
 
-parse_agent_task_and_base() {
-  AGENT_ID=""
+parse_agent_and_mode() {
+  parse_slot_and_mode "$@"
+}
+
+parse_worktree_task_and_base() {
   TASK_SLUG=""
+  BRANCH_NAME=""
   BASE_REF="${BURLA_DEV_WORKTREE_BASE_REF:-main}"
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --agent)
-        AGENT_ID="$2"
         shift 2
         ;;
       --task)
         TASK_SLUG="$2"
+        shift 2
+        ;;
+      --branch)
+        BRANCH_NAME="$2"
         shift 2
         ;;
       --base)
@@ -148,20 +176,26 @@ parse_agent_task_and_base() {
     esac
   done
 
-  [[ -n "$AGENT_ID" ]] || fail "--agent is required."
   [[ -n "$TASK_SLUG" ]] || fail "--task is required."
   [[ -n "$BASE_REF" ]] || fail "--base must not be empty."
-  validate_agent_id "$AGENT_ID"
   validate_task_slug "$TASK_SLUG"
+  if [[ -z "$BRANCH_NAME" ]]; then
+    BRANCH_NAME="$(branch_name_for_task "$TASK_SLUG")"
+  fi
+  validate_branch_name "$BRANCH_NAME"
 }
 
-parse_agent_and_destroy_flags() {
-  AGENT_ID=""
+parse_agent_task_and_base() {
+  parse_worktree_task_and_base "$@"
+}
+
+parse_slot_and_destroy_flags() {
+  SLOT_ID=""
   DELETE_PROJECT="false"
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --agent)
-        AGENT_ID="$2"
+      --slot|--agent)
+        SLOT_ID="$2"
         shift 2
         ;;
       --delete-project)
@@ -174,49 +208,91 @@ parse_agent_and_destroy_flags() {
     esac
   done
 
-  [[ -n "$AGENT_ID" ]] || fail "--agent is required."
-  validate_agent_id "$AGENT_ID"
+  [[ -n "$SLOT_ID" ]] || fail "--slot is required."
+  validate_slot_id "$SLOT_ID"
+  AGENT_ID="$SLOT_ID"
+}
+
+parse_agent_and_destroy_flags() {
+  parse_slot_and_destroy_flags "$@"
+}
+
+slot_number() {
+  local slot_id="$1"
+  printf '%d' "$((10#$slot_id))"
 }
 
 agent_number() {
-  local agent_id="$1"
-  printf '%d' "$((10#$agent_id))"
+  slot_number "$1"
+}
+
+project_id_for_slot() {
+  local slot_id="$1"
+  echo "${DEFAULT_PROJECT_PREFIX}${slot_id}"
 }
 
 project_id_for_agent() {
-  local agent_id="$1"
-  echo "${DEFAULT_PROJECT_PREFIX}${agent_id}"
+  project_id_for_slot "$1"
+}
+
+vm_name_for_slot() {
+  local slot_id="$1"
+  local timestamp="$2"
+  echo "${DEFAULT_VM_PREFIX}${slot_id}-${timestamp}"
 }
 
 vm_name_for_agent() {
-  local agent_id="$1"
-  local timestamp="$2"
-  echo "${DEFAULT_VM_PREFIX}${agent_id}-${timestamp}"
+  vm_name_for_slot "$1" "$2"
+}
+
+dashboard_port_for_slot() {
+  local slot_id="$1"
+  echo $((DEFAULT_DASHBOARD_PORT_BASE + $(slot_number "$slot_id")))
 }
 
 dashboard_port_for_agent() {
-  local agent_id="$1"
-  echo $((DEFAULT_DASHBOARD_PORT_BASE + $(agent_number "$agent_id")))
+  dashboard_port_for_slot "$1"
+}
+
+vite_port_for_slot() {
+  local slot_id="$1"
+  echo $((DEFAULT_VITE_PORT_BASE + $(slot_number "$slot_id")))
 }
 
 vite_port_for_agent() {
-  local agent_id="$1"
-  echo $((DEFAULT_VITE_PORT_BASE + $(agent_number "$agent_id")))
+  vite_port_for_slot "$1"
+}
+
+state_path_for_slot() {
+  local slot_id="$1"
+  echo "$STATE_DIR/${slot_id}.json"
 }
 
 state_path_for_agent() {
-  local agent_id="$1"
-  echo "$STATE_DIR/${agent_id}.json"
+  state_path_for_slot "$1"
+}
+
+lock_path_for_slot() {
+  local slot_id="$1"
+  echo "$STATE_DIR/${slot_id}.lock"
+}
+
+private_key_path_for_slot() {
+  local slot_id="$1"
+  echo "$KEY_DIR/${slot_id}_ed25519"
 }
 
 private_key_path_for_agent() {
-  local agent_id="$1"
-  echo "$KEY_DIR/${agent_id}_ed25519"
+  private_key_path_for_slot "$1"
+}
+
+public_key_path_for_slot() {
+  local slot_id="$1"
+  echo "$KEY_DIR/${slot_id}_ed25519.pub"
 }
 
 public_key_path_for_agent() {
-  local agent_id="$1"
-  echo "$KEY_DIR/${agent_id}_ed25519.pub"
+  public_key_path_for_slot "$1"
 }
 
 timestamp_utc() {
@@ -236,9 +312,8 @@ primary_checkout_path() {
 }
 
 branch_name_for_task() {
-  local agent_id="$1"
-  local task_slug="$2"
-  echo "agent/${agent_id}/${task_slug}"
+  local task_slug="$1"
+  echo "work/${task_slug}"
 }
 
 worktree_base_dir() {
@@ -253,9 +328,8 @@ worktree_base_dir() {
 }
 
 worktree_path_for_task() {
-  local agent_id="$1"
-  local task_slug="$2"
-  echo "$(worktree_base_dir)/agent-${agent_id}/${task_slug}"
+  local task_slug="$1"
+  echo "$(worktree_base_dir)/${task_slug}"
 }
 
 main_service_service_account() {
@@ -272,19 +346,23 @@ ensure_key_dir() {
   chmod 700 "$KEY_DIR"
 }
 
-ensure_agent_keypair() {
-  local agent_id="$1"
+ensure_slot_keypair() {
+  local slot_id="$1"
   local private_key_path
   local public_key_path
-  private_key_path="$(private_key_path_for_agent "$agent_id")"
-  public_key_path="$(public_key_path_for_agent "$agent_id")"
+  private_key_path="$(private_key_path_for_slot "$slot_id")"
+  public_key_path="$(public_key_path_for_slot "$slot_id")"
 
   if [[ -f "$private_key_path" && -f "$public_key_path" ]]; then
     return
   fi
 
   ensure_key_dir
-  ssh-keygen -t ed25519 -N "" -C "burla-dev-vm-${agent_id}" -f "$private_key_path" >/dev/null
+  ssh-keygen -t ed25519 -N "" -C "burla-dev-vm-${slot_id}" -f "$private_key_path" >/dev/null
+}
+
+ensure_agent_keypair() {
+  ensure_slot_keypair "$1"
 }
 
 merge_state_json() {
@@ -443,33 +521,68 @@ require_primary_checkout_context() {
   PRIMARY_CHECKOUT_PATH="$primary_checkout"
 }
 
-require_agent_worktree_context() {
-  local expected_agent_id="$1"
+require_linked_worktree_context() {
   local current_checkout
   local primary_checkout
   local branch_name
-  local branch_regex
 
   current_checkout="$(current_git_toplevel)"
   primary_checkout="$(primary_checkout_path)"
   [[ "$current_checkout" != "$primary_checkout" ]] || fail "Run this from a linked worktree, not the primary checkout [$primary_checkout]."
 
   branch_name="$(current_git_branch)"
-  branch_regex="^agent/${expected_agent_id}/([a-z0-9][a-z0-9-]*)$"
-  [[ "$branch_name" =~ $branch_regex ]] || fail "Current branch [$branch_name] must match [agent/${expected_agent_id}/<task-slug>]."
 
   CURRENT_CHECKOUT_PATH="$current_checkout"
   PRIMARY_CHECKOUT_PATH="$primary_checkout"
   CURRENT_BRANCH_NAME="$branch_name"
-  CURRENT_TASK_SLUG="${BASH_REMATCH[1]}"
   CURRENT_WORKTREE_PATH="$current_checkout"
 }
 
+require_agent_worktree_context() {
+  require_linked_worktree_context
+}
+
+validate_loaded_state_for_slot() {
+  [[ -n "${PROJECT_ID:-}" ]] || fail "State file [$STATE_PATH] is missing [project_id]."
+  [[ -n "${VM_NAME:-}" ]] || fail "State file [$STATE_PATH] is missing [vm_name]."
+  [[ -n "${VM_IP:-}" ]] || fail "State file [$STATE_PATH] is missing [vm_ip]."
+}
+
 validate_loaded_state_against_current_context() {
-  [[ -n "${BRANCH_NAME:-}" ]] || fail "State file [$STATE_PATH] is missing [branch_name]."
-  [[ -n "${TASK_SLUG:-}" ]] || fail "State file [$STATE_PATH] is missing [task_slug]."
-  [[ -n "${WORKTREE_PATH:-}" ]] || fail "State file [$STATE_PATH] is missing [worktree_path]."
-  [[ "$BRANCH_NAME" == "$CURRENT_BRANCH_NAME" ]] || fail "State branch [$BRANCH_NAME] does not match current branch [$CURRENT_BRANCH_NAME]."
-  [[ "$TASK_SLUG" == "$CURRENT_TASK_SLUG" ]] || fail "State task [$TASK_SLUG] does not match current task [$CURRENT_TASK_SLUG]."
-  [[ "$WORKTREE_PATH" == "$CURRENT_WORKTREE_PATH" ]] || fail "State worktree [$WORKTREE_PATH] does not match current worktree [$CURRENT_WORKTREE_PATH]."
+  validate_loaded_state_for_slot
+}
+
+source_git_metadata_json() {
+  local source_path="$1"
+  python3 - "$source_path" <<'PY'
+import json
+import pathlib
+import subprocess
+import sys
+
+source_path = pathlib.Path(sys.argv[1]).resolve()
+
+def git(*args: str) -> str:
+    result = subprocess.run(
+        ["git", "-C", str(source_path), *args],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return result.stdout.strip()
+
+branch = git("branch", "--show-current")
+commit = git("rev-parse", "HEAD")
+dirty = bool(git("status", "--short"))
+print(
+    json.dumps(
+        {
+            "last_synced_source_path": str(source_path),
+            "last_synced_branch": branch,
+            "last_synced_commit": commit,
+            "last_synced_dirty": dirty,
+        }
+    )
+)
+PY
 }

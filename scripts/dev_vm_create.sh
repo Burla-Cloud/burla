@@ -5,25 +5,24 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=scripts/dev_vm_common.sh
 source "$SCRIPT_DIR/dev_vm_common.sh"
 
-parse_agent_only "$@"
+parse_slot_only "$@"
 require_local_prereqs
-require_agent_worktree_context "$AGENT_ID"
 ensure_state_dir
-ensure_agent_keypair "$AGENT_ID"
+ensure_slot_keypair "$SLOT_ID"
 
-STATE_PATH="$(state_path_for_agent "$AGENT_ID")"
-PROJECT_ID="$(project_id_for_agent "$AGENT_ID")"
+STATE_PATH="$(state_path_for_slot "$SLOT_ID")"
+PROJECT_ID="$(project_id_for_slot "$SLOT_ID")"
 ZONE="$DEFAULT_ZONE"
 TIMESTAMP="$(timestamp_utc)"
-VM_NAME="$(vm_name_for_agent "$AGENT_ID" "$TIMESTAMP")"
-LOCAL_DASHBOARD_PORT="$(dashboard_port_for_agent "$AGENT_ID")"
-LOCAL_VITE_PORT="$(vite_port_for_agent "$AGENT_ID")"
+VM_NAME="$(vm_name_for_slot "$SLOT_ID" "$TIMESTAMP")"
+LOCAL_DASHBOARD_PORT="$(dashboard_port_for_slot "$SLOT_ID")"
+LOCAL_VITE_PORT="$(vite_port_for_slot "$SLOT_ID")"
 REMOTE_REPO_DIR="$DEFAULT_REMOTE_REPO_DIR"
 REMOTE_LOG_PATH="$DEFAULT_REMOTE_LOG_PATH"
-REMOTE_TMUX_SESSION="burla-dev-${AGENT_ID}"
+REMOTE_TMUX_SESSION="burla-dev-${SLOT_ID}"
 LOCAL_USER="$(id -un)"
-PRIVATE_KEY_PATH="$(private_key_path_for_agent "$AGENT_ID")"
-PUBLIC_KEY_PATH="$(public_key_path_for_agent "$AGENT_ID")"
+PRIVATE_KEY_PATH="$(private_key_path_for_slot "$SLOT_ID")"
+PUBLIC_KEY_PATH="$(public_key_path_for_slot "$SLOT_ID")"
 SSH_KEY_VALUE="$(python3 - "$PUBLIC_KEY_PATH" "$LOCAL_USER" <<'PY'
 import pathlib
 import sys
@@ -35,7 +34,7 @@ PY
 )"
 
 if [[ -f "$STATE_PATH" ]]; then
-  "$SCRIPT_DIR/dev_vm_destroy.sh" --agent "$AGENT_ID"
+  "$SCRIPT_DIR/dev_vm_destroy.sh" --slot "$SLOT_ID"
 fi
 
 if ! project_exists "$PROJECT_ID"; then
@@ -140,6 +139,7 @@ VM_IP="$(gcloud compute instances describe "$VM_NAME" --project "$PROJECT_ID" --
 
 PATCH_JSON="$(
   AGENT_ID="$AGENT_ID" \
+  SLOT_ID="$SLOT_ID" \
   PROJECT_ID="$PROJECT_ID" \
   VM_NAME="$VM_NAME" \
   ZONE="$ZONE" \
@@ -149,10 +149,6 @@ PATCH_JSON="$(
   DASHBOARD_URL="http://localhost:${LOCAL_DASHBOARD_PORT}" \
   REMOTE_LOG_PATH="$REMOTE_LOG_PATH" \
   REMOTE_TMUX_SESSION="$REMOTE_TMUX_SESSION" \
-  BRANCH_NAME="$CURRENT_BRANCH_NAME" \
-  TASK_SLUG="$CURRENT_TASK_SLUG" \
-  WORKTREE_PATH="$CURRENT_WORKTREE_PATH" \
-  PRIMARY_CHECKOUT_PATH="$PRIMARY_CHECKOUT_PATH" \
   LOCAL_USER="$LOCAL_USER" \
   VM_IP="$VM_IP" \
   PRIVATE_KEY_PATH="$PRIVATE_KEY_PATH" \
@@ -164,6 +160,7 @@ import os
 print(
     json.dumps(
         {
+            "slot_id": os.environ["SLOT_ID"],
             "agent_id": os.environ["AGENT_ID"],
             "project_id": os.environ["PROJECT_ID"],
             "vm_name": os.environ["VM_NAME"],
@@ -175,10 +172,6 @@ print(
             "tunnel_pid": None,
             "remote_log_path": os.environ["REMOTE_LOG_PATH"],
             "remote_tmux_session": os.environ["REMOTE_TMUX_SESSION"],
-            "branch_name": os.environ["BRANCH_NAME"],
-            "task_slug": os.environ["TASK_SLUG"],
-            "worktree_path": os.environ["WORKTREE_PATH"],
-            "primary_checkout_path": os.environ["PRIMARY_CHECKOUT_PATH"],
             "local_user": os.environ["LOCAL_USER"],
             "vm_ip": os.environ["VM_IP"],
             "private_key_path": os.environ["PRIVATE_KEY_PATH"],

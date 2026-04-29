@@ -149,10 +149,17 @@ async def upload_inputs(
 
 
 @router.get("/jobs/{job_id}/results")
-async def get_results(job_id: str = Path(...)):
+async def get_results(
+    job_id: str = Path(...),
+    ack_result_batch_id: str | None = Query(None),
+):
     if job_id != SELF["current_job"]:
         print(f"job {job_id} not found, current job: {SELF['current_job']}")
         return Response("job not found", status_code=404)
+
+    batch = SELF["pending_result_batch"]
+    if batch is not None and batch["id"] == ack_result_batch_id:
+        SELF["pending_result_batch"] = None
 
     result_batch_id, results = _get_result_batch()
     drained_logs = _pop_pending_logs()
@@ -170,17 +177,6 @@ async def get_results(job_id: str = Path(...)):
     data = pickle.dumps(response_json)
     headers = {"Content-Disposition": 'attachment; filename="results.pkl"'}
     return Response(content=data, media_type="application/octet-stream", headers=headers)
-
-
-@router.post("/jobs/{job_id}/results/ack")
-async def ack_results(job_id: str = Path(...), batch_id: str = Query(...)):
-    if job_id != SELF["current_job"]:
-        return Response("job not found", status_code=404)
-
-    batch = SELF["pending_result_batch"]
-    if batch is not None and batch["id"] == batch_id:
-        SELF["pending_result_batch"] = None
-    return Response(status_code=200)
 
 
 @router.post("/jobs/{job_id}")

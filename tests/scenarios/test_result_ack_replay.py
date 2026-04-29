@@ -7,9 +7,9 @@ no way to ask for that batch again, because node_service had already removed
 it from `SELF["results_queue"]`.
 
 The fault injection drops one non-empty `/results` response after node_service
-has served it, before the client records or ACKs it. This matches the failure
-mode where the HTTP response disappears after node_service has removed results
-from its queue.
+has served it, before the client records it or can acknowledge it on the next
+poll. This matches the failure mode where the HTTP response disappears after
+node_service has removed results from its queue.
 """
 
 from __future__ import annotations

@@ -21,7 +21,6 @@ from burla._reporting import RemoteParallelMapReporter, safe_print, safe_spinner
 
 NODE_SILENCE_TIMEOUT_SECONDS = 2 * 60
 RESULT_POLL_SILENCE_TIMEOUT_SECONDS = 10 * 60
-RESULT_ACK_TIMEOUT_SECONDS = 10 * 60
 NODE_BOOT_DEADLINE_SEC = 10 * 60
 LOGIN_TIMEOUT_SEC = 10
 MAX_INPUT_SIZE_BYTES = 1_000_000 * 200  # 200MB
@@ -226,7 +225,7 @@ class Node:
         self.current_parallelism = 0
         self.installing_packages = False
         self.result_count = 0
-        self.received_result_indices = set()
+        self.result_batch_id_to_ack = None
         self.last_reply_timestamp = time()
         self.last_result_poll_timestamp = None
         self.started_booting_at = time()
@@ -283,6 +282,7 @@ class Node:
 
     def _empty_node_results(self):
         return {
+            "result_batch_id": None,
             "results": [],
             "current_parallelism": self.current_parallelism,
             "logs": [],
@@ -428,10 +428,15 @@ class Node:
     async def _gather_results(self):
         url = f"{self.host}/jobs/{self.job_id}/results"
         self.last_result_poll_timestamp = time()
+        result_batch_id_to_ack = self.result_batch_id_to_ack
+        params = {}
+        if result_batch_id_to_ack:
+            params["ack_result_batch_id"] = result_batch_id_to_ack
 
         async def request_function():
             return await self.session.get(
                 url,
+                params=params,
                 headers=self.auth_headers,
                 timeout=ClientTimeout(total=15),
             )
@@ -443,6 +448,7 @@ class Node:
                 if response.status == 404:
                     self.state = "DONE"
                     return {
+                        "result_batch_id": None,
                         "results": [],
                         "current_parallelism": 0,
                         "logs": [],
@@ -452,6 +458,8 @@ class Node:
                 try:
                     node_results = pickle.loads(await response.content.read())
                     self.last_reply_timestamp = time()
+                    if result_batch_id_to_ack:
+                        self.result_batch_id_to_ack = None
                 except UnpicklingError as error:
                     if "Memo value not found at index" not in str(error):
                         raise error
@@ -475,33 +483,6 @@ class Node:
 
         self._print_logs(node_results.get("logs", []))
         return node_results
-
-    async def _ack_result_batch(self, result_batch_id: str):
-        url = f"{self.host}/jobs/{self.job_id}/results/ack"
-        deadline = time() + RESULT_ACK_TIMEOUT_SECONDS
-
-        async def request_function():
-            return await self.session.post(
-                url,
-                params={"batch_id": result_batch_id},
-                headers=self.auth_headers,
-                timeout=ClientTimeout(total=15),
-            )
-
-        while time() < deadline:
-            try:
-                response = await request_function()
-            except NETWORK_ERROR_TYPES:
-                await asyncio.sleep(NETWORK_RETRY_DELAY_SECONDS)
-                continue
-            async with response:
-                self.last_reply_timestamp = time()
-                if response.status == 200:
-                    return
-                raise Exception(f"Result ACK failed for node: {self.instance_name}")
-
-        msg = f"Could not ACK results from node {self.instance_name} after 10 minutes."
-        raise NodeDisconnected(self, await self._failure_message(msg))
 
     async def _upload_input_chunk(self, input_chunk: list):
         data = aiohttp.FormData()
@@ -606,16 +587,12 @@ class Node:
             result_batch_id = node_results.get("result_batch_id")
             return_values = []
             for input_index, is_error, result_pkl in node_results["results"]:
-                if input_index in self.received_result_indices:
-                    continue
                 if is_error:
                     error_info = pickle.loads(result_pkl)
                     if error_info.get("is_infrastructure_error"):
                         msg = f"Worker on node {self.instance_name} failed "
                         msg += f"while executing input index {input_index}:\n\n"
                         msg += error_info["traceback_str"]
-                        if result_batch_id:
-                            await self._ack_result_batch(result_batch_id)
                         raise NodeDisconnected(self, await self._failure_message(msg))
                     traceback = Traceback.from_dict(error_info["traceback_dict"]).as_traceback()
                     self.udf_error_event.set()
@@ -632,20 +609,17 @@ class Node:
                             exc.add_note(f"[burla] failed on input index {input_index}")
                     except Exception:
                         pass
-                    if result_batch_id:
-                        await self._ack_result_batch(result_batch_id)
                     raise exc
                 else:
-                    return_values.append((input_index, cloudpickle.loads(result_pkl)))
+                    return_values.append(cloudpickle.loads(result_pkl))
 
             self.current_parallelism = node_results["current_parallelism"]
 
-            for input_index, return_value in return_values:
+            for return_value in return_values:
                 return_queue.put_nowait(return_value)
-                self.received_result_indices.add(input_index)
                 self.result_count += 1
             if result_batch_id:
-                await self._ack_result_batch(result_batch_id)
+                self.result_batch_id_to_ack = result_batch_id
             if self.state == "DONE":
                 return
             await asyncio.sleep(0.05)

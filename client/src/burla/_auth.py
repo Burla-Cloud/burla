@@ -27,10 +27,76 @@ class AuthException(Exception):
         )
 
 
+class ADCProjectException(Exception):
+    def __init__(self):
+        super().__init__(
+            "Burla found Google Application Default Credentials, but could not determine "
+            "the active GCP project.\n\n"
+            "Set GOOGLE_CLOUD_PROJECT to the project that has Burla installed, or run `burla login`."
+        )
+
+
+class BurlaNotInstalledException(Exception):
+    def __init__(self, project_id: str):
+        super().__init__(
+            f"Burla is not installed in the active GCP project [{project_id}].\n\n"
+            "To use Burla, do one of these:\n"
+            f"- Run `burla install` while [{project_id}] is selected.\n"
+            "- Switch your Google Cloud project to one where Burla is already installed.\n"
+            "- Run `burla login` to authorize this machine against the Burla deployment you most "
+            "recently logged into in your browser."
+        )
+
+
+class ADCBootstrapException(Exception):
+    pass
+
+
+def _write_auth_config(auth_info: dict):
+    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    CONFIG_PATH.write_text(json.dumps(auth_info))
+    _get_auth_info.cache_clear()
+
+
+def _get_adc_token_and_project() -> tuple[str, str]:
+    import google.auth
+    from google.auth.transport.requests import Request
+
+    credentials, project_id = google.auth.default(
+        scopes=["https://www.googleapis.com/auth/cloud-platform"]
+    )
+    project_id = project_id or os.getenv("GOOGLE_CLOUD_PROJECT") or os.getenv("GCLOUD_PROJECT")
+    if not project_id:
+        raise ADCProjectException()
+    credentials.refresh(Request())
+    return credentials.token, project_id
+
+
+def bootstrap_from_adc() -> dict:
+    access_token, project_id = _get_adc_token_and_project()
+    response = requests.post(
+        f"{_BURLA_BACKEND_URL}/v1/clusters/{project_id}/adc:exchange",
+        headers={"Authorization": f"Bearer {access_token}"},
+        timeout=20,
+    )
+    if response.status_code == 404:
+        raise BurlaNotInstalledException(project_id)
+    if response.status_code >= 400:
+        try:
+            detail = response.json().get("detail")
+        except Exception:
+            detail = response.text
+        raise ADCBootstrapException(detail)
+    response.raise_for_status()
+    auth_info = response.json()
+    _write_auth_config(auth_info)
+    return auth_info
+
+
 @cache
 def _get_auth_info() -> tuple[str, str]:
     if not CONFIG_PATH.exists():
-        raise AuthException()
+        bootstrap_from_adc()
     auth_info = json.loads(CONFIG_PATH.read_text())
     return auth_info["email"], auth_info["auth_token"]
 
@@ -104,14 +170,10 @@ def login(no_browser: bool = False):
 
     print(f"\nYou are now logged in to [{project_id}] as [{email}].")
     print("Please email jake@burla.dev with any questions!\n")
-    if not CONFIG_PATH.exists():
-        CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        CONFIG_PATH.touch()
     config = {
         "auth_token": auth_token,
         "email": email,
         "project_id": project_id,
         "cluster_dashboard_url": cluster_dashboard_url,
     }
-    CONFIG_PATH.write_text(json.dumps(config))
-    _get_auth_info.cache_clear()
+    _write_auth_config(config)

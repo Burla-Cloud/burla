@@ -12,7 +12,7 @@ import aiohttp
 import requests
 
 from burla import get_cluster_dashboard_url
-from burla._auth import get_auth_headers
+from burla._auth import bootstrap_from_adc, get_auth_headers
 
 
 _TIMEOUT = aiohttp.ClientTimeout(total=30)
@@ -67,6 +67,7 @@ class ClusterClient:
         path: str,
         *,
         json_body: Optional[dict] = None,
+        retry_adc_bootstrap: bool = True,
     ):
         url = f"{self._url}{path}"
         async with self.session.request(
@@ -78,6 +79,15 @@ class ClusterClient:
         ) as response:
             if response.status == 404:
                 return None
+            if response.status == 401 and retry_adc_bootstrap:
+                bootstrap_from_adc()
+                self._url = get_cluster_dashboard_url()
+                return await self._request(
+                    method,
+                    path,
+                    json_body=json_body,
+                    retry_adc_bootstrap=False,
+                )
             response.raise_for_status()
             if response.content_length == 0:
                 return None
@@ -113,19 +123,25 @@ class ClusterClient:
             VersionMismatch,
         )
 
-        url = f"{self._url}/v1/jobs/{job_id}/start"
-        async with self.session.request(
-            "POST",
-            url,
-            json=config,
-            headers=get_auth_headers(),
-            timeout=_TIMEOUT,
-        ) as response:
-            status = response.status
-            try:
-                body = (await response.json()) or {}
-            except aiohttp.ContentTypeError:
-                body = {}
+        for attempt in range(2):
+            url = f"{self._url}/v1/jobs/{job_id}/start"
+            async with self.session.request(
+                "POST",
+                url,
+                json=config,
+                headers=get_auth_headers(),
+                timeout=_TIMEOUT,
+            ) as response:
+                status = response.status
+                try:
+                    body = (await response.json()) or {}
+                except aiohttp.ContentTypeError:
+                    body = {}
+            if status == 401 and attempt == 0:
+                bootstrap_from_adc()
+                self._url = get_cluster_dashboard_url()
+                continue
+            break
 
         if 200 <= status < 300:
             return body
@@ -174,7 +190,11 @@ class ClusterClient:
         url = f"{get_cluster_dashboard_url()}/v1/jobs/{job_id}"
         body = _build_patch_job_body(updates, append_fail_reason)
         try:
-            requests.patch(url, json=body, headers=get_auth_headers(), timeout=10)
+            response = requests.patch(url, json=body, headers=get_auth_headers(), timeout=10)
+            if response.status_code == 401:
+                bootstrap_from_adc()
+                url = f"{get_cluster_dashboard_url()}/v1/jobs/{job_id}"
+                requests.patch(url, json=body, headers=get_auth_headers(), timeout=10)
         except Exception:
             pass
 

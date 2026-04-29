@@ -14,7 +14,7 @@ Use the worktree and VM scripts instead of handwritten `git worktree`, `gcloud`,
 - Pick the dev VM slot automatically — never ask the user which slot to use. See "Slot Selection" below.
 - Default to `--mode local-dev` on the VM; switch to `--mode remote-dev` when real GCE worker VMs are needed.
 - Use the script-reported `http://localhost:<port>` URL for browser and client work.
-- Release the slot lock when done. Destroy the VM when the task is complete unless the user asked to keep it warm.
+- Release the slot lock when done. Stop the VM instead of deleting it so the next task can reuse the bootstrapped slot.
 - Keep the worktree and branch until explicit cleanup so work-in-progress is not lost.
 
 ## Slot Selection
@@ -22,7 +22,7 @@ Use the worktree and VM scripts instead of handwritten `git worktree`, `gcloud`,
 Pick the slot without asking the user. Follow this order:
 
 1. Run `scripts/dev_vm_slot_acquire.sh --source <worktree-path>` from any checkout. It picks the lowest unlocked slot from `00` through `10`.
-2. A slot is unavailable only if it has an explicit lock, is being created/destroyed, or an active terminal command is using it.
+2. A slot is unavailable only if it has an explicit lock, is being created/stopped, or an active terminal command is using it.
 3. Pending work in a git worktree does not reserve any dev VM slot.
 4. You need the user's explicit approval in the current conversation before using any slot above `10`.
 5. Slot IDs are zero-padded two-digit strings (`01`, `02`, ...).
@@ -41,7 +41,7 @@ Pick the slot without asking the user. Follow this order:
 10. Run `scripts/dev_vm_status.sh --slot <id>`.
 11. For local client work, run `scripts/dev_vm_client_shell.sh --slot <id> --python <version>`.
 12. When done, run `scripts/dev_vm_slot_release.sh --slot <id>`.
-13. Destroy the VM with `scripts/dev_vm_destroy.sh --slot <id>` unless the user asked to keep it warm.
+13. Stop the VM with `scripts/dev_vm_stop.sh --slot <id>` when the slot should go idle.
 14. Remove the worktree later with `scripts/dev-worktree/remove.sh --task <task-slug>` only when you are done with that branch.
 
 Switching modes on a running VM: re-run step 7 with the other `--mode`. The start script tears down the previous `main_service` container and tmux session before starting the new mode, so only one mode runs at a time.
@@ -57,7 +57,7 @@ Caveats for `remote-dev`:
 
 - Uncommitted edits under `node_service/` or `worker_server.py` do NOT reach worker VMs. The node startup script does `git fetch --depth=1 origin "{CURRENT_BURLA_VERSION}"` against the public repo. To test node-side changes remotely you must bump `CURRENT_BURLA_VERSION` in the four pinned places and push a matching tag.
 - Nested `remote_parallel_map` inside a UDF fails: workers use the `cluster_dashboard_url` the client sent (e.g. `http://localhost:<tunnel_port>`), which is not reachable from a GCE VM. Top-level RPM works fine.
-- `dev_vm_destroy.sh` best-effort POSTs `/v1/cluster/shutdown` before deleting the VM so worker VMs get cleaned up. If the VM is already unreachable, worker VMs fall back to the per-node inactivity timeout (default 10 min) or get nuked with `--delete-project`.
+- `dev_vm_stop.sh` / `dev_vm_destroy.sh` best-effort POST `/v1/cluster/shutdown` before stopping the VM so worker VMs get cleaned up. The local state file is kept so the stopped VM can be restarted by the next task.
 
 ## Guardrails
 

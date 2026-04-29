@@ -8,6 +8,10 @@ source "$SCRIPT_DIR/dev_vm_common.sh"
 parse_slot_and_destroy_flags "$@"
 require_local_prereqs
 
+if [[ "$DELETE_PROJECT" == "true" ]]; then
+  fail "--delete-project is disabled for reusable dev VM slots. Stop VMs instead of deleting them."
+fi
+
 STATE_PATH="$(state_path_for_slot "$SLOT_ID")"
 PROJECT_ID="$(project_id_for_slot "$SLOT_ID")"
 ZONE="$DEFAULT_ZONE"
@@ -31,25 +35,25 @@ if [[ -n "${VM_IP:-}" ]] && [[ -n "${PRIVATE_KEY_PATH:-}" ]]; then
   ssh_run "$shutdown_cmd" >/dev/null 2>&1 || true
 fi
 
-if [[ -n "${VM_NAME:-}" ]] && [[ -n "${VM_IP:-}" ]] && [[ -n "${PRIVATE_KEY_PATH:-}" ]] && ssh_run "CLOUDSDK_CORE_PROJECT='$PROJECT_ID' gcloud compute instances delete '$VM_NAME' --zone '${ZONE:-$DEFAULT_ZONE}' --quiet" >/dev/null 2>&1; then
-  :
-elif [[ -n "${VM_NAME:-}" ]] && vm_exists "$PROJECT_ID" "${ZONE:-$DEFAULT_ZONE}" "$VM_NAME"; then
-  delete_output="$(
-    gcloud compute instances delete "$VM_NAME" --project "$PROJECT_ID" --zone "${ZONE:-$DEFAULT_ZONE}" --quiet 2>&1
-  )" || {
-    if [[ "$delete_output" == *"was not found"* ]]; then
-      :
-    else
-      echo "$delete_output" >&2
-      exit 1
-    fi
-  }
+if [[ -n "${VM_NAME:-}" ]] && vm_exists "$PROJECT_ID" "${ZONE:-$DEFAULT_ZONE}" "$VM_NAME"; then
+  status="$(vm_status "$PROJECT_ID" "${ZONE:-$DEFAULT_ZONE}" "$VM_NAME")"
+  if [[ "$status" == "RUNNING" ]]; then
+    gcloud compute instances stop "$VM_NAME" --project "$PROJECT_ID" --zone "${ZONE:-$DEFAULT_ZONE}" --quiet >/dev/null
+  elif [[ "$status" != "TERMINATED" ]]; then
+    fail "VM [$VM_NAME] is [$status]; wait until it is RUNNING or TERMINATED before stopping slot [$SLOT_ID]."
+  fi
 fi
 
-rm -f "$STATE_PATH"
+if [[ -f "$STATE_PATH" ]]; then
+  PATCH_JSON="$(
+    python3 - <<'PY'
+import json
+from datetime import datetime, timezone
 
-if [[ "$DELETE_PROJECT" == "true" ]] && project_exists "$PROJECT_ID"; then
-  gcloud projects delete "$PROJECT_ID" --quiet >/dev/null
+print(json.dumps({"tunnel_pid": None, "last_stopped_at": datetime.now(timezone.utc).isoformat()}))
+PY
+  )"
+  merge_state_json "$STATE_PATH" "$PATCH_JSON" >/dev/null
 fi
 
-echo "Destroyed resources for slot [$SLOT_ID]."
+echo "Stopped VM for slot [$SLOT_ID]."

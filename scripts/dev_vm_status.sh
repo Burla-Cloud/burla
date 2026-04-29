@@ -11,6 +11,7 @@ load_state_vars "$SLOT_ID"
 validate_loaded_state_for_slot
 
 VM_EXISTS="false"
+VM_STATUS=""
 REMOTE_SESSION_RUNNING="false"
 TUNNEL_RUNNING="false"
 DASHBOARD_REACHABLE="false"
@@ -20,23 +21,30 @@ LOCK_PATH="$(lock_path_for_slot "$SLOT_ID")"
 LOCKED="false"
 LOCK_JSON="null"
 
-if ssh_run "true" >/dev/null 2>&1; then
+if vm_exists "$PROJECT_ID" "${ZONE:-$DEFAULT_ZONE}" "$VM_NAME"; then
   VM_EXISTS="true"
-  HEALTH="vm_created"
+  VM_STATUS="$(vm_status "$PROJECT_ID" "${ZONE:-$DEFAULT_ZONE}" "$VM_NAME")"
+  if [[ "$VM_STATUS" == "TERMINATED" ]]; then
+    HEALTH="vm_stopped"
+  elif [[ "$VM_STATUS" == "RUNNING" ]] && ssh_run "true" >/dev/null 2>&1; then
+    HEALTH="vm_created"
+  else
+    HEALTH="vm_${VM_STATUS}"
+  fi
 fi
 
 if [[ -n "${TUNNEL_PID:-}" ]] && kill -0 "$TUNNEL_PID" >/dev/null 2>&1; then
   TUNNEL_RUNNING="true"
 fi
 
-if [[ "$VM_EXISTS" == "true" ]] && ssh_run "tmux has-session -t '$REMOTE_TMUX_SESSION'" >/dev/null 2>&1; then
+if [[ "$VM_STATUS" == "RUNNING" ]] && ssh_run "tmux has-session -t '$REMOTE_TMUX_SESSION'" >/dev/null 2>&1; then
   REMOTE_SESSION_RUNNING="true"
   HEALTH="main_service_running"
 fi
 
 # Detect which mode main_service was started in by inspecting its container env.
 # Absent container -> empty string; IN_LOCAL_DEV_MODE=True present -> local-dev; else remote-dev.
-if [[ "$VM_EXISTS" == "true" ]]; then
+if [[ "$VM_STATUS" == "RUNNING" ]]; then
   inspect_cmd="docker inspect main_service --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null || true"
   container_env="$(ssh_run "$inspect_cmd" 2>/dev/null || true)"
   if [[ -n "$container_env" ]]; then
@@ -80,6 +88,7 @@ REMOTE_TMUX_SESSION="$REMOTE_TMUX_SESSION" \
 LOCAL_USER="$LOCAL_USER" \
 VM_IP="$VM_IP" \
 VM_EXISTS="$VM_EXISTS" \
+VM_STATUS="$VM_STATUS" \
 REMOTE_SESSION_RUNNING="$REMOTE_SESSION_RUNNING" \
 TUNNEL_RUNNING="$TUNNEL_RUNNING" \
 DASHBOARD_REACHABLE="$DASHBOARD_REACHABLE" \
@@ -125,6 +134,7 @@ print(
             "local_user": os.environ["LOCAL_USER"],
             "vm_ip": os.environ["VM_IP"],
             "vm_exists": os.environ["VM_EXISTS"] == "true",
+            "vm_status": os.environ["VM_STATUS"] or None,
             "remote_session_running": os.environ["REMOTE_SESSION_RUNNING"] == "true",
             "tunnel_running": os.environ["TUNNEL_RUNNING"] == "true",
             "dashboard_reachable": os.environ["DASHBOARD_REACHABLE"] == "true",

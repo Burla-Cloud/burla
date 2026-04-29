@@ -436,6 +436,20 @@ vm_exists() {
   gcloud compute instances describe "$vm_name" --project "$project_id" --zone "$zone" >/dev/null 2>&1
 }
 
+vm_status() {
+  local project_id="$1"
+  local zone="$2"
+  local vm_name="$3"
+  gcloud compute instances describe "$vm_name" --project "$project_id" --zone "$zone" --format='value(status)' 2>/dev/null
+}
+
+vm_external_ip() {
+  local project_id="$1"
+  local zone="$2"
+  local vm_name="$3"
+  gcloud compute instances describe "$vm_name" --project "$project_id" --zone "$zone" --format='value(networkInterfaces[0].accessConfigs[0].natIP)' 2>/dev/null
+}
+
 ensure_artifact_repository() {
   local project_id="$1"
   if gcloud artifacts repositories describe "$DEFAULT_ARTIFACT_REPOSITORY" --project "$project_id" --location "$DEFAULT_ARTIFACT_LOCATION" >/dev/null 2>&1; then

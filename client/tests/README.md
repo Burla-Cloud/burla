@@ -57,7 +57,7 @@ When done:
 
 ```
 scripts/dev_vm_slot_release.sh --slot <slot>
-scripts/dev_vm_destroy.sh --slot <slot>
+scripts/dev_vm_stop.sh --slot <slot>
 ```
 
 #### Running on a dev VM (agents)

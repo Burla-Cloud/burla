@@ -14,7 +14,8 @@ STATE_PATH="$(state_path_for_slot "$SLOT_ID")"
 PROJECT_ID="$(project_id_for_slot "$SLOT_ID")"
 ZONE="$DEFAULT_ZONE"
 TIMESTAMP="$(timestamp_utc)"
-VM_NAME="$(vm_name_for_slot "$SLOT_ID" "$TIMESTAMP")"
+NEW_VM_NAME="$(vm_name_for_slot "$SLOT_ID" "$TIMESTAMP")"
+VM_NAME="$NEW_VM_NAME"
 LOCAL_DASHBOARD_PORT="$(dashboard_port_for_slot "$SLOT_ID")"
 LOCAL_VITE_PORT="$(vite_port_for_slot "$SLOT_ID")"
 REMOTE_REPO_DIR="$DEFAULT_REMOTE_REPO_DIR"
@@ -34,7 +35,34 @@ PY
 )"
 
 if [[ -f "$STATE_PATH" ]]; then
-  "$SCRIPT_DIR/dev_vm_destroy.sh" --slot "$SLOT_ID"
+  load_state_vars "$SLOT_ID"
+  validate_loaded_state_for_slot
+  existing_status="$(vm_status "$PROJECT_ID" "${ZONE:-$DEFAULT_ZONE}" "$VM_NAME")"
+  if [[ "$existing_status" == "TERMINATED" ]]; then
+    gcloud compute instances start "$VM_NAME" --project "$PROJECT_ID" --zone "${ZONE:-$DEFAULT_ZONE}" --quiet >/dev/null
+    VM_IP="$(vm_external_ip "$PROJECT_ID" "${ZONE:-$DEFAULT_ZONE}" "$VM_NAME")"
+    PATCH_JSON="$(
+      VM_IP="$VM_IP" \
+      python3 - <<'PY'
+import json
+import os
+
+print(json.dumps({"vm_ip": os.environ["VM_IP"], "tunnel_pid": None}))
+PY
+    )"
+    merge_state_json "$STATE_PATH" "$PATCH_JSON" >/dev/null
+    print_state_file "$STATE_PATH"
+    exit 0
+  fi
+  if [[ "$existing_status" == "RUNNING" ]]; then
+    print_state_file "$STATE_PATH"
+    exit 0
+  fi
+  if [[ -n "$existing_status" ]]; then
+    fail "VM [$VM_NAME] is [$existing_status]; wait until it is RUNNING or TERMINATED before reusing slot [$SLOT_ID]."
+  fi
+  VM_NAME="$NEW_VM_NAME"
+  VM_IP=""
 fi
 
 if ! project_exists "$PROJECT_ID"; then

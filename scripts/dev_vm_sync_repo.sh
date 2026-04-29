@@ -33,22 +33,19 @@ SOURCE_TOPLEVEL="$(git -C "$SOURCE_PATH" rev-parse --show-toplevel 2>/dev/null)"
 [[ "$SOURCE_TOPLEVEL" == "$SOURCE_PATH" ]] || fail "Source path [$SOURCE_PATH] must be a git checkout root, got [$SOURCE_TOPLEVEL]."
 
 SYNC_ARCHIVE="$(mktemp "/tmp/burla-dev-vm-${SLOT_ID}-XXXXXX.tgz")"
+SYNC_FILE_LIST="$(mktemp "/tmp/burla-dev-vm-${SLOT_ID}-files-XXXXXX.txt")"
 REMOTE_ARCHIVE="burla-dev-vm-${SLOT_ID}.tgz"
-trap 'rm -f "$SYNC_ARCHIVE"' EXIT
+trap 'rm -f "$SYNC_ARCHIVE" "$SYNC_FILE_LIST"' EXIT
 
-COPYFILE_DISABLE=1 tar -czf "$SYNC_ARCHIVE" \
-  --exclude='.git' \
-  --exclude='.pytest_cache' \
-  --exclude='.cursor/dev-vm-state' \
-  --exclude='main_service/frontend/node_modules' \
-  --exclude='main_service/frontend/dist' \
-  --exclude='main_service/frontend/build' \
-  --exclude='_shared_workspace' \
-  --exclude='_worker_service_python_env' \
-  --exclude='_node_auth' \
-  --exclude='__pycache__' \
-  --exclude='*/__pycache__' \
-  -C "$SOURCE_PATH" .
+git -C "$SOURCE_PATH" ls-files -z --cached --others --exclude-standard > "$SYNC_FILE_LIST"
+
+COPYFILE_DISABLE=1 tar \
+  --null \
+  --no-xattrs \
+  --no-mac-metadata \
+  -czf "$SYNC_ARCHIVE" \
+  -C "$SOURCE_PATH" \
+  -T "$SYNC_FILE_LIST"
 
 scp_to_vm "$SYNC_ARCHIVE" "~/${REMOTE_ARCHIVE}" >/dev/null
 

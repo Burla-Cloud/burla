@@ -43,7 +43,8 @@ State and keys are split deliberately: the repo's `.cursor/` folder is a common 
 - `scripts/dev_vm_tunnel.sh`: forward local dashboard and Vite ports to the VM
 - `scripts/dev_vm_status.sh`: print the current state plus `health`, `running_mode` (detected from `main_service`'s `IN_LOCAL_DEV_MODE` env var), and `last_started_mode` (last value passed to `dev_vm_start.sh`)
 - `scripts/dev_vm_client_shell.sh`: start a local `uv` client shell with `BURLA_CLUSTER_DASHBOARD_URL` pointed at the tunneled dashboard URL
-- `scripts/dev_vm_destroy.sh`: best-effort POST `/v1/cluster/shutdown` to `main_service` (deletes remote-dev worker VMs), stop the local tunnel, delete the dev VM; delete the project slot only when explicitly requested via `--delete-project`
+- `scripts/dev_vm_stop.sh`: best-effort POST `/v1/cluster/shutdown` to `main_service` (deletes remote-dev worker VMs), stop the local tunnel, stop the dev VM, and keep the state file for reuse
+- `scripts/dev_vm_destroy.sh`: compatibility wrapper for the stop-only lifecycle; it stops VMs and does not delete them
 
 ## Local Client Caveat
 
@@ -82,5 +83,5 @@ These scripts accept optional environment overrides when the defaults are wrong 
 8. Start the tunnel.
 9. Use the dashboard and local client shell.
 10. Release the slot lock when done.
-11. Destroy the VM when done unless the user asked to keep it warm.
+11. Stop the VM when done unless the user asked to keep it running warm.
 12. Remove the worktree later only when the task branch is no longer needed.

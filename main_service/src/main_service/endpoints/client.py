@@ -53,17 +53,10 @@ from main_service.endpoints.cluster_lifecycle import (
     _get_cluster_config,
     _machine_type_cpu_count,
     _pack_n4_standard_machines,
-    _pack_n4_standard_machines_up_to,
     _prepare_node_boot_plan,
     _start_nodes,
 )
-from main_service.quota import (
-    INSTANCE_BUCKET,
-    N4_CPU_BUCKET,
-    active_machine_types_for_region,
-    n4_cpu_count,
-    quota_status,
-)
+from main_service.quota import active_machine_types_for_region
 
 router = APIRouter()
 
@@ -208,29 +201,6 @@ def _active_machine_types(gcp_region: str) -> list[str]:
     return active_machine_types_for_region(nodes, gcp_region)
 
 
-def _n4_quota_warning(
-    requested_cpus: int,
-    allowed_machine_types: list[str],
-    gcp_region: str,
-    active_machine_types: list[str],
-) -> dict:
-    status = quota_status(N4_CPU_BUCKET, gcp_region, active_machine_types)
-    allowed_cpus = sum(n4_cpu_count(machine_type) for machine_type in allowed_machine_types)
-    return {
-        "type": "quota_capped",
-        "machine_type": "n4-standard",
-        "region": gcp_region,
-        "requested": requested_cpus,
-        "allowed": allowed_cpus,
-        "count_unit": "vCPUs",
-        "limit": status["limit"],
-        "used": status["used"],
-        "available": status["available"],
-        "quota": status["quota"],
-        "units": status["units"],
-    }
-
-
 def _grow_if_needed(
     target_parallelism: int,
     n_inputs: int,
@@ -246,7 +216,8 @@ def _grow_if_needed(
 ) -> tuple[list[dict], list[dict]]:
     requested_parallelism = min(n_inputs, max_parallelism)
     gpu_mt = gpu_machine_type(func_gpu)
-    quota_warnings: list[dict] = []
+    n4_requested_cpus = None
+    n4_min_machine_size = 2
 
     if gpu_mt:
         missing_nodes = max(0, requested_parallelism - target_parallelism)
@@ -285,31 +256,11 @@ def _grow_if_needed(
         )
 
         if pack_by_size:
-            gcp_region = config["Nodes"][0]["gcp_region"]
-            active_machine_types = _active_machine_types(gcp_region)
-            cpu_status = quota_status(N4_CPU_BUCKET, gcp_region, active_machine_types)
-            instance_status = quota_status(INSTANCE_BUCKET, gcp_region, active_machine_types)
-            requested_machine_types = _pack_n4_standard_machines(num_cpus_to_add)
-            requested_cpus = sum(n4_cpu_count(mt) for mt in requested_machine_types)
-            if (
-                requested_cpus <= cpu_status["available"]
-                and len(requested_machine_types) <= instance_status["available"]
-            ):
-                node_machine_types = requested_machine_types
-            else:
-                quota_limited_cpus = min(num_cpus_to_add, cpu_status["available"])
-                node_machine_types = _pack_n4_standard_machines_up_to(quota_limited_cpus)
-                node_machine_types = node_machine_types[: instance_status["available"]]
-            allowed_cpus = sum(n4_cpu_count(mt) for mt in node_machine_types)
-            if allowed_cpus < num_cpus_to_add or len(node_machine_types) < len(requested_machine_types):
-                quota_warnings.append(
-                    _n4_quota_warning(
-                        requested_cpus=num_cpus_to_add,
-                        allowed_machine_types=node_machine_types,
-                        gcp_region=gcp_region,
-                        active_machine_types=active_machine_types,
-                    )
-                )
+            n4_requested_cpus = num_cpus_to_add
+            n4_min_machine_size = int(
+                _pack_n4_standard_machines(required_cpus_per_call)[0].split("-")[-1]
+            )
+            node_machine_types = _pack_n4_standard_machines(num_cpus_to_add)
         else:
             cpu_per_node = _machine_type_cpu_count(configured_machine_type)
             n_nodes_to_add = math.ceil(num_cpus_to_add / cpu_per_node)
@@ -323,22 +274,6 @@ def _grow_if_needed(
         if parallelism_capacity(mt, func_cpu, func_ram) > 0
     ]
     if not node_machine_types:
-        if quota_warnings:
-            gcp_region = config["Nodes"][0]["gcp_region"]
-            if target_parallelism > 0:
-                return [], quota_warnings
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error_code": "quota_exceeded",
-                    "region": gcp_region,
-                    "caps": quota_warnings,
-                    "message": (
-                        "Cluster is at its N4 CPU quota in "
-                        f"{gcp_region}; nothing can grow for this job shape."
-                    ),
-                },
-            )
         return [], []
 
     gcp_region = config["Nodes"][0]["gcp_region"]
@@ -347,8 +282,14 @@ def _grow_if_needed(
         node_machine_types,
         active_machine_types=_active_machine_types(gcp_region),
         raise_on_zero=False,
+        n4_requested_cpus=n4_requested_cpus,
+        n4_min_machine_size=n4_min_machine_size,
     )
-    caps = quota_warnings + shared_warnings
+    caps = shared_warnings
+    node_machine_types = [
+        mt for mt in node_machine_types
+        if parallelism_capacity(mt, func_cpu, func_ram) > 0
+    ]
 
     if not node_machine_types and caps and target_parallelism > 0:
         return [], caps

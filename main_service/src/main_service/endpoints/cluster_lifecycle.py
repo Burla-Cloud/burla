@@ -20,7 +20,14 @@ from main_service import (
 )
 from main_service.node import Container, Node
 from main_service.helpers import Logger, log_telemetry
-from main_service.quota import active_machine_types_for_region, cap_boot_machine_types
+from main_service.quota import (
+    INSTANCE_BUCKET,
+    N4_CPU_BUCKET,
+    active_machine_types_for_region,
+    cap_boot_machine_types,
+    n4_cpu_count,
+    quota_status,
+)
 
 router = APIRouter()
 MAX_GROW_CPUS = 2560
@@ -63,10 +70,10 @@ def _pack_n4_standard_machines(num_cpus: int) -> list[str]:
     return machines
 
 
-def _pack_n4_standard_machines_up_to(num_cpus: int) -> list[str]:
+def _pack_n4_standard_machines_up_to(num_cpus: int, min_size: int = 2) -> list[str]:
     machines = []
     remaining = num_cpus
-    for size in N4_STANDARD_SIZES_DESCENDING:
+    for size in [size for size in N4_STANDARD_SIZES_DESCENDING if size >= min_size]:
         while remaining >= size:
             machines.append(f"n4-standard-{size}")
             remaining -= size
@@ -108,11 +115,72 @@ def _quota_exceeded(region: str, caps: list[dict]):
     )
 
 
+def _n4_quota_warning(
+    requested_cpus: int,
+    allowed_machine_types: list[str],
+    gcp_region: str,
+    active_machine_types: list[str],
+) -> dict:
+    status = quota_status(N4_CPU_BUCKET, gcp_region, active_machine_types)
+    allowed_cpus = sum(n4_cpu_count(machine_type) for machine_type in allowed_machine_types)
+    return {
+        "type": "quota_capped",
+        "machine_type": "n4-standard",
+        "region": gcp_region,
+        "requested": requested_cpus,
+        "allowed": allowed_cpus,
+        "count_unit": "vCPUs",
+        "limit": status["limit"],
+        "used": status["used"],
+        "available": status["available"],
+        "quota": status["quota"],
+        "units": status["units"],
+    }
+
+
+def _prepare_n4_cpu_grow_boot_plan(
+    requested_cpus: int,
+    region: str,
+    active_machine_types: list[str],
+    min_machine_size: int,
+    raise_on_zero: bool,
+) -> tuple[list[str], list[dict]]:
+    requested_machine_types = _pack_n4_standard_machines(requested_cpus)
+    requested_quota_cpus = sum(n4_cpu_count(machine_type) for machine_type in requested_machine_types)
+    cpu_status = quota_status(N4_CPU_BUCKET, region, active_machine_types)
+    instance_status = quota_status(INSTANCE_BUCKET, region, active_machine_types)
+    if (
+        requested_quota_cpus <= cpu_status["available"]
+        and len(requested_machine_types) <= instance_status["available"]
+    ):
+        return requested_machine_types, []
+
+    quota_limited_cpus = min(requested_cpus, cpu_status["available"])
+    machine_types = _pack_n4_standard_machines_up_to(
+        quota_limited_cpus,
+        min_size=min_machine_size,
+    )
+    machine_types = machine_types[: instance_status["available"]]
+    warnings = [
+        _n4_quota_warning(
+            requested_cpus=requested_cpus,
+            allowed_machine_types=machine_types,
+            gcp_region=region,
+            active_machine_types=active_machine_types,
+        )
+    ]
+    if raise_on_zero and not machine_types:
+        _quota_exceeded(region, warnings)
+    return machine_types, warnings
+
+
 def _prepare_node_boot_plan(
     config: dict,
     requested_machine_types: list[str],
     active_machine_types: list[str] = None,
     raise_on_zero: bool = True,
+    n4_requested_cpus: int = None,
+    n4_min_machine_size: int = 2,
 ) -> tuple[list[str], list[dict]]:
     if IN_LOCAL_DEV_MODE:
         return requested_machine_types, []
@@ -121,6 +189,15 @@ def _prepare_node_boot_plan(
     active_machine_types = (
         active_machine_types if active_machine_types is not None else _active_machine_types(gcp_region)
     )
+    if n4_requested_cpus is not None:
+        return _prepare_n4_cpu_grow_boot_plan(
+            requested_cpus=n4_requested_cpus,
+            region=gcp_region,
+            active_machine_types=active_machine_types,
+            min_machine_size=n4_min_machine_size,
+            raise_on_zero=raise_on_zero,
+        )
+
     quota_plan = cap_boot_machine_types(
         requested_machine_types,
         gcp_region,

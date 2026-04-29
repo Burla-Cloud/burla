@@ -116,6 +116,12 @@ def test_active_machine_types_for_region_uses_only_active_nodes():
     ]
 
 
+def test_n4_pack_up_to_respects_min_machine_size():
+    from main_service.endpoints.cluster_lifecycle import _pack_n4_standard_machines_up_to
+
+    assert _pack_n4_standard_machines_up_to(79, min_size=16) == ["n4-standard-64"]
+
+
 if __name__ == "__main__":
     for test in [
         test_machine_type_requirements_cover_burla_machine_families,
@@ -123,5 +129,6 @@ if __name__ == "__main__":
         test_fetch_compute_quota_limits_reads_regional_compute_quotas,
         test_cap_boot_machine_types_counts_active_burla_usage,
         test_active_machine_types_for_region_uses_only_active_nodes,
+        test_n4_pack_up_to_respects_min_machine_size,
     ]:
         test()

@@ -1,5 +1,6 @@
 import os
 import json
+import base64
 import webbrowser
 import requests
 from functools import cache
@@ -52,13 +53,23 @@ class ADCBootstrapException(Exception):
     pass
 
 
+class ADCSecretPermissionException(Exception):
+    def __init__(self, project_id: str):
+        super().__init__(
+            f"Burla found Google Application Default Credentials for [{project_id}], "
+            "but they cannot read the Burla cluster token secret.\n\n"
+            "Grant this identity access to Secret Manager secret `burla-cluster-id-token`, "
+            "or run `burla login`."
+        )
+
+
 def _write_auth_config(auth_info: dict):
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     CONFIG_PATH.write_text(json.dumps(auth_info))
     _get_auth_info.cache_clear()
 
 
-def _get_adc_token_and_project() -> tuple[str, str]:
+def _get_adc_credentials():
     import google.auth
     from google.auth.transport.requests import Request
 
@@ -69,14 +80,53 @@ def _get_adc_token_and_project() -> tuple[str, str]:
     if not project_id:
         raise ADCProjectException()
     credentials.refresh(Request())
-    return credentials.token, project_id
+    return credentials, credentials.token, project_id
+
+
+def _get_adc_email(credentials, access_token: str) -> str:
+    service_account_email = getattr(credentials, "service_account_email", None)
+    if service_account_email:
+        return service_account_email
+
+    response = requests.get(
+        "https://oauth2.googleapis.com/tokeninfo",
+        params={"access_token": access_token},
+        timeout=10,
+    )
+    response.raise_for_status()
+    email = response.json().get("email")
+    if not email:
+        raise ADCBootstrapException(
+            "Burla could not determine the email for these Google Application Default Credentials. "
+            "Run `burla login` instead."
+        )
+    return email
+
+
+def _get_cluster_token(access_token: str, project_id: str) -> str:
+    response = requests.get(
+        "https://secretmanager.googleapis.com/v1/"
+        f"projects/{project_id}/secrets/burla-cluster-id-token/versions/latest:access",
+        headers={"Authorization": f"Bearer {access_token}"},
+        timeout=20,
+    )
+    if response.status_code == 404:
+        raise BurlaNotInstalledException(project_id)
+    if response.status_code == 403:
+        raise ADCSecretPermissionException(project_id)
+    response.raise_for_status()
+    encoded_token = response.json()["payload"]["data"]
+    return base64.b64decode(encoded_token).decode("utf-8")
 
 
 def bootstrap_from_adc() -> dict:
-    access_token, project_id = _get_adc_token_and_project()
+    credentials, access_token, project_id = _get_adc_credentials()
+    cluster_token = _get_cluster_token(access_token, project_id)
+    email = _get_adc_email(credentials, access_token)
     response = requests.post(
         f"{_BURLA_BACKEND_URL}/v1/clusters/{project_id}/adc:exchange",
-        headers={"Authorization": f"Bearer {access_token}"},
+        headers={"Authorization": f"Bearer {cluster_token}"},
+        json={"email": email},
         timeout=20,
     )
     if response.status_code == 404:

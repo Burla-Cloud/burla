@@ -47,6 +47,10 @@ class _FakeRequestsResponse:
         pass
 
 
+class _FakeCredentials:
+    service_account_email = "agent@project.iam.gserviceaccount.com"
+
+
 @pytest.mark.asyncio
 async def test_start_job_retries_once_after_adc_bootstrap(monkeypatch, tmp_path):
     import burla
@@ -67,7 +71,12 @@ async def test_start_job_retries_once_after_adc_bootstrap(monkeypatch, tmp_path)
     monkeypatch.setattr(burla, "CONFIG_PATH", config)
     monkeypatch.setattr(_auth, "CONFIG_PATH", config)
     _auth._get_auth_info.cache_clear()
-    monkeypatch.setattr(_auth, "_get_adc_token_and_project", lambda: ("google-token", "project-1"))
+    monkeypatch.setattr(
+        _auth,
+        "_get_adc_credentials",
+        lambda: (_FakeCredentials(), "google-token", "project-1"),
+    )
+    monkeypatch.setattr(_auth, "_get_cluster_token", lambda access_token, project_id: "cluster-token")
     monkeypatch.setattr(_auth.requests, "post", lambda *args, **kwargs: _FakeRequestsResponse())
 
     session = _FakeSession(

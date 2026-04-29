@@ -38,6 +38,10 @@ class _FakeResponse:
             raise RuntimeError(f"HTTP {self.status_code}")
 
 
+class _FakeCredentials:
+    service_account_email = "agent@project.iam.gserviceaccount.com"
+
+
 @pytest.fixture(autouse=True)
 def clear_auth_cache():
     yield
@@ -84,11 +88,17 @@ def test_missing_config_bootstraps_normal_credentials_from_adc(monkeypatch, tmp_
     config = tmp_path / "burla_credentials.json"
     monkeypatch.setattr(burla, "CONFIG_PATH", config)
     monkeypatch.setattr(_auth, "CONFIG_PATH", config)
-    monkeypatch.setattr(_auth, "_get_adc_token_and_project", lambda: ("google-token", "project-1"))
+    monkeypatch.setattr(
+        _auth,
+        "_get_adc_credentials",
+        lambda: (_FakeCredentials(), "google-token", "project-1"),
+    )
+    monkeypatch.setattr(_auth, "_get_cluster_token", lambda access_token, project_id: "cluster-token")
 
-    def fake_post(url, headers, timeout):
+    def fake_post(url, headers, json, timeout):
         assert url == "https://backend.burla.dev/v1/clusters/project-1/adc:exchange"
-        assert headers == {"Authorization": "Bearer google-token"}
+        assert headers == {"Authorization": "Bearer cluster-token"}
+        assert json == {"email": "agent@project.iam.gserviceaccount.com"}
         assert timeout == 20
         return _FakeResponse(
             body={
@@ -120,7 +130,12 @@ def test_adc_exchange_404_raises_not_installed(monkeypatch, tmp_path):
     config = tmp_path / "burla_credentials.json"
     monkeypatch.setattr(burla, "CONFIG_PATH", config)
     monkeypatch.setattr(_auth, "CONFIG_PATH", config)
-    monkeypatch.setattr(_auth, "_get_adc_token_and_project", lambda: ("google-token", "project-1"))
+    monkeypatch.setattr(
+        _auth,
+        "_get_adc_credentials",
+        lambda: (_FakeCredentials(), "google-token", "project-1"),
+    )
+    monkeypatch.setattr(_auth, "_get_cluster_token", lambda access_token, project_id: "cluster-token")
     monkeypatch.setattr(_auth.requests, "post", lambda *args, **kwargs: _FakeResponse(status_code=404))
 
     with pytest.raises(_auth.BurlaNotInstalledException, match="project-1"):

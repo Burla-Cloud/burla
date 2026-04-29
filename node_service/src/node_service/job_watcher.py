@@ -38,6 +38,15 @@ ACK_RETRY_DELAY_SEC = 15
 SEC_NEIGHBOR_HAD_NO_INPUTS = 0
 
 
+def _lifecycle_canceled(job_dict: dict) -> bool:
+    return (
+        job_dict.get("cluster_shutdown")
+        or job_dict.get("cluster_restarted")
+        or job_dict.get("dashboard_canceled")
+        or job_dict.get("status") == "CANCELED"
+    )
+
+
 async def get_neighbor(async_db, node_ids_expected):
     status_filter = FieldFilter("status", "==", "RUNNING")
     job_filter = FieldFilter("current_job", "==", SELF["current_job"])
@@ -257,9 +266,12 @@ async def _job_watcher(
                 client_disconnected = not any(d["client_contact_last_1s"] for d in node_dicts)
         must_be_connected = not is_background_job or not SELF["all_inputs_uploaded"]
         if client_disconnected and must_be_connected:
-            JOB_FAILED = True
-            await job_doc.update({"status": "FAILED", "fail_reason": ArrayUnion(["Client DC"])})
-            await logger.log("Client disconnected!")
+            if _lifecycle_canceled((await job_doc.get()).to_dict()):
+                JOB_CANCELED = True
+            else:
+                JOB_FAILED = True
+                await job_doc.update({"status": "FAILED", "fail_reason": ArrayUnion(["Client DC"])})
+                await logger.log("Client disconnected!")
 
         # Neighbor had no inputs for too long?
         if SEC_NEIGHBOR_HAD_NO_INPUTS and SEC_NEIGHBOR_HAD_NO_INPUTS > EMPTY_NEIGHBOR_TIMEOUT_SEC:

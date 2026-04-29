@@ -71,11 +71,13 @@ def test_cluster_restart_mid_job(
             .where(filter=FieldFilter("function_name", "==", "test_function"))
             .stream()
         )
+        most_recent = None
         for doc in docs:
             data = doc.to_dict()
             if data.get("cluster_restarted") is True:
-                return data
-        return None
+                if most_recent is None or data.get("started_at", 0) > most_recent.get("started_at", 0):
+                    most_recent = data
+        return most_recent
 
     job = wait_for_fixture(_restarted_job, timeout=15)
     assert job["cluster_restarted"] is True

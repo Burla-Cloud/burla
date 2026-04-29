@@ -616,11 +616,10 @@ def remote_parallel_map(
         if spinner:
             spinner.stop()
 
-        # Best-effort: record the failure on the job doc via main_service.
-        # main_service's PATCH will apply the FAILED status + ArrayUnion
-        # atomically, so no read-then-write is needed. A MainServiceTimeout
-        # means main_service itself is unreachable, so skip the write.
-        if not (isinstance(e, MainServiceTimeout) or background):
+        # Best-effort: record real failures on the job doc via main_service.
+        # Lifecycle cancellations already wrote their terminal status.
+        lifecycle_exception = isinstance(e, (ClusterRestarted, ClusterShutdown, JobCanceled))
+        if not (isinstance(e, MainServiceTimeout) or background or lifecycle_exception):
             ClusterClient.patch_job_sync(
                 job_id,
                 updates={"status": "FAILED"},

@@ -249,7 +249,7 @@ async def execute(
     SELF["workers"] = workers_to_assign
     SELF["idle_workers"] = workers_to_leave_idle
     SELF["current_parallelism"] = 0
-    SELF["dynamic_func_ram"] = request_json.get("func_ram") == "dynamic"
+    SELF["dynamic_func_ram"] = request_json["func_ram"] == "dynamic"
     SELF["reboot_containers_after_job"] = False
     # user specific, assign to self to use for node <-> node requests only during this job.
     SELF["auth_headers"] = {

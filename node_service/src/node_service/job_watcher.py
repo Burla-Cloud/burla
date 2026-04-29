@@ -277,7 +277,7 @@ async def _job_watcher(
             node_docs = await node_docs_collection.get()
             result_count = sum(doc.to_dict()["current_num_results"] for doc in node_docs)
             job_completed = n_inputs == result_count
-        elif all_inputs_processed and SELF["results_queue"].empty() and pending_results_empty:
+        elif all_inputs_processed:
             job_completed = (await job_doc.get()).to_dict()["client_has_all_results"]
         if job_completed or JOB_FAILED or JOB_CANCELED:
             steal_task.cancel()

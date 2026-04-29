@@ -17,6 +17,7 @@ TUNNEL_RUNNING="false"
 DASHBOARD_REACHABLE="false"
 HEALTH="missing"
 RUNNING_MODE=""
+BURLA_CREDENTIALS_PRESENT="false"
 LOCK_PATH="$(lock_path_for_slot "$SLOT_ID")"
 LOCKED="false"
 LOCK_JSON="null"
@@ -45,6 +46,9 @@ fi
 # Detect which mode main_service was started in by inspecting its container env.
 # Absent container -> empty string; IN_LOCAL_DEV_MODE=True present -> local-dev; else remote-dev.
 if [[ "$VM_STATUS" == "RUNNING" ]]; then
+  if ssh_run "test -f ~/.config/burla/burla_credentials.json" >/dev/null 2>&1; then
+    BURLA_CREDENTIALS_PRESENT="true"
+  fi
   inspect_cmd="docker inspect main_service --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null || true"
   container_env="$(ssh_run "$inspect_cmd" 2>/dev/null || true)"
   if [[ -n "$container_env" ]]; then
@@ -94,6 +98,7 @@ TUNNEL_RUNNING="$TUNNEL_RUNNING" \
 DASHBOARD_REACHABLE="$DASHBOARD_REACHABLE" \
 HEALTH="$HEALTH" \
 RUNNING_MODE="$RUNNING_MODE" \
+BURLA_CREDENTIALS_PRESENT="$BURLA_CREDENTIALS_PRESENT" \
 LAST_STARTED_MODE="${LAST_STARTED_MODE:-}" \
 LAST_SYNCED_SOURCE_PATH="${LAST_SYNCED_SOURCE_PATH:-}" \
 LAST_SYNCED_BRANCH="${LAST_SYNCED_BRANCH:-}" \
@@ -139,6 +144,7 @@ print(
             "tunnel_running": os.environ["TUNNEL_RUNNING"] == "true",
             "dashboard_reachable": os.environ["DASHBOARD_REACHABLE"] == "true",
             "running_mode": running_mode,
+            "burla_credentials_present": os.environ["BURLA_CREDENTIALS_PRESENT"] == "true",
             "last_started_mode": last_started_mode,
             "last_synced": last_synced,
             "locked": os.environ["LOCKED"] == "true",

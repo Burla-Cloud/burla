@@ -12,7 +12,7 @@ Use the worktree and VM scripts instead of handwritten `git worktree`, `gcloud`,
 - One active task gets one linked worktree and branch. It can use any available dev VM slot when it needs runtime verification.
 - Always edit from the linked worktree, never from the primary checkout.
 - Pick the dev VM slot automatically — never ask the user which slot to use. See "Slot Selection" below.
-- Default to `--mode local-dev` on the VM; switch to `--mode remote-dev` when real GCE worker VMs are needed.
+- Run `make local-dev` or `make remote-dev` directly over SSH after syncing code.
 - Use the script-reported `http://localhost:<port>` URL for browser and client work.
 - Release the slot lock when done. Stop the VM instead of deleting it so the next task can reuse the bootstrapped slot.
 - Keep the worktree and branch until explicit cleanup so work-in-progress is not lost.
@@ -33,18 +33,20 @@ Pick the slot without asking the user. Follow this order:
 2. `cd` into the printed worktree path.
 3. Make code changes only from that linked worktree.
 4. Acquire a slot: `scripts/dev_vm_slot_acquire.sh --source "$(pwd)"`.
-5. Create the VM if needed: `scripts/dev_vm_create.sh --slot <id>`.
-6. Wait for bootstrap: `scripts/dev_vm_wait_ssh.sh --slot <id>`.
-7. Sync the current worktree: `scripts/dev_vm_sync_repo.sh --slot <id> --source "$(pwd)"`.
-8. Start the synced code: `scripts/dev_vm_start.sh --slot <id> --mode <local-dev|remote-dev>`.
-9. Run `scripts/dev_vm_tunnel.sh --slot <id>`.
-10. Run `scripts/dev_vm_status.sh --slot <id>`.
-11. For local client work, run `scripts/dev_vm_client_shell.sh --slot <id> --python <version>`.
-12. When done, run `scripts/dev_vm_slot_release.sh --slot <id>`.
-13. Stop the VM with `scripts/dev_vm_stop.sh --slot <id>` when the slot should go idle.
-14. Remove the worktree later with `scripts/dev-worktree/remove.sh --task <task-slug>` only when you are done with that branch.
+5. Prepare the slot once if needed: `scripts/dev_vm_prepare_slot.sh --slot <id>`.
+6. Create or restart the VM if needed: `scripts/dev_vm_create.sh --slot <id>`.
+7. Wait for bootstrap: `scripts/dev_vm_wait_ssh.sh --slot <id>`.
+8. Sync the current worktree: `scripts/dev_vm_sync_repo.sh --slot <id> --source "$(pwd)"`.
+9. SSH into the VM and run `cd /srv/burla && make local-dev` or `make remote-dev` directly.
+10. Run `scripts/dev_vm_tunnel.sh --slot <id>`.
+11. Run `scripts/dev_vm_status.sh --slot <id>`.
+12. For local client work, run `scripts/dev_vm_client_shell.sh --slot <id> --python <version>`.
+13. For Burla CLI auth, run `scripts/dev_vm_burla_login_instructions.sh --slot <id>` and follow the GStack browser flow.
+14. When done, run `scripts/dev_vm_slot_release.sh --slot <id>`.
+15. Stop the VM with `scripts/dev_vm_stop.sh --slot <id>` when the slot should go idle.
+16. Remove the worktree later with `scripts/dev-worktree/remove.sh --task <task-slug>` only when you are done with that branch.
 
-Switching modes on a running VM: re-run step 7 with the other `--mode`. The start script tears down the previous `main_service` container and tmux session before starting the new mode, so only one mode runs at a time.
+Switching modes on a running VM: stop the existing `main_service` container or tmux session on the VM, then run `make local-dev` or `make remote-dev` directly from `/srv/burla`.
 
 ## Mode Trade-offs
 

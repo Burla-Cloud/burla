@@ -540,6 +540,12 @@ class Node:
             --property=MemoryMin={NODE_SERVICE_RESERVED_MEMORY_GB}G \
             --property=CPUWeight=1000 \
             --property=OOMScoreAdjust=-900 \
+            --setenv=NUM_GPUS="$NUM_GPUS" \
+            --setenv=INSTANCE_NAME="$INSTANCE_NAME" \
+            --setenv=PROJECT_ID="$PROJECT_ID" \
+            --setenv=CONTAINERS="$CONTAINERS" \
+            --setenv=INACTIVITY_SHUTDOWN_TIME_SEC="$INACTIVITY_SHUTDOWN_TIME_SEC" \
+            --setenv=RESERVED_FOR_JOB="$RESERVED_FOR_JOB" \
             --collect \
             /opt/burla/.venv/bin/python -m uvicorn node_service:app --host 0.0.0.0 --port {self.port} --workers 1 --timeout-keep-alive 600
 

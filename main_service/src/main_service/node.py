@@ -520,15 +520,15 @@ class Node:
         uv venv --python 3.13 --seed
         uv pip install ./node_service
         
-        total_memory_bytes=$(awk '/MemTotal/ {{print $2 * 1024}}' /proc/meminfo)
-        worker_memory_bytes=$((total_memory_bytes - {NODE_SERVICE_RESERVED_MEMORY_GB} * 1024 * 1024 * 1024))
-        if [ "$worker_memory_bytes" -lt $((1024 * 1024 * 1024)) ]; then
-            worker_memory_bytes=$((1024 * 1024 * 1024))
+        total_memory_kb=$(awk '/MemTotal/ {{print $2}}' /proc/meminfo)
+        worker_memory_kb=$((total_memory_kb - {NODE_SERVICE_RESERVED_MEMORY_GB} * 1024 * 1024))
+        if [ "$worker_memory_kb" -lt $((1024 * 1024)) ]; then
+            worker_memory_kb=$((1024 * 1024))
         fi
 
         printf '[Slice]\nMemoryMin={NODE_SERVICE_RESERVED_MEMORY_GB}G\nCPUWeight=1000\n' \
             >/etc/systemd/system/burla-node-service.slice
-        printf '[Slice]\nMemoryMax=%s\nCPUWeight=80\n' "$worker_memory_bytes" \
+        printf '[Slice]\nMemoryMax=%sK\nCPUWeight=80\n' "$worker_memory_kb" \
             >/etc/systemd/system/burla-workers.slice
 
         systemctl daemon-reload

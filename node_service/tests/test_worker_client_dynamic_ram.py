@@ -178,11 +178,12 @@ def test_dynamic_oom_requeues_input_and_retires_worker(monkeypatch):
     assert module.SELF["reboot_containers_after_job"]
     assert module.Logger.entries == [
         (
-            "Node parallelism decreased from 2 to 1 for job job-test after worker OOM on input 7.",
+            "Node parallelism decreased from 2 to 1 due to memory pressure.",
             "WARNING",
             {
                 "job_id": "job-test",
                 "input_index": 7,
+                "reason": "worker OOM",
                 "old_parallelism": 2,
                 "new_parallelism": 1,
             },
@@ -206,9 +207,9 @@ def test_dynamic_worker_exit_requeues_input_and_retires_worker(monkeypatch):
     assert worker.retired
     assert worker.restart_count == 1
     assert module.SELF["inputs_queue"].items == [((9, b"input"), len(b"input"))]
-    assert module.Logger.entries[0][0] == (
-        "Node parallelism decreased from 2 to 1 for job job-test "
-        "after worker process exit on input 9."
+    assert (
+        module.Logger.entries[0][0]
+        == "Node parallelism decreased from 2 to 1 due to memory pressure."
     )
     assert "worker died" in worker.log_writer.errors[0][1]
     assert "lower node parallelism" in worker.log_writer.errors[0][1]

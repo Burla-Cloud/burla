@@ -365,7 +365,7 @@ async def retire_workers_for_dynamic_memory_pressure(
         SELF["reboot_containers_after_job"] = True
         msg = (
             f"Node parallelism decreased from {old_parallelism} to {new_parallelism} "
-            f"for job {SELF['current_job']} after dynamic RAM pressure on inputs {input_indexes}."
+            "due to memory pressure."
         )
         await Logger().log(
             msg,
@@ -624,13 +624,14 @@ class WorkerClient:
             reason = "worker process exit" if isinstance(error, WorkerProcessTerminatedError) else "worker OOM"
             msg = (
                 f"Node parallelism decreased from {old_parallelism} to {new_parallelism} "
-                f"for job {SELF['current_job']} after {reason} on input {input_index}."
+                "due to memory pressure."
             )
             await Logger().log(
                 msg,
                 severity="WARNING",
                 job_id=SELF["current_job"],
                 input_index=input_index,
+                reason=reason,
                 old_parallelism=old_parallelism,
                 new_parallelism=new_parallelism,
             )

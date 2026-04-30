@@ -21,9 +21,13 @@ class _SizedQueue:
 class _LogWriter:
     def __init__(self):
         self.errors = []
+        self.warnings = []
 
     async def write_error(self, input_index, message):
         self.errors.append((input_index, message))
+
+    async def write_warning(self, input_index, message):
+        self.warnings.append((input_index, message))
 
 
 class _NodeLogger:
@@ -51,10 +55,19 @@ class _Writer:
         self.closed = True
 
 
+class _Memory:
+    total = 100
+    available = 10
+
+
 async def _fake_restart_container(self):
     self.restart_count += 1
     self.writer = _Writer()
     self.reader = object()
+
+
+async def _fake_retire_for_dynamic_memory_pressure(self):
+    self.kill_count += 1
 
 
 def _load_worker_client_module(monkeypatch):
@@ -75,7 +88,7 @@ def _load_worker_client_module(monkeypatch):
     monkeypatch.setitem(sys.modules, "aiodocker", fake_aiodocker)
 
     fake_psutil = types.ModuleType("psutil")
-    fake_psutil.virtual_memory = lambda: types.SimpleNamespace(total=1024**3)
+    fake_psutil.virtual_memory = lambda: _Memory()
     monkeypatch.setitem(sys.modules, "psutil", fake_psutil)
 
     fake_tblib = types.ModuleType("tblib")
@@ -101,9 +114,14 @@ def _setup_dynamic_worker_pair(module):
     other_worker.retired = False
     worker.is_idle = False
     worker.log_writer = _LogWriter()
+    worker.logstream_task = None
+    worker.container = types.SimpleNamespace(delete=lambda force: None)
     worker.writer = _Writer()
     worker.reader = object()
     worker.restart_count = 0
+    worker.container_id = "container-id"
+    worker.worker_host_pid = None
+    worker._delete_container = types.MethodType(_fake_restart_container, worker)
     worker._restart_container = types.MethodType(_fake_restart_container, worker)
     module.SELF.update(
         {
@@ -113,6 +131,21 @@ def _setup_dynamic_worker_pair(module):
             "reboot_containers_after_job": False,
             "current_job": "job-test",
         }
+    )
+    return worker
+
+
+def _worker(module, input_index, rss_bytes):
+    worker = module.WorkerClient.__new__(module.WorkerClient)
+    worker.retired = False
+    worker.is_idle = False
+    worker.current_input = (input_index, b"input")
+    worker.log_writer = _LogWriter()
+    worker.logstream_task = None
+    worker.kill_count = 0
+    worker.memory_rss_bytes = lambda: rss_bytes
+    worker.retire_for_dynamic_memory_pressure = types.MethodType(
+        _fake_retire_for_dynamic_memory_pressure, worker
     )
     return worker
 
@@ -179,6 +212,48 @@ def test_dynamic_worker_exit_requeues_input_and_retires_worker(monkeypatch):
     )
     assert "worker died" in worker.log_writer.errors[0][1]
     assert "lower node parallelism" in worker.log_writer.errors[0][1]
+
+
+@pytest.mark.unit
+def test_dynamic_memory_pressure_retires_enough_largest_workers(monkeypatch):
+    module = _load_worker_client_module(monkeypatch)
+    workers = [
+        _worker(module, 1, 20),
+        _worker(module, 2, 10),
+        _worker(module, 3, 8),
+        _worker(module, 4, 7),
+    ]
+    module.SELF.update(
+        {
+            "workers": workers,
+            "inputs_queue": _SizedQueue(),
+            "dynamic_ram_lock": asyncio.Lock(),
+            "reboot_containers_after_job": False,
+            "current_job": "job-test",
+            "dynamic_func_ram": True,
+        }
+    )
+
+    async def run_one_monitor_iteration():
+        task = asyncio.create_task(module.dynamic_ram_monitor_loop())
+        await asyncio.sleep(module.DYNAMIC_RAM_STARTUP_MONITOR_INTERVAL_SECONDS + 0.01)
+        module.SELF["dynamic_func_ram"] = False
+        await task
+
+    asyncio.run(run_one_monitor_iteration())
+
+    assert [worker.kill_count for worker in workers] == [1, 1, 1, 0]
+    assert [worker.retired for worker in workers] == [True, True, True, False]
+    assert module.SELF["inputs_queue"].items == [
+        ((1, b"input"), len(b"input")),
+        ((2, b"input"), len(b"input")),
+        ((3, b"input"), len(b"input")),
+    ]
+    assert workers[0].log_writer.warnings
+    assert workers[1].log_writer.warnings
+    assert not workers[0].log_writer.errors
+    assert not workers[1].log_writer.errors
+    module.SELF["dynamic_func_ram"] = False
 
 
 @pytest.mark.unit

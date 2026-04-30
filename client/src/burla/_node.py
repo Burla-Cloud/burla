@@ -484,6 +484,7 @@ class Node:
         except NETWORK_ERROR_TYPES:
             if self._result_poll_silence_timeout_exceeded():
                 msg = self._node_silence_timeout_message("returning results")
+                await self._fail_and_delete(msg)
                 raise NodeDisconnected(self, await self._failure_message(msg))
             return self._empty_node_results()
 

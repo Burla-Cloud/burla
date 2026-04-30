@@ -485,10 +485,7 @@ class WorkerClient:
                 msg += "\nRetrying this input with lower node parallelism."
                 await self.log_writer.write_error(input_index, msg)
 
-            if self.writer is not None:
-                self.writer.close()
-                self.writer = None
-                self.reader = None
+            await self._restart_container()
             return None
 
     async def _read_response(self):

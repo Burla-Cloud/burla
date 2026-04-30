@@ -51,6 +51,12 @@ class _Writer:
         self.closed = True
 
 
+async def _fake_restart_container(self):
+    self.restart_count += 1
+    self.writer = _Writer()
+    self.reader = object()
+
+
 def _load_worker_client_module(monkeypatch):
     _NodeLogger.entries = []
     fake_node_service = types.ModuleType("node_service")
@@ -97,6 +103,8 @@ def _setup_dynamic_worker_pair(module):
     worker.log_writer = _LogWriter()
     worker.writer = _Writer()
     worker.reader = object()
+    worker.restart_count = 0
+    worker._restart_container = types.MethodType(_fake_restart_container, worker)
     module.SELF.update(
         {
             "workers": [worker, other_worker],
@@ -131,7 +139,8 @@ def test_dynamic_oom_requeues_input_and_retires_worker(monkeypatch):
     assert result is None
     assert worker.retired
     assert worker.is_idle
-    assert worker.writer is None
+    assert worker.restart_count == 1
+    assert worker.writer is not None
     assert module.SELF["inputs_queue"].items == [((7, b"input"), len(b"input"))]
     assert module.SELF["reboot_containers_after_job"]
     assert module.Logger.entries == [
@@ -162,6 +171,7 @@ def test_dynamic_worker_exit_requeues_input_and_retires_worker(monkeypatch):
 
     assert result is None
     assert worker.retired
+    assert worker.restart_count == 1
     assert module.SELF["inputs_queue"].items == [((9, b"input"), len(b"input"))]
     assert module.Logger.entries[0][0] == (
         "Node parallelism decreased from 2 to 1 for job job-test "

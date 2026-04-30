@@ -18,6 +18,10 @@ from burla._auth import bootstrap_from_adc, get_auth_headers
 _TIMEOUT = aiohttp.ClientTimeout(total=30)
 
 
+def _is_login_response(response) -> bool:
+    return response.status in (200, 401) and response.content_type == "text/html"
+
+
 class NodesBusy(Exception):
     """
     Raised by `ClusterClient.start_job` on a 503 nodes_busy response - no
@@ -79,7 +83,7 @@ class ClusterClient:
         ) as response:
             if response.status == 404:
                 return None
-            if (response.status == 401 or response.content_type == "text/html") and retry_adc_bootstrap:
+            if (response.status == 401 or _is_login_response(response)) and retry_adc_bootstrap:
                 bootstrap_from_adc()
                 self._url = get_cluster_dashboard_url()
                 return await self._request(
@@ -137,7 +141,7 @@ class ClusterClient:
                     body = (await response.json()) or {}
                 except aiohttp.ContentTypeError:
                     body = {}
-                auth_failed = response.status == 401 or response.content_type == "text/html"
+                auth_failed = response.status == 401 or _is_login_response(response)
             if auth_failed and attempt == 0:
                 bootstrap_from_adc()
                 self._url = get_cluster_dashboard_url()

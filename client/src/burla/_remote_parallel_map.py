@@ -16,6 +16,18 @@ FuncGpu = Literal["A100", "A100_40G", "A100_80G", "H100", "H100_80G"]
 FuncRam = Union[int, Literal["dynamic"]]
 from uuid import uuid4
 
+_N_FOUR_STANDARD_CPU_TO_RAM = {
+    1: 4,
+    2: 8,
+    4: 16,
+    8: 32,
+    16: 64,
+    32: 128,
+    48: 192,
+    64: 256,
+    80: 320,
+}
+
 import aiohttp
 import cloudpickle
 from yaspin import Spinner, yaspin
@@ -61,6 +73,12 @@ def _pkg_module_mapping():
 
 
 BANNED_PACKAGES = ["ipython", "burla", "google-colab"]
+
+
+def _machine_ram_gb(machine_type: str) -> int:
+    if machine_type.startswith("n4-standard-") and machine_type.split("-")[-1].isdigit():
+        return _N_FOUR_STANDARD_CPU_TO_RAM[int(machine_type.split("-")[-1])]
+    return 0
 
 
 def _read_process_stderr(process) -> str:
@@ -348,18 +366,21 @@ async def _execute_job(
                 else:
                     total_parallelism = sum((n.current_parallelism for n in nodes))
                     booting_node_count = sum(n.state == "BOOTING" for n in nodes)
-                    reductions = [n.dynamic_worker_reduction for n in nodes if n.dynamic_worker_reduction]
-                    dynamic_worker_reduction = None
-                    if reductions:
-                        dynamic_worker_reduction = {
-                            "original": sum(r["original"] for r in reductions),
-                            "current": sum(r["current"] for r in reductions),
+                    dynamic_worker_reductions = [
+                        {
+                            "original": n.dynamic_worker_reduction["original"],
+                            "current": n.dynamic_worker_reduction["current"],
+                            "ram_per_worker_gb": _machine_ram_gb(n.machine_type)
+                            / n.dynamic_worker_reduction["current"],
                         }
+                        for n in nodes
+                        if n.dynamic_worker_reduction
+                    ]
                     reporter.set_running_progress_message(
                         total_result_count,
                         total_parallelism,
                         booting_node_count,
-                        dynamic_worker_reduction,
+                        dynamic_worker_reductions,
                     )
                 last_status_message_update_time = current_time
 

@@ -136,7 +136,6 @@ async def dynamic_ram_monitor_loop():
 
         await retire_workers_for_dynamic_memory_pressure(
             selected_worker_memory,
-            node_memory_used_fraction,
         )
 
 
@@ -324,14 +323,6 @@ def _dynamic_terminal_oom_error():
     )
 
 
-def _dynamic_memory_pressure_error(node_memory_used_fraction: float, rss_bytes: int):
-    return WorkerOutOfMemoryError(
-        "\n\nNode exceeded dynamic RAM memory pressure threshold before kernel OOM.\n"
-        f"Node memory used: {node_memory_used_fraction:.1%}\n"
-        f"Worker RSS: {rss_bytes / 1024**3:.2f} GB\n"
-    )
-
-
 def _worker_boot_timeout_error(logs: str):
     message = f"\n\nWorker boot timed out after {WORKER_BOOT_TIMEOUT_SECONDS} seconds.\n"
     message += "The worker container never became ready to accept connections.\n"
@@ -343,7 +334,6 @@ def _worker_boot_timeout_error(logs: str):
 
 async def retire_workers_for_dynamic_memory_pressure(
     selected_worker_memory: list[tuple[int, "WorkerClient"]],
-    node_memory_used_fraction: float,
 ):
     if not selected_worker_memory:
         return
@@ -382,18 +372,10 @@ async def retire_workers_for_dynamic_memory_pressure(
             new_parallelism=new_parallelism,
         )
 
-        warning_messages = []
         current_inputs = []
-        for rss_bytes, worker in selected_worker_memory:
+        for _, worker in selected_worker_memory:
             input_index = worker.current_input[0]
             current_inputs.append((worker, input_index))
-            if worker.log_writer is not None:
-                warning = str(
-                    _dynamic_memory_pressure_error(node_memory_used_fraction, rss_bytes)
-                ).strip()
-                warning += "\nRetrying this input with lower node parallelism."
-                warning_messages.append(worker.log_writer.write_warning(input_index, warning))
-        await asyncio.gather(*warning_messages)
         for worker, input_index in current_inputs:
             worker.current_input = None
 
@@ -647,11 +629,6 @@ class WorkerClient:
                 old_parallelism=old_parallelism,
                 new_parallelism=new_parallelism,
             )
-
-            if self.log_writer is not None:
-                msg = str(error).strip()
-                msg += "\nRetrying this input with lower node parallelism."
-                await self.log_writer.write_error(input_index, msg)
 
             await self._delete_container()
             return None

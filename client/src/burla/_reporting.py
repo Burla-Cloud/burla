@@ -177,7 +177,7 @@ class RemoteParallelMapReporter:
         if dynamic_worker_reduction:
             original = dynamic_worker_reduction["original"]
             current = dynamic_worker_reduction["current"]
-            message += f"\nMemory pressure: workers {original} -> {current}."
+            message += f" Memory pressure: workers {original} -> {current}."
         self.spinner.text = message
 
     async def log_job_success_telemetry(self, total_runtime: float):

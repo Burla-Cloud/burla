@@ -95,22 +95,8 @@ async def dynamic_ram_monitor_loop():
         if not active_workers:
             return
 
-        node_memory = psutil.virtual_memory()
-        node_memory_used_fraction = 1 - (node_memory.available / node_memory.total)
-        if node_memory_used_fraction < DYNAMIC_RAM_MAX_NODE_MEMORY_USED_FRACTION:
-            continue
-
-        if len(active_workers) <= 1:
-            continue
-
-        running_workers = [
-            worker for worker in active_workers if not worker.is_idle and worker.current_input is not None
-        ]
-        if not running_workers:
-            continue
-
         worker_memory = []
-        for worker in running_workers:
+        for worker in active_workers:
             try:
                 worker_memory.append((worker.memory_rss_bytes(), worker))
             except psutil.NoSuchProcess:
@@ -119,15 +105,33 @@ async def dynamic_ram_monitor_loop():
                 SELF["reboot_containers_after_job"] = True
         if not worker_memory:
             continue
-        node_memory_used_bytes = node_memory.total - node_memory.available
-        target_used_bytes = int(node_memory.total * DYNAMIC_RAM_TARGET_NODE_MEMORY_USED_FRACTION)
-        bytes_to_free = max(0, node_memory_used_bytes - target_used_bytes)
-        worker_memory.sort(reverse=True, key=lambda item: item[0])
+
+        node_memory_total_bytes = psutil.virtual_memory().total
+        active_worker_memory_bytes = sum(rss_bytes for rss_bytes, _ in worker_memory)
+        active_worker_memory_fraction = active_worker_memory_bytes / node_memory_total_bytes
+        if active_worker_memory_fraction < DYNAMIC_RAM_MAX_NODE_MEMORY_USED_FRACTION:
+            continue
+
+        if len(worker_memory) <= 1:
+            continue
+
+        target_used_bytes = int(
+            node_memory_total_bytes * DYNAMIC_RAM_TARGET_NODE_MEMORY_USED_FRACTION
+        )
+        bytes_to_free = max(0, active_worker_memory_bytes - target_used_bytes)
+        running_worker_memory = [
+            (rss_bytes, worker)
+            for rss_bytes, worker in worker_memory
+            if not worker.is_idle and worker.current_input is not None
+        ]
+        if not running_worker_memory:
+            continue
+        running_worker_memory.sort(reverse=True, key=lambda item: item[0])
 
         selected_worker_memory = []
         selected_rss_bytes = 0
-        for rss_bytes, worker in worker_memory:
-            if len(active_workers) - len(selected_worker_memory) <= 1:
+        for rss_bytes, worker in running_worker_memory:
+            if len(worker_memory) - len(selected_worker_memory) <= 1:
                 break
             selected_worker_memory.append((rss_bytes, worker))
             selected_rss_bytes += rss_bytes

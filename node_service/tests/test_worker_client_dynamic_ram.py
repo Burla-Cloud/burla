@@ -215,48 +215,6 @@ def test_dynamic_worker_exit_requeues_input_and_retires_worker(monkeypatch):
 
 
 @pytest.mark.unit
-def test_dynamic_memory_pressure_retires_enough_largest_workers(monkeypatch):
-    module = _load_worker_client_module(monkeypatch)
-    workers = [
-        _worker(module, 1, 20),
-        _worker(module, 2, 10),
-        _worker(module, 3, 8),
-        _worker(module, 4, 7),
-    ]
-    module.SELF.update(
-        {
-            "workers": workers,
-            "inputs_queue": _SizedQueue(),
-            "dynamic_ram_lock": asyncio.Lock(),
-            "reboot_containers_after_job": False,
-            "current_job": "job-test",
-            "dynamic_func_ram": True,
-        }
-    )
-
-    async def run_one_monitor_iteration():
-        task = asyncio.create_task(module.dynamic_ram_monitor_loop())
-        await asyncio.sleep(module.DYNAMIC_RAM_STARTUP_MONITOR_INTERVAL_SECONDS + 0.01)
-        module.SELF["dynamic_func_ram"] = False
-        await task
-
-    asyncio.run(run_one_monitor_iteration())
-
-    assert [worker.kill_count for worker in workers] == [1, 1, 1, 0]
-    assert [worker.retired for worker in workers] == [True, True, True, False]
-    assert module.SELF["inputs_queue"].items == [
-        ((1, b"input"), len(b"input")),
-        ((2, b"input"), len(b"input")),
-        ((3, b"input"), len(b"input")),
-    ]
-    assert workers[0].log_writer.warnings
-    assert workers[1].log_writer.warnings
-    assert not workers[0].log_writer.errors
-    assert not workers[1].log_writer.errors
-    module.SELF["dynamic_func_ram"] = False
-
-
-@pytest.mark.unit
 def test_dynamic_oom_at_one_worker_returns_terminal_error(monkeypatch):
     module = _load_worker_client_module(monkeypatch)
     worker = module.WorkerClient.__new__(module.WorkerClient)

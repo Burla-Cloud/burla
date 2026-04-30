@@ -95,6 +95,14 @@ class NodeDisconnected(Exception):
         super().__init__(message or f"Node {node.instance_name} failed during job.")
 
 
+class NodesFailedToBoot(Exception):
+    def __init__(self, nodes: list["Node"]):
+        node_word = "node" if len(nodes) == 1 else "nodes"
+        message = f"\n\nBurla tried to boot {len(nodes)} {node_word} to complete this request, "
+        message += f"but all of them failed to boot.\n"
+        super().__init__(message)
+
+
 class VersionMismatch(Exception):
     def __init__(self, lower_version: str, upper_version: str, current_version: str):
         msg = f"Incompatible cluster and client versions!\n"

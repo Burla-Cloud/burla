@@ -39,6 +39,7 @@ from burla._node import (
     NoCompatibleNodes,
     NoNodes,
     NodeDisconnected,
+    NodesFailedToBoot,
     UnauthorizedError,
     VersionMismatch,
     wait_for_nodes_to_be_ready,
@@ -71,6 +72,18 @@ def _read_process_stderr(process) -> str:
     if process.stderr is None:
         return ""
     return process.stderr.read().decode("utf-8", errors="replace")
+
+
+async def _nodes_failed_to_boot_exception(nodes: list[Node]) -> NodesFailedToBoot:
+    exception = NodesFailedToBoot(nodes)
+    failed_node = nodes[0]
+    reason = await failed_node.client.get_node_fail_reason(failed_node.instance_name)
+    if reason:
+        exception.add_note(f"Log from {failed_node.instance_name}:\n{reason}")
+    exception.add_note(
+        "Failed nodes: " + ", ".join(node.instance_name for node in nodes)
+    )
+    return exception
 
 
 async def _job_lifecycle_exception(client: ClusterClient, job_id: str):
@@ -297,6 +310,15 @@ async def _execute_job(
 
             if terminal_cancel_event.is_set():
                 return
+
+            booting_nodes_all_failed = booting_nodes and all(
+                node.state == "FAILED" for node in booting_nodes
+            )
+            no_node_started_work = all(
+                node.state in ("FAILED", "REMOVED", "BOOTING") for node in nodes
+            )
+            if booting_nodes_all_failed and no_node_started_work:
+                raise await _nodes_failed_to_boot_exception(booting_nodes)
 
             for task, node in zip(node_tasks, nodes):
                 exception = task.exception() if task.done() else None

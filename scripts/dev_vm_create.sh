@@ -65,28 +65,10 @@ PY
   VM_IP=""
 fi
 
-if ! project_exists "$PROJECT_ID"; then
-  gcloud projects create "$PROJECT_ID" \
-    --name="$PROJECT_ID" \
-    --organization="$DEFAULT_ORGANIZATION_ID" \
-    >/dev/null
-  gcloud beta billing projects link "$PROJECT_ID" \
-    --billing-account="$DEFAULT_BILLING_ACCOUNT" \
-    >/dev/null
-fi
-
+ensure_slot_project "$PROJECT_ID"
 gcloud services enable run.googleapis.com --project "$PROJECT_ID" >/dev/null
-
-if ! gcloud run services describe burla-main-service --project "$PROJECT_ID" --region "$DEFAULT_REGION" --quiet >/dev/null 2>&1; then
-  for attempt in 1 2 3; do
-    if DISABLE_BURLA_TELEMETRY=True CLOUDSDK_CORE_PROJECT="$PROJECT_ID" uv run --project "$CLIENT_PROJECT" burla install; then
-      break
-    fi
-    if [[ "$attempt" -eq 3 ]]; then
-      fail "burla install failed three times for project [$PROJECT_ID]."
-    fi
-    sleep $((attempt * 5))
-  done
+if ! main_service_account_exists "$PROJECT_ID"; then
+  fail "Slot [$SLOT_ID] is not prepared. Run [scripts/dev_vm_prepare_slot.sh --slot $SLOT_ID] first."
 fi
 
 # `burla install` seeds the cluster doc in the prod backend DB with only the
@@ -128,21 +110,8 @@ PY
   fi
 fi
 
-ensure_artifact_repository "$PROJECT_ID"
-
-for attempt in 1 2 3; do
-  if gcloud projects add-iam-policy-binding "$PROJECT_ID" \
-    --member="serviceAccount:$(main_service_service_account "$PROJECT_ID")" \
-    --role=roles/artifactregistry.writer \
-    --condition=None \
-    >/dev/null 2>&1; then
-    break
-  fi
-  if [[ "$attempt" -eq 3 ]]; then
-    fail "Failed to grant Artifact Registry writer role for project [$PROJECT_ID]."
-  fi
-  sleep $((attempt * 5))
-done
+ensure_artifact_repositories "$PROJECT_ID"
+ensure_artifact_writer_role "$PROJECT_ID"
 
 STARTUP_SCRIPT="$(mktemp)"
 trap 'rm -f "$STARTUP_SCRIPT"' EXIT

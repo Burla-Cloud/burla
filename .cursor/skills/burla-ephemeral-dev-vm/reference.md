@@ -2,14 +2,14 @@
 
 ## Worktree Contract
 
-- Default task branch: `work/<task-slug>` unless `--branch` is supplied
+- Default task branch: `<task-slug>` unless `--branch` is supplied
 - Worktree path: `../burla-worktrees/<task-slug>`
 - Create and remove worktrees from the primary checkout
 - Worktrees are not assigned to VM slots; any worktree can be synced to any slot
 
 Examples:
 
-- Task `fix-auth-flow` -> branch `work/fix-auth-flow` -> worktree `../burla-worktrees/fix-auth-flow`
+- Task `fix-auth-flow` -> branch `fix-auth-flow` -> worktree `../burla-worktrees/fix-auth-flow`
 - Task `improve-jobs-ui`, branch `feature/jobs-ui` -> worktree `../burla-worktrees/improve-jobs-ui`
 
 ## VM Slot Naming Contract
@@ -36,13 +36,15 @@ State and keys are split deliberately: the repo's `.cursor/` folder is a common 
 - `scripts/dev-worktree/remove.sh`: remove the linked worktree and optionally delete the branch
 - `scripts/dev_vm_slot_acquire.sh`: lock the lowest available slot for the current source worktree
 - `scripts/dev_vm_slot_release.sh`: release a slot lock
+- `scripts/dev_vm_prepare_slot.sh`: create/prepare the GCP project, services, Artifact Registry repositories, and IAM for a slot
 - `scripts/dev_vm_create.sh`: create or reuse the project slot, create a fresh VM, and write the local state file
 - `scripts/dev_vm_wait_ssh.sh`: wait until SSH works and the startup bootstrap is complete
 - `scripts/dev_vm_sync_repo.sh`: copy the selected source worktree to `/srv/burla` on the VM and record source metadata
-- `scripts/dev_vm_start.sh --mode <local-dev\|remote-dev>`: build the `burla-main-service:latest` image for that project and start `make local-dev` or `make remote-dev` in tmux. Tears down the prior `main_service` container + tmux session first, so repeated invocations with different `--mode` values cleanly switch modes.
+- `scripts/dev_vm_start.sh`: deprecated compatibility command that explains how to run `make local-dev` / `make remote-dev` directly over SSH
 - `scripts/dev_vm_tunnel.sh`: forward local dashboard and Vite ports to the VM
-- `scripts/dev_vm_status.sh`: print the current state plus `health`, `running_mode` (detected from `main_service`'s `IN_LOCAL_DEV_MODE` env var), and `last_started_mode` (last value passed to `dev_vm_start.sh`)
+- `scripts/dev_vm_status.sh`: print the current state plus `health`, VM status, running mode, lock state, last synced source, and VM-side Burla credential status
 - `scripts/dev_vm_client_shell.sh`: start a local `uv` client shell with `BURLA_CLUSTER_DASHBOARD_URL` pointed at the tunneled dashboard URL
+- `scripts/dev_vm_burla_login_instructions.sh`: print the GStack/browser `burla login --no_browser=True` flow for authorizing the VM-local Burla CLI
 - `scripts/dev_vm_stop.sh`: best-effort POST `/v1/cluster/shutdown` to `main_service` (deletes remote-dev worker VMs), stop the local tunnel, stop the dev VM, and keep the state file for reuse
 - `scripts/dev_vm_destroy.sh`: compatibility wrapper for the stop-only lifecycle; it stops VMs and does not delete them
 
@@ -76,12 +78,13 @@ These scripts accept optional environment overrides when the defaults are wrong 
 1. From the primary checkout, create or reopen the task worktree.
 2. `cd` into the worktree and do all edits there.
 3. Acquire an available slot.
-4. Create the VM if the slot has no warm VM.
-5. Wait for bootstrap.
-6. Sync the worktree snapshot to that slot.
-7. Start the main service in the desired mode (`--mode local-dev` or `--mode remote-dev`).
-8. Start the tunnel.
-9. Use the dashboard and local client shell.
-10. Release the slot lock when done.
-11. Stop the VM when done unless the user asked to keep it running warm.
-12. Remove the worktree later only when the task branch is no longer needed.
+4. Prepare the slot once if needed.
+5. Create/restart the VM if the slot has no warm VM.
+6. Wait for bootstrap.
+7. Sync the worktree snapshot to that slot.
+8. SSH into the VM and run `cd /srv/burla && make local-dev` or `make remote-dev`.
+9. Start the tunnel.
+10. Use the dashboard, GStack browser auth flow, and local client shell.
+11. Release the slot lock when done.
+12. Stop the VM when done unless the user asked to keep it running warm.
+13. Remove the worktree later only when the task branch is no longer needed.

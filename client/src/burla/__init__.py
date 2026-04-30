@@ -22,6 +22,10 @@ def get_cluster_dashboard_url() -> str:
     override = os.environ.get("BURLA_CLUSTER_DASHBOARD_URL")
     if override:
         return override.rstrip("/")
+    if not CONFIG_PATH.exists():
+        from burla._auth import bootstrap_from_adc
+
+        bootstrap_from_adc()
     return json.loads(CONFIG_PATH.read_text())["cluster_dashboard_url"].rstrip("/")
 
 

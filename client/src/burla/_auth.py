@@ -1,5 +1,6 @@
 import os
 import json
+import base64
 import webbrowser
 import requests
 from functools import cache
@@ -27,10 +28,121 @@ class AuthException(Exception):
         )
 
 
+class ADCProjectException(Exception):
+    def __init__(self):
+        super().__init__(
+            "Burla found Google Application Default Credentials, but could not determine "
+            "the active GCP project.\n\n"
+            "Set GOOGLE_CLOUD_PROJECT to the project that has Burla installed, or run `burla login`."
+        )
+
+
+class BurlaNotInstalledException(Exception):
+    def __init__(self, project_id: str):
+        super().__init__(
+            f"Burla is not installed in the active GCP project [{project_id}].\n\n"
+            "To use Burla, do one of these:\n"
+            f"- Run `burla install` while [{project_id}] is selected.\n"
+            "- Switch your Google Cloud project to one where Burla is already installed.\n"
+            "- Run `burla login` to authorize this machine against the Burla deployment you most "
+            "recently logged into in your browser."
+        )
+
+
+class ADCBootstrapException(Exception):
+    pass
+
+
+class ADCSecretPermissionException(Exception):
+    def __init__(self, project_id: str):
+        super().__init__(
+            f"Burla found Google Application Default Credentials for [{project_id}], "
+            "but they cannot read the Burla cluster token secret.\n\n"
+            "Grant this identity access to Secret Manager secret `burla-cluster-id-token`, "
+            "or run `burla login`."
+        )
+
+
+def _write_auth_config(auth_info: dict):
+    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    CONFIG_PATH.write_text(json.dumps(auth_info))
+    _get_auth_info.cache_clear()
+
+
+def _get_adc_identity() -> tuple[str, str, str]:
+    import google.auth
+    from google.auth.transport.requests import Request
+
+    credentials, project_id = google.auth.default(
+        scopes=["https://www.googleapis.com/auth/cloud-platform"]
+    )
+    project_id = project_id or os.getenv("GOOGLE_CLOUD_PROJECT") or os.getenv("GCLOUD_PROJECT")
+    if not project_id:
+        raise ADCProjectException()
+    credentials.refresh(Request())
+    access_token = credentials.token
+    email = getattr(credentials, "service_account_email", None)
+    if email:
+        return access_token, project_id, email
+
+    response = requests.get(
+        "https://oauth2.googleapis.com/tokeninfo",
+        params={"access_token": access_token},
+        timeout=10,
+    )
+    response.raise_for_status()
+    email = response.json().get("email")
+    if not email:
+        raise ADCBootstrapException(
+            "Burla could not determine the email for these Google Application Default Credentials. "
+            "Run `burla login` instead."
+        )
+    return access_token, project_id, email
+
+
+def _get_cluster_token(access_token: str, project_id: str) -> str:
+    response = requests.get(
+        "https://secretmanager.googleapis.com/v1/"
+        f"projects/{project_id}/secrets/burla-cluster-id-token/versions/latest:access",
+        headers={"Authorization": f"Bearer {access_token}"},
+        timeout=20,
+    )
+    if response.status_code == 404:
+        raise BurlaNotInstalledException(project_id)
+    if response.status_code == 403:
+        raise ADCSecretPermissionException(project_id)
+    response.raise_for_status()
+    encoded_token = response.json()["payload"]["data"]
+    return base64.b64decode(encoded_token).decode("utf-8")
+
+
+def bootstrap_from_adc() -> dict:
+    access_token, project_id, email = _get_adc_identity()
+    cluster_token = _get_cluster_token(access_token, project_id)
+    response = requests.post(
+        f"{_BURLA_BACKEND_URL}/v1/clusters/{project_id}/adc:exchange",
+        headers={"Authorization": f"Bearer {cluster_token}"},
+        json={"email": email},
+        timeout=20,
+    )
+    if response.status_code == 404:
+        raise BurlaNotInstalledException(project_id)
+    if response.status_code >= 400:
+        try:
+            detail = response.json().get("detail")
+        except Exception:
+            detail = response.text
+        raise ADCBootstrapException(detail)
+    response.raise_for_status()
+    auth_info = response.json()
+    _write_auth_config(auth_info)
+    return auth_info
+
+
 @cache
 def _get_auth_info() -> tuple[str, str]:
     if not CONFIG_PATH.exists():
-        raise AuthException()
+        bootstrap_from_adc()
     auth_info = json.loads(CONFIG_PATH.read_text())
     return auth_info["email"], auth_info["auth_token"]
 
@@ -104,14 +216,10 @@ def login(no_browser: bool = False):
 
     print(f"\nYou are now logged in to [{project_id}] as [{email}].")
     print("Please email jake@burla.dev with any questions!\n")
-    if not CONFIG_PATH.exists():
-        CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        CONFIG_PATH.touch()
     config = {
         "auth_token": auth_token,
         "email": email,
         "project_id": project_id,
         "cluster_dashboard_url": cluster_dashboard_url,
     }
-    CONFIG_PATH.write_text(json.dumps(config))
-    _get_auth_info.cache_clear()
+    _write_auth_config(config)

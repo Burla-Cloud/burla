@@ -7,8 +7,10 @@ alwaysApply: true
 
 For Burla agent tasks, never edit the primary checkout directly. First create or reopen a linked task worktree with `scripts/dev-worktree/create.sh`, move into it, and edit there. Prefer the Burla dev-VM skill and the `scripts/dev-worktree/*.sh` / `scripts/dev_vm_*.sh` helpers over ad hoc `git worktree`, `gcloud`, `ssh`, or `scp` commands.
 
-Git worktrees and dev VM slots are separate resources. A worktree is named for the task/branch, for example `../burla-worktrees/dev-vm-test-reliability` on branch `work/dev-vm-test-reliability`. It is not assigned to a dev VM slot. Any worktree can be synced to any available slot with `scripts/dev_vm_sync_repo.sh --slot <id> --source <worktree-path>`.
+Git worktrees and dev VM slots are separate resources. A worktree is named for the task/branch, for example `../burla-worktrees/dev-vm-test-reliability` on branch `dev-vm-test-reliability`. It is not assigned to a dev VM slot. Any worktree can be synced to any available slot with `scripts/dev_vm_sync_repo.sh --slot <id> --source <worktree-path>`.
 
 Never ask the user which dev VM slot to use. Pick the lowest-numbered unlocked slot from `00` through `10` using `scripts/dev_vm_slot_acquire.sh`. A slot is unavailable only if it has an explicit lock, is being created/stopped, or an active terminal command is using it. Pending work in a git worktree does not reserve any dev VM slot. Stop VMs instead of deleting them so slots stay bootstrapped for reuse. You need the user's explicit approval in the current conversation before using any slot above `10`; if slots `00` through `10` are all unavailable, stop and ask.
+
+You must get the user's explicit approval in the current conversation before setting up any new dev VM environment. This includes creating a new GCP project, running `scripts/dev_vm_prepare_slot.sh` for an unprepared slot, creating a VM for a slot with no existing VM, or otherwise provisioning new cloud/dev-VM resources. Reusing an already prepared, stopped VM slot does not count as setting up a new environment.
 
 Before removing an old worktree, check its git status. If it is dirty, preserve that work by committing it on its current branch with a clear WIP message unless secrets are present; push nothing unless the user explicitly asks. Remove worktrees only when they are no longer needed for their branch.

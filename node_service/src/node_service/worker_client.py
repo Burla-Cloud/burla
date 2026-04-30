@@ -99,7 +99,16 @@ async def dynamic_ram_monitor_loop():
         if not running_workers:
             continue
 
-        worker_memory = [(worker.memory_rss_bytes(), worker) for worker in running_workers]
+        worker_memory = []
+        for worker in running_workers:
+            try:
+                worker_memory.append((worker.memory_rss_bytes(), worker))
+            except psutil.NoSuchProcess:
+                worker.retired = True
+                worker.is_idle = True
+                SELF["reboot_containers_after_job"] = True
+        if not worker_memory:
+            continue
         highest_rss_bytes, highest_rss_worker = max(worker_memory, key=lambda item: item[0])
         await highest_rss_worker.retire_for_dynamic_memory_pressure(
             node_memory_used_fraction,

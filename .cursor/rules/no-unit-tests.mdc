@@ -1,0 +1,10 @@
+---
+description: Do not add unit tests
+alwaysApply: true
+---
+
+# No Unit Tests
+
+Never add unit tests.
+
+If verification is needed, use existing tests, integration/e2e tests, manual reproduction, code inspection, or another non-unit-test check.

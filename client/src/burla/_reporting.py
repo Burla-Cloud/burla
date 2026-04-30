@@ -169,15 +169,15 @@ class RemoteParallelMapReporter:
         # Due to status lag, remaining inputs can briefly be lower than reported parallelism.
         running_inputs = min(total_parallelism, self.input_count - completed_inputs)
         message = (
-            f"Calling `{self.function_name}`: {completed_inputs}/{self.input_count} completed, "
+            f"Calling `{self.function_name}`: {completed_inputs}/{self.input_count} done, "
             f"{running_inputs} running."
         )
         if booting_nodes > 0:
-            message += f" Booting {booting_nodes} nodes ..."
+            message += f" booting {booting_nodes}"
         if dynamic_worker_reduction:
             original = dynamic_worker_reduction["original"]
             current = dynamic_worker_reduction["current"]
-            message += f" Memory pressure: workers {original} -> {current} workers"
+            message += f" workers reduced {original}->{current}"
         self.spinner.text = message
 
     async def log_job_success_telemetry(self, total_runtime: float):

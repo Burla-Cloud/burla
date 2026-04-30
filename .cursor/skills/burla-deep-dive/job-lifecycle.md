@@ -76,7 +76,7 @@ Then the `execute` handler in [node_service/src/node_service/job_endpoints.py](.
 
 1. Walks `SELF["workers"]` and picks workers whose Python version matches `user_python_version` until `future_parallelism >= request_json["parallelism"]`.
 2. If zero matches, **awaits `SELF["on_job_start_task"]`** before flipping `SELF["RUNNING"]=False` and writing `status: "READY"` to Firestore, then returns 409 with a Python-version mismatch message. (Without the await the `on_job_start` write can race the rollback.)
-3. Writes the client's auth token + email + project + dashboard URL into `NODE_AUTH_CREDENTIALS_PATH` (`/opt/burla/node_auth/burla_credentials.json`) — this is bind-mounted into every worker container and is how nested `remote_parallel_map` calls inside a UDF authenticate without a prior `burla login`.
+3. Writes the client's auth token + email + project + dashboard URL into `NODE_AUTH_CREDENTIALS_PATH` (`/opt/burla/node_auth/burla_credentials.json`) — this is bind-mounted into every worker container and is how nested `remote_parallel_map` calls inside a UDF authenticate.
 4. Installs `packages` on the first worker — all workers share a volume-mounted Python env, so one install covers the whole node.
 5. Broadcasts the pickled function to every selected worker (`load_function` → TCP `l`), which also kicks off each worker's `_process_inputs` task.
 6. Populates `SELF["auth_headers"]` from the incoming `Authorization` and `X-User-Email` headers — used for node-to-node calls during this job.

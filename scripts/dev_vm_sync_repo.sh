@@ -32,33 +32,39 @@ SOURCE_PATH="$(cd "$SOURCE_PATH" && pwd)"
 SOURCE_TOPLEVEL="$(git -C "$SOURCE_PATH" rev-parse --show-toplevel 2>/dev/null)" || fail "Source path [$SOURCE_PATH] is not inside a git checkout."
 [[ "$SOURCE_TOPLEVEL" == "$SOURCE_PATH" ]] || fail "Source path [$SOURCE_PATH] must be a git checkout root, got [$SOURCE_TOPLEVEL]."
 
-SYNC_ARCHIVE="$(mktemp "/tmp/burla-dev-vm-${SLOT_ID}-XXXXXX.tgz")"
-SYNC_FILE_LIST="$(mktemp "/tmp/burla-dev-vm-${SLOT_ID}-files-XXXXXX.txt")"
-REMOTE_ARCHIVE="burla-dev-vm-${SLOT_ID}.tgz"
-trap 'rm -f "$SYNC_ARCHIVE" "$SYNC_FILE_LIST"' EXIT
-
-git -C "$SOURCE_PATH" ls-files -z --cached --others --exclude-standard > "$SYNC_FILE_LIST"
-
-COPYFILE_DISABLE=1 tar \
-  --null \
-  --no-xattrs \
-  --no-mac-metadata \
-  -czf "$SYNC_ARCHIVE" \
-  -C "$SOURCE_PATH" \
-  -T "$SYNC_FILE_LIST"
-
-scp_to_vm "$SYNC_ARCHIVE" "~/${REMOTE_ARCHIVE}" >/dev/null
-
 REMOTE_BODY="$(cat <<EOF
-sudo rm -rf '$REMOTE_REPO_DIR'
 sudo mkdir -p '$REMOTE_REPO_DIR'
-sudo tar xzf "\$HOME/${REMOTE_ARCHIVE}" -C '$REMOTE_REPO_DIR'
 sudo chown -R "\$(id -un):\$(id -gn)" '$REMOTE_REPO_DIR'
-rm -f "\$HOME/${REMOTE_ARCHIVE}"
 EOF
 )"
 
 ssh_run "$REMOTE_BODY" >/dev/null
+
+rsync \
+  -az \
+  --delete \
+  --exclude='.git/' \
+  --exclude='.cursor/dev-vm-state/' \
+  --exclude='.gstack/' \
+  --exclude='.DS_Store' \
+  --exclude='__pycache__/' \
+  --exclude='.pytest_cache/' \
+  --exclude='.mypy_cache/' \
+  --exclude='.ruff_cache/' \
+  --exclude='.venv/' \
+  --exclude='client/.venv/' \
+  --exclude='main_service/frontend/node_modules/' \
+  --exclude='main_service/frontend/dist/' \
+  --exclude='main_service/frontend/build/' \
+  --exclude='main_service/src/main_service/static/assets/' \
+  --exclude='_node_auth/' \
+  --exclude='_shared_workspace/' \
+  --exclude='_worker_service_python_env/' \
+  --exclude='_python_version_marker/' \
+  -e "ssh -i '$PRIVATE_KEY_PATH' -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" \
+  "$SOURCE_PATH/" \
+  "${LOCAL_USER}@${VM_IP}:${REMOTE_REPO_DIR}/" \
+  >/dev/null
 echo "Synced repo to [$VM_NAME:$REMOTE_REPO_DIR]."
 
 SOURCE_PATCH_JSON="$(source_git_metadata_json "$SOURCE_PATH")"
@@ -67,7 +73,7 @@ merge_state_json "$STATE_PATH" "$SOURCE_PATCH_JSON" >/dev/null
 # Ship git-ignored frontend env file (Syncfusion license, etc.) so
 # `make build-frontend` bakes VITE_* vars into the bundle. Prefer the
 # worktree copy; fall back to the primary checkout. Silent skip if neither
-# exists. /srv/burla is user-owned after the chown above so plain scp works.
+# exists.
 FRONTEND_ENV_PATH="main_service/frontend/.env.local"
 LOCAL_ENV_FILE=""
 for candidate in \

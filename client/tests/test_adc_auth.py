@@ -82,8 +82,8 @@ async def test_start_job_retries_once_after_adc_bootstrap(monkeypatch, tmp_path)
     _auth._get_auth_info.cache_clear()
     monkeypatch.setattr(
         _auth,
-        "_get_adc_credentials",
-        lambda: (_FakeCredentials(), "google-token", "project-1"),
+        "_get_adc_identity",
+        lambda: ("google-token", "project-1", _FakeCredentials.service_account_email),
     )
     monkeypatch.setattr(_auth, "_get_cluster_token", lambda access_token, project_id: "cluster-token")
     monkeypatch.setattr(_auth.requests, "post", lambda *args, **kwargs: _FakeRequestsResponse())
@@ -127,8 +127,8 @@ async def test_login_html_response_retries_once_after_adc_bootstrap(monkeypatch,
     _auth._get_auth_info.cache_clear()
     monkeypatch.setattr(
         _auth,
-        "_get_adc_credentials",
-        lambda: (_FakeCredentials(), "google-token", "project-1"),
+        "_get_adc_identity",
+        lambda: ("google-token", "project-1", _FakeCredentials.service_account_email),
     )
     monkeypatch.setattr(_auth, "_get_cluster_token", lambda access_token, project_id: "cluster-token")
     monkeypatch.setattr(_auth.requests, "post", lambda *args, **kwargs: _FakeRequestsResponse())

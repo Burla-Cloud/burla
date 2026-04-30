@@ -90,8 +90,8 @@ def test_missing_config_bootstraps_normal_credentials_from_adc(monkeypatch, tmp_
     monkeypatch.setattr(_auth, "CONFIG_PATH", config)
     monkeypatch.setattr(
         _auth,
-        "_get_adc_credentials",
-        lambda: (_FakeCredentials(), "google-token", "project-1"),
+        "_get_adc_identity",
+        lambda: ("google-token", "project-1", _FakeCredentials.service_account_email),
     )
     monkeypatch.setattr(_auth, "_get_cluster_token", lambda access_token, project_id: "cluster-token")
 
@@ -132,8 +132,8 @@ def test_adc_exchange_404_raises_not_installed(monkeypatch, tmp_path):
     monkeypatch.setattr(_auth, "CONFIG_PATH", config)
     monkeypatch.setattr(
         _auth,
-        "_get_adc_credentials",
-        lambda: (_FakeCredentials(), "google-token", "project-1"),
+        "_get_adc_identity",
+        lambda: ("google-token", "project-1", _FakeCredentials.service_account_email),
     )
     monkeypatch.setattr(_auth, "_get_cluster_token", lambda access_token, project_id: "cluster-token")
     monkeypatch.setattr(_auth.requests, "post", lambda *args, **kwargs: _FakeResponse(status_code=404))

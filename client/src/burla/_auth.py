@@ -69,7 +69,7 @@ def _write_auth_config(auth_info: dict):
     _get_auth_info.cache_clear()
 
 
-def _get_adc_credentials():
+def _get_adc_identity() -> tuple[str, str, str]:
     import google.auth
     from google.auth.transport.requests import Request
 
@@ -80,13 +80,10 @@ def _get_adc_credentials():
     if not project_id:
         raise ADCProjectException()
     credentials.refresh(Request())
-    return credentials, credentials.token, project_id
-
-
-def _get_adc_email(credentials, access_token: str) -> str:
-    service_account_email = getattr(credentials, "service_account_email", None)
-    if service_account_email:
-        return service_account_email
+    access_token = credentials.token
+    email = getattr(credentials, "service_account_email", None)
+    if email:
+        return access_token, project_id, email
 
     response = requests.get(
         "https://oauth2.googleapis.com/tokeninfo",
@@ -100,7 +97,7 @@ def _get_adc_email(credentials, access_token: str) -> str:
             "Burla could not determine the email for these Google Application Default Credentials. "
             "Run `burla login` instead."
         )
-    return email
+    return access_token, project_id, email
 
 
 def _get_cluster_token(access_token: str, project_id: str) -> str:
@@ -120,9 +117,8 @@ def _get_cluster_token(access_token: str, project_id: str) -> str:
 
 
 def bootstrap_from_adc() -> dict:
-    credentials, access_token, project_id = _get_adc_credentials()
+    access_token, project_id, email = _get_adc_identity()
     cluster_token = _get_cluster_token(access_token, project_id)
-    email = _get_adc_email(credentials, access_token)
     response = requests.post(
         f"{_BURLA_BACKEND_URL}/v1/clusters/{project_id}/adc:exchange",
         headers={"Authorization": f"Bearer {cluster_token}"},

@@ -59,9 +59,9 @@ def test_NoCompatibleNodes_insufficient_capacity_message():
 def test_VersionMismatch_pip_install_hint():
     from burla._node import VersionMismatch
 
-    exc = VersionMismatch("1.0.0", "1.5.9", "0.9.0")
+    exc = VersionMismatch("1.0.0", "1.5.10", "0.9.0")
     msg = str(exc)
-    assert "pip install burla==1.5.9" in msg
+    assert "pip install burla==1.5.10" in msg
     assert "0.9.0" in msg
 
 

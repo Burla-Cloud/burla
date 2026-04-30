@@ -37,6 +37,11 @@ OOM_KILL_MARKER_PREFIX = "__burla_oom_kill__:"
 # /worker_service_python_env before opening its socket. Under any network slowness this can take
 # well over 10 seconds; 10s was causing ~15% of initial boots to fail.
 WORKER_BOOT_TIMEOUT_SECONDS = 20
+DYNAMIC_RAM_MAX_NODE_MEMORY_USED_FRACTION = 0.90
+DYNAMIC_RAM_TARGET_NODE_MEMORY_USED_FRACTION = 0.85
+DYNAMIC_RAM_MONITOR_INTERVAL_SECONDS = 0.25
+DYNAMIC_RAM_STARTUP_MONITOR_INTERVAL_SECONDS = 0.05
+DYNAMIC_RAM_STARTUP_MONITOR_SECONDS = 30
 
 
 class WorkerOutOfMemoryError(RuntimeError):
@@ -56,6 +61,86 @@ class WorkerFunctionError(Exception):
 
 def oom_kill_marker_count(logs: str):
     return sum(line.strip().startswith(OOM_KILL_MARKER_PREFIX) for line in logs.splitlines())
+
+
+def _is_worker_internal_log_message(message: str) -> bool:
+    stripped = message.strip()
+    return (
+        stripped == "Killed"
+        or stripped.startswith(OOM_KILL_MARKER_PREFIX)
+        or stripped in {"3.11", "3.12", "3.13", "3.14"}
+        or stripped.startswith("Using CPython ")
+        or stripped.startswith("× No solution found when resolving dependencies:")
+        or stripped.startswith("╰─▶ Because there is no version of burla==")
+        or stripped.startswith("burla==")
+        or stripped.startswith("Checked 1 package in ")
+    )
+
+
+def _active_dynamic_workers():
+    return [worker for worker in SELF["workers"] if not worker.retired]
+
+
+async def dynamic_ram_monitor_loop():
+    started_at = time.perf_counter()
+    while SELF["dynamic_func_ram"]:
+        startup_window = time.perf_counter() - started_at < DYNAMIC_RAM_STARTUP_MONITOR_SECONDS
+        interval = (
+            DYNAMIC_RAM_STARTUP_MONITOR_INTERVAL_SECONDS
+            if startup_window
+            else DYNAMIC_RAM_MONITOR_INTERVAL_SECONDS
+        )
+        await asyncio.sleep(interval)
+        active_workers = _active_dynamic_workers()
+        if not active_workers:
+            return
+
+        worker_memory = []
+        for worker in active_workers:
+            try:
+                worker_memory.append((worker.memory_rss_bytes(), worker))
+            except psutil.NoSuchProcess:
+                worker.retired = True
+                worker.is_idle = True
+                SELF["reboot_containers_after_job"] = True
+        if not worker_memory:
+            continue
+
+        node_memory_total_bytes = psutil.virtual_memory().total
+        active_worker_memory_bytes = sum(rss_bytes for rss_bytes, _ in worker_memory)
+        active_worker_memory_fraction = active_worker_memory_bytes / node_memory_total_bytes
+        if active_worker_memory_fraction < DYNAMIC_RAM_MAX_NODE_MEMORY_USED_FRACTION:
+            continue
+
+        if len(worker_memory) <= 1:
+            continue
+
+        target_used_bytes = int(
+            node_memory_total_bytes * DYNAMIC_RAM_TARGET_NODE_MEMORY_USED_FRACTION
+        )
+        bytes_to_free = max(0, active_worker_memory_bytes - target_used_bytes)
+        running_worker_memory = [
+            (rss_bytes, worker)
+            for rss_bytes, worker in worker_memory
+            if not worker.is_idle and worker.current_input is not None
+        ]
+        if not running_worker_memory:
+            continue
+        running_worker_memory.sort(reverse=True, key=lambda item: item[0])
+
+        selected_worker_memory = []
+        selected_rss_bytes = 0
+        for rss_bytes, worker in running_worker_memory:
+            if len(worker_memory) - len(selected_worker_memory) <= 1:
+                break
+            selected_worker_memory.append((rss_bytes, worker))
+            selected_rss_bytes += rss_bytes
+            if selected_rss_bytes >= bytes_to_free:
+                break
+
+        await retire_workers_for_dynamic_memory_pressure(
+            selected_worker_memory,
+        )
 
 
 class JobLogWriter:
@@ -137,6 +222,8 @@ class JobLogWriter:
             self.active_input_index = None
             self.pending_flush_event.set()
             return
+        if _is_worker_internal_log_message(stripped_message):
+            return
         if self.active_input_index is None:
             return
         self._write_locked(self.active_input_index, message, timestamp)
@@ -160,6 +247,18 @@ class JobLogWriter:
                     "timestamp": datetime.now(timezone.utc),
                     "input_index": input_index,
                     "is_error": True,
+                }
+            )
+            self.pending_flush_event.set()
+
+    async def write_warning(self, input_index: int, message: str):
+        async with self.lock:
+            self.pending_documents.append(
+                {
+                    "logs": [{"timestamp": datetime.now(timezone.utc), "message": message}],
+                    "timestamp": datetime.now(timezone.utc),
+                    "input_index": input_index,
+                    "severity": "WARNING",
                 }
             )
             self.pending_flush_event.set()
@@ -237,6 +336,58 @@ def _worker_boot_timeout_error(logs: str):
     return RuntimeError(message)
 
 
+async def retire_workers_for_dynamic_memory_pressure(
+    selected_worker_memory: list[tuple[int, "WorkerClient"]],
+):
+    if not selected_worker_memory:
+        return
+    async with SELF["dynamic_ram_lock"]:
+        active_workers = [worker for worker in SELF["workers"] if not worker.retired]
+        max_retire_count = max(0, len(active_workers) - 1)
+        selected_worker_memory = [
+            (rss_bytes, worker)
+            for rss_bytes, worker in selected_worker_memory
+            if not worker.retired and worker.current_input is not None
+        ][:max_retire_count]
+        if not selected_worker_memory:
+            return
+
+        old_parallelism = len(active_workers)
+        new_parallelism = old_parallelism - len(selected_worker_memory)
+        input_indexes = []
+        for _, worker in selected_worker_memory:
+            input_index, input_pkl = worker.current_input
+            input_indexes.append(input_index)
+            worker.retired = True
+            worker.is_idle = True
+            await SELF["inputs_queue"].put((input_index, input_pkl), len(input_pkl))
+
+        SELF["reboot_containers_after_job"] = True
+        msg = (
+            f"Node parallelism decreased from {old_parallelism} to {new_parallelism} "
+            "due to memory pressure."
+        )
+        await Logger().log(
+            msg,
+            severity="WARNING",
+            job_id=SELF["current_job"],
+            input_indexes=input_indexes,
+            old_parallelism=old_parallelism,
+            new_parallelism=new_parallelism,
+        )
+
+        current_inputs = []
+        for _, worker in selected_worker_memory:
+            input_index = worker.current_input[0]
+            current_inputs.append((worker, input_index))
+        for worker, input_index in current_inputs:
+            worker.current_input = None
+
+        await asyncio.gather(
+            *(worker.retire_for_dynamic_memory_pressure() for _, worker in selected_worker_memory)
+        )
+
+
 class WorkerClient:
     def __init__(self, image: str):
         self.container_name = f"worker_{uuid4().hex[:8]}"
@@ -256,6 +407,7 @@ class WorkerClient:
         self.worker_host_pid = None
         self.oom_kill_marker_count = 0
         self.retired = False
+        self.current_input = None
 
     def _worker_server_host_path(self):
         if IN_LOCAL_DEV_MODE:
@@ -285,6 +437,7 @@ class WorkerClient:
                 ]
             )
         else:
+            host_config["CgroupParent"] = "burla-workers.slice"
             if NUM_GPUS != 0:
                 host_config["DeviceRequests"] = [{"Count": -1, "Capabilities": [["gpu"]]}]
                 host_config["Runtime"] = "nvidia"
@@ -351,6 +504,9 @@ class WorkerClient:
             if "worker_server.py" in cmd:
                 return int(row[1])
         raise RuntimeError(f"worker_server.py not found in {self.container_name}")
+
+    def memory_rss_bytes(self) -> int:
+        return psutil.Process(self.worker_host_pid).memory_info().rss
 
     async def _get_python_version(self):
         for _ in range(20):
@@ -422,8 +578,7 @@ class WorkerClient:
                 await asyncio.sleep(0.1)
         self.is_idle = True
         self.logstream_task = asyncio.create_task(self._handle_container_logs())
-        if not IN_LOCAL_DEV_MODE:
-            self.worker_host_pid = await self._get_worker_host_pid()
+        self.worker_host_pid = await self._get_worker_host_pid()
 
     async def _raise_if_worker_failed(self):
         for _ in range(10):
@@ -469,27 +624,23 @@ class WorkerClient:
             reason = "worker process exit" if isinstance(error, WorkerProcessTerminatedError) else "worker OOM"
             msg = (
                 f"Node parallelism decreased from {old_parallelism} to {new_parallelism} "
-                f"for job {SELF['current_job']} after {reason} on input {input_index}."
+                "due to memory pressure."
             )
             await Logger().log(
                 msg,
                 severity="WARNING",
                 job_id=SELF["current_job"],
                 input_index=input_index,
+                reason=reason,
                 old_parallelism=old_parallelism,
                 new_parallelism=new_parallelism,
             )
 
-            if self.log_writer is not None:
-                msg = str(error).strip()
-                msg += "\nRetrying this input with lower node parallelism."
-                await self.log_writer.write_error(input_index, msg)
-
-            if self.writer is not None:
-                self.writer.close()
-                self.writer = None
-                self.reader = None
+            await self._delete_container()
             return None
+
+    async def retire_for_dynamic_memory_pressure(self):
+        await self._kill_worker_process()
 
     async def _read_response(self):
         try:
@@ -524,6 +675,7 @@ class WorkerClient:
             input_index, input_pkl = await SELF["inputs_queue"].get()
 
             self.is_idle = False
+            self.current_input = (input_index, input_pkl)
             await self._ensure_log_writer()
             stop_after_result = False
             try:
@@ -554,7 +706,11 @@ class WorkerClient:
             finally:
                 if self.log_writer is not None:
                     await self.log_writer.finish_input(input_index)
+                self.current_input = None
 
+            if self.retired:
+                self.current_input = None
+                return
             await SELF["results_queue"].put(result, len(result[2]))
             SELF["num_results_received"] += 1
             if stop_after_result:
@@ -643,6 +799,7 @@ class WorkerClient:
                 await asyncio.sleep(0.05)
         self.is_idle = True
         self.logstream_task = asyncio.create_task(self._handle_container_logs())
+        self.worker_host_pid = await self._get_worker_host_pid()
 
     async def _restart_container(self):
         if self.writer is not None:
@@ -668,8 +825,70 @@ class WorkerClient:
         else:
             os.killpg(self.worker_host_pid, signal.SIGKILL)
         await self._reconnect()
-        if not IN_LOCAL_DEV_MODE:
-            self.worker_host_pid = await self._get_worker_host_pid()
+
+    async def _kill_worker_process(self):
+        if self.writer is not None:
+            try:
+                self.writer.close()
+                await self.writer.wait_closed()
+            except Exception:
+                pass
+            self.writer = None
+            self.reader = None
+        if self.logstream_task is not None:
+            self.logstream_task.cancel()
+            try:
+                await self.logstream_task
+            except asyncio.CancelledError:
+                pass
+            self.logstream_task = None
+        if self.log_writer is not None:
+            await self.log_writer.stop()
+            self.log_writer = None
+        if IN_LOCAL_DEV_MODE:
+            await self.container.delete(force=True)
+        else:
+            os.killpg(self.worker_host_pid, signal.SIGKILL)
+        container_id = self.container_id
+        self.container = None
+        self.container_id = None
+        self.worker_host_pid = None
+        if container_id is not None:
+            asyncio.create_task(self._remove_retired_container(container_id))
+
+    async def _delete_container(self):
+        if self.writer is not None:
+            try:
+                self.writer.close()
+                await self.writer.wait_closed()
+            except Exception:
+                pass
+            self.writer = None
+            self.reader = None
+        if self.logstream_task is not None:
+            self.logstream_task.cancel()
+            try:
+                await self.logstream_task
+            except asyncio.CancelledError:
+                pass
+            self.logstream_task = None
+        if self.log_writer is not None:
+            await self.log_writer.stop()
+            self.log_writer = None
+        await self.container.delete(force=True)
+        self.container = None
+        self.container_id = None
+        self.worker_host_pid = None
+
+    async def _remove_retired_container(self, container_id: str):
+        docker = aiodocker.Docker()
+        try:
+            container = docker.containers.container(container_id)
+            await container.delete(force=True)
+        except Exception:
+            pass
+        finally:
+            await docker.close()
 
     async def _container_exists(self):
         if not self.container_id:

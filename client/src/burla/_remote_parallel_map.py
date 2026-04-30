@@ -16,6 +16,18 @@ FuncGpu = Literal["A100", "A100_40G", "A100_80G", "H100", "H100_80G"]
 FuncRam = Union[int, Literal["dynamic"]]
 from uuid import uuid4
 
+_N_FOUR_STANDARD_CPU_TO_RAM = {
+    1: 4,
+    2: 8,
+    4: 16,
+    8: 32,
+    16: 64,
+    32: 128,
+    48: 192,
+    64: 256,
+    80: 320,
+}
+
 import aiohttp
 import cloudpickle
 from yaspin import Spinner, yaspin
@@ -39,6 +51,7 @@ from burla._node import (
     NoCompatibleNodes,
     NoNodes,
     NodeDisconnected,
+    NodesFailedToBoot,
     UnauthorizedError,
     VersionMismatch,
     wait_for_nodes_to_be_ready,
@@ -62,6 +75,12 @@ def _pkg_module_mapping():
 BANNED_PACKAGES = ["ipython", "burla", "google-colab"]
 
 
+def _machine_ram_gb(machine_type: str) -> int:
+    if machine_type.startswith("n4-standard-") and machine_type.split("-")[-1].isdigit():
+        return _N_FOUR_STANDARD_CPU_TO_RAM[int(machine_type.split("-")[-1])]
+    return 0
+
+
 def _read_process_stderr(process) -> str:
     stderr_buffer = getattr(process, "stderr_buffer", None)
     if stderr_buffer is not None:
@@ -71,6 +90,18 @@ def _read_process_stderr(process) -> str:
     if process.stderr is None:
         return ""
     return process.stderr.read().decode("utf-8", errors="replace")
+
+
+async def _nodes_failed_to_boot_exception(nodes: list[Node]) -> NodesFailedToBoot:
+    exception = NodesFailedToBoot(nodes)
+    failed_node = nodes[0]
+    reason = await failed_node.client.get_node_fail_reason(failed_node.instance_name)
+    if reason:
+        exception.add_note(f"Log from {failed_node.instance_name}:\n{reason}")
+    exception.add_note(
+        "Failed nodes: " + ", ".join(node.instance_name for node in nodes)
+    )
+    return exception
 
 
 async def _job_lifecycle_exception(client: ClusterClient, job_id: str):
@@ -298,6 +329,15 @@ async def _execute_job(
             if terminal_cancel_event.is_set():
                 return
 
+            booting_nodes_all_failed = booting_nodes and all(
+                node.state == "FAILED" for node in booting_nodes
+            )
+            no_node_started_work = all(
+                node.state in ("FAILED", "REMOVED", "BOOTING") for node in nodes
+            )
+            if booting_nodes_all_failed and no_node_started_work:
+                raise await _nodes_failed_to_boot_exception(booting_nodes)
+
             for task, node in zip(node_tasks, nodes):
                 exception = task.exception() if task.done() else None
                 if node.state == "FAILED":
@@ -325,9 +365,20 @@ async def _execute_job(
                     reporter.set_installing_packages_message()
                 else:
                     total_parallelism = sum((n.current_parallelism for n in nodes))
-                    booting_nodes = sum(n.state == "BOOTING" for n in nodes)
+                    booting_node_count = sum(n.state == "BOOTING" for n in nodes)
+                    active_node_ram_gb = sum(
+                        _machine_ram_gb(n.machine_type)
+                        for n in nodes
+                        if n.state in ("READY", "RUNNING")
+                    )
+                    ram_per_function_call_gb = None
+                    if total_parallelism > 0:
+                        ram_per_function_call_gb = active_node_ram_gb / total_parallelism
                     reporter.set_running_progress_message(
-                        total_result_count, total_parallelism, booting_nodes
+                        total_result_count,
+                        total_parallelism,
+                        booting_node_count,
+                        ram_per_function_call_gb,
                     )
                 last_status_message_update_time = current_time
 
@@ -403,8 +454,10 @@ def remote_parallel_map(
             The number of CPUs allocated for each instance of `function_`. Defaults to 1.
         func_ram (int | "dynamic", optional):
             The amount of RAM (in GB) allocated for each instance of `function_`.
-            Defaults to "dynamic", which starts with CPU-bound parallelism and retries
-            work at lower node parallelism if workers run out of memory.
+            Defaults to "dynamic": Burla starts with as many parallel calls as the
+            requested CPUs allow, then gives each call more RAM by lowering
+            parallelism on any node where workers run out of memory. Pass an
+            integer to reserve a fixed amount of RAM per function call instead.
         func_gpu (str, optional):
             Allocate one GPU per function call. One of: "A100" / "A100_40G",
             "A100_80G", "H100" / "H100_80G". Defaults to None (no GPU).

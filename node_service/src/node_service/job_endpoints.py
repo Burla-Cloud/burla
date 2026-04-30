@@ -20,6 +20,7 @@ from node_service import (
 )
 from node_service.helpers import Logger
 from node_service.job_watcher import job_watcher_logged
+from node_service.worker_client import dynamic_ram_monitor_loop
 
 _LOGS_OVERFLOW_MESSAGE = "Logs dequeued due to high volume, see dashboard to view all logs."
 MAX_LOGS_RESPONSE_BYTES = 1_000_000
@@ -163,11 +164,20 @@ async def get_results(
 
     result_batch_id, results = _get_result_batch()
     drained_logs = _pop_pending_logs()
+    original_worker_count = len(SELF["workers"])
+    current_worker_count = sum(not worker.retired for worker in SELF["workers"])
+    dynamic_worker_reduction = None
+    if SELF["dynamic_func_ram"] and current_worker_count < original_worker_count:
+        dynamic_worker_reduction = {
+            "original": original_worker_count,
+            "current": current_worker_count,
+        }
 
     response_json = {
         "result_batch_id": result_batch_id,
         "results": results,
         "current_parallelism": SELF["current_parallelism"],
+        "dynamic_worker_reduction": dynamic_worker_reduction,
         "logs": drained_logs,
         "cluster_shutdown": SELF["pending_cluster_shutdown"],
         "cluster_restarted": SELF["pending_cluster_restarted"],
@@ -272,6 +282,8 @@ async def execute(
     SELF["current_parallelism"] = 0
     SELF["dynamic_func_ram"] = request_json["func_ram"] == "dynamic"
     SELF["reboot_containers_after_job"] = False
+    if SELF["dynamic_func_ram"]:
+        SELF["dynamic_ram_monitor_task"] = asyncio.create_task(dynamic_ram_monitor_loop())
     # user specific, assign to self to use for node <-> node requests only during this job.
     SELF["auth_headers"] = {
         "Authorization": request.headers.get("Authorization", ""),

@@ -21,9 +21,13 @@ class _SizedQueue:
 class _LogWriter:
     def __init__(self):
         self.errors = []
+        self.warnings = []
 
     async def write_error(self, input_index, message):
         self.errors.append((input_index, message))
+
+    async def write_warning(self, input_index, message):
+        self.warnings.append((input_index, message))
 
 
 class _NodeLogger:
@@ -51,6 +55,21 @@ class _Writer:
         self.closed = True
 
 
+class _Memory:
+    total = 100
+    available = 10
+
+
+async def _fake_restart_container(self):
+    self.restart_count += 1
+    self.writer = _Writer()
+    self.reader = object()
+
+
+async def _fake_retire_for_dynamic_memory_pressure(self):
+    self.kill_count += 1
+
+
 def _load_worker_client_module(monkeypatch):
     _NodeLogger.entries = []
     fake_node_service = types.ModuleType("node_service")
@@ -69,7 +88,7 @@ def _load_worker_client_module(monkeypatch):
     monkeypatch.setitem(sys.modules, "aiodocker", fake_aiodocker)
 
     fake_psutil = types.ModuleType("psutil")
-    fake_psutil.virtual_memory = lambda: types.SimpleNamespace(total=1024**3)
+    fake_psutil.virtual_memory = lambda: _Memory()
     monkeypatch.setitem(sys.modules, "psutil", fake_psutil)
 
     fake_tblib = types.ModuleType("tblib")
@@ -95,8 +114,15 @@ def _setup_dynamic_worker_pair(module):
     other_worker.retired = False
     worker.is_idle = False
     worker.log_writer = _LogWriter()
+    worker.logstream_task = None
+    worker.container = types.SimpleNamespace(delete=lambda force: None)
     worker.writer = _Writer()
     worker.reader = object()
+    worker.restart_count = 0
+    worker.container_id = "container-id"
+    worker.worker_host_pid = None
+    worker._delete_container = types.MethodType(_fake_restart_container, worker)
+    worker._restart_container = types.MethodType(_fake_restart_container, worker)
     module.SELF.update(
         {
             "workers": [worker, other_worker],
@@ -105,6 +131,21 @@ def _setup_dynamic_worker_pair(module):
             "reboot_containers_after_job": False,
             "current_job": "job-test",
         }
+    )
+    return worker
+
+
+def _worker(module, input_index, rss_bytes):
+    worker = module.WorkerClient.__new__(module.WorkerClient)
+    worker.retired = False
+    worker.is_idle = False
+    worker.current_input = (input_index, b"input")
+    worker.log_writer = _LogWriter()
+    worker.logstream_task = None
+    worker.kill_count = 0
+    worker.memory_rss_bytes = lambda: rss_bytes
+    worker.retire_for_dynamic_memory_pressure = types.MethodType(
+        _fake_retire_for_dynamic_memory_pressure, worker
     )
     return worker
 
@@ -131,16 +172,18 @@ def test_dynamic_oom_requeues_input_and_retires_worker(monkeypatch):
     assert result is None
     assert worker.retired
     assert worker.is_idle
-    assert worker.writer is None
+    assert worker.restart_count == 1
+    assert worker.writer is not None
     assert module.SELF["inputs_queue"].items == [((7, b"input"), len(b"input"))]
     assert module.SELF["reboot_containers_after_job"]
     assert module.Logger.entries == [
         (
-            "Node parallelism decreased from 2 to 1 for job job-test after worker OOM on input 7.",
+            "Node parallelism decreased from 2 to 1 due to memory pressure.",
             "WARNING",
             {
                 "job_id": "job-test",
                 "input_index": 7,
+                "reason": "worker OOM",
                 "old_parallelism": 2,
                 "new_parallelism": 1,
             },
@@ -162,10 +205,11 @@ def test_dynamic_worker_exit_requeues_input_and_retires_worker(monkeypatch):
 
     assert result is None
     assert worker.retired
+    assert worker.restart_count == 1
     assert module.SELF["inputs_queue"].items == [((9, b"input"), len(b"input"))]
-    assert module.Logger.entries[0][0] == (
-        "Node parallelism decreased from 2 to 1 for job job-test "
-        "after worker process exit on input 9."
+    assert (
+        module.Logger.entries[0][0]
+        == "Node parallelism decreased from 2 to 1 due to memory pressure."
     )
     assert "worker died" in worker.log_writer.errors[0][1]
     assert "lower node parallelism" in worker.log_writer.errors[0][1]

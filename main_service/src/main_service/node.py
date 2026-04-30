@@ -71,6 +71,7 @@ NODE_BOOT_TIMEOUT = 60 * 10
 # are set on the future via set_exception and not raised from _refresh, so this retry
 # does not hide them.
 GCE_TRANSIENT_RETRY = Retry(predicate=if_transient_error)
+NODE_SERVICE_RESERVED_MEMORY_GB = 4
 
 
 def zones_supporting_machine_type(
@@ -519,7 +520,36 @@ class Node:
         uv venv --python 3.13 --seed
         uv pip install ./node_service
         
-        nice -n -20 /opt/burla/.venv/bin/python -m uvicorn node_service:app --host 0.0.0.0 --port {self.port} --workers 1 --timeout-keep-alive 600
+        total_memory_kb=$(awk '/MemTotal/ {{print $2}}' /proc/meminfo)
+        worker_memory_kb=$((total_memory_kb - {NODE_SERVICE_RESERVED_MEMORY_GB} * 1024 * 1024))
+        if [ "$worker_memory_kb" -lt $((1024 * 1024)) ]; then
+            worker_memory_kb=$((1024 * 1024))
+        fi
+
+        printf '[Slice]\nMemoryMin={NODE_SERVICE_RESERVED_MEMORY_GB}G\nCPUWeight=1000\n' \
+            >/etc/systemd/system/burla-node-service.slice
+        printf '[Slice]\nMemoryMax=%sK\nCPUWeight=80\n' "$worker_memory_kb" \
+            >/etc/systemd/system/burla-workers.slice
+
+        systemctl daemon-reload
+        systemctl start burla-node-service.slice burla-workers.slice
+
+        systemd-run \
+            --unit=burla-node-service \
+            --slice=burla-node-service.slice \
+            --property=MemoryMin={NODE_SERVICE_RESERVED_MEMORY_GB}G \
+            --property=CPUWeight=1000 \
+            --property=OOMScoreAdjust=-900 \
+            --setenv=NUM_GPUS="$NUM_GPUS" \
+            --setenv=INSTANCE_NAME="$INSTANCE_NAME" \
+            --setenv=PROJECT_ID="$PROJECT_ID" \
+            --setenv=CONTAINERS="$CONTAINERS" \
+            --setenv=INACTIVITY_SHUTDOWN_TIME_SEC="$INACTIVITY_SHUTDOWN_TIME_SEC" \
+            --setenv=RESERVED_FOR_JOB="$RESERVED_FOR_JOB" \
+            --collect \
+            /opt/burla/.venv/bin/python -m uvicorn node_service:app --host 0.0.0.0 --port {self.port} --workers 1 --timeout-keep-alive 600
+
+        journalctl -fu burla-node-service
         """
 
     def __get_shutdown_script(self):

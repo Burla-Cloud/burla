@@ -22,7 +22,7 @@ from node_service import (
 from node_service.helpers import Logger, format_traceback
 from node_service.lifecycle_endpoints import reboot_containers
 
-EMPTY_NEIGHBOR_TIMEOUT_SEC = 60
+EMPTY_NEIGHBOR_TIMEOUT_SEC = 120
 CLIENT_CONTACT_TIMEOUT_SEC = 5
 # Time we'll tolerate without a fresh `jobs/{id}` update_time before treating
 # the client as disconnected. Client heartbeats fire every 2s and go
@@ -34,6 +34,7 @@ CLIENT_CONTACT_TIMEOUT_SEC = 5
 JOB_DOC_CONTACT_TIMEOUT_SEC = 8
 ACK_RETRY_TIMEOUT_SEC = 600
 ACK_RETRY_DELAY_SEC = 15
+WORKER_CLEANUP_TIMEOUT_SEC = 120
 
 SEC_NEIGHBOR_HAD_NO_INPUTS = 0
 
@@ -113,7 +114,8 @@ async def _input_steal_loop(async_db, session, logger, job_started_at, node_ids_
                 if response.status == 200:
                     items = pickle.loads(await response.read())
         except Exception as error:
-            await logger.log(f"GET inputs from {neighbor_id} failed: {error}", "WARNING")
+            error_name = type(error).__name__
+            await logger.log(f"GET inputs from {neighbor_id} failed: {error_name}: {error}", "WARNING")
 
         if items:
             for input_index, input_pkl in items:
@@ -361,12 +363,31 @@ async def reinit_node(assigned_workers: list, async_db: AsyncClient):
 async def reset_workers(logger: Logger, async_db: AsyncClient):
     # Stops idle or reassigned workers from holding creds for a finished job.
     NODE_AUTH_CREDENTIALS_PATH.unlink(missing_ok=True)
+    monitor_task = SELF["dynamic_ram_monitor_task"]
+    if monitor_task is not None:
+        monitor_task.cancel()
+        try:
+            await monitor_task
+        except asyncio.CancelledError:
+            pass
+        SELF["dynamic_ram_monitor_task"] = None
     if SELF["reboot_containers_after_job"]:
         await logger.log("Rebooting worker containers to restore dynamic RAM capacity ...")
-        await reboot_containers(logger=logger)
+        try:
+            await asyncio.wait_for(
+                reboot_containers(logger=logger),
+                timeout=WORKER_CLEANUP_TIMEOUT_SEC,
+            )
+        except Exception as e:
+            node_doc = async_db.collection("nodes").document(INSTANCE_NAME)
+            await node_doc.update({"status": "FAILED"})
+            await logger.log(f"Timed out rebooting worker containers: {e}", severity="ERROR")
         return
     try:
-        await asyncio.gather(*(worker.reset() for worker in SELF["workers"]))
+        await asyncio.wait_for(
+            asyncio.gather(*(worker.reset() for worker in SELF["workers"])),
+            timeout=WORKER_CLEANUP_TIMEOUT_SEC,
+        )
     except Exception as e:
         # dont throw errors if node deleting
         node_doc = async_db.collection("nodes").document(INSTANCE_NAME)
@@ -376,6 +397,16 @@ async def reset_workers(logger: Logger, async_db: AsyncClient):
 
         await logger.log(f"Error resetting workers: {e}", severity="ERROR")
         await logger.log("Some workers failed to reset, rebooting containers ...")
-        await reboot_containers(logger=logger)
+        try:
+            await asyncio.wait_for(
+                reboot_containers(logger=logger),
+                timeout=WORKER_CLEANUP_TIMEOUT_SEC,
+            )
+        except Exception as reboot_error:
+            await node_doc.update({"status": "FAILED"})
+            await logger.log(
+                f"Timed out rebooting worker containers after reset failure: {reboot_error}",
+                severity="ERROR",
+            )
         return
     await reinit_node(SELF["workers"], async_db)

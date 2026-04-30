@@ -95,6 +95,14 @@ class NodeDisconnected(Exception):
         super().__init__(message or f"Node {node.instance_name} failed during job.")
 
 
+class NodesFailedToBoot(Exception):
+    def __init__(self, nodes: list["Node"]):
+        node_word = "node" if len(nodes) == 1 else "nodes"
+        message = f"\n\nBurla tried to boot {len(nodes)} {node_word} to complete this request, "
+        message += f"but all of them failed to boot.\n"
+        super().__init__(message)
+
+
 class VersionMismatch(Exception):
     def __init__(self, lower_version: str, upper_version: str, current_version: str):
         msg = f"Incompatible cluster and client versions!\n"
@@ -226,6 +234,7 @@ class Node:
         self.installing_packages = False
         self.result_count = 0
         self.result_batch_id_to_ack = None
+        self.dynamic_worker_reduction = None
         self.last_reply_timestamp = time()
         self.last_result_poll_timestamp = None
         self.started_booting_at = time()
@@ -285,6 +294,7 @@ class Node:
             "result_batch_id": None,
             "results": [],
             "current_parallelism": self.current_parallelism,
+            "dynamic_worker_reduction": None,
             "logs": [],
         }
 
@@ -453,6 +463,7 @@ class Node:
                         "result_batch_id": None,
                         "results": [],
                         "current_parallelism": 0,
+                        "dynamic_worker_reduction": None,
                         "logs": [],
                     }
                 if response.status != 200:
@@ -473,6 +484,7 @@ class Node:
         except NETWORK_ERROR_TYPES:
             if self._result_poll_silence_timeout_exceeded():
                 msg = self._node_silence_timeout_message("returning results")
+                await self._fail_and_delete(msg)
                 raise NodeDisconnected(self, await self._failure_message(msg))
             return self._empty_node_results()
 
@@ -618,6 +630,7 @@ class Node:
                     return_values.append(cloudpickle.loads(result_pkl))
 
             self.current_parallelism = node_results["current_parallelism"]
+            self.dynamic_worker_reduction = node_results.get("dynamic_worker_reduction")
 
             for return_value in return_values:
                 return_queue.put_nowait(return_value)

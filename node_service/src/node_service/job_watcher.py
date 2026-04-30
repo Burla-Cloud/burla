@@ -38,6 +38,15 @@ ACK_RETRY_DELAY_SEC = 15
 SEC_NEIGHBOR_HAD_NO_INPUTS = 0
 
 
+def _lifecycle_canceled(job_dict: dict) -> bool:
+    return (
+        job_dict.get("cluster_shutdown")
+        or job_dict.get("cluster_restarted")
+        or job_dict.get("dashboard_canceled")
+        or job_dict.get("status") == "CANCELED"
+    )
+
+
 async def get_neighbor(async_db, node_ids_expected):
     status_filter = FieldFilter("status", "==", "RUNNING")
     job_filter = FieldFilter("current_job", "==", SELF["current_job"])
@@ -219,7 +228,9 @@ async def _job_watcher(
     last_reported_client_contact_last_1s = True
     while not SELF["job_watcher_stop_event"].is_set():
 
-        SELF["current_parallelism"] = sum(not worker.is_idle for worker in SELF["workers"])
+        SELF["current_parallelism"] = sum(
+            not worker.is_idle and not worker.retired for worker in SELF["workers"]
+        )
         pending_transfer_count = sum(len(batch) for batch in SELF["pending_transfers"].values())
         remaining_inputs = SELF["inputs_queue"].qsize() + pending_transfer_count
         input_queue_empty = remaining_inputs == 0
@@ -256,9 +267,12 @@ async def _job_watcher(
                 client_disconnected = not any(d["client_contact_last_1s"] for d in node_dicts)
         must_be_connected = not is_background_job or not SELF["all_inputs_uploaded"]
         if client_disconnected and must_be_connected:
-            JOB_FAILED = True
-            await job_doc.update({"status": "FAILED", "fail_reason": ArrayUnion(["Client DC"])})
-            await logger.log("Client disconnected!")
+            if _lifecycle_canceled((await job_doc.get()).to_dict()):
+                JOB_CANCELED = True
+            else:
+                JOB_FAILED = True
+                await job_doc.update({"status": "FAILED", "fail_reason": ArrayUnion(["Client DC"])})
+                await logger.log("Client disconnected!")
 
         # Neighbor had no inputs for too long?
         if SEC_NEIGHBOR_HAD_NO_INPUTS and SEC_NEIGHBOR_HAD_NO_INPUTS > EMPTY_NEIGHBOR_TIMEOUT_SEC:
@@ -347,6 +361,10 @@ async def reinit_node(assigned_workers: list, async_db: AsyncClient):
 async def reset_workers(logger: Logger, async_db: AsyncClient):
     # Stops idle or reassigned workers from holding creds for a finished job.
     NODE_AUTH_CREDENTIALS_PATH.unlink(missing_ok=True)
+    if SELF["reboot_containers_after_job"]:
+        await logger.log("Rebooting worker containers to restore dynamic RAM capacity ...")
+        await reboot_containers(logger=logger)
+        return
     try:
         await asyncio.gather(*(worker.reset() for worker in SELF["workers"]))
     except Exception as e:

@@ -13,7 +13,15 @@ import aiodocker
 import psutil
 from tblib import Traceback
 
-from node_service import SELF, ASYNC_DB, INSTANCE_NAME, IN_LOCAL_DEV_MODE, NUM_GPUS, __version__
+from node_service import (
+    SELF,
+    ASYNC_DB,
+    INSTANCE_NAME,
+    IN_LOCAL_DEV_MODE,
+    NUM_GPUS,
+    Logger,
+    __version__,
+)
 
 RESULTS_QUEUE_RAM_LIMIT_BYTES = int(psutil.virtual_memory().total * 0.5)
 
@@ -23,11 +31,31 @@ MAX_LOG_DOCUMENT_SIZE_BYTES = 100_000
 TRUNCATED_LOG_SUFFIX = "<too-long--remaining-msg-truncated-due-to-length>"
 LOG_START_MARKER_PREFIX = "__burla_input_start__:"
 LOG_END_MARKER_PREFIX = "__burla_input_end__:"
+OOM_KILL_MARKER_PREFIX = "__burla_oom_kill__:"
 
 # The first worker on a fresh VM downloads uv from GitHub and installs cloudpickle/tblib into
 # /worker_service_python_env before opening its socket. Under any network slowness this can take
 # well over 10 seconds; 10s was causing ~15% of initial boots to fail.
 WORKER_BOOT_TIMEOUT_SECONDS = 20
+
+
+class WorkerOutOfMemoryError(RuntimeError):
+    pass
+
+
+class WorkerProcessTerminatedError(RuntimeError):
+    pass
+
+
+class WorkerFunctionError(Exception):
+    def __init__(self, error_info_pkl: bytes, traceback_str: str):
+        self.error_info_pkl = error_info_pkl
+        self.traceback_str = traceback_str
+        super().__init__(traceback_str)
+
+
+def oom_kill_marker_count(logs: str):
+    return sum(line.strip().startswith(OOM_KILL_MARKER_PREFIX) for line in logs.splitlines())
 
 
 class JobLogWriter:
@@ -178,10 +206,25 @@ class JobLogWriter:
 
 
 def _worker_oom_error():
-    return RuntimeError(
+    return WorkerOutOfMemoryError(
         "\n\nWorker container was killed by the Linux OOM killer.\n"
         "This usually means the submitted function used more memory than the container had available.\n"
-        "Increase the container memory limit or reduce memory usage inside the function.\n"
+        "Increase `func_ram`, use `func_ram=\"dynamic\"`, or reduce memory usage inside the function.\n"
+    )
+
+
+def _worker_process_oom_error():
+    return WorkerOutOfMemoryError(
+        "\n\nWorker process was killed by the Linux OOM killer while the container stayed healthy.\n"
+        "This usually means this function call used more memory than was available at the current node parallelism.\n"
+        "Increase `func_ram`, use `func_ram=\"dynamic\"`, or reduce memory usage inside the function.\n"
+    )
+
+
+def _dynamic_terminal_oom_error():
+    return WorkerOutOfMemoryError(
+        "\n\nWorker ran out of memory while `func_ram=\"dynamic\"` was already down to one active worker on this node.\n"
+        "Burla cannot give this input more memory on the current machine. Reduce memory usage inside the function or use a larger node.\n"
     )
 
 
@@ -211,6 +254,8 @@ class WorkerClient:
         self.process_inputs_task = None
         self.log_writer = None
         self.worker_host_pid = None
+        self.oom_kill_marker_count = 0
+        self.retired = False
 
     def _worker_server_host_path(self):
         if IN_LOCAL_DEV_MODE:
@@ -262,7 +307,15 @@ class WorkerClient:
                 "export PYTHONUNBUFFERED=1; "
                 "export PYTHONPATH=/worker_service_python_env; "
                 'export PATH="/worker_service_python_env/bin:$PATH"; '
-                f"while true; do python /opt/burla/worker_server.py {WORKER_INTERNAL_PORT} {__version__}; sleep 0.1; done"
+                "oom_kill_count() { awk '$1 == \"oom_kill\" {print $2}' /sys/fs/cgroup/memory.events; }; "
+                "oom_kills=$(oom_kill_count); "
+                f"while true; do python /opt/burla/worker_server.py {WORKER_INTERNAL_PORT} {__version__}; "
+                "next_oom_kills=$(oom_kill_count); "
+                "if [ \"$next_oom_kills\" != \"$oom_kills\" ]; then "
+                f"echo '{OOM_KILL_MARKER_PREFIX}'\"$oom_kills->$next_oom_kills\"; "
+                "fi; "
+                "oom_kills=$next_oom_kills; "
+                "sleep 0.1; done"
             ),
         ]
 
@@ -330,6 +383,8 @@ class WorkerClient:
         return self.log_writer
 
     def _traceback_string(self, error: Exception):
+        if isinstance(error, WorkerFunctionError):
+            return error.traceback_str
         error_info = getattr(error, "burla_error_info", None)
         if error_info and error_info.get("traceback_dict"):
             traceback_object = Traceback.from_dict(error_info["traceback_dict"]).as_traceback()
@@ -379,15 +434,62 @@ class WorkerClient:
                 await self._log_container_failure()
                 raise RuntimeError("\n\nWorker container stopped unexpectedly.\n")
             await asyncio.sleep(0.1)
-        # Naming the likely causes points users at their own UDF instead of a
-        # suspected cluster or network issue.
-        msg = (
+        current_oom_kill_marker_count = oom_kill_marker_count(await self._get_logs())
+        if current_oom_kill_marker_count > self.oom_kill_marker_count:
+            self.oom_kill_marker_count = current_oom_kill_marker_count
+            raise _worker_process_oom_error()
+        self.oom_kill_marker_count = current_oom_kill_marker_count
+        raise WorkerProcessTerminatedError(
             "\n\nWorker process ended unexpectedly while the container was still healthy.\n"
             "This usually means the user function called `os._exit`, `sys.exit`, raised\n"
             "`SystemExit`/`KeyboardInterrupt`, or crashed a C extension (segfault / OOM of\n"
             "the worker subprocess specifically). The cluster itself is fine.\n"
         )
-        raise RuntimeError(msg)
+
+    async def _retire_after_dynamic_worker_failure(
+        self,
+        input_index: int,
+        input_pkl: bytes,
+        error: WorkerOutOfMemoryError | WorkerProcessTerminatedError,
+    ):
+        async with SELF["dynamic_ram_lock"]:
+            active_workers = [worker for worker in SELF["workers"] if not worker.retired]
+            if len(active_workers) <= 1:
+                if isinstance(error, WorkerOutOfMemoryError):
+                    error = _dynamic_terminal_oom_error()
+                return (input_index, True, self._serialize_error(error))
+
+            old_parallelism = len(active_workers)
+            new_parallelism = old_parallelism - 1
+            self.retired = True
+            self.is_idle = True
+            SELF["reboot_containers_after_job"] = True
+            await SELF["inputs_queue"].put((input_index, input_pkl), len(input_pkl))
+
+            reason = "worker process exit" if isinstance(error, WorkerProcessTerminatedError) else "worker OOM"
+            msg = (
+                f"Node parallelism decreased from {old_parallelism} to {new_parallelism} "
+                f"for job {SELF['current_job']} after {reason} on input {input_index}."
+            )
+            await Logger().log(
+                msg,
+                severity="WARNING",
+                job_id=SELF["current_job"],
+                input_index=input_index,
+                old_parallelism=old_parallelism,
+                new_parallelism=new_parallelism,
+            )
+
+            if self.log_writer is not None:
+                msg = str(error).strip()
+                msg += "\nRetrying this input with lower node parallelism."
+                await self.log_writer.write_error(input_index, msg)
+
+            if self.writer is not None:
+                self.writer.close()
+                self.writer = None
+                self.reader = None
+            return None
 
     async def _read_response(self):
         try:
@@ -403,24 +505,14 @@ class WorkerClient:
         if status == b"e":
             error_size = int.from_bytes(await self.reader.readexactly(8), "big")
             error_response = pickle.loads(await self.reader.readexactly(error_size))
-            error_info = error_response["error_info"]
-            exception = error_info["exception"]
-            if error_info.get("traceback_dict"):
-                traceback = Traceback.from_dict(error_info["traceback_dict"]).as_traceback()
-                exception = exception.with_traceback(traceback)
-            exception.burla_error_info = error_info
-            raise exception
+            raise WorkerFunctionError(
+                error_response["error_info_pkl"], error_response["traceback_str"]
+            )
         raise Exception(f"unknown response status: {status}")
 
     def _serialize_error(self, error: Exception):
-        # UDF errors carry `burla_error_info` (set in `_read_response`) and pickle cleanly because
-        # their type comes from user code the client already has. Infrastructure errors (worker
-        # container died, aiodocker failures during cluster shutdown, etc.) may reference modules
-        # like `aiodocker` that the client does not have installed, so we send a traceback string
-        # instead of the raw exception type.
-        error_info = getattr(error, "burla_error_info", None)
-        if error_info is not None:
-            return pickle.dumps(error_info)
+        if isinstance(error, WorkerFunctionError):
+            return error.error_info_pkl
         traceback_str = "".join(traceback.format_exception(type(error), error, error.__traceback__))
         return pickle.dumps({"traceback_str": traceback_str, "is_infrastructure_error": True})
 
@@ -433,11 +525,28 @@ class WorkerClient:
 
             self.is_idle = False
             await self._ensure_log_writer()
+            stop_after_result = False
             try:
                 result_pkl = await self.call_function(input_index, input_pkl)
                 result = (input_index, False, result_pkl)
             except asyncio.CancelledError:
                 raise
+            except WorkerFunctionError as error:
+                if self.log_writer is not None:
+                    await self.log_writer.write_error(input_index, error.traceback_str)
+                result = (input_index, True, error.error_info_pkl)
+            except (WorkerOutOfMemoryError, WorkerProcessTerminatedError) as error:
+                if SELF["dynamic_func_ram"]:
+                    result = await self._retire_after_dynamic_worker_failure(
+                        input_index, input_pkl, error
+                    )
+                    if result is None:
+                        return
+                else:
+                    if self.log_writer is not None:
+                        await self.log_writer.write_error(input_index, self._traceback_string(error))
+                    result = (input_index, True, self._serialize_error(error))
+                stop_after_result = True
             except BaseException as error:
                 if self.log_writer is not None:
                     await self.log_writer.write_error(input_index, self._traceback_string(error))
@@ -448,6 +557,8 @@ class WorkerClient:
 
             await SELF["results_queue"].put(result, len(result[2]))
             SELF["num_results_received"] += 1
+            if stop_after_result:
+                return
 
     async def install_packages(self, packages: dict):
         try:

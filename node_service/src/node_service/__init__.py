@@ -84,6 +84,9 @@ def REINIT_SELF(SELF):
     SELF["current_container_config"] = []
     SELF["auth_headers"] = {}
     SELF["all_inputs_uploaded"] = False
+    SELF["dynamic_func_ram"] = False
+    SELF["dynamic_ram_lock"] = asyncio.Lock()
+    SELF["reboot_containers_after_job"] = False
     SELF["num_results_received"] = 0
     SELF["pending_transfers"] = {}
     SELF["pending_result_batch"] = None

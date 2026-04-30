@@ -366,21 +366,19 @@ async def _execute_job(
                 else:
                     total_parallelism = sum((n.current_parallelism for n in nodes))
                     booting_node_count = sum(n.state == "BOOTING" for n in nodes)
-                    dynamic_worker_reductions = [
-                        {
-                            "original": n.dynamic_worker_reduction["original"],
-                            "current": n.dynamic_worker_reduction["current"],
-                            "ram_per_worker_gb": _machine_ram_gb(n.machine_type)
-                            / n.dynamic_worker_reduction["current"],
-                        }
+                    active_node_ram_gb = sum(
+                        _machine_ram_gb(n.machine_type)
                         for n in nodes
-                        if n.dynamic_worker_reduction
-                    ]
+                        if n.state in ("READY", "RUNNING")
+                    )
+                    ram_per_function_call_gb = None
+                    if total_parallelism > 0:
+                        ram_per_function_call_gb = active_node_ram_gb / total_parallelism
                     reporter.set_running_progress_message(
                         total_result_count,
                         total_parallelism,
                         booting_node_count,
-                        dynamic_worker_reductions,
+                        ram_per_function_call_gb,
                     )
                 last_status_message_update_time = current_time
 

@@ -162,7 +162,7 @@ class RemoteParallelMapReporter:
         completed_inputs: int,
         total_parallelism: int,
         booting_nodes: int = 0,
-        dynamic_worker_reductions: list[dict] | None = None,
+        ram_per_function_call_gb: float | None = None,
     ):
         if not self.spinner:
             return
@@ -173,14 +173,11 @@ class RemoteParallelMapReporter:
             f"{running_inputs} running."
         )
         if booting_nodes > 0:
-            message += f" booting {booting_nodes}"
-        if dynamic_worker_reductions:
-            highest_ram_reduction = max(
-                dynamic_worker_reductions,
-                key=lambda reduction: reduction["ram_per_worker_gb"],
-            )
-            ram_per_worker = highest_ram_reduction["ram_per_worker_gb"]
-            message += f" RAM: {ram_per_worker:g}GB per function call"
+            message = message.rstrip(".")
+            message += f", booting {booting_nodes}."
+        if ram_per_function_call_gb is not None:
+            message = message.rstrip(".")
+            message += f", {ram_per_function_call_gb:g}G RAM / function call."
         self.spinner.text = message
 
     async def log_job_success_telemetry(self, total_runtime: float):

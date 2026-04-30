@@ -539,7 +539,7 @@ class WorkerClient:
                 msg += "\nRetrying this input with lower node parallelism."
                 await self.log_writer.write_error(input_index, msg)
 
-            await self._restart_container()
+            await self._delete_container()
             return None
 
     async def retire_for_dynamic_memory_pressure(
@@ -737,6 +737,30 @@ class WorkerClient:
         else:
             os.killpg(self.worker_host_pid, signal.SIGKILL)
         await self._reconnect()
+
+    async def _delete_container(self):
+        if self.writer is not None:
+            try:
+                self.writer.close()
+                await self.writer.wait_closed()
+            except Exception:
+                pass
+            self.writer = None
+            self.reader = None
+        if self.logstream_task is not None:
+            self.logstream_task.cancel()
+            try:
+                await self.logstream_task
+            except asyncio.CancelledError:
+                pass
+            self.logstream_task = None
+        if self.log_writer is not None:
+            await self.log_writer.stop()
+            self.log_writer = None
+        await self.container.delete(force=True)
+        self.container = None
+        self.container_id = None
+        self.worker_host_pid = None
 
     async def _container_exists(self):
         if not self.container_id:

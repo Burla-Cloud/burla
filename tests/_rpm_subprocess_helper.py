@@ -15,6 +15,28 @@ import traceback
 from typing import Any
 
 
+def _drop_first_result_batch_if_requested() -> None:
+    if os.environ.get("BURLA_TEST_DROP_FIRST_RESULT_BATCH") != "1":
+        return
+
+    from burla import _node
+
+    original_gather_results = _node.Node._gather_results
+    dropped_batch = False
+
+    async def gather_results_with_one_dropped_batch(self):
+        nonlocal dropped_batch
+
+        node_results = await original_gather_results(self)
+        if not dropped_batch and node_results["results"]:
+            dropped_batch = True
+            print("BURLA_TEST_DROPPED_FIRST_RESULT_BATCH")
+            return self._empty_node_results()
+        return node_results
+
+    _node.Node._gather_results = gather_results_with_one_dropped_batch
+
+
 def run_rpm_in_subprocess(
     result_queue: Any,
     function_source: str,
@@ -28,6 +50,8 @@ def run_rpm_in_subprocess(
     os.environ.setdefault("BURLA_CLUSTER_DASHBOARD_URL", dashboard_url)
 
     from burla import remote_parallel_map
+
+    _drop_first_result_batch_if_requested()
 
     function_namespace: dict = {}
     exec(function_source, function_namespace, function_namespace)

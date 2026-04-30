@@ -225,6 +225,7 @@ class Node:
         self.current_parallelism = 0
         self.installing_packages = False
         self.result_count = 0
+        self.result_batch_id_to_ack = None
         self.last_reply_timestamp = time()
         self.last_result_poll_timestamp = None
         self.started_booting_at = time()
@@ -281,6 +282,7 @@ class Node:
 
     def _empty_node_results(self):
         return {
+            "result_batch_id": None,
             "results": [],
             "current_parallelism": self.current_parallelism,
             "logs": [],
@@ -426,10 +428,15 @@ class Node:
     async def _gather_results(self):
         url = f"{self.host}/jobs/{self.job_id}/results"
         self.last_result_poll_timestamp = time()
+        result_batch_id_to_ack = self.result_batch_id_to_ack
+        params = {}
+        if result_batch_id_to_ack:
+            params["ack_result_batch_id"] = result_batch_id_to_ack
 
         async def request_function():
             return await self.session.get(
                 url,
+                params=params,
                 headers=self.auth_headers,
                 timeout=ClientTimeout(total=15),
             )
@@ -441,6 +448,7 @@ class Node:
                 if response.status == 404:
                     self.state = "DONE"
                     return {
+                        "result_batch_id": None,
                         "results": [],
                         "current_parallelism": 0,
                         "logs": [],
@@ -450,6 +458,8 @@ class Node:
                 try:
                     node_results = pickle.loads(await response.content.read())
                     self.last_reply_timestamp = time()
+                    if result_batch_id_to_ack:
+                        self.result_batch_id_to_ack = None
                 except UnpicklingError as error:
                     if "Memo value not found at index" not in str(error):
                         raise error
@@ -574,6 +584,7 @@ class Node:
                 first_chunk_barrier = None
 
             node_results = await self._gather_results()
+            result_batch_id = node_results.get("result_batch_id")
             return_values = []
             for input_index, is_error, result_pkl in node_results["results"]:
                 if is_error:
@@ -607,6 +618,8 @@ class Node:
             for return_value in return_values:
                 return_queue.put_nowait(return_value)
                 self.result_count += 1
+            if result_batch_id:
+                self.result_batch_id_to_ack = result_batch_id
             if self.state == "DONE":
                 return
             await asyncio.sleep(0.05)

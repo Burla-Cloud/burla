@@ -13,7 +13,7 @@ exec > >(tee -a "$LOG_PATH") 2>&1
 export DEBIAN_FRONTEND=noninteractive
 
 apt-get update
-apt-get install -y ca-certificates curl git gnupg jq make python3 python3-pip python3-venv rsync software-properties-common tar tmux
+apt-get install -y ca-certificates curl git gnupg jq make python3 python3-pip python3-venv rsync software-properties-common tar
 
 install -m 0755 -d /etc/apt/keyrings
 
@@ -39,6 +39,7 @@ install -m 0755 /root/.local/bin/uvx /usr/local/bin/uvx
 
 id -u "$DEV_VM_USER" >/dev/null 2>&1 || useradd --create-home --shell /bin/bash "$DEV_VM_USER"
 usermod -aG docker "$DEV_VM_USER"
+sudo -u "$DEV_VM_USER" gcloud auth configure-docker us-docker.pkg.dev --quiet
 
 mkdir -p "$REMOTE_REPO_DIR"
 chown -R "$DEV_VM_USER:$DEV_VM_USER" "$REMOTE_REPO_DIR"

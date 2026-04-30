@@ -4,7 +4,6 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 CLIENT_PROJECT="$REPO_ROOT/client"
-STATE_DIR="$REPO_ROOT/.cursor/dev-vm-state"
 KEY_DIR="${BURLA_DEV_VM_KEY_DIR:-${HOME}/.ssh/burla-dev-vm}"
 
 DEFAULT_ORGANIZATION_ID="${BURLA_DEV_VM_ORGANIZATION_ID:-1085197508222}"
@@ -25,6 +24,8 @@ DEFAULT_VM_PREFIX="${BURLA_DEV_VM_VM_PREFIX:-burla-dev-vm-}"
 DEFAULT_DASHBOARD_PORT_BASE=15000
 DEFAULT_VITE_PORT_BASE=18000
 
+PRIMARY_CHECKOUT_CACHE=""
+
 fail() {
   echo "Error: $*" >&2
   exit 1
@@ -41,7 +42,7 @@ require_local_prereqs() {
   require_command scp
   require_command ssh
   require_command ssh-keygen
-  require_command tar
+  require_command rsync
   require_command uv
 }
 
@@ -117,107 +118,6 @@ parse_agent_and_python() {
   parse_slot_and_python "$@"
 }
 
-parse_slot_and_mode() {
-  SLOT_ID=""
-  MODE=""
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --slot|--agent)
-        SLOT_ID="$2"
-        shift 2
-        ;;
-      --mode)
-        MODE="$2"
-        shift 2
-        ;;
-      *)
-        fail "Unknown argument [$1]."
-        ;;
-    esac
-  done
-
-  [[ -n "$SLOT_ID" ]] || fail "--slot is required."
-  [[ -n "$MODE" ]] || fail "--mode is required (local-dev or remote-dev)."
-  validate_slot_id "$SLOT_ID"
-  case "$MODE" in
-    local-dev|remote-dev) ;;
-    *) fail "--mode must be [local-dev] or [remote-dev], got [$MODE]." ;;
-  esac
-  AGENT_ID="$SLOT_ID"
-}
-
-parse_agent_and_mode() {
-  parse_slot_and_mode "$@"
-}
-
-parse_worktree_task_and_base() {
-  TASK_SLUG=""
-  BRANCH_NAME=""
-  BASE_REF="${BURLA_DEV_WORKTREE_BASE_REF:-main}"
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --agent)
-        shift 2
-        ;;
-      --task)
-        TASK_SLUG="$2"
-        shift 2
-        ;;
-      --branch)
-        BRANCH_NAME="$2"
-        shift 2
-        ;;
-      --base)
-        BASE_REF="$2"
-        shift 2
-        ;;
-      *)
-        fail "Unknown argument [$1]."
-        ;;
-    esac
-  done
-
-  [[ -n "$TASK_SLUG" ]] || fail "--task is required."
-  [[ -n "$BASE_REF" ]] || fail "--base must not be empty."
-  validate_task_slug "$TASK_SLUG"
-  if [[ -z "$BRANCH_NAME" ]]; then
-    BRANCH_NAME="$(branch_name_for_task "$TASK_SLUG")"
-  fi
-  validate_branch_name "$BRANCH_NAME"
-}
-
-parse_agent_task_and_base() {
-  parse_worktree_task_and_base "$@"
-}
-
-parse_slot_and_destroy_flags() {
-  SLOT_ID=""
-  DELETE_PROJECT="false"
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --slot|--agent)
-        SLOT_ID="$2"
-        shift 2
-        ;;
-      --delete-project)
-        DELETE_PROJECT="true"
-        shift
-        ;;
-      *)
-        fail "Unknown argument [$1]."
-        ;;
-    esac
-  done
-
-  [[ -n "$SLOT_ID" ]] || fail "--slot is required."
-  validate_slot_id "$SLOT_ID"
-  AGENT_ID="$SLOT_ID"
-}
-
-parse_agent_and_destroy_flags() {
-  parse_slot_and_destroy_flags "$@"
-}
-
 slot_number() {
   local slot_id="$1"
   printf '%d' "$((10#$slot_id))"
@@ -238,12 +138,11 @@ project_id_for_agent() {
 
 vm_name_for_slot() {
   local slot_id="$1"
-  local timestamp="$2"
-  echo "${DEFAULT_VM_PREFIX}${slot_id}-${timestamp}"
+  echo "${DEFAULT_VM_PREFIX}${slot_id}"
 }
 
 vm_name_for_agent() {
-  vm_name_for_slot "$1" "$2"
+  vm_name_for_slot "$1"
 }
 
 dashboard_port_for_slot() {
@@ -266,16 +165,11 @@ vite_port_for_agent() {
 
 state_path_for_slot() {
   local slot_id="$1"
-  echo "$STATE_DIR/${slot_id}.json"
+  echo "$(state_dir)/${slot_id}.json"
 }
 
 state_path_for_agent() {
   state_path_for_slot "$1"
-}
-
-lock_path_for_slot() {
-  local slot_id="$1"
-  echo "$STATE_DIR/${slot_id}.lock"
 }
 
 private_key_path_for_slot() {
@@ -296,10 +190,6 @@ public_key_path_for_agent() {
   public_key_path_for_slot "$1"
 }
 
-timestamp_utc() {
-  date -u +%Y%m%dt%H%M%S
-}
-
 current_git_toplevel() {
   git rev-parse --show-toplevel
 }
@@ -309,28 +199,17 @@ current_git_branch() {
 }
 
 primary_checkout_path() {
+  if [[ -n "$PRIMARY_CHECKOUT_CACHE" ]]; then
+    echo "$PRIMARY_CHECKOUT_CACHE"
+    return
+  fi
   git worktree list --porcelain | awk '/^worktree /{print substr($0, 10); exit}'
 }
 
-branch_name_for_task() {
-  local task_slug="$1"
-  echo "$task_slug"
-}
-
-worktree_base_dir() {
-  if [[ -n "${BURLA_DEV_WORKTREE_BASE_DIR:-}" ]]; then
-    echo "$BURLA_DEV_WORKTREE_BASE_DIR"
-    return
-  fi
-
+state_dir() {
   local primary_checkout
   primary_checkout="$(primary_checkout_path)"
-  echo "$(dirname "$primary_checkout")/burla-worktrees"
-}
-
-worktree_path_for_task() {
-  local task_slug="$1"
-  echo "$(worktree_base_dir)/${task_slug}"
+  echo "$primary_checkout/.cursor/dev-vm-state"
 }
 
 main_service_service_account() {
@@ -344,7 +223,7 @@ main_service_account_exists() {
 }
 
 ensure_state_dir() {
-  mkdir -p "$STATE_DIR"
+  mkdir -p "$(state_dir)"
 }
 
 ensure_key_dir() {
@@ -456,6 +335,42 @@ vm_external_ip() {
   gcloud compute instances describe "$vm_name" --project "$project_id" --zone "$zone" --format='value(networkInterfaces[0].accessConfigs[0].natIP)' 2>/dev/null
 }
 
+slot_vm_name() {
+  vm_name_for_slot "$1"
+}
+
+slot_vm_status() {
+  local slot_id="$1"
+  local project_id
+  local vm_name
+  project_id="$(project_id_for_slot "$slot_id")"
+  vm_name="$(slot_vm_name "$slot_id")"
+  vm_status "$project_id" "$DEFAULT_ZONE" "$vm_name" || true
+}
+
+slot_is_available() {
+  local slot_id="$1"
+  local status
+  status="$(slot_vm_status "$slot_id")"
+  [[ -z "$status" || "$status" == "TERMINATED" ]]
+}
+
+wait_for_vm_bootstrap() {
+  local max_attempts="${BURLA_DEV_VM_WAIT_ATTEMPTS:-120}"
+  local sleep_seconds="${BURLA_DEV_VM_WAIT_SLEEP_SECONDS:-5}"
+  local remote_body="test -f '$DEFAULT_BOOTSTRAP_READY_PATH' && command -v docker >/dev/null && command -v gcloud >/dev/null && command -v uv >/dev/null && command -v node >/dev/null && command -v npm >/dev/null && docker info >/dev/null 2>&1"
+
+  for ((attempt = 1; attempt <= max_attempts; attempt += 1)); do
+    if ssh_run "$remote_body" >/dev/null 2>&1; then
+      echo "VM [$VM_NAME] is reachable and bootstrapped."
+      return
+    fi
+    sleep "$sleep_seconds"
+  done
+
+  fail "VM [$VM_NAME] never became reachable after $max_attempts attempts."
+}
+
 ensure_artifact_repository() {
   local project_id="$1"
   local repository="$2"
@@ -492,6 +407,21 @@ ensure_artifact_writer_role() {
     sleep $((attempt * 5))
   done
   fail "Failed to grant Artifact Registry writer role for project [$project_id]."
+}
+
+ensure_artifact_reader_role() {
+  local project_id="$1"
+  for attempt in 1 2 3; do
+    if gcloud projects add-iam-policy-binding "$project_id" \
+      --member="serviceAccount:$(main_service_service_account "$project_id")" \
+      --role=roles/artifactregistry.reader \
+      --condition=None \
+      >/dev/null 2>&1; then
+      return
+    fi
+    sleep $((attempt * 5))
+  done
+  fail "Failed to grant Artifact Registry reader role for project [$project_id]."
 }
 
 ensure_slot_project() {
@@ -564,39 +494,6 @@ rendered = rendered.replace("__REMOTE_LOG_PATH__", os.environ["REMOTE_LOG_PATH"]
 rendered = rendered.replace("__BOOTSTRAP_READY_PATH__", os.environ["BOOTSTRAP_READY_PATH"])
 pathlib.Path(sys.argv[2]).write_text(rendered)
 PY
-}
-
-require_primary_checkout_context() {
-  local current_checkout
-  local primary_checkout
-
-  current_checkout="$(current_git_toplevel)"
-  primary_checkout="$(primary_checkout_path)"
-  [[ "$current_checkout" == "$primary_checkout" ]] || fail "Run this from the primary checkout [$primary_checkout], not from linked worktree [$current_checkout]."
-
-  CURRENT_CHECKOUT_PATH="$current_checkout"
-  PRIMARY_CHECKOUT_PATH="$primary_checkout"
-}
-
-require_linked_worktree_context() {
-  local current_checkout
-  local primary_checkout
-  local branch_name
-
-  current_checkout="$(current_git_toplevel)"
-  primary_checkout="$(primary_checkout_path)"
-  [[ "$current_checkout" != "$primary_checkout" ]] || fail "Run this from a linked worktree, not the primary checkout [$primary_checkout]."
-
-  branch_name="$(current_git_branch)"
-
-  CURRENT_CHECKOUT_PATH="$current_checkout"
-  PRIMARY_CHECKOUT_PATH="$primary_checkout"
-  CURRENT_BRANCH_NAME="$branch_name"
-  CURRENT_WORKTREE_PATH="$current_checkout"
-}
-
-require_agent_worktree_context() {
-  require_linked_worktree_context
 }
 
 validate_loaded_state_for_slot() {

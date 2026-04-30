@@ -2,15 +2,18 @@ from __future__ import annotations
 
 import json
 
+import aiohttp
 import pytest
 
 pytestmark = pytest.mark.unit
 
 
 class _FakeAiohttpResponse:
-    def __init__(self, status: int, body: dict):
+    def __init__(self, status: int, body: dict, content_type: str = "application/json"):
         self.status = status
         self._body = body
+        self.content_type = content_type
+        self.content_length = 1
 
     async def __aenter__(self):
         return self
@@ -19,7 +22,13 @@ class _FakeAiohttpResponse:
         return False
 
     async def json(self):
+        if self.content_type == "text/html":
+            raise aiohttp.ContentTypeError(None, ())
         return self._body
+
+    def raise_for_status(self):
+        if self.status >= 400:
+            raise RuntimeError(f"HTTP {self.status}")
 
 
 class _FakeSession:
@@ -94,3 +103,47 @@ async def test_start_job_retries_once_after_adc_bootstrap(monkeypatch, tmp_path)
         "http://fresh-main/v1/jobs/job-1/start",
     ]
     assert json.loads(config.read_text())["auth_token"] == "fresh-token"
+
+
+@pytest.mark.asyncio
+async def test_login_html_response_retries_once_after_adc_bootstrap(monkeypatch, tmp_path):
+    import burla
+    from burla import _auth
+    from burla._cluster_client import ClusterClient
+
+    config = tmp_path / "burla_credentials.json"
+    config.write_text(
+        json.dumps(
+            {
+                "auth_token": "stale-token",
+                "email": "old@example.com",
+                "project_id": "old-project",
+                "cluster_dashboard_url": "http://stale-main",
+            }
+        )
+    )
+    monkeypatch.setattr(burla, "CONFIG_PATH", config)
+    monkeypatch.setattr(_auth, "CONFIG_PATH", config)
+    _auth._get_auth_info.cache_clear()
+    monkeypatch.setattr(
+        _auth,
+        "_get_adc_credentials",
+        lambda: (_FakeCredentials(), "google-token", "project-1"),
+    )
+    monkeypatch.setattr(_auth, "_get_cluster_token", lambda access_token, project_id: "cluster-token")
+    monkeypatch.setattr(_auth.requests, "post", lambda *args, **kwargs: _FakeRequestsResponse())
+
+    session = _FakeSession(
+        [
+            _FakeAiohttpResponse(200, {}, content_type="text/html"),
+            _FakeAiohttpResponse(200, {"ready_nodes": [], "booting_count": 0, "running_count": 0}),
+        ]
+    )
+
+    state = await ClusterClient(session).get_cluster_state()
+
+    assert state == {"ready_nodes": [], "booting_count": 0, "running_count": 0}
+    assert session.urls == [
+        "http://stale-main/v1/cluster/state",
+        "http://fresh-main/v1/cluster/state",
+    ]

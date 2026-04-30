@@ -79,7 +79,8 @@ class ClusterClient:
         ) as response:
             if response.status == 404:
                 return None
-            if response.status == 401 and retry_adc_bootstrap:
+            auth_failed = response.status == 401 or response.content_type == "text/html"
+            if auth_failed and retry_adc_bootstrap:
                 bootstrap_from_adc()
                 self._url = get_cluster_dashboard_url()
                 return await self._request(
@@ -137,10 +138,13 @@ class ClusterClient:
                     body = (await response.json()) or {}
                 except aiohttp.ContentTypeError:
                     body = {}
-            if status == 401 and attempt == 0:
+                auth_failed = status == 401 or response.content_type == "text/html"
+            if auth_failed and attempt == 0:
                 bootstrap_from_adc()
                 self._url = get_cluster_dashboard_url()
                 continue
+            if auth_failed:
+                status = 401
             break
 
         if 200 <= status < 300:

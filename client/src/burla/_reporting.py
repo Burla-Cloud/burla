@@ -177,7 +177,8 @@ class RemoteParallelMapReporter:
             message += f", booting {booting_nodes}."
         if ram_per_function_call_gb is not None:
             message = message.rstrip(".")
-            message += f", {ram_per_function_call_gb:g}G RAM / function call."
+            message += f", {ram_per_function_call_gb:.1f}G RAM per function call."
+
         self.spinner.text = message
 
     async def log_job_success_telemetry(self, total_runtime: float):

@@ -454,8 +454,10 @@ def remote_parallel_map(
             The number of CPUs allocated for each instance of `function_`. Defaults to 1.
         func_ram (int | "dynamic", optional):
             The amount of RAM (in GB) allocated for each instance of `function_`.
-            Defaults to "dynamic", which starts with CPU-bound parallelism and retries
-            work at lower node parallelism if workers run out of memory.
+            Defaults to "dynamic": Burla starts with as many parallel calls as the
+            requested CPUs allow, then gives each call more RAM by lowering
+            parallelism on any node where workers run out of memory. Pass an
+            integer to reserve a fixed amount of RAM per function call instead.
         func_gpu (str, optional):
             Allocate one GPU per function call. One of: "A100" / "A100_40G",
             "A100_80G", "H100" / "H100_80G". Defaults to None (no GPU).

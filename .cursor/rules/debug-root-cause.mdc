@@ -1,0 +1,13 @@
+---
+description: Require evidence-backed root-cause debugging
+alwaysApply: true
+---
+
+# Debug Root Cause
+
+When debugging a failure, do not stop at a plausible hypothesis if direct evidence is available.
+
+- If an error message says to check logs, Cloud Logging, Sentry, Datadog, CI output, browser console, or another external source, inspect that source before answering.
+- Keep investigating until you can cite the exact failing command, exception, log line, status, or response that explains the failure.
+- Final debugging answers must distinguish confirmed root cause from guesses and include the concrete evidence used.
+- If the evidence source is unavailable or blocked, say exactly what blocked it and what command/tool should be run next.

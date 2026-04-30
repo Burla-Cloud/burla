@@ -348,8 +348,18 @@ async def _execute_job(
                 else:
                     total_parallelism = sum((n.current_parallelism for n in nodes))
                     booting_node_count = sum(n.state == "BOOTING" for n in nodes)
+                    reductions = [n.dynamic_worker_reduction for n in nodes if n.dynamic_worker_reduction]
+                    dynamic_worker_reduction = None
+                    if reductions:
+                        dynamic_worker_reduction = {
+                            "original": sum(r["original"] for r in reductions),
+                            "current": sum(r["current"] for r in reductions),
+                        }
                     reporter.set_running_progress_message(
-                        total_result_count, total_parallelism, booting_node_count
+                        total_result_count,
+                        total_parallelism,
+                        booting_node_count,
+                        dynamic_worker_reduction,
                     )
                 last_status_message_update_time = current_time
 

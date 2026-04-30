@@ -234,6 +234,7 @@ class Node:
         self.installing_packages = False
         self.result_count = 0
         self.result_batch_id_to_ack = None
+        self.dynamic_worker_reduction = None
         self.last_reply_timestamp = time()
         self.last_result_poll_timestamp = None
         self.started_booting_at = time()
@@ -293,6 +294,7 @@ class Node:
             "result_batch_id": None,
             "results": [],
             "current_parallelism": self.current_parallelism,
+            "dynamic_worker_reduction": None,
             "logs": [],
         }
 
@@ -461,6 +463,7 @@ class Node:
                         "result_batch_id": None,
                         "results": [],
                         "current_parallelism": 0,
+                        "dynamic_worker_reduction": None,
                         "logs": [],
                     }
                 if response.status != 200:
@@ -626,6 +629,7 @@ class Node:
                     return_values.append(cloudpickle.loads(result_pkl))
 
             self.current_parallelism = node_results["current_parallelism"]
+            self.dynamic_worker_reduction = node_results.get("dynamic_worker_reduction")
 
             for return_value in return_values:
                 return_queue.put_nowait(return_value)

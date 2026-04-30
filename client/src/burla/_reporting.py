@@ -158,7 +158,11 @@ class RemoteParallelMapReporter:
         self._write_message(message)
 
     def set_running_progress_message(
-        self, completed_inputs: int, total_parallelism: int, booting_nodes: int = 0
+        self,
+        completed_inputs: int,
+        total_parallelism: int,
+        booting_nodes: int = 0,
+        dynamic_worker_reduction: dict | None = None,
     ):
         if not self.spinner:
             return
@@ -170,6 +174,10 @@ class RemoteParallelMapReporter:
         )
         if booting_nodes > 0:
             message += f" Booting {booting_nodes} nodes ..."
+        if dynamic_worker_reduction:
+            original = dynamic_worker_reduction["original"]
+            current = dynamic_worker_reduction["current"]
+            message += f" Memory pressure: workers {original} -> {current}."
         self.spinner.text = message
 
     async def log_job_success_telemetry(self, total_runtime: float):

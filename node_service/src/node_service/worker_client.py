@@ -60,6 +60,20 @@ def oom_kill_marker_count(logs: str):
     return sum(line.strip().startswith(OOM_KILL_MARKER_PREFIX) for line in logs.splitlines())
 
 
+def _is_worker_internal_log_message(message: str) -> bool:
+    stripped = message.strip()
+    return (
+        stripped == "Killed"
+        or stripped.startswith(OOM_KILL_MARKER_PREFIX)
+        or stripped in {"3.11", "3.12", "3.13", "3.14"}
+        or stripped.startswith("Using CPython ")
+        or stripped.startswith("× No solution found when resolving dependencies:")
+        or stripped.startswith("╰─▶ Because there is no version of burla==")
+        or stripped.startswith("burla==")
+        or stripped.startswith("Checked 1 package in ")
+    )
+
+
 def _active_dynamic_workers():
     return [worker for worker in SELF["workers"] if not worker.retired]
 
@@ -171,6 +185,8 @@ class JobLogWriter:
             self._queue_document_locked(input_index)
             self.active_input_index = None
             self.pending_flush_event.set()
+            return
+        if _is_worker_internal_log_message(stripped_message):
             return
         if self.active_input_index is None:
             return

@@ -164,11 +164,20 @@ async def get_results(
 
     result_batch_id, results = _get_result_batch()
     drained_logs = _pop_pending_logs()
+    original_worker_count = len(SELF["workers"])
+    current_worker_count = sum(not worker.retired for worker in SELF["workers"])
+    dynamic_worker_reduction = None
+    if SELF["dynamic_func_ram"] and current_worker_count < original_worker_count:
+        dynamic_worker_reduction = {
+            "original": original_worker_count,
+            "current": current_worker_count,
+        }
 
     response_json = {
         "result_batch_id": result_batch_id,
         "results": results,
         "current_parallelism": SELF["current_parallelism"],
+        "dynamic_worker_reduction": dynamic_worker_reduction,
         "logs": drained_logs,
         "cluster_shutdown": SELF["pending_cluster_shutdown"],
         "cluster_restarted": SELF["pending_cluster_restarted"],

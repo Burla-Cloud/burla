@@ -38,7 +38,10 @@ OOM_KILL_MARKER_PREFIX = "__burla_oom_kill__:"
 # well over 10 seconds; 10s was causing ~15% of initial boots to fail.
 WORKER_BOOT_TIMEOUT_SECONDS = 20
 DYNAMIC_RAM_MAX_NODE_MEMORY_USED_FRACTION = 0.85
+DYNAMIC_RAM_TARGET_NODE_MEMORY_USED_FRACTION = 0.75
 DYNAMIC_RAM_MONITOR_INTERVAL_SECONDS = 0.25
+DYNAMIC_RAM_STARTUP_MONITOR_INTERVAL_SECONDS = 0.05
+DYNAMIC_RAM_STARTUP_MONITOR_SECONDS = 30
 
 
 class WorkerOutOfMemoryError(RuntimeError):
@@ -79,8 +82,15 @@ def _active_dynamic_workers():
 
 
 async def dynamic_ram_monitor_loop():
+    started_at = time.perf_counter()
     while SELF["dynamic_func_ram"]:
-        await asyncio.sleep(DYNAMIC_RAM_MONITOR_INTERVAL_SECONDS)
+        startup_window = time.perf_counter() - started_at < DYNAMIC_RAM_STARTUP_MONITOR_SECONDS
+        interval = (
+            DYNAMIC_RAM_STARTUP_MONITOR_INTERVAL_SECONDS
+            if startup_window
+            else DYNAMIC_RAM_MONITOR_INTERVAL_SECONDS
+        )
+        await asyncio.sleep(interval)
         active_workers = _active_dynamic_workers()
         if not active_workers:
             return
@@ -109,10 +119,24 @@ async def dynamic_ram_monitor_loop():
                 SELF["reboot_containers_after_job"] = True
         if not worker_memory:
             continue
-        highest_rss_bytes, highest_rss_worker = max(worker_memory, key=lambda item: item[0])
-        await highest_rss_worker.retire_for_dynamic_memory_pressure(
+        node_memory_used_bytes = node_memory.total - node_memory.available
+        target_used_bytes = int(node_memory.total * DYNAMIC_RAM_TARGET_NODE_MEMORY_USED_FRACTION)
+        bytes_to_free = max(0, node_memory_used_bytes - target_used_bytes)
+        worker_memory.sort(reverse=True, key=lambda item: item[0])
+
+        selected_worker_memory = []
+        selected_rss_bytes = 0
+        for rss_bytes, worker in worker_memory:
+            if len(active_workers) - len(selected_worker_memory) <= 1:
+                break
+            selected_worker_memory.append((rss_bytes, worker))
+            selected_rss_bytes += rss_bytes
+            if selected_rss_bytes >= bytes_to_free:
+                break
+
+        await retire_workers_for_dynamic_memory_pressure(
+            selected_worker_memory,
             node_memory_used_fraction,
-            highest_rss_bytes,
         )
 
 
@@ -224,6 +248,18 @@ class JobLogWriter:
             )
             self.pending_flush_event.set()
 
+    async def write_warning(self, input_index: int, message: str):
+        async with self.lock:
+            self.pending_documents.append(
+                {
+                    "logs": [{"timestamp": datetime.now(timezone.utc), "message": message}],
+                    "timestamp": datetime.now(timezone.utc),
+                    "input_index": input_index,
+                    "severity": "WARNING",
+                }
+            )
+            self.pending_flush_event.set()
+
     async def finish_input(self, input_index: int):
         async with self.lock:
             self._queue_document_locked(input_index)
@@ -288,6 +324,14 @@ def _dynamic_terminal_oom_error():
     )
 
 
+def _dynamic_memory_pressure_error(node_memory_used_fraction: float, rss_bytes: int):
+    return WorkerOutOfMemoryError(
+        "\n\nNode exceeded dynamic RAM memory pressure threshold before kernel OOM.\n"
+        f"Node memory used: {node_memory_used_fraction:.1%}\n"
+        f"Worker RSS: {rss_bytes / 1024**3:.2f} GB\n"
+    )
+
+
 def _worker_boot_timeout_error(logs: str):
     message = f"\n\nWorker boot timed out after {WORKER_BOOT_TIMEOUT_SECONDS} seconds.\n"
     message += "The worker container never became ready to accept connections.\n"
@@ -295,6 +339,67 @@ def _worker_boot_timeout_error(logs: str):
     message += "---------------------\n"
     message += f"{logs}\n"
     return RuntimeError(message)
+
+
+async def retire_workers_for_dynamic_memory_pressure(
+    selected_worker_memory: list[tuple[int, "WorkerClient"]],
+    node_memory_used_fraction: float,
+):
+    if not selected_worker_memory:
+        return
+    async with SELF["dynamic_ram_lock"]:
+        active_workers = [worker for worker in SELF["workers"] if not worker.retired]
+        max_retire_count = max(0, len(active_workers) - 1)
+        selected_worker_memory = [
+            (rss_bytes, worker)
+            for rss_bytes, worker in selected_worker_memory
+            if not worker.retired and worker.current_input is not None
+        ][:max_retire_count]
+        if not selected_worker_memory:
+            return
+
+        old_parallelism = len(active_workers)
+        new_parallelism = old_parallelism - len(selected_worker_memory)
+        input_indexes = []
+        for _, worker in selected_worker_memory:
+            input_index, input_pkl = worker.current_input
+            input_indexes.append(input_index)
+            worker.retired = True
+            worker.is_idle = True
+            await SELF["inputs_queue"].put((input_index, input_pkl), len(input_pkl))
+
+        SELF["reboot_containers_after_job"] = True
+        msg = (
+            f"Node parallelism decreased from {old_parallelism} to {new_parallelism} "
+            f"for job {SELF['current_job']} after dynamic RAM pressure on inputs {input_indexes}."
+        )
+        await Logger().log(
+            msg,
+            severity="WARNING",
+            job_id=SELF["current_job"],
+            input_indexes=input_indexes,
+            old_parallelism=old_parallelism,
+            new_parallelism=new_parallelism,
+        )
+
+        warning_messages = []
+        current_inputs = []
+        for rss_bytes, worker in selected_worker_memory:
+            input_index = worker.current_input[0]
+            current_inputs.append((worker, input_index))
+            if worker.log_writer is not None:
+                warning = str(
+                    _dynamic_memory_pressure_error(node_memory_used_fraction, rss_bytes)
+                ).strip()
+                warning += "\nRetrying this input with lower node parallelism."
+                warning_messages.append(worker.log_writer.write_warning(input_index, warning))
+        await asyncio.gather(*warning_messages)
+        for worker, input_index in current_inputs:
+            worker.current_input = None
+
+        await asyncio.gather(
+            *(worker.retire_for_dynamic_memory_pressure() for _, worker in selected_worker_memory)
+        )
 
 
 class WorkerClient:
@@ -551,18 +656,8 @@ class WorkerClient:
             await self._delete_container()
             return None
 
-    async def retire_for_dynamic_memory_pressure(
-        self,
-        node_memory_used_fraction: float,
-        rss_bytes: int,
-    ):
-        input_index, input_pkl = self.current_input
-        error = WorkerOutOfMemoryError(
-            "\n\nNode exceeded dynamic RAM memory pressure threshold before kernel OOM.\n"
-            f"Node memory used: {node_memory_used_fraction:.1%}\n"
-            f"Worker RSS: {rss_bytes / 1024**3:.2f} GB\n"
-        )
-        return await self._retire_after_dynamic_worker_failure(input_index, input_pkl, error)
+    async def retire_for_dynamic_memory_pressure(self):
+        await self._kill_worker_process()
 
     async def _read_response(self):
         try:
@@ -631,6 +726,7 @@ class WorkerClient:
                 self.current_input = None
 
             if self.retired:
+                self.current_input = None
                 return
             await SELF["results_queue"].put(result, len(result[2]))
             SELF["num_results_received"] += 1
@@ -747,6 +843,36 @@ class WorkerClient:
             os.killpg(self.worker_host_pid, signal.SIGKILL)
         await self._reconnect()
 
+    async def _kill_worker_process(self):
+        if self.writer is not None:
+            try:
+                self.writer.close()
+                await self.writer.wait_closed()
+            except Exception:
+                pass
+            self.writer = None
+            self.reader = None
+        if self.logstream_task is not None:
+            self.logstream_task.cancel()
+            try:
+                await self.logstream_task
+            except asyncio.CancelledError:
+                pass
+            self.logstream_task = None
+        if self.log_writer is not None:
+            await self.log_writer.stop()
+            self.log_writer = None
+        if IN_LOCAL_DEV_MODE:
+            await self.container.delete(force=True)
+        else:
+            os.killpg(self.worker_host_pid, signal.SIGKILL)
+        container_id = self.container_id
+        self.container = None
+        self.container_id = None
+        self.worker_host_pid = None
+        if container_id is not None:
+            asyncio.create_task(self._remove_retired_container(container_id))
+
     async def _delete_container(self):
         if self.writer is not None:
             try:
@@ -770,6 +896,16 @@ class WorkerClient:
         self.container = None
         self.container_id = None
         self.worker_host_pid = None
+
+    async def _remove_retired_container(self, container_id: str):
+        docker = aiodocker.Docker()
+        try:
+            container = docker.containers.container(container_id)
+            await container.delete(force=True)
+        except Exception:
+            pass
+        finally:
+            await docker.close()
 
     async def _container_exists(self):
         if not self.container_id:

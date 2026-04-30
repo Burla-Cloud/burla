@@ -22,7 +22,7 @@ from node_service import (
 from node_service.helpers import Logger, format_traceback
 from node_service.lifecycle_endpoints import reboot_containers
 
-EMPTY_NEIGHBOR_TIMEOUT_SEC = 60
+EMPTY_NEIGHBOR_TIMEOUT_SEC = 120
 CLIENT_CONTACT_TIMEOUT_SEC = 5
 # Time we'll tolerate without a fresh `jobs/{id}` update_time before treating
 # the client as disconnected. Client heartbeats fire every 2s and go

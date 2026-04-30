@@ -347,9 +347,9 @@ async def _execute_job(
                     reporter.set_installing_packages_message()
                 else:
                     total_parallelism = sum((n.current_parallelism for n in nodes))
-                    booting_nodes = sum(n.state == "BOOTING" for n in nodes)
+                    booting_node_count = sum(n.state == "BOOTING" for n in nodes)
                     reporter.set_running_progress_message(
-                        total_result_count, total_parallelism, booting_nodes
+                        total_result_count, total_parallelism, booting_node_count
                     )
                 last_status_message_update_time = current_time
 

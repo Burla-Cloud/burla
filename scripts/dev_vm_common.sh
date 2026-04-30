@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+if [[ -z "${BASH_VERSION:-}" ]]; then
+  echo "Error: dev_vm_common.sh must be sourced from bash, not ${SHELL:-this shell}." >&2
+  return 1 2>/dev/null || exit 1
+fi
+
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

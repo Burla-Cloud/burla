@@ -168,4 +168,7 @@ print(
 PY
 )"
 
-merge_state_json "$STATE_PATH" "$PATCH_JSON"
+merge_state_json "$STATE_PATH" "$PATCH_JSON" >/dev/null
+wait_for_vm_bootstrap
+echo "Dev VM slot [$SLOT_ID] is ready."
+echo "$PATCH_JSON" | python3 -m json.tool

@@ -13,5 +13,6 @@ VM:
 ```
 cd /srv/burla
 BURLA_TEST_PROJECT=burla-agent-<slot> \
+BURLA_CLUSTER_DASHBOARD_URL=http://localhost:5001 \
   uv run --project ./client --group dev pytest main_service/tests -m "service and not chaos"
 ```

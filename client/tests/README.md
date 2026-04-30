@@ -46,22 +46,19 @@ Run `make -f makefile local-dev` / `make -f makefile remote-dev` inside
 `dev_vm_shell.sh`. Do not run those targets through non-interactive SSH; Docker
 needs a real terminal.
 
-Open the tunneled dashboard in the GStack browser and click Start. Then
-authorize Burla CLI inside the VM:
+Open the tunneled dashboard in the GStack browser and click Start. Force
+VM-local tests and smoke jobs to hit the dev server:
 
 ```
 cd /srv/burla
-uv run --project ./client --group dev burla login --no_browser=True
+export BURLA_CLUSTER_DASHBOARD_URL=http://localhost:5001
 ```
 
-Open the printed URL in the same GStack browser session and click authorize.
 Then run tests from the VM:
 
 ```
-curl -sX POST http://localhost:5001/v1/cluster/restart \
-  -H "X-User-Email: <user-email>" \
-  -H "Authorization: Bearer <agent-token>"
 BURLA_TEST_PROJECT=burla-agent-<slot> \
+BURLA_CLUSTER_DASHBOARD_URL=http://localhost:5001 \
   uv run --project ./client --group dev pytest -m "not chaos and not dashboard"
 ```
 
@@ -85,15 +82,14 @@ scripts/dev_vm_stop.sh --slot <slot>
 5. Run the tests on the VM with `scripts/dev_vm_shell.sh --slot <slot>`.
    Start the cluster with `make -f makefile local-dev`. The VM has `uv` at `/usr/local/bin/uv`;
    always invoke pytest via `uv run --project ./client --group dev pytest`.
-6. Set `BURLA_TEST_PROJECT=burla-agent-<slot>` so the readiness gate in
+6. Set `BURLA_CLUSTER_DASHBOARD_URL=http://localhost:5001` for VM-local
+   client/test commands so they hit the dev server.
+7. Set `BURLA_TEST_PROJECT=burla-agent-<slot>` so the readiness gate in
    `conftest.py` matches the active project. On a laptop it defaults to
    `burla-test`, which is wrong for agent dev VMs.
-7. Readiness gate: if the cluster isn't verifiably READY, stop and investigate.
+8. Readiness gate: if the cluster isn't verifiably READY, stop and investigate.
    A failure caused by cluster-not-ready is NOT a test failure — do not report
    it as one.
-8. Auth errors (`invalid_grant` / `Invalid JWT Signature`) → run
-   `uv run --project ./client --group dev burla login --no_browser=True`
-   on the VM and authorize the printed URL.
 9. All tests have a 120s default timeout. If output doesn't advance past
    `collected N items` within 10 seconds, stop and report blocked.
 

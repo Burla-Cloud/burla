@@ -86,6 +86,7 @@ def REINIT_SELF(SELF):
     SELF["all_inputs_uploaded"] = False
     SELF["dynamic_func_ram"] = False
     SELF["dynamic_ram_lock"] = asyncio.Lock()
+    SELF["dynamic_ram_monitor_task"] = None
     SELF["reboot_containers_after_job"] = False
     SELF["num_results_received"] = 0
     SELF["pending_transfers"] = {}

@@ -37,6 +37,8 @@ OOM_KILL_MARKER_PREFIX = "__burla_oom_kill__:"
 # /worker_service_python_env before opening its socket. Under any network slowness this can take
 # well over 10 seconds; 10s was causing ~15% of initial boots to fail.
 WORKER_BOOT_TIMEOUT_SECONDS = 20
+DYNAMIC_RAM_MAX_NODE_MEMORY_USED_FRACTION = 0.95
+DYNAMIC_RAM_MONITOR_INTERVAL_SECONDS = 0.25
 
 
 class WorkerOutOfMemoryError(RuntimeError):
@@ -56,6 +58,39 @@ class WorkerFunctionError(Exception):
 
 def oom_kill_marker_count(logs: str):
     return sum(line.strip().startswith(OOM_KILL_MARKER_PREFIX) for line in logs.splitlines())
+
+
+def _active_dynamic_workers():
+    return [worker for worker in SELF["workers"] if not worker.retired]
+
+
+async def dynamic_ram_monitor_loop():
+    while SELF["dynamic_func_ram"]:
+        await asyncio.sleep(DYNAMIC_RAM_MONITOR_INTERVAL_SECONDS)
+        active_workers = _active_dynamic_workers()
+        if not active_workers:
+            return
+
+        node_memory = psutil.virtual_memory()
+        node_memory_used_fraction = 1 - (node_memory.available / node_memory.total)
+        if node_memory_used_fraction < DYNAMIC_RAM_MAX_NODE_MEMORY_USED_FRACTION:
+            continue
+
+        if len(active_workers) <= 1:
+            continue
+
+        running_workers = [
+            worker for worker in active_workers if not worker.is_idle and worker.current_input is not None
+        ]
+        if not running_workers:
+            continue
+
+        worker_memory = [(worker.memory_rss_bytes(), worker) for worker in running_workers]
+        highest_rss_bytes, highest_rss_worker = max(worker_memory, key=lambda item: item[0])
+        await highest_rss_worker.retire_for_dynamic_memory_pressure(
+            node_memory_used_fraction,
+            highest_rss_bytes,
+        )
 
 
 class JobLogWriter:
@@ -256,6 +291,7 @@ class WorkerClient:
         self.worker_host_pid = None
         self.oom_kill_marker_count = 0
         self.retired = False
+        self.current_input = None
 
     def _worker_server_host_path(self):
         if IN_LOCAL_DEV_MODE:
@@ -352,6 +388,9 @@ class WorkerClient:
                 return int(row[1])
         raise RuntimeError(f"worker_server.py not found in {self.container_name}")
 
+    def memory_rss_bytes(self) -> int:
+        return psutil.Process(self.worker_host_pid).memory_info().rss
+
     async def _get_python_version(self):
         for _ in range(20):
             logs = await self._get_logs()
@@ -422,8 +461,7 @@ class WorkerClient:
                 await asyncio.sleep(0.1)
         self.is_idle = True
         self.logstream_task = asyncio.create_task(self._handle_container_logs())
-        if not IN_LOCAL_DEV_MODE:
-            self.worker_host_pid = await self._get_worker_host_pid()
+        self.worker_host_pid = await self._get_worker_host_pid()
 
     async def _raise_if_worker_failed(self):
         for _ in range(10):
@@ -488,6 +526,19 @@ class WorkerClient:
             await self._restart_container()
             return None
 
+    async def retire_for_dynamic_memory_pressure(
+        self,
+        node_memory_used_fraction: float,
+        rss_bytes: int,
+    ):
+        input_index, input_pkl = self.current_input
+        error = WorkerOutOfMemoryError(
+            "\n\nNode exceeded dynamic RAM memory pressure threshold before kernel OOM.\n"
+            f"Node memory used: {node_memory_used_fraction:.1%}\n"
+            f"Worker RSS: {rss_bytes / 1024**3:.2f} GB\n"
+        )
+        return await self._retire_after_dynamic_worker_failure(input_index, input_pkl, error)
+
     async def _read_response(self):
         try:
             status = await self.reader.readexactly(1)
@@ -521,6 +572,7 @@ class WorkerClient:
             input_index, input_pkl = await SELF["inputs_queue"].get()
 
             self.is_idle = False
+            self.current_input = (input_index, input_pkl)
             await self._ensure_log_writer()
             stop_after_result = False
             try:
@@ -551,7 +603,10 @@ class WorkerClient:
             finally:
                 if self.log_writer is not None:
                     await self.log_writer.finish_input(input_index)
+                self.current_input = None
 
+            if self.retired:
+                return
             await SELF["results_queue"].put(result, len(result[2]))
             SELF["num_results_received"] += 1
             if stop_after_result:
@@ -640,6 +695,7 @@ class WorkerClient:
                 await asyncio.sleep(0.05)
         self.is_idle = True
         self.logstream_task = asyncio.create_task(self._handle_container_logs())
+        self.worker_host_pid = await self._get_worker_host_pid()
 
     async def _restart_container(self):
         if self.writer is not None:
@@ -665,8 +721,6 @@ class WorkerClient:
         else:
             os.killpg(self.worker_host_pid, signal.SIGKILL)
         await self._reconnect()
-        if not IN_LOCAL_DEV_MODE:
-            self.worker_host_pid = await self._get_worker_host_pid()
 
     async def _container_exists(self):
         if not self.container_id:

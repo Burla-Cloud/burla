@@ -27,7 +27,7 @@ Use Git worktrees for code isolation and VM scripts for cloud resources. Git wor
 1. From the primary checkout, run `git worktree add -b <branch-name> ../burla-worktrees/<task-slug> main`.
 2. `cd` into the printed worktree path.
 3. Make code changes only from that linked worktree.
-4. Run `scripts/dev_vm_create.sh`; it chooses a slot, starts or creates the VM, waits for SSH/bootstrap readiness, and prints the slot state.
+4. Run `scripts/dev_vm_create.sh`; it chooses a slot, starts or creates the VM, waits for SSH/bootstrap readiness, and prints the slot details.
 5. Run `scripts/dev_vm_sync_repo.sh --slot <id> --source "$(pwd)"`.
 6. Run `scripts/dev_vm_shell.sh --slot <id>` and start Burla inside that TTY shell with `make -f makefile local-dev` or `make -f makefile remote-dev`. Do not start these targets through non-interactive SSH; Docker needs a real terminal.
 7. Run `scripts/dev_vm_tunnel.sh --slot <id>` when you need dashboard/browser access.
@@ -49,7 +49,7 @@ Caveats for `remote-dev`:
 - Uncommitted edits under `node_service/` or `worker_server.py` do NOT reach worker VMs. The node startup script does `git fetch --depth=1 origin "{CURRENT_BURLA_VERSION}"` against the public repo. To test node-side changes remotely you must bump `CURRENT_BURLA_VERSION` in the four pinned places and push a matching tag.
 - Nested `remote_parallel_map` inside a UDF fails: workers use the `cluster_dashboard_url` the client sent (e.g. `http://localhost:<tunnel_port>`), which is not reachable from a GCE VM. Top-level RPM works fine.
 - Set `BURLA_CLUSTER_DASHBOARD_URL=http://localhost:5001` for tests or smoke jobs that should hit the running dev server.
-- `dev_vm_stop.sh` best-effort POSTs `/v1/cluster/shutdown` before stopping the VM so worker VMs get cleaned up. The local state file is kept so the stopped VM can be restarted by the next task.
+- `dev_vm_stop.sh` best-effort POSTs `/v1/cluster/shutdown` before stopping the VM so worker VMs get cleaned up.
 
 ## Guardrails
 
@@ -60,7 +60,7 @@ Caveats for `remote-dev`:
 - Never expose port `5001` publicly.
 - Never assume the browser/tunnel URL is `http://localhost:5001`; use the URL printed by `scripts/dev_vm_create.sh`. Inside the VM, use `http://localhost:5001` for client commands that should target the dev server.
 - Sync the repo before starting or restarting the main service if local code changed.
-- `scripts/dev_vm_common.sh` is bash-only. If you must source it for ad hoc state helpers, run from bash, e.g. `bash -lc 'source scripts/dev_vm_common.sh && load_state_vars 02 && ...'`; do not source it from zsh.
+- `scripts/dev_vm_common.sh` is bash-only. If you must source it for ad hoc helpers, run from bash; do not source it from zsh.
 - Use raw `gcloud` / `ssh` automation only; do not switch the workflow into Cursor Remote SSH windows.
 
 ## Script Roles

@@ -29,8 +29,6 @@ DEFAULT_VM_PREFIX="${BURLA_DEV_VM_VM_PREFIX:-burla-dev-vm-}"
 DEFAULT_DASHBOARD_PORT_BASE=15000
 DEFAULT_VITE_PORT_BASE=18000
 
-PRIMARY_CHECKOUT_CACHE=""
-
 fail() {
   echo "Error: $*" >&2
   exit 1
@@ -168,15 +166,6 @@ vite_port_for_agent() {
   vite_port_for_slot "$1"
 }
 
-state_path_for_slot() {
-  local slot_id="$1"
-  echo "$(state_dir)/${slot_id}.json"
-}
-
-state_path_for_agent() {
-  state_path_for_slot "$1"
-}
-
 private_key_path_for_slot() {
   local slot_id="$1"
   echo "$KEY_DIR/${slot_id}_ed25519"
@@ -203,20 +192,6 @@ current_git_branch() {
   git branch --show-current
 }
 
-primary_checkout_path() {
-  if [[ -n "$PRIMARY_CHECKOUT_CACHE" ]]; then
-    echo "$PRIMARY_CHECKOUT_CACHE"
-    return
-  fi
-  git worktree list --porcelain | awk '/^worktree /{print substr($0, 10); exit}'
-}
-
-state_dir() {
-  local primary_checkout
-  primary_checkout="$(primary_checkout_path)"
-  echo "$primary_checkout/.cursor/dev-vm-state"
-}
-
 main_service_service_account() {
   local project_id="$1"
   echo "burla-main-service@${project_id}.iam.gserviceaccount.com"
@@ -225,10 +200,6 @@ main_service_service_account() {
 main_service_account_exists() {
   local project_id="$1"
   gcloud iam service-accounts describe "$(main_service_service_account "$project_id")" --project "$project_id" >/dev/null 2>&1
-}
-
-ensure_state_dir() {
-  mkdir -p "$(state_dir)"
 }
 
 ensure_key_dir() {
@@ -253,65 +224,6 @@ ensure_slot_keypair() {
 
 ensure_agent_keypair() {
   ensure_slot_keypair "$1"
-}
-
-merge_state_json() {
-  local state_path="$1"
-  local patch_json="$2"
-
-  python3 - "$state_path" "$patch_json" <<'PY'
-import json
-import pathlib
-import sys
-
-state_path = pathlib.Path(sys.argv[1])
-patch = json.loads(sys.argv[2])
-state = {}
-if state_path.exists():
-    state = json.loads(state_path.read_text())
-state.update(patch)
-state_path.parent.mkdir(parents=True, exist_ok=True)
-state_path.write_text(json.dumps(state, indent=2) + "\n")
-print(json.dumps(state, indent=2))
-PY
-}
-
-load_state_vars() {
-  local agent_id="$1"
-  local state_path
-  state_path="$(state_path_for_agent "$agent_id")"
-  [[ -f "$state_path" ]] || fail "State file [$state_path] not found."
-
-  eval "$(
-    python3 - "$state_path" <<'PY'
-import json
-import pathlib
-import shlex
-import sys
-
-state = json.loads(pathlib.Path(sys.argv[1]).read_text())
-for key, value in state.items():
-    shell_key = key.upper()
-    if value is None:
-        rendered = ""
-    else:
-        rendered = str(value)
-    print(f"{shell_key}={shlex.quote(rendered)}")
-PY
-  )"
-  STATE_PATH="$state_path"
-}
-
-print_state_file() {
-  local state_path="$1"
-  python3 - "$state_path" <<'PY'
-import json
-import pathlib
-import sys
-
-state = json.loads(pathlib.Path(sys.argv[1]).read_text())
-print(json.dumps(state, indent=2))
-PY
 }
 
 project_exists() {
@@ -358,6 +270,27 @@ slot_is_available() {
   local status
   status="$(slot_vm_status "$slot_id")"
   [[ -z "$status" || "$status" == "TERMINATED" ]]
+}
+
+load_slot_vars() {
+  local slot_id="$1"
+  SLOT_ID="$slot_id"
+  AGENT_ID="$slot_id"
+  PROJECT_ID="$(project_id_for_slot "$slot_id")"
+  ZONE="$DEFAULT_ZONE"
+  VM_NAME="$(vm_name_for_slot "$slot_id")"
+  LOCAL_DASHBOARD_PORT="$(dashboard_port_for_slot "$slot_id")"
+  LOCAL_VITE_PORT="$(vite_port_for_slot "$slot_id")"
+  REMOTE_REPO_DIR="$DEFAULT_REMOTE_REPO_DIR"
+  REMOTE_LOG_PATH="$DEFAULT_REMOTE_LOG_PATH"
+  LOCAL_USER="$(id -un)"
+  PRIVATE_KEY_PATH="$(private_key_path_for_slot "$slot_id")"
+  PUBLIC_KEY_PATH="$(public_key_path_for_slot "$slot_id")"
+  VM_IP="$(vm_external_ip "$PROJECT_ID" "$ZONE" "$VM_NAME")"
+}
+
+require_vm_ip() {
+  [[ -n "${VM_IP:-}" ]] || fail "VM [$VM_NAME] in project [$PROJECT_ID] has no external IP."
 }
 
 wait_for_vm_bootstrap() {
@@ -498,50 +431,5 @@ rendered = rendered.replace("__REMOTE_REPO_DIR__", os.environ["REMOTE_REPO_DIR"]
 rendered = rendered.replace("__REMOTE_LOG_PATH__", os.environ["REMOTE_LOG_PATH"])
 rendered = rendered.replace("__BOOTSTRAP_READY_PATH__", os.environ["BOOTSTRAP_READY_PATH"])
 pathlib.Path(sys.argv[2]).write_text(rendered)
-PY
-}
-
-validate_loaded_state_for_slot() {
-  [[ -n "${PROJECT_ID:-}" ]] || fail "State file [$STATE_PATH] is missing [project_id]."
-  [[ -n "${VM_NAME:-}" ]] || fail "State file [$STATE_PATH] is missing [vm_name]."
-  [[ -n "${VM_IP:-}" ]] || fail "State file [$STATE_PATH] is missing [vm_ip]."
-}
-
-validate_loaded_state_against_current_context() {
-  validate_loaded_state_for_slot
-}
-
-source_git_metadata_json() {
-  local source_path="$1"
-  python3 - "$source_path" <<'PY'
-import json
-import pathlib
-import subprocess
-import sys
-
-source_path = pathlib.Path(sys.argv[1]).resolve()
-
-def git(*args: str) -> str:
-    result = subprocess.run(
-        ["git", "-C", str(source_path), *args],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    return result.stdout.strip()
-
-branch = git("branch", "--show-current")
-commit = git("rev-parse", "HEAD")
-dirty = bool(git("status", "--short"))
-print(
-    json.dumps(
-        {
-            "last_synced_source_path": str(source_path),
-            "last_synced_branch": branch,
-            "last_synced_commit": commit,
-            "last_synced_dirty": dirty,
-        }
-    )
-)
 PY
 }

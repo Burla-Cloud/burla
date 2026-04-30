@@ -7,8 +7,8 @@ source "$SCRIPT_DIR/dev_vm_common.sh"
 
 parse_slot_only "$@"
 require_local_prereqs
-load_state_vars "$SLOT_ID"
-validate_loaded_state_for_slot
+load_slot_vars "$SLOT_ID"
+require_vm_ip
 
 exec ssh \
   -i "$PRIVATE_KEY_PATH" \

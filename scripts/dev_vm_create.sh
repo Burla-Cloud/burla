@@ -45,10 +45,8 @@ else
   validate_slot_id "$SLOT_ID"
 fi
 AGENT_ID="$SLOT_ID"
-ensure_state_dir
 ensure_slot_keypair "$SLOT_ID"
 
-STATE_PATH="$(state_path_for_slot "$SLOT_ID")"
 PROJECT_ID="$(project_id_for_slot "$SLOT_ID")"
 ZONE="$DEFAULT_ZONE"
 VM_NAME="$(vm_name_for_slot "$SLOT_ID")"
@@ -125,7 +123,7 @@ fi
 
 VM_IP="$(gcloud compute instances describe "$VM_NAME" --project "$PROJECT_ID" --zone "$ZONE" --format='value(networkInterfaces[0].accessConfigs[0].natIP)')"
 
-PATCH_JSON="$(
+SLOT_JSON="$(
   AGENT_ID="$AGENT_ID" \
   SLOT_ID="$SLOT_ID" \
   PROJECT_ID="$PROJECT_ID" \
@@ -156,7 +154,6 @@ print(
             "local_dashboard_port": int(os.environ["LOCAL_DASHBOARD_PORT"]),
             "local_vite_port": int(os.environ["LOCAL_VITE_PORT"]),
             "dashboard_url": os.environ["DASHBOARD_URL"],
-            "tunnel_pid": None,
             "remote_log_path": os.environ["REMOTE_LOG_PATH"],
             "local_user": os.environ["LOCAL_USER"],
             "vm_ip": os.environ["VM_IP"],
@@ -168,7 +165,6 @@ print(
 PY
 )"
 
-merge_state_json "$STATE_PATH" "$PATCH_JSON" >/dev/null
 wait_for_vm_bootstrap
 echo "Dev VM slot [$SLOT_ID] is ready."
-echo "$PATCH_JSON" | python3 -m json.tool
+echo "$SLOT_JSON" | python3 -m json.tool

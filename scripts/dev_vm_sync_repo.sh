@@ -22,8 +22,8 @@ done
 
 parse_slot_only "${parse_slot_only_args[@]}"
 require_local_prereqs
-load_state_vars "$SLOT_ID"
-validate_loaded_state_for_slot
+load_slot_vars "$SLOT_ID"
+require_vm_ip
 
 if [[ -z "$SOURCE_PATH" ]]; then
   SOURCE_PATH="$(current_git_toplevel)"
@@ -44,7 +44,6 @@ rsync \
   -az \
   --delete \
   --exclude='.git/' \
-  --exclude='.cursor/dev-vm-state/' \
   --exclude='.gstack/' \
   --exclude='.DS_Store' \
   --exclude='__pycache__/' \
@@ -67,9 +66,6 @@ rsync \
   >/dev/null
 echo "Synced repo to [$VM_NAME:$REMOTE_REPO_DIR]."
 
-SOURCE_PATCH_JSON="$(source_git_metadata_json "$SOURCE_PATH")"
-merge_state_json "$STATE_PATH" "$SOURCE_PATCH_JSON" >/dev/null
-
 # Ship git-ignored frontend env file (Syncfusion license, etc.) so
 # `make build-frontend` bakes VITE_* vars into the bundle. Prefer the
 # worktree copy; fall back to the primary checkout. Silent skip if neither
@@ -78,7 +74,7 @@ FRONTEND_ENV_PATH="main_service/frontend/.env.local"
 LOCAL_ENV_FILE=""
 for candidate in \
   "$SOURCE_PATH/$FRONTEND_ENV_PATH" \
-  "$(primary_checkout_path)/$FRONTEND_ENV_PATH"; do
+  "$REPO_ROOT/$FRONTEND_ENV_PATH"; do
   if [[ -f "$candidate" ]]; then
     LOCAL_ENV_FILE="$candidate"
     break

@@ -433,6 +433,7 @@ class WorkerClient:
                 ]
             )
         else:
+            host_config["CgroupParent"] = "/burla-workers.slice"
             if NUM_GPUS != 0:
                 host_config["DeviceRequests"] = [{"Count": -1, "Capabilities": [["gpu"]]}]
                 host_config["Runtime"] = "nvidia"

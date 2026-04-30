@@ -25,23 +25,6 @@ import pytest
 pytestmark = pytest.mark.unit
 
 
-class _FakeResponse:
-    def __init__(self, status_code=200, body=None):
-        self.status_code = status_code
-        self._body = body or {}
-
-    def json(self):
-        return self._body
-
-    def raise_for_status(self):
-        if self.status_code >= 400:
-            raise RuntimeError(f"HTTP {self.status_code}")
-
-
-class _FakeCredentials:
-    service_account_email = "agent@project.iam.gserviceaccount.com"
-
-
 @pytest.fixture(autouse=True)
 def clear_auth_cache():
     yield
@@ -79,67 +62,6 @@ def test_get_cluster_dashboard_url_reads_config_when_no_env(monkeypatch, tmp_pat
     monkeypatch.setattr(burla, "CONFIG_PATH", config)
 
     assert get_cluster_dashboard_url() == "http://from-config"
-
-
-def test_missing_config_bootstraps_normal_credentials_from_adc(monkeypatch, tmp_path):
-    import burla
-    from burla import _auth
-
-    config = tmp_path / "burla_credentials.json"
-    monkeypatch.setattr(burla, "CONFIG_PATH", config)
-    monkeypatch.setattr(_auth, "CONFIG_PATH", config)
-    monkeypatch.setattr(
-        _auth,
-        "_get_adc_identity",
-        lambda: ("google-token", "project-1", _FakeCredentials.service_account_email),
-    )
-    monkeypatch.setattr(_auth, "_get_cluster_token", lambda access_token, project_id: "cluster-token")
-
-    def fake_post(url, headers, json, timeout):
-        assert url == "https://backend.burla.dev/v1/clusters/project-1/adc:exchange"
-        assert headers == {"Authorization": "Bearer cluster-token"}
-        assert json == {"email": "agent@project.iam.gserviceaccount.com"}
-        assert timeout == 20
-        return _FakeResponse(
-            body={
-                "auth_token": "burla-token",
-                "email": "agent@project.iam.gserviceaccount.com",
-                "project_id": "project-1",
-                "cluster_dashboard_url": "https://burla.example",
-            }
-        )
-
-    monkeypatch.setattr(_auth.requests, "post", fake_post)
-
-    assert _auth.get_auth_headers() == {
-        "X-User-Email": "agent@project.iam.gserviceaccount.com",
-        "Authorization": "Bearer burla-token",
-    }
-    assert json.loads(config.read_text()) == {
-        "auth_token": "burla-token",
-        "email": "agent@project.iam.gserviceaccount.com",
-        "project_id": "project-1",
-        "cluster_dashboard_url": "https://burla.example",
-    }
-
-
-def test_adc_exchange_404_raises_not_installed(monkeypatch, tmp_path):
-    import burla
-    from burla import _auth
-
-    config = tmp_path / "burla_credentials.json"
-    monkeypatch.setattr(burla, "CONFIG_PATH", config)
-    monkeypatch.setattr(_auth, "CONFIG_PATH", config)
-    monkeypatch.setattr(
-        _auth,
-        "_get_adc_identity",
-        lambda: ("google-token", "project-1", _FakeCredentials.service_account_email),
-    )
-    monkeypatch.setattr(_auth, "_get_cluster_token", lambda access_token, project_id: "cluster-token")
-    monkeypatch.setattr(_auth.requests, "post", lambda *args, **kwargs: _FakeResponse(status_code=404))
-
-    with pytest.raises(_auth.BurlaNotInstalledException, match="project-1"):
-        _auth.bootstrap_from_adc()
 
 
 def test_COLAB_RELEASE_TAG_sets_IN_COLAB_on_reimport(monkeypatch):

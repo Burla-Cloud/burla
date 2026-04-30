@@ -119,6 +119,7 @@ class ClusterClient:
         from burla._node import (
             NoCompatibleNodes,
             NoNodes,
+            QuotaExceeded,
             UnauthorizedError,
             VersionMismatch,
         )
@@ -150,6 +151,8 @@ class ClusterClient:
             return body
 
         detail = body.get("detail") if isinstance(body, dict) else None
+        if status == 400 and isinstance(detail, dict) and detail.get("error_code") == "quota_exceeded":
+            raise QuotaExceeded(detail)
         if status == 409 and isinstance(detail, dict) and detail.get("error") == "version_mismatch":
             raise VersionMismatch(
                 detail["lower_version"],

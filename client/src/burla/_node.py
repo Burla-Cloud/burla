@@ -79,6 +79,41 @@ class NoCompatibleNodes(Exception):
         super().__init__(message)
 
 
+class QuotaExceeded(Exception):
+    def __init__(self, detail: dict):
+        region = detail["region"]
+        caps = detail["caps"]
+        lines = [
+            "",
+            "",
+            f"GCP quota exceeded: Burla cannot boot any additional machines "
+            f"for this job in {region} without exceeding quota.",
+            "",
+        ]
+        for cap in caps:
+            count_unit = cap.get("count_unit", "machines")
+            quota = cap.get("quota", "GCP quota")
+            used = cap.get("used", 0)
+            limit = cap.get("limit", "?")
+            units = cap.get("units", "units")
+            lines.append(
+                f"  - {cap['machine_type']}: requested {cap['requested']} {count_unit}, "
+                f"allowed {cap['allowed']} {count_unit} "
+                f"({quota}: {used}/{limit} {units} already in use)"
+            )
+        lines += [
+            "",
+            "Increase the quota for your GCP project, or lower the job's parallelism.",
+            "Self-hosting? See https://cloud.google.com/docs/quotas/view-manage .",
+            "Using Burla Cloud? Email jake@burla.dev and we'll raise it.",
+            "",
+        ]
+        super().__init__("\n".join(lines))
+        self.detail = detail
+        self.region = region
+        self.caps = caps
+
+
 class MainServiceTimeout(Exception):
     def __init__(self):
         message = (

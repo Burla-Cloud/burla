@@ -7,12 +7,14 @@ import { SettingsForm } from "@/components/SettingsForm";
 import UsageSettings from "@/components/UsageSettings";
 
 import { Button } from "@/components/ui/button";
-import { useSaveSettings } from "@/hooks/useSaveSettings";
+import { QuotaWarningDetails, useSaveSettings } from "@/hooks/useSaveSettings";
 import { toast } from "@/components/ui/use-toast";
+import { getConfigurationLabelForMachineType } from "@/types/constants";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { AlertTriangle, Loader2 } from "lucide-react";
+import { Settings } from "@/types/coreTypes";
 import {
   AlertDialog,
   AlertDialogContent,
@@ -20,6 +22,18 @@ import {
   AlertDialogAction,
   AlertDialogCancel,
 } from "@/components/ui/alert-dialog";
+
+interface HardwareSnapshot {
+  machineType: string;
+  gcpRegion?: string;
+  machineQuantity: number;
+}
+
+const hardwareSnapshot = (source: Settings): HardwareSnapshot => ({
+  machineType: source.machineType,
+  gcpRegion: source.gcpRegion,
+  machineQuantity: source.machineQuantity,
+});
 
 const SettingsPage = () => {
   const navigate = useNavigate();
@@ -36,9 +50,11 @@ const SettingsPage = () => {
   const [error, setError] = useState<string | null>(null);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [showExitDialog, setShowExitDialog] = useState(false);
+  const [quotaWarning, setQuotaWarning] = useState<QuotaWarningDetails | null>(null);
 
   const pendingNavRef = useRef<string | null>(null);
   const settingsFormRef = useRef<{ isRegionValid: () => boolean } | null>(null);
+  const lastSavedHardwareRef = useRef<HardwareSnapshot | null>(null);
 
   const section = useMemo(() => {
     const sp = new URLSearchParams(location.search);
@@ -52,7 +68,11 @@ const SettingsPage = () => {
         const res = await fetch("/v1/settings", { credentials: "include" });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
-        setSettings((prev) => ({ ...prev, ...data }));
+        setSettings((prev) => {
+          const next = { ...prev, ...data };
+          lastSavedHardwareRef.current = hardwareSnapshot(next);
+          return next;
+        });
       } catch {
         setError("Could not load settings");
         toast({ title: "Failed to load settings", variant: "destructive" });
@@ -121,15 +141,38 @@ const SettingsPage = () => {
     }
 
     setSaving(true);
-    const ok = await saveSettings(settings);
-    toast({
-      title: ok ? "Settings saved successfully" : "Failed to save settings",
-      variant: ok ? "default" : "destructive",
-    });
+    const result = await saveSettings(settings);
+    if (result.ok) {
+      toast({
+        title: "Settings saved successfully",
+        variant: "default",
+      });
+      lastSavedHardwareRef.current = hardwareSnapshot(settings);
+    } else if (result.quota) {
+      if ((result.quota.allowed || 0) > 0) {
+        setSettings((prev) => ({
+          ...prev,
+          machineQuantity: result.quota.allowed || 1,
+        }));
+        setHasUnsavedChanges(true);
+      } else {
+        setSettings((prev) => ({
+          ...prev,
+          ...lastSavedHardwareRef.current!,
+        }));
+      }
+      setQuotaWarning(result.quota);
+    } else {
+      toast({
+        title: "Failed to save settings",
+        description: result.errorMessage,
+        variant: "destructive",
+      });
+    }
     setSaving(false);
 
-    if (ok) setHasUnsavedChanges(false);
-    return ok;
+    if (result.ok) setHasUnsavedChanges(false);
+    return result.ok;
   };
 
   const attemptNavigate = (to: string) => {
@@ -320,6 +363,103 @@ const SettingsPage = () => {
               className="border border-gray-200 bg-gray-50 text-gray-800 hover:bg-gray-100 rounded-md px-5 py-2.5 font-medium min-w-[130px] transition-all focus:outline-none"
             >
               Exit Without Saving
+            </AlertDialogAction>
+          </div>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog
+        open={Boolean(quotaWarning)}
+        onOpenChange={(open) => {
+          if (!open) setQuotaWarning(null);
+        }}
+      >
+        <AlertDialogContent className="max-w-[670px] mx-auto py-7 px-6 rounded-lg shadow-[0_8px_24px_rgba(0,0,0,0.06)] bg-white">
+          {quotaWarning && (
+            <div className="space-y-3">
+              <AlertDialogTitle className="text-lg font-semibold text-gray-900">
+                <span className="inline-flex items-center gap-2">
+                  <AlertTriangle className="h-4 w-4 text-red-500" />
+                  GCP quota limit reached
+                </span>
+              </AlertDialogTitle>
+              <div className="space-y-5 text-base text-gray-800 leading-relaxed">
+                <div className="space-y-1.5">
+                  <p className="font-semibold text-gray-900">Requested Cluster</p>
+                  <p>
+                    Machine:{" "}
+                    <span className="font-semibold">{quotaWarning.machineType}</span>
+                  </p>
+                  <p>
+                    Configuration:{" "}
+                    <span className="font-semibold">
+                      {getConfigurationLabelForMachineType(quotaWarning.machineType)}
+                    </span>
+                  </p>
+                  <p>
+                    Region: <span className="font-semibold">{quotaWarning.region}</span>
+                  </p>
+                </div>
+
+                <div className="space-y-1.5">
+                  <p>
+                    Requested machines:{" "}
+                    <span className="font-semibold">{quotaWarning.requested}</span>
+                  </p>
+                  <p>
+                    Machines Burla can start:{" "}
+                    <span className="font-semibold">{quotaWarning.allowed || 0}</span>
+                  </p>
+                  <p>
+                    Limiting quota:{" "}
+                    <span className="font-semibold">
+                      {quotaWarning.quota || "GCP quota"}
+                    </span>
+                    {quotaWarning.units ? (
+                      <>
+                        {" "}
+                        ({quotaWarning.used || 0}/{quotaWarning.limit}{" "}
+                        {quotaWarning.units} already in use)
+                      </>
+                    ) : null}
+                  </p>
+                </div>
+
+                <p>
+                  Contact{" "}
+                  <a
+                    href="mailto:jake@burla.dev"
+                    className="text-blue-600 underline hover:text-blue-700"
+                  >
+                    jake@burla.dev
+                  </a>{" "}
+                  to increase your quota.
+                </p>
+
+                <p>
+                  <span className="font-semibold text-gray-900">Self hosting?</span>{" "}
+                  Increase quota in{" "}
+                  <a
+                    href="https://docs.cloud.google.com/docs/quotas/view-manage"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-blue-600 underline hover:text-blue-700"
+                  >
+                    GCP
+                  </a>
+                </p>
+              </div>
+            </div>
+          )}
+
+          <div className="flex justify-center mt-5">
+            <AlertDialogAction
+              onClick={() => {
+                setQuotaWarning(null);
+              }}
+              className="bg-gray-700 text-white hover:bg-gray-800 rounded-md px-5 py-2.5 font-medium min-w-[130px] transition-all focus:outline-none"
+            >
+              OK
             </AlertDialogAction>
           </div>
         </AlertDialogContent>

@@ -1,6 +1,6 @@
 import requests
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 
 from main_service import (
     DB,
@@ -10,6 +10,7 @@ from main_service import (
     IN_LOCAL_DEV_MODE,
     LOCAL_DEV_CONFIG,
 )
+from main_service.quota import cap_boot_machine_types
 
 router = APIRouter()
 BURLA_BACKEND_URL = "https://backend.burla.dev"
@@ -53,6 +54,44 @@ async def update_settings(request: Request):
     nodes = config_dict.get("Nodes", [{}])
     node = nodes[0]
     container = node.get("containers", [{}])[0]
+
+    requested_machine_type = request_json.get("machineType", node.get("machine_type"))
+    requested_region = request_json.get("gcpRegion", node.get("gcp_region"))
+    requested_quantity = int(request_json.get("machineQuantity", node.get("quantity")) or 1)
+
+    if not IN_LOCAL_DEV_MODE:
+        quota_plan = cap_boot_machine_types(
+            [requested_machine_type] * requested_quantity,
+            requested_region,
+            active_machine_types=[],
+        )
+    else:
+        quota_plan = None
+
+    if quota_plan and quota_plan.caps:
+        cap = quota_plan.caps[0]
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error_code": "quota_exceeded",
+                "message": (
+                    f"Quota exceeded. Burla can start {cap.allowed} "
+                    f"{requested_machine_type} machines in {requested_region}, "
+                    f"but you requested {requested_quantity}."
+                ),
+                "machine_type": requested_machine_type,
+                "region": requested_region,
+                "limit": cap.limit,
+                "used": cap.used,
+                "available": cap.available,
+                "allowed": cap.allowed,
+                "count_unit": "machines",
+                "quota": cap.quota,
+                "units": cap.units,
+                "requested": requested_quantity,
+            },
+        )
+
     container.update(
         {
             "image": request_json.get("containerImage", container.get("image")),
@@ -62,9 +101,9 @@ async def update_settings(request: Request):
     container.pop("python_version", None)
     node.update(
         {
-            "machine_type": request_json.get("machineType", node.get("machine_type")),
-            "gcp_region": request_json.get("gcpRegion", node.get("gcp_region")),
-            "quantity": request_json.get("machineQuantity", node.get("quantity")),
+            "machine_type": requested_machine_type,
+            "gcp_region": requested_region,
+            "quantity": requested_quantity,
             "disk_size_gb": request_json.get("diskSize", node.get("disk_size_gb")),
             "inactivity_shutdown_time_sec": (
                 request_json.get("inactivityTimeout", node.get("inactivity_shutdown_time_sec")) * 60

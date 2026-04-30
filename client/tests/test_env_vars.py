@@ -25,14 +25,6 @@ import pytest
 pytestmark = pytest.mark.unit
 
 
-@pytest.fixture(autouse=True)
-def clear_auth_cache():
-    yield
-    from burla import _auth
-
-    _auth._get_auth_info.cache_clear()
-
-
 def test_BURLA_CLUSTER_DASHBOARD_URL_overrides_config(monkeypatch, tmp_path):
     from burla import get_cluster_dashboard_url
     import burla

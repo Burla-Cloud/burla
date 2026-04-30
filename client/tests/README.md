@@ -61,7 +61,6 @@ Then run tests from the VM:
 curl -sX POST http://localhost:5001/v1/cluster/restart \
   -H "X-User-Email: <user-email>" \
   -H "Authorization: Bearer <agent-token>"
-# wait for ready_nodes >= 1 at /v1/cluster/state
 BURLA_TEST_PROJECT=burla-agent-<slot> \
   uv run --project ./client --group dev pytest -m "not chaos and not dashboard"
 ```
@@ -80,9 +79,9 @@ scripts/dev_vm_stop.sh --slot <slot>
    project if needed, and starts or creates the VM.
 3. Sync the worktree explicitly with
    `scripts/dev_vm_sync_repo.sh --slot <slot> --source <worktree>`.
-4. Before every service / e2e run, verify: cluster is reachable through the
-   tunnel (`curl http://localhost:<local-dashboard-port>/version` returns 200)
-   and `ready_nodes` in `/v1/cluster/state` is ≥ 1.
+4. For now, tests that call `remote_parallel_map` should pass `grow=True` so the
+   job boots nodes itself instead of relying on an already-started cluster.
+   Do this for smoke tests too.
 5. Run the tests on the VM with `scripts/dev_vm_shell.sh --slot <slot>`.
    Start the cluster with `make -f makefile local-dev`. The VM has `uv` at `/usr/local/bin/uv`;
    always invoke pytest via `uv run --project ./client --group dev pytest`.

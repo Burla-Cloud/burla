@@ -71,45 +71,6 @@ if ! main_service_account_exists "$PROJECT_ID"; then
   fail "Slot [$SLOT_ID] is not prepared. Run [scripts/dev_vm_prepare_slot.sh --slot $SLOT_ID] first."
 fi
 
-# `burla install` seeds the cluster doc in the prod backend DB with only the
-# human's email in `authorized_users`. Add the cursor-agent's Google account so
-# it can sign in to the dashboard via the browser without a manual DB edit each
-# time. Idempotent. Empty `BURLA_DEV_VM_AGENT_EMAIL` skips the step; non-jake
-# users will hit a Firestore permission error which we downgrade to a warning.
-AGENT_EMAIL="${BURLA_DEV_VM_AGENT_EMAIL:-jakescursoragent@gmail.com}"
-if [[ -n "$AGENT_EMAIL" ]]; then
-  if ! PROJECT_ID="$PROJECT_ID" AGENT_EMAIL="$AGENT_EMAIL" uv run --project "$CLIENT_PROJECT" --with google-cloud-firestore python3 - <<'PY'
-import os
-import sys
-
-from google.cloud import firestore
-from google.cloud.firestore_v1 import FieldFilter
-
-project_id = os.environ["PROJECT_ID"]
-email = os.environ["AGENT_EMAIL"]
-
-db = firestore.Client(project="burla-prod", database="backend-service")
-snaps = list(
-    db.collection("clusters")
-    .where(filter=FieldFilter("project_id", "==", project_id))
-    .limit(1)
-    .stream()
-)
-if not snaps:
-    sys.exit(f"No cluster doc found for project_id={project_id}.")
-snap = snaps[0]
-authorized_before = snap.to_dict().get("authorized_users") or []
-if email in authorized_before:
-    print(f"{email} already authorized on {project_id}.")
-else:
-    snap.reference.update({"authorized_users": firestore.ArrayUnion([email])})
-    print(f"Authorized {email} on {project_id}.")
-PY
-  then
-    echo "Warning: failed to authorize [$AGENT_EMAIL] on cluster [$PROJECT_ID]." >&2
-  fi
-fi
-
 ensure_artifact_repositories "$PROJECT_ID"
 ensure_artifact_writer_role "$PROJECT_ID"
 

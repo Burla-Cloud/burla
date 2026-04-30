@@ -44,7 +44,7 @@ State and keys are split deliberately: the repo's `.cursor/` folder is a common 
 - `scripts/dev_vm_tunnel.sh`: forward local dashboard and Vite ports to the VM
 - `scripts/dev_vm_status.sh`: print the current state plus `health`, VM status, running mode, lock state, last synced source, and VM-side Burla credential status
 - `scripts/dev_vm_client_shell.sh`: start a local `uv` client shell with `BURLA_CLUSTER_DASHBOARD_URL` pointed at the tunneled dashboard URL
-- `scripts/dev_vm_burla_login_instructions.sh`: print the GStack/browser `burla login --no_browser=True` flow for authorizing the VM-local Burla CLI
+- `scripts/dev_vm_burla_login_instructions.sh`: print the `burla login --no_browser=True` flow for authorizing the VM-local Burla CLI
 - `scripts/dev_vm_stop.sh`: best-effort POST `/v1/cluster/shutdown` to `main_service` (deletes remote-dev worker VMs), stop the local tunnel, stop the dev VM, and keep the state file for reuse
 - `scripts/dev_vm_destroy.sh`: compatibility wrapper for the stop-only lifecycle; it stops VMs and does not delete them
 
@@ -84,7 +84,7 @@ These scripts accept optional environment overrides when the defaults are wrong 
 7. Sync the worktree snapshot to that slot.
 8. SSH into the VM and run `cd /srv/burla && make local-dev` or `make remote-dev`.
 9. Start the tunnel.
-10. Use the dashboard, GStack browser auth flow, and local client shell.
+10. Use the dashboard and local client shell.
 11. Release the slot lock when done.
 12. Stop the VM when done unless the user asked to keep it running warm.
 13. Remove the worktree later only when the task branch is no longer needed.

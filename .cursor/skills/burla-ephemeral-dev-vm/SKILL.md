@@ -41,7 +41,7 @@ Pick the slot without asking the user. Follow this order:
 10. Run `scripts/dev_vm_tunnel.sh --slot <id>`.
 11. Run `scripts/dev_vm_status.sh --slot <id>`.
 12. For local client work, run `scripts/dev_vm_client_shell.sh --slot <id> --python <version>`.
-13. For Burla CLI auth, run `scripts/dev_vm_burla_login_instructions.sh --slot <id>` and follow the GStack browser flow.
+13. For Burla CLI auth, run `scripts/dev_vm_burla_login_instructions.sh --slot <id>`.
 14. When done, run `scripts/dev_vm_slot_release.sh --slot <id>`.
 15. Stop the VM with `scripts/dev_vm_stop.sh --slot <id>` when the slot should go idle.
 16. Remove the worktree later with `scripts/dev-worktree/remove.sh --task <task-slug>` only when you are done with that branch.

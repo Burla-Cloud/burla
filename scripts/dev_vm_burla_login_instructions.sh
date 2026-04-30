@@ -13,7 +13,7 @@ validate_loaded_state_for_slot
 echo "1. Make sure the tunnel is running:"
 echo "   scripts/dev_vm_tunnel.sh --slot $SLOT_ID"
 echo
-echo "2. Open [$DASHBOARD_URL] in the GStack browser and sign in with the agent account."
+echo "2. Open [$DASHBOARD_URL] in the GStack browser."
 echo
 echo "3. Click Start in the dashboard so the cluster starts with the current mode/config."
 echo

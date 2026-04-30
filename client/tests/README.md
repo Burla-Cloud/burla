@@ -46,8 +46,8 @@ cd /srv/burla
 make local-dev
 ```
 
-Open the tunneled dashboard in the GStack browser, sign in with the agent
-account, and click Start. Then authorize Burla CLI inside the VM:
+Open the tunneled dashboard in the GStack browser and click Start. Then
+authorize Burla CLI inside the VM:
 
 ```
 cd /srv/burla
@@ -59,7 +59,7 @@ Then run tests from the VM:
 
 ```
 curl -sX POST http://localhost:5001/v1/cluster/restart \
-  -H "X-User-Email: jakescursoragent@gmail.com" \
+  -H "X-User-Email: <user-email>" \
   -H "Authorization: Bearer <agent-token>"
 # wait for ready_nodes >= 1 at /v1/cluster/state
 BURLA_TEST_PROJECT=burla-agent-<slot> \
@@ -99,7 +99,7 @@ scripts/dev_vm_stop.sh --slot <slot>
    cluster, then restart. Otherwise nodes will 500 on `NODE_AUTH_CREDENTIALS_PATH.write_text()`.
 8. Auth errors (`invalid_grant` / `Invalid JWT Signature`) → run
    `uv run --project ./client --group dev burla login --no_browser=True`
-   on the VM and authorize the printed URL in the signed-in GStack browser.
+   on the VM and authorize the printed URL.
 9. All tests have a 120s default timeout. If output doesn't advance past
    `collected N items` within 10 seconds, stop and report blocked.
 

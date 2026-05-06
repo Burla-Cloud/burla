@@ -33,11 +33,10 @@ LOG_START_MARKER_PREFIX = "__burla_input_start__:"
 LOG_END_MARKER_PREFIX = "__burla_input_end__:"
 OOM_KILL_MARKER_PREFIX = "__burla_oom_kill__:"
 
-# Workers normally boot in <2s because main_service's startup script pre-populates the shared
-# /worker_service_python_env with uv + burla deps. This budget exists for fallback paths (env
-# missing/corrupt, container restart racing a partial install) where worker_server.py would
-# fall back to downloading uv from GitHub and `uv pip install burla` from PyPI.
-WORKER_BOOT_TIMEOUT_SECONDS = 60
+# The first worker on a fresh VM downloads uv from GitHub and installs cloudpickle/tblib into
+# /worker_service_python_env before opening its socket. Under any network slowness this can take
+# well over 10 seconds; 10s was causing ~15% of initial boots to fail.
+WORKER_BOOT_TIMEOUT_SECONDS = 20
 DYNAMIC_RAM_MAX_NODE_MEMORY_USED_FRACTION = 0.90
 DYNAMIC_RAM_TARGET_NODE_MEMORY_USED_FRACTION = 0.85
 DYNAMIC_RAM_MONITOR_INTERVAL_SECONDS = 0.25

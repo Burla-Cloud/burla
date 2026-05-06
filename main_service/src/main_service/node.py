@@ -519,6 +519,19 @@ class Node:
 
         uv venv --python 3.13 --seed
         uv pip install ./node_service
+
+        # Pre-populate the shared worker python env so worker[0]'s boot doesn't have
+        # to download uv from GitHub and `uv pip install burla` over PyPI inside the
+        # container. Worker_server.py short-circuits both steps when uv is on PATH and
+        # `importlib.metadata.version("burla") == target_burla_version`. CURRENT_BURLA_VERSION
+        # is templated into this script so this stays in sync with each release.
+        mkdir -p /worker_service_python_env/bin
+        cp "$(command -v uv)" /worker_service_python_env/bin/uv
+        uv pip install \
+            --python-version 3.12 \
+            --python-platform x86_64-manylinux2014 \
+            --target /worker_service_python_env \
+            burla=={CURRENT_BURLA_VERSION}
         
         total_memory_kb=$(awk '/MemTotal/ {{print $2}}' /proc/meminfo)
         worker_memory_kb=$((total_memory_kb - {NODE_SERVICE_RESERVED_MEMORY_GB} * 1024 * 1024))

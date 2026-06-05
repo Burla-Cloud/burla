@@ -128,4 +128,4 @@ Burla has all the features you need to closely monitor logs, output files, and a
 
 <p align="center"><a href="https://docs.burla.dev/demo-categories/basic-examples"><b>Browse all examples &rarr;</b></a></p>
 
-## Want to learn more? [Book a call](https://cal.com/jakez/burla?user=jakez) to chat the people who built it.
+## Want to learn more? [Book a call](https://cal.com/jakez/burla?user=jakez) to chat with the people who built it.

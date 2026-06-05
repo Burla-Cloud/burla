@@ -76,24 +76,6 @@ Not only is this easier (no YAML or config footguns), it's often 2-5x more compu
 
 <br> 
 
-# With Burla, the same jobs use 50% less compute.
-
-Burla vertically scales hardware available to each function call live while the program is running.\
-This frequently more than doubles compute efficiency, and eliminates out of memory errors.
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/Burla-Cloud/user-docs/main/.gitbook/assets/image.png" alt="CPU demand curve rising and falling while Burla adds and removes machines to match it" width="90%" />
-</p>
-
-```py
-remote_parallel_map(..., func_ram="dynamic", func_cpu="dynamic")
-```
-
-This system is possible due to Burla's unique architecture lacking a traditional master node.\
-Read [our blog post](https://docs.burla.dev/blog/dynamic-hardware) to learn more about dynamic hardware.
-
-<br> 
-
 ## How it works:
 
 Running code in the cloud shouldn't feel any different from running code locally.
@@ -114,6 +96,24 @@ You can manually add & remove machines from the pool, or let the platform react 
 
 <br> 
 
+## With Burla, the same jobs use 50% less compute.
+
+Burla vertically scales hardware available to each function call live while the program is running.\
+This frequently more than doubles compute efficiency, and eliminates out of memory errors.
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Burla-Cloud/user-docs/main/.gitbook/assets/image.png" alt="CPU demand curve rising and falling while Burla adds and removes machines to match it" width="90%" />
+</p>
+
+```py
+remote_parallel_map(..., func_ram="dynamic", func_cpu="dynamic")
+```
+
+This system is possible due to Burla's unique architecture lacking a traditional master node.\
+Read [our blog post](https://docs.burla.dev/blog/dynamic-hardware) to learn more about dynamic hardware.
+
+<br> 
+
 ## Everything you need to scale up and monitor any workload.
 
 Keep an eye on your analysis, pipeline, or background job from your phone.\
@@ -125,7 +125,7 @@ Burla has all the features you need to closely monitor logs, output files, and a
 
 <br> 
 
-## See our library of Examples:
+## Examples:
 
 <table>
   <tr>
@@ -140,8 +140,8 @@ Burla has all the features you need to closely monitor logs, output files, and a
   </tr>
 </table>
 
-<p align="center"><a href="https://docs.burla.dev/demo-categories/basic-examples"><b>Browse all examples &rarr;</b></a></p>
+<p align="center"><a href="https://docs.burla.dev/demo-categories/basic-examples"><b>Browse all &rarr;</b></a></p>
 
 <br> 
 
-## Want to learn more? Schedule a call 
+## Want to learn more? [Schedule a call](https://cal.com/jakez/burla?user=jakez) we're happy to answer any questions.

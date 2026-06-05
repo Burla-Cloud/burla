@@ -114,7 +114,7 @@ Read [our blog post](https://docs.burla.dev/blog/dynamic-hardware) to learn more
 
 <br> 
 
-## Everything you need to scale up and monitor any workload.
+## Burla has everything you need to scale up and monitor your workload.
 
 Keep an eye on your analysis, pipeline, or background job from your phone.\
 Burla has all the features you need to closely monitor logs, output files, and available compute.

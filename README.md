@@ -17,8 +17,8 @@
 
 # Scale Python to 1,000 VMs in your cloud in 1 second.
 
-Burla is a self-hostable compute platform for scaling big data workloads in your cloud.\
-Run analysis, inference, embeddings, and more with instant feedback, and 2-5x higher utilization.
+Burla is a open-source compute platform for scaling Python applications.\
+Run AI-inference, vector embeddings, ML-pipelines and more on thousands of VM's at once.
 
 Burla only has one function:
 
@@ -71,8 +71,20 @@ Creates a pipeline like:
   <img src="https://raw.githubusercontent.com/Burla-Cloud/user-docs/main/.gitbook/assets/image%20(19).png" alt="Burla data pipeline: cloud storage to CPUs, into a 64-CPU aggregation step, out to GPUs, and back to cloud storage" width="90%" />
 </p>
 
-Burla automatically manages it's own pool of VMs maximizing speed and efficiency.\
-Not only is this easier (no YAML or config footguns), it's often 2-5x more compute efficient.
+<br> 
+
+## With Burla, the same jobs use 50% less compute.
+
+Compared to software like Ray, Dask, or AWS Batch workloads running on Burla require less compute and automatically stay at 90%+ CPU/RAM utilization without taking any longer to finish the job.
+
+This is achieved with adaptive concurrency and horizontal autoscaling. Burla quickly reacts to changes in task resource utilization, and rearranges work during runtime to fill excess capacity.
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Burla-Cloud/user-docs/main/.gitbook/assets/image%20(31).png" alt="CPU utilization comparison: other orchestration tools fluctuate between idle and busy, while the same workload on Burla stays near full utilization" width="90%" />
+</p>
+
+This system frequently more than doubles compute efficiency, and eliminates out of memory errors.\
+[Read our blog](https://docs.burla.dev/blog/dynamic-hardware) to learn how it works.
 
 <br> 
 
@@ -91,33 +103,15 @@ When a Python function is run using `remote_parallel_map`, it runs in the cloud 
 - Any packages or local modules are (very quickly) cloned on all remote machines.
 - Code starts running in under one second! Even with millions of inputs, or thousands of machines.
 
-Code runs on a pool of VM's that are automatically managed by Burla to maximize efficiency.\
+Burla automatically manages it's own pool of VMs underneath to maximize speed and efficiency.\
 You can manually add & remove machines from the pool, or let the platform react live to requests.
 
 <br> 
 
-## With Burla, the same jobs use 50% less compute.
+## Everything you need to manage Python at scale.
 
-Burla vertically scales hardware available to each function call live while the program is running.\
-This frequently more than doubles compute efficiency, and eliminates out of memory errors.
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/Burla-Cloud/user-docs/main/.gitbook/assets/image.png" alt="CPU demand curve rising and falling while Burla adds and removes machines to match it" width="90%" />
-</p>
-
-```py
-remote_parallel_map(..., func_ram="dynamic", func_cpu="dynamic")
-```
-
-This system is possible due to Burla's unique architecture lacking a traditional master node.\
-Read [our blog post](https://docs.burla.dev/blog/dynamic-hardware) to learn more about dynamic hardware.
-
-<br> 
-
-## Burla has everything you need to scale up and monitor any workload.
-
-Keep an eye on your analysis, pipeline, or background job from your phone.\
-Burla has all the features you need to closely monitor logs, output files, and available compute.
+Monitor your analysis, pipeline, or background job from your phone.\
+Burla has all the features you need to closely manage logs, output files, and available compute.
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/Burla-Cloud/user-docs/main/.gitbook/assets/area2-radius60-247-251-252.gif" alt="Burla dashboard showing live logs, output files, and cluster status" />
@@ -144,4 +138,4 @@ Burla has all the features you need to closely monitor logs, output files, and a
 
 <br> 
 
-## Want to learn more? [Schedule a call](https://cal.com/jakez/burla?user=jakez) we're happy to answer any questions.
+## Want to learn more? [Book a call](https://cal.com/jakez/burla?user=jakez) to discover how Burla can accelerate your team.

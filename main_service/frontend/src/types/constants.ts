@@ -87,3 +87,16 @@ export function getOnDemandHourlyUsdForMachine(machineType: string): number | nu
   const price = GCP_MACHINE_PRICING_MAPPING[mt]?.on_demand_price;
   return typeof price === "number" ? price : null;
 }
+
+const _N4_STANDARD_CPU_TO_RAM: Record<number, number> = {
+  2: 8, 4: 16, 8: 32, 16: 64, 32: 128, 48: 192, 64: 256, 80: 320,
+};
+
+export function getConfigurationLabelForMachineType(machineType: string): string {
+  if (machineType.startsWith("n4-standard-")) {
+    const cpus = Number(machineType.split("-").pop());
+    const ram = _N4_STANDARD_CPU_TO_RAM[cpus];
+    return `${cpus} vCPUs / ${ram} GB RAM`;
+  }
+  return `${machineType.split("-").pop()?.replace("g", "")} GPUs`;
+}

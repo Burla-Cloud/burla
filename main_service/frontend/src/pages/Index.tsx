@@ -2,11 +2,19 @@ import { ClusterStatusCard } from "@/components/ClusterStatusCard";
 import { ClusterControls } from "@/components/ClusterControls";
 import { NodesList } from "@/components/NodesList";
 import { useClusterControl } from "@/hooks/useClusterControl";
+import { QuotaWarningDetails } from "@/hooks/useSaveSettings";
 import { useNodes } from "@/contexts/NodesContext";
 import { useCluster } from "@/contexts/ClusterContext";
 import { useEffect, useMemo, useState } from "react";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { AlertTriangle } from "lucide-react";
+import {
+    AlertDialog,
+    AlertDialogAction,
+    AlertDialogContent,
+    AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 const ACTIVE_STATUSES = new Set(["BOOTING", "READY", "RUNNING"]);
 
@@ -17,6 +25,10 @@ const Dashboard = () => {
 
     const [disableStartButton, setDisableStartButton] = useState(false);
     const [disableStopButton, setDisableStopButton] = useState(false);
+    const [quotaDialog, setQuotaDialog] = useState<{
+        type: "warning" | "error";
+        quota: QuotaWarningDetails;
+    } | null>(null);
     const SHOW_DELETED_STORAGE_KEY = "nodesShowDeleted";
 
     const [showDeleted, setShowDeleted] = useState(() => {
@@ -170,7 +182,12 @@ const Dashboard = () => {
     const handleReboot = async () => {
         setDisableStartButton(true);
         setTimeout(() => setDisableStartButton(false), 4000);
-        await rebootCluster();
+        const result = await rebootCluster();
+        if (result.ok && result.warnings?.length) {
+            setQuotaDialog({ type: "warning", quota: result.warnings[0] });
+        } else if (!result.ok && result.quota) {
+            setQuotaDialog({ type: "error", quota: result.quota });
+        }
     };
 
     const handleStop = async () => {
@@ -306,6 +323,108 @@ const Dashboard = () => {
                     </a>
                 </div>
             </div>
+            <AlertDialog
+                open={Boolean(quotaDialog)}
+                onOpenChange={(open) => {
+                    if (!open) setQuotaDialog(null);
+                }}
+            >
+                <AlertDialogContent className="max-w-[620px] mx-auto py-7 px-6 rounded-lg shadow-[0_8px_24px_rgba(0,0,0,0.06)] bg-white">
+                    {quotaDialog && (
+                        <div className="space-y-3">
+                            <AlertDialogTitle className="text-lg font-semibold text-gray-900">
+                                <span className="inline-flex items-center gap-2">
+                                    <AlertTriangle className="h-4 w-4 text-amber-500" />
+                                    {quotaDialog.type === "warning"
+                                        ? "Cluster started at reduced size"
+                                        : "GCP quota limit reached"}
+                                </span>
+                            </AlertDialogTitle>
+                            <div className="space-y-4 text-base text-gray-800 leading-relaxed">
+                                <p>
+                                    {quotaDialog.type === "warning"
+                                        ? "Burla is starting the machines that fit under your current GCP quota."
+                                        : "Burla cannot start any machines for this cluster without exceeding your current GCP quota."}
+                                </p>
+                                <div className="space-y-1.5">
+                                    <p>
+                                        Machine:{" "}
+                                        <span className="font-semibold">
+                                            {quotaDialog.quota.machineType}
+                                        </span>
+                                    </p>
+                                    <p>
+                                        Region:{" "}
+                                        <span className="font-semibold">
+                                            {quotaDialog.quota.region}
+                                        </span>
+                                    </p>
+                                    <p>
+                                        Requested:{" "}
+                                        <span className="font-semibold">
+                                            {quotaDialog.quota.requested}{" "}
+                                            {quotaDialog.quota.countUnit || "machines"}
+                                        </span>
+                                    </p>
+                                    <p>
+                                        Starting now:{" "}
+                                        <span className="font-semibold">
+                                            {quotaDialog.quota.allowed || 0}{" "}
+                                            {quotaDialog.quota.countUnit || "machines"}
+                                        </span>
+                                    </p>
+                                    <p>
+                                        Limiting quota:{" "}
+                                        <span className="font-semibold">
+                                            {quotaDialog.quota.quota || "GCP quota"}
+                                        </span>
+                                        {quotaDialog.quota.units ? (
+                                            <>
+                                                {" "}
+                                                ({quotaDialog.quota.used || 0}/
+                                                {quotaDialog.quota.limit}{" "}
+                                                {quotaDialog.quota.units} already in use)
+                                            </>
+                                        ) : null}
+                                    </p>
+                                </div>
+                                <p>
+                                    Contact{" "}
+                                    <a
+                                        href="mailto:jake@burla.dev"
+                                        className="text-blue-600 underline hover:text-blue-700"
+                                    >
+                                        jake@burla.dev
+                                    </a>{" "}
+                                    to increase your quota.
+                                </p>
+                                <p>
+                                    <span className="font-semibold text-gray-900">
+                                        Self hosting?
+                                    </span>{" "}
+                                    Increase quota in{" "}
+                                    <a
+                                        href="https://docs.cloud.google.com/docs/quotas/view-manage"
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        className="text-blue-600 underline hover:text-blue-700"
+                                    >
+                                        GCP
+                                    </a>
+                                </p>
+                            </div>
+                        </div>
+                    )}
+                    <div className="flex justify-center mt-5">
+                        <AlertDialogAction
+                            onClick={() => setQuotaDialog(null)}
+                            className="bg-gray-700 text-white hover:bg-gray-800 rounded-md px-5 py-2.5 font-medium min-w-[130px] transition-all focus:outline-none"
+                        >
+                            OK
+                        </AlertDialogAction>
+                    </div>
+                </AlertDialogContent>
+            </AlertDialog>
         </div>
     );
 };

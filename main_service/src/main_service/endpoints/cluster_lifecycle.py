@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from time import time
 from typing import Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from google.cloud.firestore_v1.base_query import FieldFilter
 from google.cloud.compute_v1 import InstancesClient, MachineTypesClient
 from concurrent.futures import ThreadPoolExecutor
@@ -12,12 +12,22 @@ from main_service import (
     DB,
     IN_LOCAL_DEV_MODE,
     LOCAL_DEV_CONFIG,
+    NODES_CACHE,
+    _nodes_cache_lock,
     get_logger,
     get_auth_headers,
     get_add_background_task_function,
 )
 from main_service.node import Container, Node
 from main_service.helpers import Logger, log_telemetry
+from main_service.quota import (
+    INSTANCE_BUCKET,
+    N4_CPU_BUCKET,
+    active_machine_types_for_region,
+    cap_boot_machine_types,
+    n4_cpu_count,
+    quota_status,
+)
 
 router = APIRouter()
 MAX_GROW_CPUS = 2560
@@ -58,6 +68,144 @@ def _pack_n4_standard_machines(num_cpus: int) -> list[str]:
                 machines.append(f"n4-standard-{size}")
                 break
     return machines
+
+
+def _pack_n4_standard_machines_up_to(num_cpus: int, min_size: int = 2) -> list[str]:
+    machines = []
+    remaining = num_cpus
+    for size in [size for size in N4_STANDARD_SIZES_DESCENDING if size >= min_size]:
+        while remaining >= size:
+            machines.append(f"n4-standard-{size}")
+            remaining -= size
+    return machines
+
+
+def _configured_machine_types(config: dict) -> list[str]:
+    machine_types = []
+    for node_spec in config["Nodes"]:
+        machine_types.extend([node_spec["machine_type"]] * node_spec["quantity"])
+    return machine_types
+
+
+def _requested_machine_types(
+    config: dict, n_nodes_to_add: int = None, node_machine_types: list[str] = None
+) -> list[str]:
+    if node_machine_types is not None:
+        return node_machine_types
+    if n_nodes_to_add is not None:
+        return [config["Nodes"][0]["machine_type"]] * n_nodes_to_add
+    return _configured_machine_types(config)
+
+
+def _active_machine_types(gcp_region: str) -> list[str]:
+    with _nodes_cache_lock:
+        nodes = list(NODES_CACHE.values())
+    return active_machine_types_for_region(nodes, gcp_region)
+
+
+def _quota_exceeded(region: str, caps: list[dict]):
+    raise HTTPException(
+        status_code=400,
+        detail={
+            "error_code": "quota_exceeded",
+            "region": region,
+            "caps": caps,
+            "message": "No machines can boot without exceeding this project's GCP quota.",
+        },
+    )
+
+
+def _n4_quota_warning(
+    requested_cpus: int,
+    allowed_machine_types: list[str],
+    gcp_region: str,
+    active_machine_types: list[str],
+) -> dict:
+    status = quota_status(N4_CPU_BUCKET, gcp_region, active_machine_types)
+    allowed_cpus = sum(n4_cpu_count(machine_type) for machine_type in allowed_machine_types)
+    return {
+        "type": "quota_capped",
+        "machine_type": "n4-standard",
+        "region": gcp_region,
+        "requested": requested_cpus,
+        "allowed": allowed_cpus,
+        "count_unit": "vCPUs",
+        "limit": status["limit"],
+        "used": status["used"],
+        "available": status["available"],
+        "quota": status["quota"],
+        "units": status["units"],
+    }
+
+
+def _prepare_n4_cpu_grow_boot_plan(
+    requested_cpus: int,
+    region: str,
+    active_machine_types: list[str],
+    min_machine_size: int,
+    raise_on_zero: bool,
+) -> tuple[list[str], list[dict]]:
+    requested_machine_types = _pack_n4_standard_machines(requested_cpus)
+    requested_quota_cpus = sum(n4_cpu_count(machine_type) for machine_type in requested_machine_types)
+    cpu_status = quota_status(N4_CPU_BUCKET, region, active_machine_types)
+    instance_status = quota_status(INSTANCE_BUCKET, region, active_machine_types)
+    if (
+        requested_quota_cpus <= cpu_status["available"]
+        and len(requested_machine_types) <= instance_status["available"]
+    ):
+        return requested_machine_types, []
+
+    quota_limited_cpus = min(requested_cpus, cpu_status["available"])
+    machine_types = _pack_n4_standard_machines_up_to(
+        quota_limited_cpus,
+        min_size=min_machine_size,
+    )
+    machine_types = machine_types[: instance_status["available"]]
+    warnings = [
+        _n4_quota_warning(
+            requested_cpus=requested_cpus,
+            allowed_machine_types=machine_types,
+            gcp_region=region,
+            active_machine_types=active_machine_types,
+        )
+    ]
+    if raise_on_zero and not machine_types:
+        _quota_exceeded(region, warnings)
+    return machine_types, warnings
+
+
+def _prepare_node_boot_plan(
+    config: dict,
+    requested_machine_types: list[str],
+    active_machine_types: list[str] = None,
+    raise_on_zero: bool = True,
+    n4_requested_cpus: int = None,
+    n4_min_machine_size: int = 2,
+) -> tuple[list[str], list[dict]]:
+    if IN_LOCAL_DEV_MODE:
+        return requested_machine_types, []
+
+    gcp_region = config["Nodes"][0]["gcp_region"]
+    active_machine_types = (
+        active_machine_types if active_machine_types is not None else _active_machine_types(gcp_region)
+    )
+    if n4_requested_cpus is not None:
+        return _prepare_n4_cpu_grow_boot_plan(
+            requested_cpus=n4_requested_cpus,
+            region=gcp_region,
+            active_machine_types=active_machine_types,
+            min_machine_size=n4_min_machine_size,
+            raise_on_zero=raise_on_zero,
+        )
+
+    quota_plan = cap_boot_machine_types(
+        requested_machine_types,
+        gcp_region,
+        active_machine_types=active_machine_types,
+    )
+    if raise_on_zero and not quota_plan.machine_types and quota_plan.caps:
+        _quota_exceeded(gcp_region, quota_plan.warnings)
+    return quota_plan.machine_types, quota_plan.warnings
 
 
 def _remove_local_dev_cluster_containers():
@@ -140,7 +288,18 @@ def _start_nodes(
     node_machine_types: list[str] = None,
     containers_override: list[dict] = None,
     inactivity_shutdown_time_sec_override: Optional[int] = None,
+    quota_checked: bool = False,
+    active_machine_types_for_quota: list[str] = None,
 ):
+    if not quota_checked:
+        requested_machine_types = _requested_machine_types(config, n_nodes_to_add, node_machine_types)
+        node_machine_types, _warnings = _prepare_node_boot_plan(
+            config,
+            requested_machine_types,
+            active_machine_types=active_machine_types_for_quota,
+        )
+        n_nodes_to_add = len(node_machine_types)
+
     node_service_port = _current_local_dev_max_node_port()
     futures = []
     executor = ThreadPoolExecutor(max_workers=32)
@@ -236,17 +395,33 @@ def _mark_running_jobs_with_lifecycle_event(event: str, message: str):
         job_ref.update({"status": "CANCELED", **extra})
 
 
-def _restart_cluster(logger: Logger, auth_headers: dict):
+def _restart_cluster(logger: Logger, auth_headers: dict, node_machine_types: list[str] = None):
     start = time()
 
     _shutdown_cluster(logger, auth_headers)
     _remove_local_dev_cluster_containers()
 
     config = _get_cluster_config()
-    msg = f"Booting {config['Nodes'][0]['quantity']} {config['Nodes'][0]['machine_type']} nodes"
+    node_count = len(node_machine_types) if node_machine_types is not None else config["Nodes"][0]["quantity"]
+    machine_type = (
+        node_machine_types[0]
+        if node_machine_types
+        else config["Nodes"][0]["machine_type"]
+    )
+    msg = f"Booting {node_count} {machine_type} nodes"
     log_telemetry(msg, severity="INFO")
 
-    _start_nodes(logger, auth_headers, config)
+    if node_machine_types is None:
+        _start_nodes(logger, auth_headers, config)
+    elif node_machine_types:
+        _start_nodes(
+            logger,
+            auth_headers,
+            config,
+            n_nodes_to_add=len(node_machine_types),
+            node_machine_types=node_machine_types,
+            quota_checked=True,
+        )
 
     duration = time() - start
     logger.log(f"Restarted after {duration//60}m {duration%60}s")
@@ -258,8 +433,22 @@ def restart_cluster(
     auth_headers: dict = Depends(get_auth_headers),
     add_background_task=Depends(get_add_background_task_function),
 ):
+    config = _get_cluster_config()
+    gcp_region = config["Nodes"][0]["gcp_region"]
+    requested_machine_types = _configured_machine_types(config)
+    active_machine_types = _active_machine_types(gcp_region)
+    # This endpoint is both Start and Restart. If nodes are already active,
+    # _restart_cluster deletes them before booting the replacement batch.
+    quota_active_machine_types = [] if active_machine_types else active_machine_types
+    requested_machine_types, warnings = _prepare_node_boot_plan(
+        config,
+        requested_machine_types,
+        active_machine_types=quota_active_machine_types,
+    )
+
     _mark_running_jobs_with_lifecycle_event("cluster_restarted", "The cluster was restarted.")
-    add_background_task(_restart_cluster, logger, auth_headers)
+    add_background_task(_restart_cluster, logger, auth_headers, requested_machine_types)
+    return {"warnings": warnings} if warnings else {}
 
 
 @router.post("/v1/cluster/shutdown")

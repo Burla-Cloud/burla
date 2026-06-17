@@ -105,6 +105,27 @@ class RemoteParallelMapReporter:
         message += "and inputs have finished uploading.\n-"
         self._write_message(message)
 
+    def print_quota_warnings(self, warnings: list[dict]):
+        region = warnings[0]["region"]
+        lines = [
+            "",
+            f"WARNING: Hit GCP quota in {region}. Burla will run this job at reduced scale.",
+        ]
+        for cap in warnings:
+            count_unit = cap.get("count_unit", "machines")
+            quota = cap.get("quota", "GCP quota")
+            used = cap.get("used", 0)
+            limit = cap.get("limit", "?")
+            units = cap.get("units", "units")
+            lines.append(
+                f"  - {cap['machine_type']}: requested {cap['requested']} {count_unit}, "
+                f"booting {cap['allowed']} {count_unit} "
+                f"({quota}: {used}/{limit} {units} already in use)"
+            )
+        lines.append("Self-hosting? See https://docs.cloud.google.com/docs/quotas/ .")
+        lines.append("")
+        self._write_message("\n".join(lines))
+
     def set_booting_nodes_message(self, number_of_booting_nodes: int):
         if not self.spinner:
             return

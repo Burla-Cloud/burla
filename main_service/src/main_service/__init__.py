@@ -252,13 +252,19 @@ async def lifespan(app: FastAPI):
         def frontend_built_successfully(attempt=1):
             if attempt == 3:
                 return False
-            else:
+            try:
                 frontend_built_at = float(Path(".frontend_last_built_at.txt").read_text().strip())
-                frontend_rebuilt = time() - frontend_built_at < 4
-                if not frontend_rebuilt:
-                    sleep(2)  # wait a couple sec then try again (could still be building)
-                    return frontend_built_successfully(attempt=attempt + 1)
-                return True
+            except (FileNotFoundError, ValueError):
+                # File hasn't been written yet (first run / vite dev server not up)
+                # or is malformed. Treat the same as "not rebuilt recently" rather
+                # than crashing uvicorn startup.
+                sleep(2)
+                return frontend_built_successfully(attempt=attempt + 1)
+            frontend_rebuilt = time() - frontend_built_at < 4
+            if not frontend_rebuilt:
+                sleep(2)  # wait a couple sec then try again (could still be building)
+                return frontend_built_successfully(attempt=attempt + 1)
+            return True
 
         if frontend_built_successfully():
             print(f"Successfully rebuilt frontend.")

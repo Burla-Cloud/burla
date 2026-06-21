@@ -519,6 +519,30 @@ class Node:
 
         uv venv --python 3.13 --seed
         uv pip install ./node_service
+
+        # Pre-populate the shared /worker_service_python_env so worker[0]'s boot doesn't
+        # have to download uv from GitHub and `uv pip install burla` over PyPI inside the
+        # container. We detect the python version from the first user container image
+        # because cp311/cp312/cp313 C-extension wheels (cryptography, aiohttp, …) are
+        # ABI-incompatible across cpython tags. Subshell makes the whole block best-effort:
+        # if the image is missing python or anything else trips, fall through and let
+        # worker_server.py run its own download path rather than killing the VM via the
+        # outer trap.
+        (
+            FIRST_IMAGE=$(echo "$CONTAINERS" | python3 -c \
+                'import json,sys; d=json.load(sys.stdin); print(d[0]["image"] if d else "")')
+            [ -n "$FIRST_IMAGE" ] || exit 0
+            docker pull "$FIRST_IMAGE" >/dev/null
+            PY_VERSION=$(docker run --rm --entrypoint python "$FIRST_IMAGE" -c \
+                'import sys; print(f"{{sys.version_info.major}}.{{sys.version_info.minor}}")')
+            mkdir -p /worker_service_python_env/bin
+            cp "$(command -v uv)" /worker_service_python_env/bin/uv
+            uv pip install \
+                --python-version "$PY_VERSION" \
+                --python-platform x86_64-manylinux2014 \
+                --target /worker_service_python_env \
+                "burla=={CURRENT_BURLA_VERSION}"
+        ) || true
         
         total_memory_kb=$(awk '/MemTotal/ {{print $2}}' /proc/meminfo)
         worker_memory_kb=$((total_memory_kb - {NODE_SERVICE_RESERVED_MEMORY_GB} * 1024 * 1024))

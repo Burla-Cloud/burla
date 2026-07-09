@@ -629,7 +629,7 @@ class WorkerClient:
                 SELF["reboot_containers_after_job"] = True
                 return (input_index, True, self._serialize_error(error))
 
-            old_parallelism = len(active_workers)
+            old_parallelism = len(other_active_workers) + 1
             new_parallelism = old_parallelism - 1
             self.retired = True
             self.is_idle = True

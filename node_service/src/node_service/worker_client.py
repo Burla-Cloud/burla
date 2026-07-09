@@ -609,10 +609,24 @@ class WorkerClient:
         error: WorkerOutOfMemoryError | WorkerProcessTerminatedError,
     ):
         async with SELF["dynamic_ram_lock"]:
-            active_workers = [worker for worker in SELF["workers"] if not worker.retired]
-            if len(active_workers) <= 1:
+            # A memory-pressure retirement already requeued this input (it
+            # clears current_input before killing the process). Requeueing or
+            # delivering here too would run the input twice.
+            if self.current_input is None:
+                return None
+            # The monitor loop may have already retired this worker when its
+            # process died (NoSuchProcess), so "terminal" means no OTHER
+            # active worker is left to retry the input.
+            other_active_workers = [
+                worker
+                for worker in SELF["workers"]
+                if not worker.retired and worker is not self
+            ]
+            if not other_active_workers:
                 if isinstance(error, WorkerOutOfMemoryError):
                     error = _dynamic_terminal_oom_error()
+                self.retired = True
+                SELF["reboot_containers_after_job"] = True
                 return (input_index, True, self._serialize_error(error))
 
             old_parallelism = len(active_workers)
@@ -695,6 +709,14 @@ class WorkerClient:
                     )
                     if result is None:
                         return
+                    # Terminal: no other worker is left to retry this input.
+                    # Deliver here, bypassing the `self.retired` early-return
+                    # below: the RAM monitor races this handler (it retires a
+                    # worker the moment its process disappears) and used to
+                    # win, swallowing the error and hanging the job.
+                    await SELF["results_queue"].put(result, len(result[2]))
+                    SELF["num_results_received"] += 1
+                    return
                 else:
                     if self.log_writer is not None:
                         await self.log_writer.write_error(input_index, self._traceback_string(error))

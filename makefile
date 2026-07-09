@@ -91,6 +91,7 @@ local-dev:
 	echo "Starting local dev"; \
 	docker network create local-burla-cluster 2>/dev/null || true; \
 	gcloud auth print-access-token > .temp_token.txt; \
+	CLUSTER_ID_TOKEN=$$(gcloud secrets versions access latest --secret=burla-cluster-id-token 2>/dev/null || echo local-dev-token); \
 	docker run --rm -it \
 		--name main_service \
 		--network local-burla-cluster \
@@ -99,6 +100,7 @@ local-dev:
 		-v /var/run/docker.sock:/var/run/docker.sock \
 		-e GOOGLE_CLOUD_PROJECT=$${PROJECT_ID} \
 		-e IN_LOCAL_DEV_MODE=True \
+		-e CLUSTER_ID_TOKEN=$${CLUSTER_ID_TOKEN} \
 		-e REDIRECT_LOCALLY_ON_LOGIN=True \
 		-e HOST_PWD=$(PWD) \
 		-e HOST_HOME_DIR=$${HOME} \

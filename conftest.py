@@ -32,7 +32,9 @@ import pytest
 DASHBOARD_URL = os.environ.get("BURLA_CLUSTER_DASHBOARD_URL", "http://localhost:5001")
 EXPECTED_GCP_PROJECT = os.environ.get("BURLA_TEST_PROJECT", "burla-test")
 READINESS_TIMEOUT_SEC = 30
-CLEAN_CLUSTER_TIMEOUT_SEC = 120
+# local-dev containers reset in ~20s; real VMs need minutes. Remote e2e runs
+# (BURLA_CLUSTER_DASHBOARD_URL pointed at a live cluster) should raise this.
+CLEAN_CLUSTER_TIMEOUT_SEC = int(os.environ.get("BURLA_CLEAN_CLUSTER_TIMEOUT_SEC", 120))
 
 
 def _port_open(host: str, port: int) -> bool:
@@ -41,6 +43,17 @@ def _port_open(host: str, port: int) -> bool:
             return True
     except OSError:
         return False
+
+
+def _request_headers() -> dict[str, str]:
+    """Burla auth headers when available. local-dev ignores them; a prod-mode
+    head (remote e2e runs) requires them on every endpoint."""
+    try:
+        from burla._auth import get_auth_headers
+
+        return get_auth_headers()
+    except Exception:
+        return {}
 
 
 def _main_service_reachable() -> bool:
@@ -85,7 +98,7 @@ def pytest_configure(config: pytest.Config) -> None:
 def _active_node_docs() -> list[dict[str, Any]]:
     import requests
 
-    resp = requests.get(f"{DASHBOARD_URL}/v1/cluster/nodes", timeout=5)
+    resp = requests.get(f"{DASHBOARD_URL}/v1/cluster/nodes", headers=_request_headers(), timeout=5)
     resp.raise_for_status()
     return resp.json()["nodes"]
 
@@ -222,7 +235,7 @@ def local_dev_cluster(burla_auth_headers) -> dict[str, Any]:
     last_err: str | None = None
     while time.time() < deadline:
         try:
-            resp = requests.get(f"{DASHBOARD_URL}/version", timeout=2)
+            resp = requests.get(f"{DASHBOARD_URL}/version", headers=_request_headers(), timeout=2)
             if resp.status_code == 200:
                 version_info = resp.json()
                 break
@@ -267,7 +280,9 @@ def _cluster_state_via_http() -> dict[str, Any]:
     import requests
 
     try:
-        resp = requests.get(f"{DASHBOARD_URL}/v1/cluster/state", timeout=5)
+        resp = requests.get(
+            f"{DASHBOARD_URL}/v1/cluster/state", headers=_request_headers(), timeout=5
+        )
         if resp.status_code == 200:
             return resp.json()
     except Exception:
@@ -293,7 +308,7 @@ def get_job_via_http(job_id: str) -> dict[str, Any] | None:
     """The job dict as the head sees it (in-memory, falling back to history)."""
     import requests
 
-    resp = requests.get(f"{DASHBOARD_URL}/v1/jobs/{job_id}", timeout=5)
+    resp = requests.get(f"{DASHBOARD_URL}/v1/jobs/{job_id}", headers=_request_headers(), timeout=5)
     if resp.status_code == 404:
         return None
     resp.raise_for_status()

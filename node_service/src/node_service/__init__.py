@@ -89,6 +89,10 @@ def REINIT_SELF(SELF):
     SELF["reserved_for_job"] = None
     SELF["watch_reservation_task"] = None
     SELF["SHUTTING_DOWN"] = False
+    # Populated from backend.burla.dev in reboot_containers; initialized so a
+    # request arriving before that fetch gets the middleware's re-fetch path
+    # (or a clean 401) instead of a KeyError 500.
+    SELF["authorized_users"] = []
     # State reported to / received from the head over the push exchange.
     SELF["reported_status"] = "BOOTING"
     SELF["client_contact_last_1s"] = True

@@ -4,7 +4,7 @@ import requests
 import textwrap
 import traceback
 from dataclasses import dataclass, asdict
-from requests.exceptions import ConnectionError, ConnectTimeout, Timeout
+from requests.exceptions import ConnectionError, ConnectTimeout, HTTPError, Timeout
 from time import sleep, time
 from uuid import uuid4
 from typing import Optional
@@ -199,7 +199,10 @@ class Node:
                 response = requests.get(f"{self.host}/", timeout=2, headers=self.auth_headers)
                 response.raise_for_status()
                 return response.json()["status"]
-            except (ConnectionError, ConnectTimeout, Timeout):
+            except (ConnectionError, ConnectTimeout, Timeout, HTTPError):
+                # Transient error responses during boot (e.g. a 500 while the
+                # service warms up) must not insta-fail the node; the boot
+                # timeout still bounds how long we wait.
                 if self.is_booting:
                     return "BOOTING"
                 else:

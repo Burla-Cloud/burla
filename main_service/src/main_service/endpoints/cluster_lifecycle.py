@@ -54,6 +54,13 @@ def _shutdown_cluster(logger: Logger, auth_headers: dict):
     [future.result() for future in futures]
     executor.shutdown(wait=True)
 
+    # FAILED tombstones exist so clients polling a mid-boot node can see the
+    # failure; once the whole cluster is torn down they're purely historical
+    # (and history already has them), so drop them from live state.
+    for node_dict in cluster_state.list_nodes():
+        if node_dict.get("status") == "FAILED":
+            cluster_state.remove_node(node_dict["instance_name"])
+
     _remove_local_dev_cluster_containers()
 
 

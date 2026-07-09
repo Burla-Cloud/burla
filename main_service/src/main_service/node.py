@@ -1,6 +1,7 @@
 import sys
 import json
 import requests
+import textwrap
 import traceback
 from dataclasses import dataclass, asdict
 from requests.exceptions import ConnectionError, ConnectTimeout, Timeout
@@ -218,7 +219,10 @@ class Node:
         if self.sync_bucket_name and self.sync_bucket_name != "None":
             mount_script = self.provider.mount_shared_workspace_script(self.sync_bucket_name)
 
-        return f"""
+        # cloud-init (EC2 user-data) only executes scripts whose shebang is at
+        # byte 0, so the indented template must be dedented + stripped. GCE's
+        # guest agent tolerates either form.
+        script = f"""
         #! /bin/bash
         set -Eeuo pipefail
 
@@ -251,7 +255,7 @@ class Node:
         # TODO: figure out why/if this doesn't work.
         mkdir -p /etc/docker
         jq '. + {{"max-concurrent-downloads": 32}}' /etc/docker/daemon.json 2>/dev/null || echo '{{}}' | jq '. + {{"max-concurrent-downloads": 32}}' > /etc/docker/daemon.json
-        killall -HUP dockerd || open -a Docker
+        killall -HUP dockerd || true
 
         # mount shared workspace bucket at /workspace/shared
         cd /
@@ -277,6 +281,10 @@ class Node:
         git fetch --depth=1 origin "{CURRENT_BURLA_VERSION}"
         git reset --hard FETCH_HEAD
 
+        # Node images ship a pre-warmed /opt/burla/.venv; newer uv refuses to
+        # overwrite an existing venv unless told to (older uv, as baked into
+        # the GCP images, ignores this env var and overwrites regardless).
+        export UV_VENV_CLEAR=1
         uv venv --python 3.13 --seed
         uv pip install ./node_service
 
@@ -337,10 +345,12 @@ class Node:
 
         journalctl -fu burla-node-service
         """
+        return textwrap.dedent(script).strip() + "\n"
 
     def __get_shutdown_script(self):
-        return f"""
+        script = f"""
         #! /bin/bash
         # Tell the node_service this VM is being shutdown so it can reassign inputs and stuff.
         curl -X POST "http://localhost:{self.port}/shutdown"
         """
+        return textwrap.dedent(script).strip() + "\n"

@@ -148,7 +148,15 @@ class AWSProvider:
 
         public_ip = None
         for _ in range(60):
-            description = ec2.describe_instances(InstanceIds=[instance_id])
+            try:
+                description = ec2.describe_instances(InstanceIds=[instance_id])
+            except ClientError as error:
+                # run_instances is eventually consistent: the new id can be
+                # invisible to describe_instances for a few seconds.
+                if error.response["Error"]["Code"] == "InvalidInstanceID.NotFound":
+                    sleep(2)
+                    continue
+                raise
             instance = description["Reservations"][0]["Instances"][0]
             public_ip = instance.get("PublicIpAddress")
             if public_ip:
@@ -164,7 +172,16 @@ class AWSProvider:
         cached = _instance_ids.pop(instance_name, None)
         if cached:
             instance_id, region = cached
-            self._ec2(region).terminate_instances(InstanceIds=[instance_id])
+            # A just-created id can be invisible for a few seconds (same
+            # eventual consistency as describe_instances in create_instance).
+            for attempt in range(5):
+                try:
+                    self._ec2(region).terminate_instances(InstanceIds=[instance_id])
+                    return
+                except ClientError as error:
+                    if error.response["Error"]["Code"] != "InvalidInstanceID.NotFound":
+                        raise
+                    sleep(3)
             return
         ec2 = self._ec2(self.region)
         response = ec2.describe_instances(

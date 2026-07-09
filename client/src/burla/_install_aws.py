@@ -358,7 +358,7 @@ def _register_cluster_and_save_token(spinner, project_id, region):
 def _latest_ubuntu_ami(region) -> str:
     return _aws(
         f"ssm get-parameter --region {region} "
-        f"--name /aws/service/canonical/ubuntu/server/22.04/stable/current/amd64/hvm/ebs-gp3/ami-id "
+        f"--name /aws/service/canonical/ubuntu/server/22.04/stable/current/amd64/hvm/ebs-gp2/ami-id "
         f'--query "Parameter.Value" --output json'
     )
 
@@ -396,15 +396,26 @@ def _ensure_node_ami(spinner, region, node_profile) -> str:
         )
     builder_id = instance["Instances"][0]["InstanceId"]
 
-    # The setup script powers the instance off when it finishes.
+    # run-instances is eventually consistent: an immediate describe/wait can
+    # get InvalidInstanceID.NotFound and abort, so wait for visibility first.
     run_command(
-        f"aws ec2 wait instance-stopped --region {region} --instance-ids {builder_id}",
+        f"aws ec2 wait instance-exists --region {region} --instance-ids {builder_id}",
         raise_error=False,
     )
-    state = _aws(
-        f"ec2 describe-instances --region {region} --instance-ids {builder_id} "
-        f'--query "Reservations[0].Instances[0].State.Name" --output json'
-    )
+    # The setup script powers the instance off when it finishes. One waiter
+    # round caps at 10 minutes; slow apt mirrors can exceed that.
+    state = None
+    for _ in range(3):
+        run_command(
+            f"aws ec2 wait instance-stopped --region {region} --instance-ids {builder_id}",
+            raise_error=False,
+        )
+        state = _aws(
+            f"ec2 describe-instances --region {region} --instance-ids {builder_id} "
+            f'--query "Reservations[0].Instances[0].State.Name" --output json'
+        )
+        if state == "stopped":
+            break
     if state != "stopped":
         spinner.fail("✗")
         raise Exception(
@@ -485,6 +496,10 @@ docker run -d --restart always --network host --name burla-main-service \\
             f"'ResourceType=instance,Tags=[{{Key=Name,Value=burla-main-service}}]'"
         )
     head_id = instance["Instances"][0]["InstanceId"]
+    run_command(
+        f"aws ec2 wait instance-exists --region {region} --instance-ids {head_id}",
+        raise_error=False,
+    )
     run_command(f"aws ec2 wait instance-running --region {region} --instance-ids {head_id}")
 
     # Stable public IP so the dashboard URL survives restarts.

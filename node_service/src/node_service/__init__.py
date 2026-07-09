@@ -13,17 +13,6 @@ import logging as python_logging
 from contextlib import asynccontextmanager
 from threading import Event
 
-# throws some uncatchable, unimportant, warnings
-python_logging.getLogger("google.api_core.bidi").setLevel(python_logging.ERROR)
-# prevent some annoying grpc logs / warnings
-os.environ["GRPC_VERBOSITY"] = "ERROR"  # only log ERROR/FATAL
-os.environ["GLOG_minloglevel"] = "2"  # 0-INFO, 1-WARNING, 2-ERROR, 3-FATAL
-
-import google.auth
-from google.auth.transport.requests import Request
-from google.cloud import logging, secretmanager
-from google.cloud.compute_v1 import InstancesClient
-from google.cloud.firestore_v1.async_client import AsyncClient
 import aiohttp
 from fastapi import FastAPI, Request, BackgroundTasks, Depends
 from fastapi.responses import Response
@@ -31,12 +20,16 @@ from starlette.requests import ClientDisconnect
 from starlette.datastructures import UploadFile
 
 
-__version__ = "1.5.10"
-CREDENTIALS, PROJECT_ID = google.auth.default()
+__version__ = "1.6.0"
+PROJECT_ID = os.environ["PROJECT_ID"]
 BURLA_BACKEND_URL = "https://backend.burla.dev"
 
-ASYNC_DB = AsyncClient(project=PROJECT_ID, database="burla")
 IN_LOCAL_DEV_MODE = os.environ.get("IN_LOCAL_DEV_MODE") == "True"  # Cluster running locally
+
+# The head (main_service). Every piece of cluster state this node reads or
+# writes goes through it over HTTP - there is no database here.
+MAIN_SERVICE_URL = os.environ["MAIN_SERVICE_URL"].rstrip("/")
+CLUSTER_ID_TOKEN = os.environ["CLUSTER_ID_TOKEN"]
 
 NUM_GPUS = int(os.environ.get("NUM_GPUS"))
 INSTANCE_NAME = os.environ["INSTANCE_NAME"]
@@ -44,12 +37,6 @@ _raw_inactivity = os.environ.get("INACTIVITY_SHUTDOWN_TIME_SEC")
 INACTIVITY_SHUTDOWN_TIME_SEC = int(_raw_inactivity) if _raw_inactivity is not None else None
 RESERVED_FOR_JOB = os.environ.get("RESERVED_FOR_JOB") or None
 INSTANCE_N_CPUS = 2 if IN_LOCAL_DEV_MODE else os.cpu_count()
-GCL_CLIENT = logging.Client().logger("node_service", labels=dict(INSTANCE_NAME=INSTANCE_NAME))
-
-secret_client = secretmanager.SecretManagerServiceClient()
-secret_name = f"projects/{PROJECT_ID}/secrets/burla-cluster-id-token/versions/latest"
-response = secret_client.access_secret_version(request={"name": secret_name})
-CLUSTER_ID_TOKEN = response.payload.data.decode("UTF-8")
 
 # Bind-mounted into every worker at burla.CONFIG_PATH so a UDF's nested
 # remote_parallel_map call finds its creds without a prior `burla login`.
@@ -64,6 +51,8 @@ from node_service.helpers import ResultsEndpointFilter, Logger, SizedQueue
 # memory usage at ~20k docs (<= 2 GB given the 100 KB per-doc cap
 # enforced in worker_client.py).
 MAX_PENDING_LOGS = 20_000
+
+STATE_PUSH_INTERVAL_SEC = 1
 
 
 # SELF = state of this current instance of the node service
@@ -100,6 +89,11 @@ def REINIT_SELF(SELF):
     SELF["reserved_for_job"] = None
     SELF["watch_reservation_task"] = None
     SELF["SHUTTING_DOWN"] = False
+    # State reported to / received from the head over the push exchange.
+    SELF["reported_status"] = "BOOTING"
+    SELF["client_contact_last_1s"] = True
+    SELF["job_view"] = None
+    SELF["host"] = None
 
 
 SELF = {}
@@ -162,6 +156,7 @@ def get_add_background_task_function(
 
 
 from node_service.helpers import Logger, format_traceback
+from node_service import head_client
 from node_service.job_endpoints import router as job_endpoints_router
 from node_service.lifecycle_endpoints import (
     reboot_containers,
@@ -185,23 +180,46 @@ async def shutdown_if_idle_for_too_long(logger: Logger):
 
     SELF["SHUTTING_DOWN"] = True
 
-    node_doc = ASYNC_DB.collection("nodes").document(INSTANCE_NAME)
-    snapshot = await node_doc.get()
-    if snapshot.exists and snapshot.to_dict().get("status") != "FAILED":
-        await node_doc.update({"status": "DELETED", "ended_at": time()})
+    if not SELF["FAILED"]:
+        SELF["reported_status"] = "DELETED"
+        await head_client.push_state(status="DELETED", ended_at=time())
 
     msg = f"Node has been idle for {INACTIVITY_SHUTDOWN_TIME_SEC // 60} minutes.\n"
     msg += f"SHUTTING DOWN NODE {INSTANCE_NAME} DUE TO INACTIVITY."
     await logger.log(msg, severity="WARNING")
 
-    instance_client = InstancesClient()
-    silly_response = instance_client.aggregated_list(project=PROJECT_ID)
-    vms_per_zone = [getattr(vms_in_zone, "instances", []) for _, vms_in_zone in silly_response]
-    vms = [vm for vms_in_zone in vms_per_zone for vm in vms_in_zone]
-    vm = next((vm for vm in vms if vm.name == INSTANCE_NAME), None)
-    if vm:
-        zone = vm.zone.split("/")[-1]
-        instance_client.delete(project=PROJECT_ID, zone=zone, instance=INSTANCE_NAME)
+    # The head owns cloud APIs; it deletes this VM.
+    await head_client.request_self_delete()
+
+
+async def _state_push_loop(logger: Logger):
+    """Continuous exchange with the head: reports status + job progress up,
+    carries `host` and the job signal set down. Replaces this service's
+    firestore writes and its per-job on_snapshot watch."""
+    consecutive_failures = 0
+    while True:
+        await asyncio.sleep(STATE_PUSH_INTERVAL_SEC)
+        if SELF["SHUTTING_DOWN"]:
+            continue
+        try:
+            # Progress only counts once the job watcher is live; registering
+            # it earlier would leave a stale progress entry behind if the
+            # assignment is rolled back before the watcher starts.
+            watcher_active = not SELF["job_watcher_stop_event"].is_set()
+            view = await head_client.push_state(
+                status=SELF["reported_status"],
+                include_job_progress=watcher_active,
+            )
+            consecutive_failures = 0
+            SELF["host"] = view.get("host")
+            if SELF["current_job"]:
+                head_client.apply_job_signals(view.get("job"))
+        except Exception as e:
+            consecutive_failures += 1
+            # The head being briefly down (restart/redeploy) is survivable -
+            # nodes keep working and re-sync on the next successful push.
+            if consecutive_failures in (1, 10, 60):
+                print(f"state push to head failed ({consecutive_failures}x): {e}")
 
 
 @asynccontextmanager
@@ -224,8 +242,10 @@ async def lifespan(app: FastAPI):
         msg = f"This node will shutdown if idle for {INACTIVITY_SHUTDOWN_TIME_SEC//60} minutes!"
         await logger.log(msg)
 
+    asyncio.create_task(_state_push_loop(logger=logger))
+
     # boot containers before accepting any requests.
-    # `reboot_containers` will delete VM's if it fails, no need to do that here.
+    # `reboot_containers` will ask the head to delete this VM if it fails, no need to do that here.
     containers = [c["image"] for c in json.loads(os.environ["CONTAINERS"])]
     await reboot_containers(new_container_config=containers, logger=logger)
 
@@ -234,22 +254,23 @@ async def lifespan(app: FastAPI):
 
 async def on_job_start(scope, first_event):
     # SELF is set synchronously so the middleware's next-request 409 guard and
-    # the execute endpoint's rollback (which reads SELF, not firestore) see the
-    # new state immediately. The firestore write happens in the background; the
-    # rollback awaits `on_job_start_task` so the two writes cannot race.
+    # the execute endpoint's rollback (which reads SELF, not the head) see the
+    # new state immediately. The head push happens in the background; the
+    # rollback awaits `on_job_start_task` so the two pushes cannot race.
     job_id = scope.get("path", "").split("/jobs/")[-1]
     SELF["RUNNING"] = True
     SELF["current_job"] = job_id
     SELF["reserved_for_job"] = None
-    # `_watch_reservation` is obsolete once assignment arrives - cancel so its
-    # firestore snapshot listener is torn down without writing a redundant clear
-    # (the node_doc.update below already clears `reserved_for_job`).
+    SELF["reported_status"] = "RUNNING"
+    SELF["job_view"] = None
+    # `_watch_reservation` is obsolete once assignment arrives - cancel it so
+    # it stops polling the head without writing a redundant clear (the push
+    # below already clears `reserved_for_job`).
     watch_task = SELF.get("watch_reservation_task")
     if watch_task and not watch_task.done():
         watch_task.cancel()
-    node_doc = ASYNC_DB.collection("nodes").document(INSTANCE_NAME)
-    update_fields = {"status": "RUNNING", "current_job": job_id, "reserved_for_job": None}
-    SELF["on_job_start_task"] = asyncio.create_task(node_doc.update(update_fields))
+    push = head_client.push_state(status="RUNNING", current_job=job_id, reserved_for_job=None)
+    SELF["on_job_start_task"] = asyncio.create_task(push)
 
 
 class CallHookOnJobStartMiddleware:
@@ -380,6 +401,7 @@ async def handle_errors(request: Request, call_next):
         if disconnected_mid_assign:
             SELF["RUNNING"] = False
             SELF["current_job"] = None
+            SELF["reported_status"] = "READY"
     except Exception as exception:
         # create new response object to return gracefully.
         response = Response(status_code=500, content="Internal server error.")
@@ -452,9 +474,9 @@ async def log_and_time_requests(request: Request, call_next):
     chatty_endpoint = request.url.path.endswith(("/results", "/ack_transfer", "/get_inputs"))
 
     logger = Logger(request)
-    # Don't use this ^ (except in `get_add_background_task_function`) because it logs to firestore
-    # and that can't be turned off without affecting other class instances currently because they
-    # all share a python logger.
+    # Don't use this ^ (except in `get_add_background_task_function`) because it forwards to the
+    # head's log store and that can't be turned off without affecting other class instances
+    # currently because they all share a python logger.
 
     try:
         response = await call_next(request)
@@ -473,13 +495,11 @@ async def log_and_time_requests(request: Request, call_next):
     is_non_2xx_response = response.status_code < 200 or response.status_code >= 300
     if is_non_2xx_response and hasattr(response, "body"):
         response_text = response.body.decode("utf-8", errors="ignore")
-        msg = f"non-2xx status response: {response.status_code}: {response_text}"
-        GCL_CLIENT.log_text(msg, severity="WARNING")
+        print(f"non-2xx status response: {response.status_code}: {response_text}")
     elif is_non_2xx_response and hasattr(response, "body_iterator"):
         body = b"".join([chunk async for chunk in response.body_iterator])
         response_text = body.decode("utf-8", errors="ignore")
-        msg = f"non-2xx status response: {response.status_code}: {response_text}"
-        GCL_CLIENT.log_text(msg, severity="WARNING")
+        print(f"non-2xx status response: {response.status_code}: {response_text}")
 
         async def body_stream():  #  <- it has to be ugly like this :(
             yield body
@@ -487,7 +507,6 @@ async def log_and_time_requests(request: Request, call_next):
         response.body_iterator = body_stream()
     elif response.status_code == 200 and not chatty_endpoint and not IN_LOCAL_DEV_MODE:
         latency = time() - start
-        msg = f"{request.method} to {request.url} returned 200 after {latency}s."
-        add_background_task(GCL_CLIENT.log_text, msg)
+        print(f"{request.method} to {request.url} returned 200 after {latency}s.")
 
     return response

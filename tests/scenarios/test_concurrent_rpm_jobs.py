@@ -17,7 +17,7 @@ pytestmark = [pytest.mark.e2e, pytest.mark.slow]
 
 
 def test_two_rpms_run_concurrently_each_on_its_own_node(
-    rpm_subprocess, local_dev_cluster, main_http_client, firestore_db
+    rpm_subprocess, local_dev_cluster, main_http_client
 ):
     state = main_http_client.get("/v1/cluster/state").json()
     if len(state["ready_nodes"]) < 2:
@@ -78,12 +78,10 @@ def test_two_rpms_run_concurrently_each_on_its_own_node(
     # No node should be stuck in FAILED after this.
     import time as _time
 
-    failed_nodes = [
-        d.to_dict() for d in firestore_db.collection("nodes").stream()
-        if (d.to_dict() or {}).get("status") == "FAILED"
-    ]
+    all_nodes = main_http_client.get("/v1/cluster/nodes").json()["nodes"]
     recent_failed = [
-        n for n in failed_nodes
-        if n.get("started_booting_at", 0) > _time.time() - 600
+        n for n in all_nodes
+        if n.get("status") == "FAILED"
+        and n.get("started_booting_at", 0) > _time.time() - 600
     ]
     assert not recent_failed, f"recent FAILED nodes after concurrent run: {recent_failed}"

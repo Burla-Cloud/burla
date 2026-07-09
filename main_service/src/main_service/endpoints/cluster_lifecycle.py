@@ -1,63 +1,29 @@
 import docker
-from datetime import datetime, timezone
 from time import time
-from typing import Optional
 
 from fastapi import APIRouter, Depends
-from google.cloud.firestore_v1.base_query import FieldFilter
-from google.cloud.compute_v1 import InstancesClient, MachineTypesClient
 from concurrent.futures import ThreadPoolExecutor
 
 from main_service import (
-    DB,
     IN_LOCAL_DEV_MODE,
     LOCAL_DEV_CONFIG,
     get_logger,
     get_auth_headers,
     get_add_background_task_function,
 )
+from main_service import cluster_state, history
 from main_service.node import Container, Node
+from main_service.providers import get_provider
 from main_service.helpers import Logger, log_telemetry
 
 router = APIRouter()
 MAX_GROW_CPUS = 2560
 LOCAL_DEV_MAX_GROW_CPUS = 4
 
-# Nodes booted by /v1/cluster/grow always get a short inactivity timeout
+# Nodes booted by the grow path always get a short inactivity timeout
 # regardless of the cluster-config value, so a burst-scaled job doesn't leave
 # expensive hardware sitting idle long after the job finishes.
 GROW_INACTIVITY_SHUTDOWN_TIME_SEC = 60
-
-# Priced n4-standard sizes the dashboard exposes, largest first. n4-standard-48
-# is intentionally omitted to match `main_service/frontend/src/types/constants.ts`
-# (pricing isn't defined for it), so grow never provisions an unpriced size.
-N4_STANDARD_SIZES_DESCENDING = (80, 64, 32, 16, 8, 4, 2)
-
-
-def _machine_type_cpu_count(machine_type: str) -> int:
-    if machine_type.startswith("n4-standard-") and machine_type.split("-")[-1].isdigit():
-        return int(machine_type.split("-")[-1])
-    return 1
-
-
-def _pack_n4_standard_machines(num_cpus: int) -> list[str]:
-    """
-    Pick n4-standard machine types that cover `num_cpus`, greedily using as
-    many of the largest size as possible and covering any remainder with the
-    smallest size that fits. e.g. 95 -> [n4-standard-80, n4-standard-16].
-    """
-    machines = []
-    largest = N4_STANDARD_SIZES_DESCENDING[0]
-    remaining = num_cpus
-    while remaining >= largest:
-        machines.append(f"n4-standard-{largest}")
-        remaining -= largest
-    if remaining > 0:
-        for size in reversed(N4_STANDARD_SIZES_DESCENDING):
-            if size >= remaining:
-                machines.append(f"n4-standard-{size}")
-                break
-    return machines
 
 
 def _remove_local_dev_cluster_containers():
@@ -78,12 +44,12 @@ def _remove_local_dev_cluster_containers():
 def _shutdown_cluster(logger: Logger, auth_headers: dict):
     futures = []
     executor = ThreadPoolExecutor(max_workers=32)
-    instance_client = InstancesClient()
+    provider = get_provider()
 
-    node_filter = FieldFilter("status", "in", ["READY", "BOOTING", "RUNNING"])
-    active_nodes = list(DB.collection("nodes").where(filter=node_filter).stream())
-    for node_snapshot in active_nodes:
-        node = Node.from_snapshot(DB, logger, node_snapshot, auth_headers, instance_client)
+    active_statuses = ("READY", "BOOTING", "RUNNING")
+    active_nodes = [n for n in cluster_state.list_nodes() if n.get("status") in active_statuses]
+    for node_dict in active_nodes:
+        node = Node.from_state(logger, node_dict, auth_headers, provider)
         futures.append(executor.submit(node.delete))
     [future.result() for future in futures]
     executor.shutdown(wait=True)
@@ -93,10 +59,11 @@ def _shutdown_cluster(logger: Logger, auth_headers: dict):
 
 def _current_local_dev_max_node_port():
     max_port = 8080
-    node_filter = FieldFilter("status", "in", ["READY", "BOOTING", "RUNNING"])
-    active_nodes = list(DB.collection("nodes").where(filter=node_filter).stream())
-    for node_snapshot in active_nodes:
-        host = str(node_snapshot.to_dict().get("host") or "")
+    active_statuses = ("READY", "BOOTING", "RUNNING")
+    for node in cluster_state.list_nodes():
+        if node.get("status") not in active_statuses:
+            continue
+        host = str(node.get("host") or "")
         if ":" not in host:
             continue
         port = host.rsplit(":", 1)[-1]
@@ -106,28 +73,9 @@ def _current_local_dev_max_node_port():
 
 
 def _get_cluster_config():
-    """
-    Returns the current cluster_config dict.
-
-    Hot path: served from `CLUSTER_CONFIG_CACHE`, kept in sync by a firestore
-    on_snapshot listener started in `lifespan`. Cold path (listener hasn't
-    fired yet): one direct firestore read. The doc is guaranteed to exist
-    by then - main_service seeds it synchronously at module import.
-    """
-    # Importing here to pick up the latest module-level value (the cache is
-    # updated in place by the snapshot thread) and to avoid an import cycle
-    # from __init__.py -> this module at import time.
-    from main_service import CLUSTER_CONFIG_CACHE, _config_cache_lock
-
     if IN_LOCAL_DEV_MODE:
         return LOCAL_DEV_CONFIG
-    with _config_cache_lock:
-        cached = CLUSTER_CONFIG_CACHE
-    if cached is not None:
-        return cached
-
-    # First-call fallback while the snapshot listener is still warming up.
-    return DB.collection("cluster_config").document("cluster_config").get().to_dict()
+    return history.get_cluster_config()
 
 
 def _start_nodes(
@@ -139,13 +87,12 @@ def _start_nodes(
     reserved_for_job: str = None,
     node_machine_types: list[str] = None,
     containers_override: list[dict] = None,
-    inactivity_shutdown_time_sec_override: Optional[int] = None,
+    inactivity_shutdown_time_sec_override: int | None = None,
 ):
     node_service_port = _current_local_dev_max_node_port()
     futures = []
     executor = ThreadPoolExecutor(max_workers=32)
-    instance_client = InstancesClient()
-    machine_types_client = MachineTypesClient()
+    provider = get_provider()
 
     def _add_node_logged(**node_start_kwargs):
         return Node.start(**node_start_kwargs).instance_name
@@ -168,17 +115,14 @@ def _start_nodes(
                 else node_spec.get("inactivity_shutdown_time_sec")
             )
             node_start_kwargs = dict(
-                db=DB,
                 logger=logger,
                 machine_type=machine_type,
-                gcp_region=node_spec["gcp_region"],
+                region=node_spec["gcp_region"],
                 containers=[Container.from_dict(c) for c in spec_containers],
                 auth_headers=auth_headers,
-                instance_client=instance_client,
-                machine_types_client=machine_types_client,
+                provider=provider,
                 service_port=node_service_port,
-                sync_gcs_bucket_name=config["gcs_bucket_name"],
-                as_local_container=IN_LOCAL_DEV_MODE,
+                sync_bucket_name=config["gcs_bucket_name"],
                 inactivity_shutdown_time_sec=inactivity_timeout,
                 disk_size=node_spec.get("disk_size_gb"),
                 instance_name=instance_name,
@@ -209,31 +153,26 @@ def _start_nodes(
 def _mark_running_jobs_with_lifecycle_event(event: str, message: str):
     """
     Runs synchronously in the restart/shutdown endpoints so clients see a
-    definitive lifecycle signal via their firestore log listener before their
-    nodes start going away and producing infrastructure errors.
+    definitive lifecycle signal (riding the next /results response from their
+    nodes) before those nodes start going away and producing infrastructure
+    errors.
     """
-    status_filter = FieldFilter("status", "==", "RUNNING")
-    running_jobs = list(DB.collection("jobs").where(filter=status_filter).stream())
-    if not running_jobs:
+    running_job_ids = cluster_state.running_job_ids()
+    if not running_job_ids:
         return
-    timestamp = datetime.now(timezone.utc)
+    timestamp = time()
     log_doc = {
         "logs": [{"message": message, "timestamp": timestamp}],
         "timestamp": timestamp,
         "is_error": True,
         "event": event,
     }
-    # The client raises the matching exception the moment it sees the bool on
-    # /results (see Node._gather_results), so write it on the same update as the
-    # status change. Writes happen before VM teardown in _shutdown_cluster, so
-    # the doc is authoritative if a node vanishes mid-poll.
     extra = (
         {"cluster_restarted": True} if event == "cluster_restarted" else {"cluster_shutdown": True}
     )
-    for job_snapshot in running_jobs:
-        job_ref = job_snapshot.reference
-        job_ref.collection("logs").add(log_doc)
-        job_ref.update({"status": "CANCELED", **extra})
+    for job_id in running_job_ids:
+        history.add_job_logs(job_id, [log_doc])
+        cluster_state.update_job(job_id, {"status": "CANCELED", **extra})
 
 
 def _restart_cluster(logger: Logger, auth_headers: dict):

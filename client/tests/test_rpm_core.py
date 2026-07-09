@@ -161,27 +161,23 @@ def test_max_parallelism_one_runs_serially(rpm_subprocess, local_dev_cluster):
 
 # -------------------------------------------------------------------- section 4 (detach)
 
-def test_detach_runs_and_eventually_completes_in_firestore(
-    rpm_subprocess, local_dev_cluster, firestore_db, wait_for_fixture
+def test_detach_runs_and_eventually_completes(
+    rpm_subprocess, local_dev_cluster, main_http_client, wait_for_fixture
 ):
     source = "def test_function(x):\n    return x + 1\n"
     result = rpm_subprocess(source, list(range(4)), timeout_seconds=60, detach=True)
     # detach returns None (no outputs captured locally for background jobs).
     assert result["ok"]
-    # Wait for the job to become COMPLETED in firestore.
+    # Wait for the job to reach a terminal state on the head.
     # We can't know the exact job_id from the subprocess without extra plumbing,
-    # but there should be at least one test_function-* job recently completed.
+    # but there should be at least one test_function-* job recently finished.
     def _done():
-        jobs = (
-            firestore_db.collection("jobs")
-            .where(filter=__import__("google.cloud.firestore_v1.base_query", fromlist=["FieldFilter"]).FieldFilter("function_name", "==", "test_function"))
-            .limit(10)
-            .stream()
-        )
-        for doc in jobs:
-            data = doc.to_dict()
-            if data.get("status") in {"COMPLETED", "CANCELED", "FAILED"}:
-                return data
+        jobs = main_http_client.get("/v1/jobs?page=0").json()["jobs"]
+        for job in jobs:
+            if job.get("function_name") != "test_function":
+                continue
+            if job.get("status") in {"COMPLETED", "CANCELED", "FAILED"}:
+                return job
         return None
 
     # Give the cluster up to 45s to finalize the detached job.

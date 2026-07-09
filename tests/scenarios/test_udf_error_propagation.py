@@ -3,13 +3,11 @@ Scenario 4: UDF error propagation end-to-end.
 
 A UDF raises `ValueError` on a specific input. The client must receive it
 with `exc.burla_input_index` set, the traceback preserved via `tblib`, a
-Python 3.11+ `__notes__` entry, and a matching `is_error: True` log doc in
-Firestore.
+Python 3.11+ `__notes__` entry, and a matching error log recorded by the
+head (visible via the jobs HTTP API).
 """
 
 from __future__ import annotations
-
-import time
 
 import pytest
 
@@ -19,7 +17,7 @@ pytestmark = pytest.mark.e2e
 def test_udf_error_propagation(
     rpm_subprocess,
     local_dev_cluster,
-    firestore_db,
+    main_http_client,
     wait_for_fixture,
 ):
     source = (
@@ -43,37 +41,25 @@ def test_udf_error_propagation(
     # Python 3.11+ note attached for visibility.
     assert "[burla] failed on input index 7" in tb
 
-    # Firestore: find the matching job and check its logs subcollection has an
-    # is_error=True doc tagged with input_index=7.
-    from google.cloud.firestore_v1.base_query import FieldFilter
-
-    def _error_log():
-        docs = (
-            firestore_db.collection("jobs")
-            .where(filter=FieldFilter("function_name", "==", "test_function"))
-            .stream()
-        )
-        for job_doc in docs:
-            job = job_doc.to_dict()
-            if not job or job.get("status") == "COMPLETED":
+    # Head-visible: find the matching job and check input_index=7 is recorded
+    # as a failed index (i.e. an is_error log landed for it).
+    def _failed_indexes():
+        jobs = main_http_client.get("/v1/jobs?page=0").json()["jobs"]
+        for job in jobs:
+            if job.get("function_name") != "test_function":
                 continue
-            logs = (
-                firestore_db.collection("jobs")
-                .document(job_doc.id)
-                .collection("logs")
-                .where(filter=FieldFilter("is_error", "==", True))
-                .stream()
-            )
-            for log in logs:
-                data = log.to_dict() or {}
-                if data.get("input_index") == 7:
-                    return data
+            if job.get("status") == "COMPLETED":
+                continue
+            resp = main_http_client.get(f"/v1/jobs/{job['jobId']}/logged-input-indexes")
+            indexes = resp.json()
+            if 7 in indexes["failed_indexes"]:
+                return indexes
         return None
 
-    err_log = wait_for_fixture(
-        _error_log,
+    indexes = wait_for_fixture(
+        _failed_indexes,
         timeout=30,
-        message="no is_error=True log doc for input_index=7",
+        message="no error log recorded for input_index=7",
     )
-    assert err_log["is_error"] is True
-    assert err_log["input_index"] == 7
+    assert 7 in indexes["failed_indexes"]
+    assert 7 not in indexes["non_failed_indexes_with_logs"]

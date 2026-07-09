@@ -42,7 +42,7 @@ Switching modes on a running VM: stop the foreground make command in the VM shel
 | Mode | Nodes | Hot-reload | GCP cost | When to use |
 |------|-------|-----------|----------|-------------|
 | `local-dev` | 2x `n4-standard-2` docker containers on the same VM | `main_service` + `node_service` + `worker_service` | VM only | Default. Fast loop, no cluster to babysit. |
-| `remote-dev` | Real GCE VMs in the agent's project, sized from the firestore `cluster_config` | `main_service` only (node/worker code is pinned to `CURRENT_BURLA_VERSION` on public GitHub) | VM + worker VMs | Reproducing bugs that only surface with real VM cold-starts, GPU images, multi-node grow/shrink, or real firewall/IAM paths. |
+| `remote-dev` | Real GCE VMs in the agent's project, sized from the cluster config in the head's history db | `main_service` only (node/worker code is pinned to `CURRENT_BURLA_VERSION` on public GitHub) | VM + worker VMs | Reproducing bugs that only surface with real VM cold-starts, GPU images, multi-node grow/shrink, or real firewall/IAM paths. |
 
 Caveats for `remote-dev`:
 

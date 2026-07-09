@@ -1,7 +1,7 @@
 """
 Async HTTP client for the endpoints `main_service` exposes for the burla
 client. This is all the state-mutation / state-read the client does against
-the cluster; firestore is never touched from the client directly.
+the cluster.
 
 Each method maps one-to-one to a main_service endpoint.
 """
@@ -208,11 +208,7 @@ class ClusterClient:
     # ---------- cluster / nodes ----------
 
     async def get_cluster_state(self) -> dict:
-        """
-        Returns {booting_count, running_count, ready_nodes: [...]}. Replaces
-        the three separate `where(status == ...)` firestore queries the
-        client used to make.
-        """
+        """Returns {booting_count, running_count, ready_nodes: [...]}."""
         state = await self._request("GET", "/v1/cluster/state")
         return state or {"booting_count": 0, "running_count": 0, "ready_nodes": []}
 

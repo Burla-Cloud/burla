@@ -126,12 +126,11 @@ async def _job_lifecycle_exception(client: ClusterClient, job_id: str):
 def _job_diagnostic_summary(job_dict: dict | None) -> str | None:
     if job_dict is None:
         return None
-    heartbeat_at = job_dict.get("client_heartbeat_at")
     status = job_dict.get("status")
     all_inputs_uploaded = job_dict.get("all_inputs_uploaded")
     client_has_all_results = job_dict.get("client_has_all_results")
     return (
-        f"Job diagnostics: status={status}, client_heartbeat_at={heartbeat_at}, "
+        f"Job diagnostics: status={status}, "
         f"all_inputs_uploaded={all_inputs_uploaded}, client_has_all_results={client_has_all_results}"
     )
 
@@ -395,7 +394,7 @@ async def _execute_job(
             if (time() - start_time) >= 5 and current_hosts and hosts_changed:
                 if ping_process is not None:
                     ping_process.kill()
-                ping_process = await run_in_subprocess(send_alive_pings, list(current_hosts), job_id)
+                ping_process = await run_in_subprocess(send_alive_pings, list(current_hosts))
                 pinged_hosts = current_hosts
 
             if ping_process and ping_process.poll():

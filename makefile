@@ -15,9 +15,6 @@ define UV_ZSH_ENV
 	ZDOTDIR=$$tmp_dir uv run --project $(PROJECT_ABS) --group $(2) zsh -i
 endef
 
-# make/cluster_dashboard_dev_state.py (delete_booting_nodes only)
-BURLA_MAKE_PYTHON := uv run --project ./client python make/cluster_dashboard_dev_state.py
-
 .PHONY: 3.11-dev 3.12-dev 3.13-dev 3.14-dev 3.11-jupyter 3.12-jupyter 3.13-jupyter 3.14-jupyter
 
 3.11-dev:
@@ -58,12 +55,13 @@ test-e2e:
 test-chaos:
 	uv run --project ./client --group dev pytest -m chaos -s --disable-warnings
 
-# remove all booting nodes from DB (only run in local-dev mode)
+# kill all local-dev cluster containers. Cluster state lives inside the
+# main_service process, so there is nothing else to clean up.
 stop:
 	set -e; \
-	PROJECT_ID=$$(gcloud config get-value project 2>/dev/null); \
-	export PROJECT_ID=$${PROJECT_ID}; \
-	$(BURLA_MAKE_PYTHON) delete_booting_nodes
+	ids=$$(docker ps -a --format '{{.Names}} {{.ID}}' | awk '$$1 ~ /^(node_|worker_|OLD--)/ {print $$2}'); \
+	if [ -n "$$ids" ]; then docker rm -f $$ids; fi; \
+	echo "Removed all node_* / worker_* containers."
 
 
 # start ONLY the main service, in local dev mode
@@ -114,18 +112,24 @@ local-dev:
 			--timeout-graceful-shutdown 0
 
 # Only the `main_service` is run locally, nodes are started as GCE VM's in the test cloud.
-# Uses cluster config from firestore doc: `/databases/burla/cluster_config/cluster_config`
+# Uses the cluster config stored in the head's history db (a fresh one is
+# seeded on first boot). CLUSTER_ID_TOKEN comes from Secret Manager, where
+# `burla install` registers it (the client's ADC login path reads it there).
 remote-dev:
 	set -e; \
 	PROJECT_ID=$$(gcloud config get-value project 2>/dev/null); \
+	CLUSTER_ID_TOKEN=$$(gcloud secrets versions access latest --secret=burla-cluster-id-token); \
 	IMAGE_NAME=$$( echo \
 		"us-docker.pkg.dev/$${PROJECT_ID}/burla-main-service/burla-main-service:latest" \
 	); \
+	mkdir -p ./_history_db; \
 	docker run --rm -it \
 		--name main_service \
 		-v $(PWD)/main_service:/burla/main_service \
+		-v $(PWD)/_history_db:/var/lib/burla \
 		-v ~/.config/gcloud:/root/.config/gcloud \
 		-e GOOGLE_CLOUD_PROJECT=$${PROJECT_ID} \
+		-e CLUSTER_ID_TOKEN=$${CLUSTER_ID_TOKEN} \
 		-e REDIRECT_LOCALLY_ON_LOGIN=True \
 		-p 5001:5001 \
 		--entrypoint python \

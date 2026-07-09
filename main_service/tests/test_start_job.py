@@ -141,11 +141,11 @@ def test_start_job_insufficient_capacity_func_cpu_too_high(
 
 
 def test_start_job_grow_returns_booting_nodes_when_deficit(
-    main_http_client, local_dev_cluster, isolated_job_id, cleanup_job, firestore_db
+    main_http_client, local_dev_cluster, isolated_job_id, cleanup_job
 ):
     """Asking for more parallelism than the cluster has, with grow=True,
     should schedule new nodes."""
-    # Ask for parallelism=10 with grow=True — should get booting_nodes back.
+    # Ask for parallelism=10 with grow=True: should get booting_nodes back.
     job_id = cleanup_job(isolated_job_id())
     config = _base_config(n_inputs=10, max_parallelism=10, grow=True, image="python:3.12")
     resp = main_http_client.post(f"/v1/jobs/{job_id}/start", json=config)
@@ -156,27 +156,13 @@ def test_start_job_grow_returns_booting_nodes_when_deficit(
         assert "ready_nodes" in body
         assert "booting_nodes" in body
 
-    # Clean up any nodes the grow booted.
-    time.sleep(1)
-    try:
-        from google.cloud.firestore_v1.base_query import FieldFilter
-
-        docs = (
-            firestore_db.collection("nodes")
-            .where(filter=FieldFilter("reserved_for_job", "==", job_id))
-            .stream()
-        )
-        for doc in docs:
-            try:
-                doc.reference.delete()
-            except Exception:
-                pass
-    except Exception:
-        pass
+    # No explicit cleanup: grow-booted nodes carry the 60s grow inactivity
+    # timeout and self-delete since this job never assigns them; the
+    # local_dev_cluster gate restarts the cluster if any linger dirty.
 
 
 def test_start_job_writes_job_doc(
-    main_http_client, local_dev_cluster, isolated_job_id, cleanup_job, firestore_db,
+    main_http_client, local_dev_cluster, isolated_job_id, cleanup_job, get_job,
     wait_for_fixture,
 ):
     job_id = cleanup_job(isolated_job_id())
@@ -186,11 +172,9 @@ def test_start_job_writes_job_doc(
     if resp.status_code != 200:
         pytest.skip(f"start_job returned {resp.status_code}, skipping doc-check")
 
-    def _has_doc():
-        doc = firestore_db.collection("jobs").document(job_id).get()
-        return doc.to_dict() if doc.exists else None
-
-    doc = wait_for_fixture(_has_doc, timeout=10, message="job doc never appeared")
+    doc = wait_for_fixture(
+        lambda: get_job(job_id), timeout=10, message="job doc never appeared"
+    )
     assert doc["function_name"] == "test_function"
     assert doc["n_inputs"] == 3
     assert doc["func_cpu"] == 1
@@ -199,7 +183,7 @@ def test_start_job_writes_job_doc(
 
 
 def test_start_job_dynamic_func_ram_writes_raw_setting(
-    main_http_client, local_dev_cluster, isolated_job_id, cleanup_job, firestore_db,
+    main_http_client, local_dev_cluster, isolated_job_id, cleanup_job, get_job,
     wait_for_fixture,
 ):
     job_id = cleanup_job(isolated_job_id())
@@ -207,17 +191,13 @@ def test_start_job_dynamic_func_ram_writes_raw_setting(
     if resp.status_code != 200:
         pytest.skip(f"start_job returned {resp.status_code}")
 
-    def _has_doc():
-        doc = firestore_db.collection("jobs").document(job_id).get()
-        return doc.to_dict() if doc.exists else None
-
-    doc = wait_for_fixture(_has_doc, timeout=10)
+    doc = wait_for_fixture(lambda: get_job(job_id), timeout=10)
     assert doc["func_ram"] == "dynamic"
     assert doc["target_parallelism"] >= 1
 
 
 def test_start_job_job_doc_includes_burla_client_version(
-    main_http_client, local_dev_cluster, isolated_job_id, cleanup_job, firestore_db,
+    main_http_client, local_dev_cluster, isolated_job_id, cleanup_job, get_job,
     wait_for_fixture,
 ):
     import burla
@@ -227,9 +207,5 @@ def test_start_job_job_doc_includes_burla_client_version(
     if resp.status_code != 200:
         pytest.skip(f"start_job returned {resp.status_code}")
 
-    def _has_doc():
-        doc = firestore_db.collection("jobs").document(job_id).get()
-        return doc.to_dict() if doc.exists else None
-
-    doc = wait_for_fixture(_has_doc, timeout=10)
+    doc = wait_for_fixture(lambda: get_job(job_id), timeout=10)
     assert doc["burla_client_version"] == burla.__version__

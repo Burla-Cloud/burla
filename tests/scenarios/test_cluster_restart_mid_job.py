@@ -20,7 +20,6 @@ pytestmark = [pytest.mark.chaos, pytest.mark.slow]
 def test_cluster_restart_mid_job(
     rpm_subprocess,
     local_dev_cluster,
-    firestore_db,
     main_http_client,
     wait_for_fixture,
 ):
@@ -62,18 +61,14 @@ def test_cluster_restart_mid_job(
         "JobStalled",
     ), f"unexpected exception {result['exception_type']}: {result['exception_message']}"
 
-    # Firestore: at least one test_function job should have cluster_restarted=True.
-    from google.cloud.firestore_v1.base_query import FieldFilter
-
+    # Head-visible: at least one test_function job should have cluster_restarted=True.
     def _restarted_job():
-        docs = (
-            firestore_db.collection("jobs")
-            .where(filter=FieldFilter("function_name", "==", "test_function"))
-            .stream()
-        )
+        jobs = main_http_client.get("/v1/jobs?page=0").json()["jobs"]
         most_recent = None
-        for doc in docs:
-            data = doc.to_dict()
+        for summary in jobs:
+            if summary.get("function_name") != "test_function":
+                continue
+            data = main_http_client.get(f"/v1/jobs/{summary['jobId']}").json()
             if data.get("cluster_restarted") is True:
                 if most_recent is None or data.get("started_at", 0) > most_recent.get("started_at", 0):
                     most_recent = data

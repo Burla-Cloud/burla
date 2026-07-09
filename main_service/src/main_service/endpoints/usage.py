@@ -1,13 +1,10 @@
-import re
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Request, HTTPException
-from google.cloud import firestore
-from google.cloud.firestore_v1.base_query import FieldFilter
-from google.cloud.firestore_v1.field_path import FieldPath
 
-from main_service import DB
+from main_service import history
+from main_service.providers.catalog import machine_type_cpu_count
 
 router = APIRouter()
 
@@ -105,15 +102,8 @@ def _quantize_hours(hours: float, decimals: int = 6) -> float:
     return round(value, decimals)
 
 
-_N4_RE = re.compile(r"^n4-standard-(\d+)$")
-
-
 def _cpu_hour_multiplier(machine_type: str) -> int:
-    match = _N4_RE.match(str(machine_type or ""))
-    if not match:
-        return 1
-    vcpu = int(match.group(1))
-    return vcpu if vcpu > 0 else 1
+    return machine_type_cpu_count(str(machine_type or ""))
 
 
 @router.get("/v1/nodes/monthly_hours")
@@ -156,73 +146,50 @@ def nodes_monthly_hours(
     buckets: dict[str, dict[str, float]] = {mk: {} for mk in month_keys}
     compute_buckets: dict[str, dict[str, float]] = {mk: {} for mk in month_keys}
 
-    last_doc = None
-    scanned = 0
-    max_scan = 20000
+    ended_nodes = history.nodes_ended_after(cutoff_sec)
 
-    while True:
-        query = (
-            DB.collection("nodes")
-            .where(filter=FieldFilter("ended_at", ">=", cutoff_sec))
-            .order_by("ended_at", direction=firestore.Query.DESCENDING)
-        )
-        if last_doc is not None:
-            query = query.start_after(last_doc)
+    for data in ended_nodes:
+        ended_raw = data.get("ended_at")
+        started_raw = data.get("started_at") or data.get("started_booting_at")
+        if ended_raw is None or started_raw is None:
+            continue
 
-        docs = list(query.limit(500).stream())
-        if not docs:
-            break
+        start_dt = _as_utc_datetime(started_raw)
+        end_dt = _as_utc_datetime(ended_raw)
+        if not start_dt or not end_dt or end_dt <= start_dt:
+            continue
 
-        last_doc = docs[-1]
-        scanned += len(docs)
+        machine_type = data.get("machine_type")
+        gcp_region = data.get("gcp_region")
+        spot_bool = bool(data.get("spot")) if data.get("spot") is not None else False
+        if not machine_type or not gcp_region:
+            continue
 
-        for doc in docs:
-            data = doc.to_dict() or {}
+        group_key = f"{machine_type}|{gcp_region}|{1 if spot_bool else 0}"
+        mult = _cpu_hour_multiplier(machine_type)
 
-            ended_raw = data.get("ended_at")
-            started_raw = data.get("started_at") or data.get("started_booting_at")
-            if ended_raw is None or started_raw is None:
-                continue
+        window_start = max(start_dt, start_month_dt)
+        window_end = min(end_dt, end_boundary)
+        if window_end <= window_start:
+            continue
 
-            start_dt = _as_utc_datetime(started_raw)
-            end_dt = _as_utc_datetime(ended_raw)
-            if not start_dt or not end_dt or end_dt <= start_dt:
-                continue
-
-            machine_type = data.get("machine_type")
-            gcp_region = data.get("gcp_region")
-            spot_bool = bool(data.get("spot")) if data.get("spot") is not None else False
-            if not machine_type or not gcp_region:
-                continue
-
-            group_key = f"{machine_type}|{gcp_region}|{1 if spot_bool else 0}"
-            mult = _cpu_hour_multiplier(machine_type)
-
-            window_start = max(start_dt, start_month_dt)
-            window_end = min(end_dt, end_boundary)
-            if window_end <= window_start:
-                continue
-
-            month_cursor = _month_start(window_start)
-            while month_cursor < window_end:
-                next_month = _add_months(month_cursor, 1)
-                seg_start = max(window_start, month_cursor)
-                seg_end = min(window_end, next_month)
-                if seg_end > seg_start:
-                    raw_hours = (seg_end - seg_start).total_seconds() / 3600.0
-                    month_label = _month_key(month_cursor)
-                    if month_label in buckets:
-                        buckets[month_label][group_key] = (
-                            buckets[month_label].get(group_key, 0.0) + raw_hours
-                        )
-                    if month_label in compute_buckets:
-                        compute_buckets[month_label][group_key] = (
-                            compute_buckets[month_label].get(group_key, 0.0) + (raw_hours * mult)
-                        )
-                month_cursor = next_month
-
-        if scanned >= max_scan:
-            break
+        month_cursor = _month_start(window_start)
+        while month_cursor < window_end:
+            next_month = _add_months(month_cursor, 1)
+            seg_start = max(window_start, month_cursor)
+            seg_end = min(window_end, next_month)
+            if seg_end > seg_start:
+                raw_hours = (seg_end - seg_start).total_seconds() / 3600.0
+                month_label = _month_key(month_cursor)
+                if month_label in buckets:
+                    buckets[month_label][group_key] = (
+                        buckets[month_label].get(group_key, 0.0) + raw_hours
+                    )
+                if month_label in compute_buckets:
+                    compute_buckets[month_label][group_key] = (
+                        compute_buckets[month_label].get(group_key, 0.0) + (raw_hours * mult)
+                    )
+            month_cursor = next_month
 
     months_out = []
     grand_total_raw = 0.0
@@ -274,8 +241,7 @@ def nodes_monthly_hours(
         },
         "meta": {
             "hours_precision_decimals": 6,
-            "scanned": scanned,
-            "max_scan": max_scan,
+            "scanned": len(ended_nodes),
         },
     }
 
@@ -302,71 +268,48 @@ def nodes_daily_hours(
     buckets: dict[str, dict[str, float]] = {dk: {} for dk in day_keys}
     compute_buckets: dict[str, dict[str, float]] = {dk: {} for dk in day_keys}
 
-    last_doc = None
-    scanned = 0
-    max_scan = 20000
+    ended_nodes = history.nodes_ended_after(cutoff_sec)
 
-    while True:
-        query = (
-            DB.collection("nodes")
-            .where(filter=FieldFilter("ended_at", ">=", cutoff_sec))
-            .order_by("ended_at", direction=firestore.Query.DESCENDING)
-        )
-        if last_doc is not None:
-            query = query.start_after(last_doc)
+    for data in ended_nodes:
+        ended_raw = data.get("ended_at")
+        started_raw = data.get("started_at") or data.get("started_booting_at")
+        if ended_raw is None or started_raw is None:
+            continue
 
-        docs = list(query.limit(500).stream())
-        if not docs:
-            break
+        start_dt = _as_utc_datetime(started_raw)
+        end_dt = _as_utc_datetime(ended_raw)
+        if not start_dt or not end_dt or end_dt <= start_dt:
+            continue
 
-        last_doc = docs[-1]
-        scanned += len(docs)
+        machine_type = data.get("machine_type")
+        gcp_region = data.get("gcp_region")
+        spot_bool = bool(data.get("spot")) if data.get("spot") is not None else False
+        if not machine_type or not gcp_region:
+            continue
 
-        for doc in docs:
-            data = doc.to_dict() or {}
+        window_start = max(start_dt, month_start)
+        window_end = min(end_dt, month_end)
+        if window_end <= window_start:
+            continue
 
-            ended_raw = data.get("ended_at")
-            started_raw = data.get("started_at") or data.get("started_booting_at")
-            if ended_raw is None or started_raw is None:
-                continue
+        group_key = f"{machine_type}|{gcp_region}|{1 if spot_bool else 0}"
+        mult = _cpu_hour_multiplier(machine_type)
 
-            start_dt = _as_utc_datetime(started_raw)
-            end_dt = _as_utc_datetime(ended_raw)
-            if not start_dt or not end_dt or end_dt <= start_dt:
-                continue
-
-            machine_type = data.get("machine_type")
-            gcp_region = data.get("gcp_region")
-            spot_bool = bool(data.get("spot")) if data.get("spot") is not None else False
-            if not machine_type or not gcp_region:
-                continue
-
-            window_start = max(start_dt, month_start)
-            window_end = min(end_dt, month_end)
-            if window_end <= window_start:
-                continue
-
-            group_key = f"{machine_type}|{gcp_region}|{1 if spot_bool else 0}"
-            mult = _cpu_hour_multiplier(machine_type)
-
-            day = _day_start(window_start)
-            while day < window_end:
-                next_day = _add_days(day, 1)
-                seg_start = max(window_start, day)
-                seg_end = min(window_end, next_day)
-                if seg_end > seg_start:
-                    raw_hours = (seg_end - seg_start).total_seconds() / 3600.0
-                    day_label = _date_key(day)
-                    if day_label in buckets:
-                        buckets[day_label][group_key] = buckets[day_label].get(group_key, 0.0) + raw_hours
-                    if day_label in compute_buckets:
-                        compute_buckets[day_label][group_key] = (
-                            compute_buckets[day_label].get(group_key, 0.0) + (raw_hours * mult)
-                        )
-                day = next_day
-
-        if scanned >= max_scan:
-            break
+        day = _day_start(window_start)
+        while day < window_end:
+            next_day = _add_days(day, 1)
+            seg_start = max(window_start, day)
+            seg_end = min(window_end, next_day)
+            if seg_end > seg_start:
+                raw_hours = (seg_end - seg_start).total_seconds() / 3600.0
+                day_label = _date_key(day)
+                if day_label in buckets:
+                    buckets[day_label][group_key] = buckets[day_label].get(group_key, 0.0) + raw_hours
+                if day_label in compute_buckets:
+                    compute_buckets[day_label][group_key] = (
+                        compute_buckets[day_label].get(group_key, 0.0) + (raw_hours * mult)
+                    )
+            day = next_day
 
     days_out = []
     total_raw = 0.0
@@ -415,8 +358,7 @@ def nodes_daily_hours(
         "total_compute_hours": _quantize_hours(total_compute_raw),
         "meta": {
             "hours_precision_decimals": 6,
-            "scanned": scanned,
-            "max_scan": max_scan,
+            "scanned": len(ended_nodes),
         },
     }
 
@@ -439,22 +381,23 @@ def nodes_month_nodes(
     month_end = _add_months(month_dt, 1)
 
     cutoff_sec = month_start.timestamp()
-    doc_id_field = FieldPath.document_id()
-
-    query = (
-        DB.collection("nodes")
-        .where(filter=FieldFilter("ended_at", ">=", cutoff_sec))
-        .order_by("ended_at", direction=firestore.Query.DESCENDING)
-        .order_by(doc_id_field, direction=firestore.Query.DESCENDING)
+    ended_nodes = history.nodes_ended_after(cutoff_sec)
+    # nodes_ended_after returns ended_at DESC; add id DESC as tiebreak to
+    # keep cursor pagination stable.
+    ended_nodes.sort(
+        key=lambda d: (float(d.get("ended_at") or 0), str(d.get("instance_name") or "")),
+        reverse=True,
     )
     if cursor_ended_at is not None and cursor_id is not None:
-        query = query.start_after({"ended_at": float(cursor_ended_at), doc_id_field: cursor_id})
+        cursor = (float(cursor_ended_at), str(cursor_id))
+        ended_nodes = [
+            d for d in ended_nodes
+            if (float(d.get("ended_at") or 0), str(d.get("instance_name") or "")) < cursor
+        ]
 
-    docs = list(query.limit(limit).stream())
+    page = ended_nodes[:limit]
     nodes_out = []
-    for doc in docs:
-        data = doc.to_dict() or {}
-
+    for data in page:
         ended_raw = data.get("ended_at")
         started_raw = data.get("started_at") or data.get("started_booting_at")
         if ended_raw is None or started_raw is None:
@@ -482,8 +425,8 @@ def nodes_month_nodes(
 
         nodes_out.append(
             {
-                "id": doc.id,
-                "instance_name": data.get("instance_name", doc.id),
+                "id": data.get("instance_name"),
+                "instance_name": data.get("instance_name"),
                 "machine_type": machine_type,
                 "gcp_region": data.get("gcp_region"),
                 "spot": spot_bool,
@@ -495,12 +438,11 @@ def nodes_month_nodes(
         )
 
     next_cursor = None
-    if len(docs) == limit:
-        last = docs[-1]
-        last_data = last.to_dict() or {}
-        last_ended = last_data.get("ended_at")
+    if len(page) == limit and page:
+        last = page[-1]
+        last_ended = last.get("ended_at")
         if last_ended is not None:
-            next_cursor = {"ended_at": float(last_ended), "id": last.id}
+            next_cursor = {"ended_at": float(last_ended), "id": last.get("instance_name")}
 
     return {
         "month": _month_key(month_start),

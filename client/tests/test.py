@@ -1,7 +1,7 @@
 """
 DEV VM ONLY. These tests drive a live local-dev cluster over HTTP and
 assume the full Burla stack is running inside a dev VM (Docker-in-Docker,
-Firestore SA access, /srv/burla bind mounts). Do not run on a laptop.
+/srv/burla bind mounts). Do not run on a laptop.
 See client/tests/README.md for the workflow.
 """
 

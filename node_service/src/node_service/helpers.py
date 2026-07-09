@@ -6,7 +6,7 @@ import logging as python_logging
 from time import time
 
 from fastapi import Request
-from node_service import ASYNC_DB, IN_LOCAL_DEV_MODE, GCL_CLIENT, PROJECT_ID, BURLA_BACKEND_URL, INSTANCE_NAME
+from node_service import PROJECT_ID, BURLA_BACKEND_URL
 
 
 def format_traceback(traceback_details: list):
@@ -49,62 +49,31 @@ class SizedQueue(asyncio.Queue):
         self.size_bytes -= size_bytes
         return item
 
+
 class Logger:
+    """Prints to stdout (journald / docker captures it) and forwards each line
+    to the head so it shows in the dashboard's node-log view. Errors also go
+    to Burla's telemetry backend."""
 
     def __init__(self, request: Optional[Request] = None):
-        self.request = request
-        self.loggable_request = None
-        self.log_collection = ASYNC_DB.collection("nodes").document(INSTANCE_NAME).collection("logs")
-
-    def __make_serializeable(self, obj):
-        """
-        Recursively traverses a nested dict swapping any:
-        - tuple -> list
-        - !dict or !list or !str -> str
-        """
-        if isinstance(obj, tuple) or isinstance(obj, list):
-            return [self.__make_serializeable(item) for item in obj]
-        elif isinstance(obj, dict):
-            return {key: self.__make_serializeable(value) for key, value in obj.items()}
-        elif not (isinstance(obj, dict) or isinstance(obj, list) or isinstance(obj, str)):
-            return str(obj)
-        else:
-            return obj
-
-    def __loggable_request(self, request: Request):
-        keys = ["asgi", "client", "headers", "http_version", "method", "path", "path_params"]
-        keys.extend(["query_string", "raw_path", "root_path", "scheme", "server", "state", "type"])
-        scope = {key: request.scope.get(key) for key in keys}
-        request_dict = {
-            "scope": scope,
-            "url": str(request.url),
-            "base_url": str(request.base_url),
-            "headers": request.headers,
-            "query_params": request.query_params,
-            "path_params": request.path_params,
-            "cookies": request.cookies,
-            "client": request.client,
-            "method": request.method,
-        }
-        # google cloud logging won't log tuples or bytes objects.
-        return self.__make_serializeable(request_dict)
+        self.request_line = f"{request.method} {request.url}" if request else None
 
     async def log(self, message: str, severity="INFO", **kw):
-        if (self.loggable_request is None) and self.request:
-            self.loggable_request = self.__loggable_request(self.request)
-
         traceback_str = kw.get("traceback")
         if traceback_str:
             print(traceback_str.strip())
         else:
             print(message)
 
-        firestore_msg = traceback_str.strip() if traceback_str else message
-        await self.log_collection.document().set({"msg": firestore_msg, "ts": time()})
+        # Lazy import: head_client imports SELF from node_service, which
+        # imports this module first.
+        from node_service import head_client
 
-        if not IN_LOCAL_DEV_MODE:
-            struct = dict(message=message, request=self.loggable_request, **kw)
-            await asyncio.to_thread(GCL_CLIENT.log_struct, struct, severity=severity)
+        head_msg = traceback_str.strip() if traceback_str else message
+        try:
+            await head_client.post_node_logs([{"msg": head_msg, "ts": time()}])
+        except Exception as e:
+            print(f"failed to forward log to head: {e}")
 
         if severity == "ERROR" or traceback_str:
             try:

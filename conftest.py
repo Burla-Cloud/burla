@@ -1,11 +1,12 @@
 """
 Repo-root conftest for the Burla test suite. All tiers (unit, service, e2e, chaos)
-share these helpers so the subprocess-isolation pattern, cluster-readiness gate, and
-GCP/Firestore integration live in one place.
+share these helpers so the subprocess-isolation pattern and cluster-readiness gate
+live in one place.
 
 All service / e2e / chaos tests assume `make local-dev` is running against the
 `burla-test` GCP project. A readiness gate fixture verifies this before any test
-that uses it runs.
+that uses it runs. All cluster state is read/written over the main_service HTTP
+API - there is no database to inspect.
 """
 
 from __future__ import annotations
@@ -81,15 +82,12 @@ def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line("markers", "dashboard: requires Playwright, browser, and dashboard UI")
 
 
-def _active_node_docs(firestore_db) -> list[dict[str, Any]]:
-    from google.cloud.firestore_v1.base_query import FieldFilter
+def _active_node_docs() -> list[dict[str, Any]]:
+    import requests
 
-    docs = (
-        firestore_db.collection("nodes")
-        .where(filter=FieldFilter("status", "in", ["READY", "BOOTING", "RUNNING", "FAILED"]))
-        .stream()
-    )
-    return [doc.to_dict() for doc in docs]
+    resp = requests.get(f"{DASHBOARD_URL}/v1/cluster/nodes", timeout=5)
+    resp.raise_for_status()
+    return resp.json()["nodes"]
 
 
 def _test_runner_node_url(host: str) -> str:
@@ -159,7 +157,6 @@ def _cluster_dirty_reason(
 
 
 def _wait_for_clean_cluster(
-    firestore_db,
     auth_headers: dict[str, str],
     expected_ready_nodes: int,
     timeout: float,
@@ -168,7 +165,7 @@ def _wait_for_clean_cluster(
     last_reason = "cluster not checked"
     while time.time() < deadline:
         state = _cluster_state_via_http()
-        active_nodes = _active_node_docs(firestore_db)
+        active_nodes = _active_node_docs()
         last_reason = _cluster_dirty_reason(
             state,
             active_nodes,
@@ -193,7 +190,7 @@ def _restart_cluster(auth_headers: dict[str, str]) -> None:
 
 
 @pytest.fixture
-def local_dev_cluster(firestore_db, burla_auth_headers) -> dict[str, Any]:
+def local_dev_cluster(burla_auth_headers) -> dict[str, Any]:
     """
     Readiness gate for service / e2e / chaos tiers.
 
@@ -237,7 +234,7 @@ def local_dev_cluster(firestore_db, burla_auth_headers) -> dict[str, Any]:
 
     expected_ready_nodes = _expected_ready_node_count(burla_auth_headers)
     state = _cluster_state_via_http()
-    active_nodes = _active_node_docs(firestore_db)
+    active_nodes = _active_node_docs()
     if _cluster_dirty_reason(
         state,
         active_nodes,
@@ -246,7 +243,6 @@ def local_dev_cluster(firestore_db, burla_auth_headers) -> dict[str, Any]:
     ) is not None:
         _restart_cluster(burla_auth_headers)
         state = _wait_for_clean_cluster(
-            firestore_db,
             burla_auth_headers,
             expected_ready_nodes,
             CLEAN_CLUSTER_TIMEOUT_SEC,
@@ -293,57 +289,40 @@ def isolated_job_id() -> Callable[[str], str]:
     return _factory
 
 
-@pytest.fixture(scope="session")
-def firestore_db():
-    """
-    A Firestore client pointed at database `burla` in the active project.
-    Tests that use this fixture own the responsibility of cleaning up any docs
-    they write — see `cleanup_job` / `cleanup_node`.
-    """
-    try:
-        from google.cloud import firestore
-    except Exception as e:
-        pytest.skip(f"google-cloud-firestore not installed: {e}")
-    return firestore.Client(database="burla")
+def get_job_via_http(job_id: str) -> dict[str, Any] | None:
+    """The job dict as the head sees it (in-memory, falling back to history)."""
+    import requests
+
+    resp = requests.get(f"{DASHBOARD_URL}/v1/jobs/{job_id}", timeout=5)
+    if resp.status_code == 404:
+        return None
+    resp.raise_for_status()
+    return resp.json() or None
 
 
 @pytest.fixture
-def cleanup_job(firestore_db):
-    created: list[str] = []
+def get_job():
+    return get_job_via_http
+
+
+@pytest.fixture
+def cleanup_job():
+    """History lives inside the main_service container and dies with it; test
+    jobs need no explicit cleanup anymore. Kept so tests can still register
+    ids without caring."""
 
     def _register(job_id: str) -> str:
-        created.append(job_id)
         return job_id
 
     yield _register
 
-    for job_id in created:
-        try:
-            for sub in ("logs", "assigned_nodes"):
-                for doc in firestore_db.collection("jobs").document(job_id).collection(sub).stream():
-                    doc.reference.delete()
-            firestore_db.collection("jobs").document(job_id).delete()
-        except Exception:
-            pass
-
 
 @pytest.fixture
-def cleanup_node(firestore_db):
-    created: list[str] = []
-
+def cleanup_node():
     def _register(instance_name: str) -> str:
-        created.append(instance_name)
         return instance_name
 
     yield _register
-
-    for instance_name in created:
-        try:
-            for doc in firestore_db.collection("nodes").document(instance_name).collection("logs").stream():
-                doc.reference.delete()
-            firestore_db.collection("nodes").document(instance_name).delete()
-        except Exception:
-            pass
 
 
 @pytest.fixture(scope="session")
@@ -548,8 +527,8 @@ def ctrl_c_after():
 
 
 # ---------------------------------------------------------------------------
-# Polling helper — every test that needs to wait for a Firestore / cluster
-# state change should use this instead of ad-hoc sleeps.
+# Polling helper — every test that needs to wait for a cluster state change
+# should use this instead of ad-hoc sleeps.
 # ---------------------------------------------------------------------------
 
 

@@ -4,13 +4,11 @@ import sys
 import tempfile
 import textwrap
 from asyncio import create_task
-from time import time
 
 import aiohttp
 import cloudpickle
 
 from burla._auth import get_auth_headers
-from burla._cluster_client import ClusterClient
 
 
 async def run_in_subprocess(func, *args):
@@ -43,35 +41,23 @@ async def _send_node_pings(session: aiohttp.ClientSession, node_host: str, heade
         await asyncio.sleep(0.5)
 
 
-async def send_alive_pings_async(node_hosts: list[str], job_id: str):
+async def send_alive_pings_async(node_hosts: list[str]):
+    """Direct per-node liveness pings, run in a subprocess so they keep
+    beating while the main process is blocked in user code. Nodes report
+    their contact flag to the head, which answers the disconnect-quorum
+    question, so this is the only liveness channel."""
     auth_headers = get_auth_headers()
     async with aiohttp.ClientSession() as session:
         tasks = []
         for node_host in node_hosts:
             tasks.append(create_task(_send_node_pings(session, node_host, auth_headers)))
 
-        # Each PATCH bumps the job doc's `update_time`, which the node's
-        # `_on_job_snapshot` watches to detect a dead client. Interval
-        # leaves headroom under JOB_DOC_CONTACT_TIMEOUT_SEC for a slow PATCH.
-        client = ClusterClient(session)
         while True:
             for task in tasks:
                 if task.done() and task.exception():
                     raise task.exception()
-
-            try:
-                await client.patch_job(job_id, {"client_heartbeat_at": time()})
-            except Exception as error:
-                # Don't let a transient main_service failure (5xx, network
-                # blip, brief cold start) kill this subprocess - the parent
-                # polling loop checks `ping_process.poll()` and would fail
-                # the whole job. The per-node direct `/client-heartbeat`
-                # path (above) is still running; if main_service is gone
-                # for longer than JOB_DOC_CONTACT_TIMEOUT_SEC the node's
-                # own liveness check will detect it.
-                print(f"heartbeat PATCH failed, retrying: {error}", file=sys.stderr)
             await asyncio.sleep(2)
 
 
-def send_alive_pings(node_hosts: list[str], job_id: str):
-    asyncio.run(send_alive_pings_async(node_hosts, job_id))
+def send_alive_pings(node_hosts: list[str]):
+    asyncio.run(send_alive_pings_async(node_hosts))

@@ -345,9 +345,10 @@ class Node:
     async def _update_status(self):
         node_data = await self.client.get_node(self.instance_name)
         if node_data is None:
-            # A 404 during BOOTING can race main_service's background write of
-            # the initial firestore doc — the instance_name came back from
-            # /v1/jobs/{id}/start before the doc landed. Not a real eviction.
+            # A 404 during BOOTING can race main_service's background
+            # `_start_nodes` task — the instance_name came back from
+            # /v1/jobs/{id}/start before Node.start registered the node.
+            # Not a real eviction.
             if self.state == "BOOTING":
                 return
             self.state = "FAILED"

@@ -37,7 +37,7 @@ def test_imports_inside_function_body_strips_submodules():
     from burla._helpers import _imports_inside_function_body
 
     def fn(x):
-        import google.cloud.firestore
+        import google.cloud.storage
         return x
 
     names = _imports_inside_function_body(fn)

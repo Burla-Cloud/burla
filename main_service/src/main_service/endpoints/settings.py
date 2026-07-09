@@ -3,22 +3,21 @@ import requests
 from fastapi import APIRouter, Request
 
 from main_service import (
-    DB,
     PROJECT_ID,
     CLUSTER_ID_TOKEN,
     CURRENT_BURLA_VERSION,
     IN_LOCAL_DEV_MODE,
     LOCAL_DEV_CONFIG,
+    BURLA_BACKEND_URL,
 )
+from main_service import history
 
 router = APIRouter()
-BURLA_BACKEND_URL = "https://backend.burla.dev"
 
 
 @router.get("/v1/settings")
 def get_settings(request: Request):
-    config_doc = DB.collection("cluster_config").document("cluster_config")
-    config_dict = config_doc.get().to_dict()
+    config_dict = history.get_cluster_config()
 
     if IN_LOCAL_DEV_MODE:
         config_dict = LOCAL_DEV_CONFIG
@@ -46,10 +45,9 @@ def get_settings(request: Request):
 @router.post("/v1/settings")
 async def update_settings(request: Request):
     request_json = await request.json()
-    config_ref = DB.collection("cluster_config").document("cluster_config")
-    config_dict = config_ref.get().to_dict()
+    config_dict = history.get_cluster_config()
 
-    # updates Nodes object in cluster_config doc
+    # updates Nodes object in cluster config
     nodes = config_dict.get("Nodes", [{}])
     node = nodes[0]
     container = node.get("containers", [{}])[0]
@@ -74,7 +72,8 @@ async def update_settings(request: Request):
         }
     )
     nodes[0]["containers"] = [container]
-    config_ref.update({"Nodes": nodes})
+    config_dict["Nodes"] = nodes
+    history.save_cluster_config(config_dict)
 
     if IN_LOCAL_DEV_MODE:
         LOCAL_DEV_CONFIG["Nodes"] = nodes

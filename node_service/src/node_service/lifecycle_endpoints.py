@@ -241,7 +241,13 @@ async def _watch_reservation(job_id: str):
     try:
         while time() - started_at < RESERVATION_ASSIGNMENT_TIMEOUT_SEC:
             await asyncio.sleep(RESERVATION_POLL_INTERVAL_SEC)
-            job = await head_client.get_job(job_id)
+            try:
+                job = await head_client.get_job(job_id)
+            except Exception:
+                # A transient head outage must not kill this task: an uncleared
+                # reservation pins the inactivity watchdog and immortalizes
+                # the VM (observed with grow nodes booted mid-shutdown).
+                continue
             if job is None or job.get("status") != "RUNNING":
                 break
     except asyncio.CancelledError:

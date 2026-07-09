@@ -25,7 +25,11 @@ def _node_port(host: str) -> str:
 
 
 def _local_url(host: str) -> str:
-    # On the VM, nodes bind to the host on their docker port, reachable at localhost:<port>.
+    # local-dev node hosts are docker network names (`http://node_xxx:8081`),
+    # reachable from the VM at localhost:<port>. Remote nodes advertise a
+    # public IP that is directly reachable.
+    if "node_" not in host:
+        return host
     port = _node_port(host)
     return f"http://localhost:{port}"
 

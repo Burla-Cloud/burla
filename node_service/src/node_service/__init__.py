@@ -216,6 +216,17 @@ async def _state_push_loop(logger: Logger):
             )
             consecutive_failures = 0
             SELF["host"] = view.get("host")
+            if view.get("status") == "DELETED":
+                # The head deleted this node (dashboard delete, or a cluster
+                # shutdown that raced our boot) and refuses to resurrect it.
+                # Without this the VM would serve forever with the head blind
+                # to it (observed with grow nodes booted mid-shutdown).
+                SELF["SHUTTING_DOWN"] = True
+                SELF["job_watcher_stop_event"].set()
+                print("Head reports this node as DELETED; requesting VM deletion.")
+                if not IN_LOCAL_DEV_MODE:
+                    await head_client.request_self_delete()
+                continue
             if SELF["current_job"]:
                 head_client.apply_job_signals(view.get("job"))
         except Exception as e:

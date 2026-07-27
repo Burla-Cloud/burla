@@ -51,6 +51,11 @@ except importlib.metadata.PackageNotFoundError:
 
 target_burla_version = sys.argv[2]
 if installed_burla_version != target_burla_version:
+    package_spec = (
+        "/opt/burla/client"
+        if os.path.isdir("/opt/burla/client")
+        else f"burla=={target_burla_version}"
+    )
     install_command = [
         "uv",
         "pip",
@@ -59,13 +64,9 @@ if installed_burla_version != target_burla_version:
         "python",
         "--target",
         "/worker_service_python_env",
-        f"burla=={target_burla_version}",
+        package_spec,
     ]
-    # In-dev versions aren't published to PyPI yet; fall back to the latest release.
-    result = subprocess.run(install_command)
-    if result.returncode != 0:
-        install_command[-1] = "burla"
-        subprocess.run(install_command, check=True)
+    subprocess.run(install_command, check=True)
 
 import cloudpickle
 from tblib import Traceback

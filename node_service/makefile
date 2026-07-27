@@ -6,16 +6,19 @@ PYTHON_MODULE_NAME = node_service
 
 ARTIFACT_REPO_NAME := $(WEBSERVICE_NAME)
 ARTIFACT_PKG_NAME := $(WEBSERVICE_NAME)
-PROD_IMAGE_BASE_NAME := us-docker.pkg.dev/burla-prod/$(ARTIFACT_REPO_NAME)/$(ARTIFACT_PKG_NAME)
 
 
 service:
 	python3.11 -m uvicorn $(PYTHON_MODULE_NAME):app --host 0.0.0.0 --port 8080 --reload \
 		--workers 1 --timeout-keep-alive 600 --reload
 
-image:
+dev-image:
 	set -e; \
 	PROJECT_ID=$$(gcloud config get-value project 2>/dev/null); \
+	case "$${PROJECT_ID}" in \
+		burla-test|burla-agent-[0-9][0-9]) ;; \
+		*) echo "Refusing dev image build in $${PROJECT_ID}"; exit 1 ;; \
+	esac; \
 	TEST_IMAGE_BASE_NAME=$$( echo \
 		"us-docker.pkg.dev/$${PROJECT_ID}/$(ARTIFACT_REPO_NAME)/$(ARTIFACT_PKG_NAME)" \
 	); \

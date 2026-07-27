@@ -1,5 +1,6 @@
 import asyncio
 import random
+import ssl
 import sys
 import traceback
 import base64
@@ -76,7 +77,10 @@ BANNED_PACKAGES = ["ipython", "burla", "google-colab"]
 
 
 def _machine_ram_gb(machine_type: str) -> int:
-    if machine_type.startswith("n4-standard-") and machine_type.split("-")[-1].isdigit():
+    if (
+        machine_type.startswith("n4-standard-")
+        and machine_type.split("-")[-1].isdigit()
+    ):
         return _N_FOUR_STANDARD_CPU_TO_RAM[int(machine_type.split("-")[-1])]
     return 0
 
@@ -137,7 +141,9 @@ def _job_diagnostic_summary(job_dict: dict | None) -> str | None:
 
 class FunctionTooBig(Exception):
     def __init__(self, function_name: str):
-        msg = f"\n\nYour function `{function_name}` is referencing some large objects!\n"
+        msg = (
+            f"\n\nYour function `{function_name}` is referencing some large objects!\n"
+        )
         msg += "Functions submitted to Burla, including objects they reference that are defined elsewhere, must be less than 0.1GB.\n"
         msg += "Does your function reference any big numpy arrays, dataframes, or other objects defined elsewhere?\n"
         msg += "Please pass these as inputs to your function, or download them from the internet once inside the function.\n"
@@ -249,13 +255,28 @@ async def _execute_job(
                 raise AllNodesBusy()
             await wait_for_nodes_to_be_ready(client=client, spinner=spinner)
 
+    cluster_ca = response.get("cluster_ca")
+    node_session = session
+    if cluster_ca:
+        node_ssl_context = ssl.create_default_context(cadata=cluster_ca)
+        node_connector = aiohttp.TCPConnector(
+            limit=300,
+            limit_per_host=50,
+            keepalive_timeout=60,
+            enable_cleanup_closed=True,
+            ssl=node_ssl_context,
+        )
+        node_session = await session_stack.enter_async_context(
+            aiohttp.ClientSession(connector=node_connector, trust_env=True)
+        )
+
     ready_nodes = [
         Node.from_ready(
             instance_name=node_data["instance_name"],
             host=_local_host_from(node_data["host"]),
             machine_type=node_data["machine_type"],
             target_parallelism=int(node_data["target_parallelism"]),
-            session=session,
+            session=node_session,
             client=client,
             spinner=spinner,
         )
@@ -265,7 +286,7 @@ async def _execute_job(
         Node.from_booting(
             instance_name=node_data["instance_name"],
             target_parallelism=int(node_data["target_parallelism"]),
-            session=session,
+            session=node_session,
             client=client,
             spinner=spinner,
         )
@@ -278,12 +299,16 @@ async def _execute_job(
     elif not nodes:
         raise NoNodes("Cluster refused to boot required additional nodes ...")
 
-    job_start_telemetry_task = create_task(reporter.log_job_start_telemetry(nodes, packages))
+    job_start_telemetry_task = create_task(
+        reporter.log_job_start_telemetry(nodes, packages)
+    )
     session_stack.callback(job_start_telemetry_task.cancel)
     reporter.set_uploading_function_message(nodes)
 
     node_tasks = []
-    n_inputs = len(inputs)  # <- inputs will be popped from so len(inputs) will start changing
+    n_inputs = len(
+        inputs
+    )  # <- inputs will be popped from so len(inputs) will start changing
     inputs_with_indicies = list(enumerate(inputs))
     random.shuffle(inputs_with_indicies)
     n_ready_nodes = len(nodes) - len(booting_nodes)
@@ -343,8 +368,8 @@ async def _execute_job(
                     exception = NodeDisconnected(node, await node._failure_message())
                 if exception:
                     exception.add_note(node._diagnostic_summary())
-                    lifecycle_exception, lifecycle_error, job_dict = await _job_lifecycle_exception(
-                        client, job_id
+                    lifecycle_exception, lifecycle_error, job_dict = (
+                        await _job_lifecycle_exception(client, job_id)
                     )
                     if lifecycle_exception is not None:
                         raise lifecycle_exception
@@ -372,7 +397,9 @@ async def _execute_job(
                     )
                     ram_per_function_call_gb = None
                     if total_parallelism > 0:
-                        ram_per_function_call_gb = active_node_ram_gb / total_parallelism
+                        ram_per_function_call_gb = (
+                            active_node_ram_gb / total_parallelism
+                        )
                     reporter.set_running_progress_message(
                         total_result_count,
                         total_parallelism,
@@ -394,7 +421,11 @@ async def _execute_job(
             if (time() - start_time) >= 5 and current_hosts and hosts_changed:
                 if ping_process is not None:
                     ping_process.kill()
-                ping_process = await run_in_subprocess(send_alive_pings, list(current_hosts))
+                ping_process = await run_in_subprocess(
+                    send_alive_pings,
+                    list(current_hosts),
+                    cluster_ca,
+                )
                 pinged_hosts = current_hosts
 
             if ping_process and ping_process.poll():
@@ -402,7 +433,10 @@ async def _execute_job(
                 raise Exception(f"Heartbeat process failed!\n{stderr}")
 
             total_result_count = sum(node.result_count for node in nodes)
-            if all([task.done() for task in node_tasks]) and total_result_count < n_inputs:
+            if (
+                all([task.done() for task in node_tasks])
+                and total_result_count < n_inputs
+            ):
                 summary = "\n".join([await n._stall_summary_line() for n in nodes])
                 msg = (
                     f"Job ended before all results were received "
@@ -523,7 +557,9 @@ def remote_parallel_map(
 
     # Move below code back into `_execute_job` after above todo is done.
     # Needs to operate on function_.__globals__ which cannot be reassigned -> must be done here.
-    custom_module_names, package_module_names = get_modules_required_on_remote(function_)
+    custom_module_names, package_module_names = get_modules_required_on_remote(
+        function_
+    )
 
     # temp fix: these are mistetected as PyPI packages but are not!
     if "clim_shift" in package_module_names:
@@ -554,7 +590,9 @@ def remote_parallel_map(
         packages.pop(package, None)
 
     # not an official dep
-    if packages.get("SQLAlchemy") and "psycopg2-binary" in pkg_module_mapping.get("psycopg2", []):
+    if packages.get("SQLAlchemy") and "psycopg2-binary" in pkg_module_mapping.get(
+        "psycopg2", []
+    ):
         packages["psycopg2-binary"] = metadata.version("psycopg2-binary")
 
     # manually check for extras until we can support automatic extra detection.
@@ -599,9 +637,13 @@ def remote_parallel_map(
         if spinner is True and not stdio_supports_unicode():
             spinner = False
         if spinner:
-            spinner = yaspin(sigmap={})  # <- .start will overwrite my handlers without sigmap={}
+            spinner = yaspin(
+                sigmap={}
+            )  # <- .start will overwrite my handlers without sigmap={}
             spinner.start()
-            spinner.text = f"Preparing to call `{function_.__name__}` on {len(inputs)} inputs ..."
+            spinner.text = (
+                f"Preparing to call `{function_.__name__}` on {len(inputs)} inputs ..."
+            )
         terminal_cancel_event = Event()
         inputs_done_event = Event()
         original_signal_handlers = install_signal_handlers(
@@ -644,8 +686,14 @@ def remote_parallel_map(
 
         if terminal_cancel_event.is_set() and background and inputs_done_event.is_set():
             return
-        elif terminal_cancel_event.is_set() and background and not inputs_done_event.is_set():
-            message = "\n\nBackground job canceled before all inputs finished uploading!"
+        elif (
+            terminal_cancel_event.is_set()
+            and background
+            and not inputs_done_event.is_set()
+        ):
+            message = (
+                "\n\nBackground job canceled before all inputs finished uploading!"
+            )
             message += '\nPlease wait until the message "Done uploading inputs!" '
             message += "appears before canceling.\n\n-"
             raise JobCanceled(message)
@@ -659,7 +707,9 @@ def remote_parallel_map(
                 n_results += 1
 
         if spinner:
-            spinner.text = f"Done! {len(inputs)} `{function_.__name__}` calls completed."
+            spinner.text = (
+                f"Done! {len(inputs)} `{function_.__name__}` calls completed."
+            )
             spinner.ok("OK")
 
         return _output_generator() if generator else list(_output_generator())
@@ -670,7 +720,9 @@ def remote_parallel_map(
 
         # Best-effort: record real failures on the job doc via main_service.
         # Lifecycle cancellations already wrote their terminal status.
-        lifecycle_exception = isinstance(e, (ClusterRestarted, ClusterShutdown, JobCanceled))
+        lifecycle_exception = isinstance(
+            e, (ClusterRestarted, ClusterShutdown, JobCanceled)
+        )
         if not (isinstance(e, MainServiceTimeout) or background or lifecycle_exception):
             ClusterClient.patch_job_sync(
                 job_id,
@@ -680,7 +732,9 @@ def remote_parallel_map(
 
         # Report errors back to Burla's cloud.
         if not udf_error_event.is_set():
-            chill_exception = any([isinstance(e, e_type) for e_type in EXEC_TYPES_TO_NOT_ALERT])
+            chill_exception = any(
+                [isinstance(e, e_type) for e_type in EXEC_TYPES_TO_NOT_ALERT]
+            )
 
             exc_type, exc_value, exc_traceback = sys.exc_info()
             tb_details = traceback.format_exception(exc_type, exc_value, exc_traceback)

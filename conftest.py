@@ -20,6 +20,7 @@ import os
 import queue
 import signal
 import socket
+import ssl
 import sys
 import time
 import traceback
@@ -31,6 +32,7 @@ import pytest
 
 DASHBOARD_URL = os.environ.get("BURLA_CLUSTER_DASHBOARD_URL", "http://localhost:5001")
 EXPECTED_GCP_PROJECT = os.environ.get("BURLA_TEST_PROJECT", "burla-test")
+REQUIRE_CLUSTER = os.environ.get("BURLA_REQUIRE_CLUSTER") == "1"
 READINESS_TIMEOUT_SEC = 30
 # local-dev containers reset in ~20s; real VMs need minutes. Remote e2e runs
 # (BURLA_CLUSTER_DASHBOARD_URL pointed at a live cluster) should raise this.
@@ -88,17 +90,27 @@ def _resolve_active_gcp_project() -> str | None:
 
 def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line("markers", "unit: pure unit test, no cluster needed")
-    config.addinivalue_line("markers", "service: service-level test, requires make local-dev")
-    config.addinivalue_line("markers", "e2e: full end-to-end test, requires make local-dev")
-    config.addinivalue_line("markers", "chaos: failure-injection test, requires make local-dev")
+    config.addinivalue_line(
+        "markers", "service: service-level test, requires make local-dev"
+    )
+    config.addinivalue_line(
+        "markers", "e2e: full end-to-end test, requires make local-dev"
+    )
+    config.addinivalue_line(
+        "markers", "chaos: failure-injection test, requires make local-dev"
+    )
     config.addinivalue_line("markers", "slow: slow test (>30s)")
-    config.addinivalue_line("markers", "dashboard: requires Playwright, browser, and dashboard UI")
+    config.addinivalue_line(
+        "markers", "dashboard: requires Playwright, browser, and dashboard UI"
+    )
 
 
 def _active_node_docs() -> list[dict[str, Any]]:
     import requests
 
-    resp = requests.get(f"{DASHBOARD_URL}/v1/cluster/nodes", headers=_request_headers(), timeout=5)
+    resp = requests.get(
+        f"{DASHBOARD_URL}/v1/cluster/nodes", headers=_request_headers(), timeout=5
+    )
     resp.raise_for_status()
     return resp.json()["nodes"]
 
@@ -110,14 +122,21 @@ def _test_runner_node_url(host: str) -> str:
     return host
 
 
-def _ready_nodes_unreachable(state: dict[str, Any], auth_headers: dict[str, str]) -> str | None:
-    import requests
+def _ready_nodes_unreachable(
+    state: dict[str, Any], auth_headers: dict[str, str]
+) -> str | None:
+    import httpx
 
     for node in state["ready_nodes"]:
         url = _test_runner_node_url(node["host"])
+        verify = (
+            ssl.create_default_context(cadata=state["cluster_ca"])
+            if url.startswith("https://")
+            else True
+        )
         try:
-            resp = requests.get(url, headers=auth_headers, timeout=2)
-        except requests.RequestException as e:
+            resp = httpx.get(url, headers=auth_headers, timeout=2, verify=verify)
+        except httpx.HTTPError as e:
             return f"{node['instance_name']} unreachable at {url}: {e}"
         if resp.status_code != 200:
             return f"{node['instance_name']} returned {resp.status_code} at {url}"
@@ -148,12 +167,13 @@ def _cluster_dirty_reason(
     dirty_nodes = [
         node
         for node in active_nodes
-        if node.get("status") != "READY" or node.get("current_job") or node.get("reserved_for_job")
+        if node.get("status") != "READY"
+        or node.get("current_job")
+        or node.get("reserved_for_job")
     ]
     if dirty_nodes:
         summaries = [
-            f"{node.get('instance_name')}:{node.get('status')}"
-            for node in dirty_nodes
+            f"{node.get('instance_name')}:{node.get('status')}" for node in dirty_nodes
         ]
         return "dirty node docs: " + ", ".join(summaries)
 
@@ -188,7 +208,9 @@ def _wait_for_clean_cluster(
         if last_reason is None:
             return state
         time.sleep(0.5)
-    raise AssertionError(f"cluster did not become clean within {timeout}s: {last_reason}")
+    raise AssertionError(
+        f"cluster did not become clean within {timeout}s: {last_reason}"
+    )
 
 
 def _restart_cluster(auth_headers: dict[str, str]) -> None:
@@ -212,22 +234,24 @@ def local_dev_cluster(burla_auth_headers) -> dict[str, Any]:
     Returns basic cluster metadata the rest of the tests need.
     """
     if not _main_service_reachable():
-        pytest.skip(
+        message = (
             f"main_service is not reachable at {DASHBOARD_URL}. "
-            "These tests must run on a dev VM, not your laptop — see "
+            "These tests must run on a dev VM, not your laptop; see "
             "client/tests/README.md. Start the cluster on the VM with "
             "`scripts/dev_vm_shell.sh --slot <id>` then `make -f makefile local-dev`, run "
             "`scripts/dev_vm_tunnel.sh --slot <id>`, and set "
             "BURLA_CLUSTER_DASHBOARD_URL to the tunnel URL (or run tests "
             "directly on the VM, which is recommended)."
         )
+        pytest.fail(message) if REQUIRE_CLUSTER else pytest.skip(message)
 
     project = _resolve_active_gcp_project()
     if project != EXPECTED_GCP_PROJECT:
-        pytest.skip(
+        message = (
             f"Expected gcloud project `{EXPECTED_GCP_PROJECT}`, got `{project}`. "
             f"Run `gcloud config set project {EXPECTED_GCP_PROJECT}` first."
         )
+        pytest.fail(message) if REQUIRE_CLUSTER else pytest.skip(message)
 
     import requests
 
@@ -235,7 +259,9 @@ def local_dev_cluster(burla_auth_headers) -> dict[str, Any]:
     last_err: str | None = None
     while time.time() < deadline:
         try:
-            resp = requests.get(f"{DASHBOARD_URL}/version", headers=_request_headers(), timeout=2)
+            resp = requests.get(
+                f"{DASHBOARD_URL}/version", headers=_request_headers(), timeout=2
+            )
             if resp.status_code == 200:
                 version_info = resp.json()
                 break
@@ -243,17 +269,34 @@ def local_dev_cluster(burla_auth_headers) -> dict[str, Any]:
             last_err = str(e)
         time.sleep(0.5)
     else:
-        pytest.skip(f"main_service /version not reachable within {READINESS_TIMEOUT_SEC}s: {last_err}")
+        message = f"main_service /version not reachable within {READINESS_TIMEOUT_SEC}s: {last_err}"
+        pytest.fail(message) if REQUIRE_CLUSTER else pytest.skip(message)
+
+    import burla
+
+    if version_info.get("project") != EXPECTED_GCP_PROJECT:
+        pytest.fail(
+            f"Expected head project `{EXPECTED_GCP_PROJECT}`, "
+            f"got `{version_info.get('project')}`"
+        )
+    if version_info.get("version") != burla.__version__:
+        pytest.fail(
+            f"Expected head version `{burla.__version__}`, "
+            f"got `{version_info.get('version')}`"
+        )
 
     expected_ready_nodes = _expected_ready_node_count(burla_auth_headers)
     state = _cluster_state_via_http()
     active_nodes = _active_node_docs()
-    if _cluster_dirty_reason(
-        state,
-        active_nodes,
-        burla_auth_headers,
-        expected_ready_nodes,
-    ) is not None:
+    if (
+        _cluster_dirty_reason(
+            state,
+            active_nodes,
+            burla_auth_headers,
+            expected_ready_nodes,
+        )
+        is not None
+    ):
         _restart_cluster(burla_auth_headers)
         state = _wait_for_clean_cluster(
             burla_auth_headers,
@@ -308,7 +351,9 @@ def get_job_via_http(job_id: str) -> dict[str, Any] | None:
     """The job dict as the head sees it (in-memory, falling back to history)."""
     import requests
 
-    resp = requests.get(f"{DASHBOARD_URL}/v1/jobs/{job_id}", headers=_request_headers(), timeout=5)
+    resp = requests.get(
+        f"{DASHBOARD_URL}/v1/jobs/{job_id}", headers=_request_headers(), timeout=5
+    )
     if resp.status_code == 404:
         return None
     resp.raise_for_status()
@@ -404,7 +449,7 @@ def burla_auth_headers() -> dict[str, str]:
 def node_http_client(main_http_client, burla_auth_headers):
     """
     Factory for per-node httpx clients. A node's `host` field is
-    `http://node_xxx:8081` on the local-burla-cluster Docker network. From
+    `http://node_xxx:8080` on the local-burla-cluster Docker network. From
     the host we reach nodes via `http://localhost:<port>` since each node
     publishes its port. This fixture handles that rewriting and attaches
     the standard burla auth headers.
@@ -419,14 +464,26 @@ def node_http_client(main_http_client, burla_auth_headers):
             pytest.skip("No READY nodes to talk to.")
         target = nodes[0]
         if instance_name:
-            target = next((n for n in nodes if n["instance_name"] == instance_name), None)
+            target = next(
+                (n for n in nodes if n["instance_name"] == instance_name), None
+            )
             if target is None:
                 pytest.skip(f"Node {instance_name} not in ready_nodes.")
         host = target["host"]
         if host.startswith("http://node_"):
             port = host.rsplit(":", 1)[-1]
             host = f"http://localhost:{port}"
-        return httpx.Client(base_url=host, timeout=30, headers=burla_auth_headers)
+        verify = (
+            ssl.create_default_context(cadata=state["cluster_ca"])
+            if host.startswith("https://")
+            else True
+        )
+        return httpx.Client(
+            base_url=host,
+            timeout=30,
+            headers=burla_auth_headers,
+            verify=verify,
+        )
 
     return _factory
 
@@ -441,8 +498,7 @@ def any_ready_node(main_http_client):
 
 
 # ---------------------------------------------------------------------------
-# Subprocess isolation — the existing pattern from client/tests/test.py,
-# generalized so every client-side test can use it without duplicating code.
+# Shared subprocess isolation for client-side tests.
 #
 # The actual subprocess body lives in tests/_rpm_subprocess_helper.py because
 # mp.get_context('spawn') re-imports the target function's module in the
@@ -479,7 +535,14 @@ def run_rpm_in_subprocess(
     result_queue = context.Queue()
     process = context.Process(
         target=_target,
-        args=(result_queue, function_source, inputs, rpm_kwargs, env_overrides, DASHBOARD_URL),
+        args=(
+            result_queue,
+            function_source,
+            inputs,
+            rpm_kwargs,
+            env_overrides,
+            DASHBOARD_URL,
+        ),
     )
     process.start()
 
@@ -528,7 +591,9 @@ def ctrl_c_after():
         result = ctrl_c_after(source, inputs, delay_s=2, **kwargs)
     """
 
-    def _send(function_source: str, inputs: list, delay_s: float, **kwargs: Any) -> dict:
+    def _send(
+        function_source: str, inputs: list, delay_s: float, **kwargs: Any
+    ) -> dict:
         return run_rpm_in_subprocess(
             function_source,
             inputs,
@@ -563,7 +628,9 @@ def wait_for(
         if last and not isinstance(last, Exception):
             return last
         time.sleep(interval)
-    raise AssertionError(f"wait_for timed out after {timeout}s: {message} (last={last!r})")
+    raise AssertionError(
+        f"wait_for timed out after {timeout}s: {message} (last={last!r})"
+    )
 
 
 @pytest.fixture
@@ -592,12 +659,18 @@ def burla_version_current() -> str:
 # ---------------------------------------------------------------------------
 
 
-def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+def pytest_collection_modifyitems(
+    config: pytest.Config, items: list[pytest.Item]
+) -> None:
     requires_cluster = {"service", "e2e", "chaos"}
     cluster_up = _main_service_reachable()
+    if REQUIRE_CLUSTER and not cluster_up:
+        raise pytest.UsageError(f"local-dev cluster not running at {DASHBOARD_URL}")
     for item in items:
         markers = {m.name for m in item.iter_markers()}
         if markers & requires_cluster and not cluster_up:
             item.add_marker(
-                pytest.mark.skip(reason=f"local-dev cluster not running at {DASHBOARD_URL}")
+                pytest.mark.skip(
+                    reason=f"local-dev cluster not running at {DASHBOARD_URL}"
+                )
             )

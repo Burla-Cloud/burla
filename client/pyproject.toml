@@ -1,10 +1,11 @@
 [project]
 name = "burla"
-version = "1.6.0"
+version = "1.6.1"
 description = "Easy to use cluster-compute software."
 requires-python = ">=3.11"
 dependencies = [
     "aiohttp>=3.13.2",
+    "boto3>=1.42.39",
     "cloudpickle>=3.1.1",
     "fire>=0.7.1",
     "google-auth>=2.42.0",

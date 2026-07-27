@@ -19,12 +19,15 @@ from fastapi.responses import Response
 from starlette.requests import ClientDisconnect
 from starlette.datastructures import UploadFile
 
-
-__version__ = "1.6.0"
+__version__ = "1.6.1"
 PROJECT_ID = os.environ["PROJECT_ID"]
-BURLA_BACKEND_URL = "https://backend.burla.dev"
+BURLA_BACKEND_URL = os.environ.get(
+    "BURLA_BACKEND_URL", "https://backend.burla.dev"
+).rstrip("/")
 
-IN_LOCAL_DEV_MODE = os.environ.get("IN_LOCAL_DEV_MODE") == "True"  # Cluster running locally
+IN_LOCAL_DEV_MODE = (
+    os.environ.get("IN_LOCAL_DEV_MODE") == "True"
+)  # Cluster running locally
 
 # The head (main_service). Every piece of cluster state this node reads or
 # writes goes through it over HTTP - there is no database here.
@@ -34,7 +37,9 @@ CLUSTER_ID_TOKEN = os.environ["CLUSTER_ID_TOKEN"]
 NUM_GPUS = int(os.environ.get("NUM_GPUS"))
 INSTANCE_NAME = os.environ["INSTANCE_NAME"]
 _raw_inactivity = os.environ.get("INACTIVITY_SHUTDOWN_TIME_SEC")
-INACTIVITY_SHUTDOWN_TIME_SEC = int(_raw_inactivity) if _raw_inactivity is not None else None
+INACTIVITY_SHUTDOWN_TIME_SEC = (
+    int(_raw_inactivity) if _raw_inactivity is not None else None
+)
 RESERVED_FOR_JOB = os.environ.get("RESERVED_FOR_JOB") or None
 INSTANCE_N_CPUS = 2 if IN_LOCAL_DEV_MODE else os.cpu_count()
 
@@ -44,7 +49,6 @@ NODE_AUTH_DIR = Path("/opt/burla/node_auth")
 NODE_AUTH_CREDENTIALS_PATH = NODE_AUTH_DIR / "burla_credentials.json"
 
 from node_service.helpers import ResultsEndpointFilter, Logger, SizedQueue
-
 
 # Upper bound on how many UDF log documents we'll buffer in memory
 # between /results polls. If the client stops polling this caps
@@ -64,7 +68,9 @@ def REINIT_SELF(SELF):
     SELF["current_job"] = None
     SELF["current_parallelism"] = 0
     SELF["job_watcher_stop_event"] = Event()
-    SELF["job_watcher_stop_event"].set()  # needs to be default set so it definitely dies on reboot
+    SELF[
+        "job_watcher_stop_event"
+    ].set()  # needs to be default set so it definitely dies on reboot
     SELF["job_watcher_task"] = None
     SELF["on_job_start_task"] = None
     SELF["BOOTING"] = False
@@ -139,7 +145,9 @@ def get_add_background_task_function(
 ):
     def add_logged_background_task(func: Callable, *a, **kw):
         tb_details = traceback.format_list(traceback.extract_stack()[:-1])
-        parent_traceback = "Traceback (most recent call last):\n" + format_traceback(tb_details)
+        parent_traceback = "Traceback (most recent call last):\n" + format_traceback(
+            tb_details
+        )
 
         async def func_logged(*a, **kw):
             try:
@@ -149,10 +157,16 @@ def get_add_background_task_function(
                 return result
             except Exception as e:
                 exc_type, exc_value, exc_traceback = sys.exc_info()
-                tb_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
-                local_traceback_no_title = "\n".join(format_traceback(tb_details).split("\n")[1:])
+                tb_details = traceback.format_exception(
+                    exc_type, exc_value, exc_traceback
+                )
+                local_traceback_no_title = "\n".join(
+                    format_traceback(tb_details).split("\n")[1:]
+                )
                 traceback_str = parent_traceback + local_traceback_no_title
-                await logger.log(message=str(e), severity="ERROR", traceback=traceback_str)
+                await logger.log(
+                    message=str(e), severity="ERROR", traceback=traceback_str
+                )
 
         background_tasks.add_task(func_logged, *a, **kw)
 
@@ -165,6 +179,7 @@ from node_service.job_endpoints import router as job_endpoints_router
 from node_service.lifecycle_endpoints import (
     reboot_containers,
     router as lifecycle_endpoints_router,
+    watch_reservation,
 )
 
 
@@ -216,6 +231,17 @@ async def _state_push_loop(logger: Logger):
             )
             consecutive_failures = 0
             SELF["host"] = view.get("host")
+            reservation = view.get("reserved_for_job")
+            if not SELF["current_job"] and reservation != SELF["reserved_for_job"]:
+                watch_task = SELF["watch_reservation_task"]
+                if watch_task and not watch_task.done():
+                    watch_task.cancel()
+                SELF["reserved_for_job"] = reservation
+                SELF["watch_reservation_task"] = (
+                    asyncio.create_task(watch_reservation(reservation))
+                    if reservation
+                    else None
+                )
             if view.get("status") == "DELETED":
                 # The head deleted this node (dashboard delete, or a cluster
                 # shutdown that raced our boot) and refuses to resurrect it.
@@ -264,27 +290,34 @@ async def lifespan(app: FastAPI):
     containers = [c["image"] for c in json.loads(os.environ["CONTAINERS"])]
     await reboot_containers(new_container_config=containers, logger=logger)
 
+    certificate_renewal_task = None
+    if not IN_LOCAL_DEV_MODE:
+        from node_service.transport_tls import certificate_renewal_loop
+
+        certificate_renewal_task = asyncio.create_task(certificate_renewal_loop())
+
     yield
 
+    if certificate_renewal_task is not None:
+        certificate_renewal_task.cancel()
 
-async def on_job_start(scope, first_event):
-    # SELF is set synchronously so the middleware's next-request 409 guard and
-    # the execute endpoint's rollback (which reads SELF, not the head) see the
-    # new state immediately. The head push happens in the background; the
-    # rollback awaits `on_job_start_task` so the two pushes cannot race.
+
+def on_job_start(scope):
     job_id = scope.get("path", "").split("/jobs/")[-1]
     SELF["RUNNING"] = True
     SELF["current_job"] = job_id
     SELF["reserved_for_job"] = None
     SELF["reported_status"] = "RUNNING"
     SELF["job_view"] = None
-    # `_watch_reservation` is obsolete once assignment arrives - cancel it so
+    # `watch_reservation` is obsolete once assignment arrives - cancel it so
     # it stops polling the head without writing a redundant clear (the push
     # below already clears `reserved_for_job`).
     watch_task = SELF.get("watch_reservation_task")
     if watch_task and not watch_task.done():
         watch_task.cancel()
-    push = head_client.push_state(status="RUNNING", current_job=job_id, reserved_for_job=None)
+    push = head_client.push_state(
+        status="RUNNING", current_job=job_id, reserved_for_job=None
+    )
     SELF["on_job_start_task"] = asyncio.create_task(push)
 
 
@@ -300,7 +333,6 @@ class CallHookOnJobStartMiddleware:
         )
 
         if is_job_execution_request:
-            started = False
             if SELF["SHUTTING_DOWN"]:
                 msg = "Node is shutting down due to inactivity."
                 return await Response(msg, status_code=503)(scope, receive, send)
@@ -308,17 +340,8 @@ class CallHookOnJobStartMiddleware:
                 msg = "Node currently running or booting, request refused."
                 return await Response(msg, status_code=409)(scope, receive, send)
 
-            async def wrapped_receive():
-                nonlocal started
-                event = await receive()
-                job_starting = event.get("type") == "http.request" and not started
-
-                if job_starting:
-                    started = True
-                    await on_job_start(scope, event)
-                return event
-
-            return await self.app(scope, wrapped_receive, send)
+            on_job_start(scope)
+            return await self.app(scope, receive, send)
         return await self.app(scope, receive, send)
 
 
@@ -349,7 +372,9 @@ class TrackOpenRequestMiddleware:
             return event
 
         async def wrapped_send(message):
-            if message["type"] == "http.response.body" and not message.get("more_body", False):
+            if message["type"] == "http.response.body" and not message.get(
+                "more_body", False
+            ):
                 mark_request_done()
             await send(message)
 
@@ -386,7 +411,8 @@ async def client_heartbeat(request: Request, logger: Logger = Depends(get_logger
         seconds_since_last_ping = now - (last_ping_received_at or now)
         if seconds_since_last_ping > 2:
             await logger.log(
-                f"high heartbeat gap: {seconds_since_last_ping:.3f}s", severity="WARNING"
+                f"high heartbeat gap: {seconds_since_last_ping:.3f}s",
+                severity="WARNING",
             )
         last_ping_received_at = now
         await asyncio.sleep(0)
@@ -414,9 +440,13 @@ async def handle_errors(request: Request, call_next):
             and SELF["job_watcher_task"] is None
         )
         if disconnected_mid_assign:
+            await SELF["on_job_start_task"]
             SELF["RUNNING"] = False
             SELF["current_job"] = None
             SELF["reported_status"] = "READY"
+            await head_client.push_state(
+                status="READY", current_job=None, reserved_for_job=None
+            )
     except Exception as exception:
         # create new response object to return gracefully.
         response = Response(status_code=500, content="Internal server error.")
@@ -428,8 +458,12 @@ async def handle_errors(request: Request, call_next):
     # handle response failure/success:
     if response.status_code == 500 and not str(request.url).endswith("/shutdown"):
         has_background_tasks = getattr(response, "background") is not None
-        response.background = response.background if has_background_tasks else BackgroundTasks()
-        add_background_task = get_add_background_task_function(response.background, logger=logger)
+        response.background = (
+            response.background if has_background_tasks else BackgroundTasks()
+        )
+        add_background_task = get_add_background_task_function(
+            response.background, logger=logger
+        )
         add_background_task(reboot_containers, logger=logger)
     if response.status_code == 200:
         SELF["last_client_activity_timestamp"] = time()
@@ -451,7 +485,9 @@ async def validate_requests(request: Request, call_next):
         if request.client.host == "127.0.0.1":
             return await call_next(request)
         else:
-            return Response("Shutdown endpoint can only be called from localhost", status_code=403)
+            return Response(
+                "Shutdown endpoint can only be called from localhost", status_code=403
+            )
 
     # validate all other requests:
     invalid_headers = True
@@ -486,7 +522,9 @@ async def validate_requests(request: Request, call_next):
 async def log_and_time_requests(request: Request, call_next):
     start = time()
     request.state.uuid = uuid4().hex
-    chatty_endpoint = request.url.path.endswith(("/results", "/ack_transfer", "/get_inputs"))
+    chatty_endpoint = request.url.path.endswith(
+        ("/results", "/ack_transfer", "/get_inputs")
+    )
 
     logger = Logger(request)
     # Don't use this ^ (except in `get_add_background_task_function`) because it forwards to the
@@ -503,8 +541,12 @@ async def log_and_time_requests(request: Request, call_next):
 
     # ensure background tasks are availabe:
     has_background_tasks = getattr(response, "background") is not None
-    response.background = response.background if has_background_tasks else BackgroundTasks()
-    add_background_task = get_add_background_task_function(response.background, logger=logger)
+    response.background = (
+        response.background if has_background_tasks else BackgroundTasks()
+    )
+    add_background_task = get_add_background_task_function(
+        response.background, logger=logger
+    )
 
     # Log response
     is_non_2xx_response = response.status_code < 200 or response.status_code >= 300

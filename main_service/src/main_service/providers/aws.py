@@ -4,6 +4,7 @@ from time import sleep
 import boto3
 from botocore.exceptions import ClientError
 
+from main_service import CURRENT_BURLA_VERSION
 from main_service.providers import NoCapacity
 
 # Capacity errors worth trying the next AZ for; anything else is a real error.
@@ -21,7 +22,9 @@ class AWSProvider:
     `burla-cluster-node`, in a security group opening the node port."""
 
     def __init__(self):
-        self.region = os.environ.get("AWS_REGION") or boto3.session.Session().region_name
+        self.region = (
+            os.environ.get("AWS_REGION") or boto3.session.Session().region_name
+        )
 
     def _ec2(self, region: str):
         return boto3.client("ec2", region_name=region)
@@ -34,9 +37,15 @@ class AWSProvider:
             return override
         response = ec2.describe_images(
             Owners=["self"],
-            Filters=[{"Name": "tag:burla-node-image", "Values": ["true"]}],
+            Filters=[
+                {"Name": "tag:burla-node-image", "Values": ["true"]},
+                {"Name": "tag:burla-version", "Values": [CURRENT_BURLA_VERSION]},
+                {"Name": "state", "Values": ["available"]},
+            ],
         )
-        images = sorted(response["Images"], key=lambda i: i["CreationDate"], reverse=True)
+        images = sorted(
+            response["Images"], key=lambda i: i["CreationDate"], reverse=True
+        )
         if not images:
             raise Exception(
                 "No burla node AMI found in this region. "
@@ -62,9 +71,9 @@ class AWSProvider:
         startup_script: str,
         shutdown_script: str,
         on_log,
-    ) -> tuple[str, str]:
+    ) -> tuple[str, str, str]:
         """Create the EC2 instance, iterating AZs on capacity exhaustion.
-        Returns (public_ip, availability_zone)."""
+        Returns (public_ip, private_ip, availability_zone)."""
         if num_gpus > 0:
             raise Exception(
                 "GPU nodes are not supported on AWS yet (the burla node AMI "
@@ -90,7 +99,11 @@ class AWSProvider:
             BlockDeviceMappings=[
                 {
                     "DeviceName": "/dev/sda1",
-                    "Ebs": {"VolumeSize": disk_size, "VolumeType": "gp3", "DeleteOnTermination": True},
+                    "Ebs": {
+                        "VolumeSize": disk_size,
+                        "VolumeType": "gp3",
+                        "DeleteOnTermination": True,
+                    },
                 }
             ],
             TagSpecifications=[
@@ -163,10 +176,15 @@ class AWSProvider:
                 break
             sleep(2)
         if not public_ip:
-            raise Exception(f"Instance {instance_name} ({instance_id}) never got a public IP.")
+            raise Exception(
+                f"Instance {instance_name} ({instance_id}) never got a public IP."
+            )
+        private_ip = instance["PrivateIpAddress"]
 
-        on_log(f"Successfully provisioned {machine_type} in AZ: {zone}\nWaiting for startup script ...")
-        return public_ip, zone
+        on_log(
+            f"Successfully provisioned {machine_type} in AZ: {zone}\nWaiting for startup script ..."
+        )
+        return public_ip, private_ip, zone
 
     def delete_instance(self, instance_name: str, zone: str | None = None):
         cached = _instance_ids.pop(instance_name, None)
@@ -187,7 +205,10 @@ class AWSProvider:
         response = ec2.describe_instances(
             Filters=[
                 {"Name": "tag:Name", "Values": [instance_name]},
-                {"Name": "instance-state-name", "Values": ["pending", "running", "stopping", "stopped"]},
+                {
+                    "Name": "instance-state-name",
+                    "Values": ["pending", "running", "stopping", "stopped"],
+                },
             ]
         )
         instance_ids = [

@@ -15,13 +15,14 @@ cluster token. These replace every node -> Firestore write and watch:
 
 import asyncio
 
-from fastapi import APIRouter, Request, Depends
+from fastapi import APIRouter, Request, Depends, HTTPException
 
 from main_service import get_logger, get_add_background_task_function
 from main_service import cluster_state, history
 from main_service.helpers import Logger
 from main_service.node import Node
 from main_service.providers import get_provider
+from main_service.transport_tls import cluster_ca_pem, sign_node_csr
 
 router = APIRouter()
 
@@ -39,10 +40,7 @@ async def push_node_state(instance_name: str, request: Request):
     body = await request.json()
 
     updates = {key: body[key] for key in _NODE_STATE_FIELDS if key in body}
-    if updates:
-        merged = cluster_state.update_node(instance_name, updates)
-    else:
-        merged = cluster_state.get_node(instance_name) or {}
+    merged = cluster_state.record_node_push(instance_name, updates)
 
     progress = body.get("job_progress")
     if progress:
@@ -69,13 +67,29 @@ async def push_node_logs(instance_name: str, request: Request):
     await asyncio.to_thread(cluster_state.add_node_logs, instance_name, body["logs"])
 
 
+@router.post("/v1/nodes/{instance_name}/certificate")
+async def issue_node_certificate(instance_name: str, request: Request):
+    node = cluster_state.get_node(instance_name)
+    if node is None or not node.get("public_ip") or not node.get("private_ip"):
+        raise HTTPException(status_code=409, detail="Node addresses are not registered")
+    body = await request.json()
+    certificate = sign_node_csr(
+        body["csr"],
+        node["public_ip"],
+        node["private_ip"],
+    )
+    return {"certificate": certificate, "cluster_ca": cluster_ca_pem()}
+
+
 @router.post("/v1/nodes/{instance_name}/self_delete")
 async def self_delete_node(
     instance_name: str,
     add_background_task=Depends(get_add_background_task_function),
     logger: Logger = Depends(get_logger),
 ):
-    node_dict = cluster_state.get_node(instance_name) or {"instance_name": instance_name}
+    node_dict = cluster_state.get_node(instance_name) or {
+        "instance_name": instance_name
+    }
     node = Node.from_state(logger, node_dict, auth_headers={}, provider=get_provider())
 
     def _delete_vm_only():

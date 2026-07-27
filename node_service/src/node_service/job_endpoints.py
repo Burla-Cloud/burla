@@ -21,7 +21,9 @@ from node_service.helpers import Logger
 from node_service.job_watcher import job_watcher_logged
 from node_service.worker_client import dynamic_ram_monitor_loop
 
-_LOGS_OVERFLOW_MESSAGE = "Logs dequeued due to high volume, see dashboard to view all logs."
+_LOGS_OVERFLOW_MESSAGE = (
+    "Logs dequeued due to high volume, see dashboard to view all logs."
+)
 MAX_LOGS_RESPONSE_BYTES = 1_000_000
 MAX_LOG_DOCUMENTS_PER_RESULTS_RESPONSE = 500
 MAX_RESULTS_RESPONSE_BYTES = 1_000_000
@@ -50,7 +52,10 @@ def _pop_pending_logs() -> list:
         drained_logs.append(warning_document)
         total_bytes += _log_document_size(warning_document)
 
-    while SELF["pending_logs"] and len(drained_logs) < MAX_LOG_DOCUMENTS_PER_RESULTS_RESPONSE:
+    while (
+        SELF["pending_logs"]
+        and len(drained_logs) < MAX_LOG_DOCUMENTS_PER_RESULTS_RESPONSE
+    ):
         log_document = SELF["pending_logs"][0]
         document_size = _log_document_size(log_document)
         if drained_logs and total_bytes + document_size > MAX_LOGS_RESPONSE_BYTES:
@@ -68,7 +73,9 @@ def _get_result_batch() -> tuple[str | None, list]:
 
     results = []
     total_bytes = 0
-    while (not SELF["results_queue"].empty()) and (total_bytes < MAX_RESULTS_RESPONSE_BYTES):
+    while (not SELF["results_queue"].empty()) and (
+        total_bytes < MAX_RESULTS_RESPONSE_BYTES
+    ):
         result = SELF["results_queue"].get_nowait()
         results.append(result)
         total_bytes += len(result[2])
@@ -103,7 +110,9 @@ async def get_inputs(
             except asyncio.QueueEmpty:
                 break
             if total_bytes + len(input_pkl) > 3_000_000 and items:
-                SELF["inputs_queue"].put_nowait((input_index, input_pkl), len(input_pkl))
+                SELF["inputs_queue"].put_nowait(
+                    (input_index, input_pkl), len(input_pkl)
+                )
                 break
             items.append((input_index, input_pkl))
             total_bytes += len(input_pkl)
@@ -185,7 +194,9 @@ async def get_results(
 
     data = pickle.dumps(response_json)
     headers = {"Content-Disposition": 'attachment; filename="results.pkl"'}
-    return Response(content=data, media_type="application/octet-stream", headers=headers)
+    return Response(
+        content=data, media_type="application/octet-stream", headers=headers
+    )
 
 
 @router.post("/jobs/{job_id}")
@@ -266,6 +277,7 @@ async def execute(
             }
         )
     )
+    NODE_AUTH_CREDENTIALS_PATH.chmod(0o600)
 
     packages = request_json["packages"]
     if packages:
@@ -281,7 +293,9 @@ async def execute(
     SELF["dynamic_func_ram"] = request_json["func_ram"] == "dynamic"
     SELF["reboot_containers_after_job"] = False
     if SELF["dynamic_func_ram"]:
-        SELF["dynamic_ram_monitor_task"] = asyncio.create_task(dynamic_ram_monitor_loop())
+        SELF["dynamic_ram_monitor_task"] = asyncio.create_task(
+            dynamic_ram_monitor_loop()
+        )
     # user specific, assign to self to use for node <-> node requests only during this job.
     SELF["auth_headers"] = {
         "Authorization": request.headers.get("Authorization", ""),

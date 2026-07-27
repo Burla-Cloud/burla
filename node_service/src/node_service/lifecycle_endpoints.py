@@ -51,7 +51,9 @@ async def reboot_containers_endpoint(
     add_background_task: Callable = Depends(get_add_background_task_function),
 ):
     if SELF["BOOTING"]:
-        return Response("Node already BOOTING, unable to satisfy request.", status_code=409)
+        return Response(
+            "Node already BOOTING, unable to satisfy request.", status_code=409
+        )
     return await reboot_containers(new_container_config, logger, add_background_task)
 
 
@@ -61,14 +63,20 @@ def image_size_GB(image: str):
     params = {"service": "registry.docker.io", "scope": f"repository:{name}:pull"}
     token = requests.get("https://auth.docker.io/token", params=params).json()["token"]
     auth = {"Authorization": f"Bearer {token}"}
-    headers = {**auth, "Accept": "application/vnd.docker.distribution.manifest.list.v2+json"}
+    headers = {
+        **auth,
+        "Accept": "application/vnd.docker.distribution.manifest.list.v2+json",
+    }
     url = f"https://registry-1.docker.io/v2/{name}/manifests/{tag}"
     manifest = requests.get(url, headers=headers).json()
     if "manifests" in manifest:
         is_linux = lambda m: m["platform"]["os"] == "linux"
         is_amd64 = lambda m: m["platform"]["architecture"] == "amd64"
         m = next(m for m in manifest["manifests"] if is_linux(m) and is_amd64(m))
-        headers = {**auth, "Accept": "application/vnd.docker.distribution.manifest.v2+json"}
+        headers = {
+            **auth,
+            "Accept": "application/vnd.docker.distribution.manifest.v2+json",
+        }
         url = f"https://registry-1.docker.io/v2/{name}/manifests/{m['digest']}"
         manifest = requests.get(url, headers=headers).json()
     size = sum(l["size"] for l in manifest["layers"])
@@ -133,16 +141,16 @@ async def _pull_image_if_missing(image: str, logger: Logger, docker: aiodocker.D
     if IN_LOCAL_DEV_MODE:
         return await _LOCAL_DEV_ONLY_pull_image_if_missing(image, logger, docker)
 
-    async def _run_command(command, raise_error=True):
-        process = await asyncio.create_subprocess_shell(
-            command,
+    async def _run_command(*args, input_bytes=None, raise_error=True):
+        process = await asyncio.create_subprocess_exec(
+            *args,
+            stdin=asyncio.subprocess.PIPE if input_bytes is not None else None,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout, stderr = await process.communicate()
+        stdout, stderr = await process.communicate(input_bytes)
         if process.returncode != 0 and raise_error:
-            print("")
-            raise Exception(command, stderr)
+            raise Exception(args, stderr)
         return process.returncode, stdout, stderr
 
     attempt = 0
@@ -154,14 +162,18 @@ async def _pull_image_if_missing(image: str, logger: Logger, docker: aiodocker.D
         except Exception:
             await logger.log(f"Pulling image {image} ...")
 
-        returncode, stdout, stderr = await _run_command(f"docker pull {image}", raise_error=False)
+        returncode, stdout, stderr = await _run_command(
+            "docker", "pull", image, raise_error=False
+        )
         text_output = stderr.decode() + stdout.decode()
         no_transient_error = not (returncode != 0 and "unexpected EOF" in text_output)
 
         if no_transient_error or attempt > 5:
             break
         else:
-            await logger.log(f"`Unexpected EOF` error detected, retrying... (attempt {attempt})")
+            await logger.log(
+                f"`Unexpected EOF` error detected, retrying... (attempt {attempt})"
+            )
             await asyncio.sleep(3)
 
     docker_pull_failed = returncode != 0
@@ -169,7 +181,9 @@ async def _pull_image_if_missing(image: str, logger: Logger, docker: aiodocker.D
     not_hosted_in_google_artifact_registry = "docker.pkg.dev" not in image
 
     if docker_pull_failed and not_hosted_in_google_artifact_registry:
-        raise Exception(f"CMD `docker pull {image}` failed with error:\n{docker_pull_stderr}\n")
+        raise Exception(
+            f"CMD `docker pull {image}` failed with error:\n{docker_pull_stderr}\n"
+        )
 
     # if failed and image is in GAR, try again using service account credentials
     if docker_pull_failed:
@@ -183,18 +197,32 @@ async def _pull_image_if_missing(image: str, logger: Logger, docker: aiodocker.D
             host = f'https://{image.split("/")[0]}'
 
         auth_config = _gcp_artifact_registry_auth()
-        login_cmd = f"docker login {host} -u oauth2accesstoken --password {auth_config['password']}"
-        returncode, stdout, stderr = await _run_command(login_cmd, raise_error=False)
+        returncode, stdout, stderr = await _run_command(
+            "docker",
+            "login",
+            host,
+            "-u",
+            "oauth2accesstoken",
+            "--password-stdin",
+            input_bytes=auth_config["password"].encode(),
+            raise_error=False,
+        )
         if returncode != 0:
-            msg = f"CMD `docker pull {image}` failed with error:\n{docker_pull_stderr}\n"
-            msg += f"Following attempt to login to {host} using the VM's service account "
+            msg = (
+                f"CMD `docker pull {image}` failed with error:\n{docker_pull_stderr}\n"
+            )
+            msg += (
+                f"Following attempt to login to {host} using the VM's service account "
+            )
             msg += f"also failed with error:\n{stderr}\n"
             raise Exception(msg)
 
-        await _run_command(f"docker pull {image}")
+        await _run_command("docker", "pull", image)
 
     # sanity check, not positive this is necessary with cli, but was with python api.
-    returncode, stdout, stderr = await _run_command(f"docker inspect {image}", raise_error=False)
+    returncode, stdout, stderr = await _run_command(
+        "docker", "inspect", image, raise_error=False
+    )
     if returncode != 0:
         msg = f"CMD: `docker pull {image}` succeeded, but subsequent `docker inspect ...` failed!\n"
         msg += f"`docker inspect` stderr:\n{stderr}\n"
@@ -230,7 +258,7 @@ RESERVATION_ASSIGNMENT_TIMEOUT_SEC = 60
 RESERVATION_POLL_INTERVAL_SEC = 2
 
 
-async def _watch_reservation(job_id: str):
+async def watch_reservation(job_id: str):
     """
     Wait until this node is assigned to `job_id`, or until the reservation is no longer valid.
     A reservation is no longer valid if the job is not RUNNING, or if the assignment never
@@ -324,7 +352,9 @@ async def reboot_containers(
                             await container.kill()
                         except Exception:
                             pass
-                        _schedule_container_removal(container.id, logger, add_background_task)
+                        _schedule_container_removal(
+                            container.id, logger, add_background_task
+                        )
 
                     elif belongs_to_current_node:
                         tasks.append(container.rename(f"OLD--{name}"))
@@ -344,7 +374,9 @@ async def reboot_containers(
                             await container.kill()
                         except Exception:
                             pass
-                        _schedule_container_removal(container.id, logger, add_background_task)
+                        _schedule_container_removal(
+                            container.id, logger, add_background_task
+                        )
 
             # start new workers.
             workers = []
@@ -383,7 +415,7 @@ async def reboot_containers(
 
         if SELF["reserved_for_job"]:
             SELF["watch_reservation_task"] = asyncio.create_task(
-                _watch_reservation(SELF["reserved_for_job"])
+                watch_reservation(SELF["reserved_for_job"])
             )
 
     except Exception as parent_exception:
@@ -405,4 +437,6 @@ async def reboot_containers(
             raise e from parent_exception
         raise parent_exception
 
-    await logger.log(f"Done booting {len(SELF['workers'])} workers, {INSTANCE_NAME} is READY!")
+    await logger.log(
+        f"Done booting {len(SELF['workers'])} workers, {INSTANCE_NAME} is READY!"
+    )

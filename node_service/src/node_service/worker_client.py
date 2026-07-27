@@ -60,7 +60,9 @@ class WorkerFunctionError(Exception):
 
 
 def oom_kill_marker_count(logs: str):
-    return sum(line.strip().startswith(OOM_KILL_MARKER_PREFIX) for line in logs.splitlines())
+    return sum(
+        line.strip().startswith(OOM_KILL_MARKER_PREFIX) for line in logs.splitlines()
+    )
 
 
 def _is_worker_internal_log_message(message: str) -> bool:
@@ -84,7 +86,9 @@ def _active_dynamic_workers():
 async def dynamic_ram_monitor_loop():
     started_at = time.perf_counter()
     while SELF["dynamic_func_ram"]:
-        startup_window = time.perf_counter() - started_at < DYNAMIC_RAM_STARTUP_MONITOR_SECONDS
+        startup_window = (
+            time.perf_counter() - started_at < DYNAMIC_RAM_STARTUP_MONITOR_SECONDS
+        )
         interval = (
             DYNAMIC_RAM_STARTUP_MONITOR_INTERVAL_SECONDS
             if startup_window
@@ -108,7 +112,9 @@ async def dynamic_ram_monitor_loop():
 
         node_memory_total_bytes = psutil.virtual_memory().total
         active_worker_memory_bytes = sum(rss_bytes for rss_bytes, _ in worker_memory)
-        active_worker_memory_fraction = active_worker_memory_bytes / node_memory_total_bytes
+        active_worker_memory_fraction = (
+            active_worker_memory_bytes / node_memory_total_bytes
+        )
         if active_worker_memory_fraction < DYNAMIC_RAM_MAX_NODE_MEMORY_USED_FRACTION:
             continue
 
@@ -164,7 +170,9 @@ class JobLogWriter:
         message_size = len(message.encode("utf-8")) + 180
         if message_size <= MAX_LOG_DOCUMENT_SIZE_BYTES:
             return message
-        max_bytes = MAX_LOG_DOCUMENT_SIZE_BYTES - len(TRUNCATED_LOG_SUFFIX.encode("utf-8"))
+        max_bytes = MAX_LOG_DOCUMENT_SIZE_BYTES - len(
+            TRUNCATED_LOG_SUFFIX.encode("utf-8")
+        )
         truncated_bytes = message.encode("utf-8")[:max_bytes]
         truncated_message = truncated_bytes.decode("utf-8", errors="ignore")
         return truncated_message + TRUNCATED_LOG_SUFFIX
@@ -206,14 +214,18 @@ class JobLogWriter:
 
     def _parse_container_log_line(self, container_log_line: str):
         timestamp_string, _, message = container_log_line.partition(" ")
-        timestamp = datetime.fromisoformat(timestamp_string.replace("Z", "+00:00")).timestamp()
+        timestamp = datetime.fromisoformat(
+            timestamp_string.replace("Z", "+00:00")
+        ).timestamp()
         return timestamp, message
 
     def _capture_container_log_line_locked(self, container_log_line: str):
         timestamp, message = self._parse_container_log_line(container_log_line)
         stripped_message = message.strip()
         if stripped_message.startswith(LOG_START_MARKER_PREFIX):
-            self.active_input_index = int(stripped_message.removeprefix(LOG_START_MARKER_PREFIX))
+            self.active_input_index = int(
+                stripped_message.removeprefix(LOG_START_MARKER_PREFIX)
+            )
             return
         if stripped_message.startswith(LOG_END_MARKER_PREFIX):
             input_index = int(stripped_message.removeprefix(LOG_END_MARKER_PREFIX))
@@ -309,7 +321,7 @@ def _worker_oom_error():
     return WorkerOutOfMemoryError(
         "\n\nWorker container was killed by the Linux OOM killer.\n"
         "This usually means the submitted function used more memory than the container had available.\n"
-        "Increase `func_ram`, use `func_ram=\"dynamic\"`, or reduce memory usage inside the function.\n"
+        'Increase `func_ram`, use `func_ram="dynamic"`, or reduce memory usage inside the function.\n'
     )
 
 
@@ -317,19 +329,21 @@ def _worker_process_oom_error():
     return WorkerOutOfMemoryError(
         "\n\nWorker process was killed by the Linux OOM killer while the container stayed healthy.\n"
         "This usually means this function call used more memory than was available at the current node parallelism.\n"
-        "Increase `func_ram`, use `func_ram=\"dynamic\"`, or reduce memory usage inside the function.\n"
+        'Increase `func_ram`, use `func_ram="dynamic"`, or reduce memory usage inside the function.\n'
     )
 
 
 def _dynamic_terminal_oom_error():
     return WorkerOutOfMemoryError(
-        "\n\nWorker ran out of memory while `func_ram=\"dynamic\"` was already down to one active worker on this node.\n"
+        '\n\nWorker ran out of memory while `func_ram="dynamic"` was already down to one active worker on this node.\n'
         "Burla cannot give this input more memory on the current machine. Reduce memory usage inside the function or use a larger node.\n"
     )
 
 
 def _worker_boot_timeout_error(logs: str):
-    message = f"\n\nWorker boot timed out after {WORKER_BOOT_TIMEOUT_SECONDS} seconds.\n"
+    message = (
+        f"\n\nWorker boot timed out after {WORKER_BOOT_TIMEOUT_SECONDS} seconds.\n"
+    )
     message += "The worker container never became ready to accept connections.\n"
     message += "\nBuffered worker logs:\n"
     message += "---------------------\n"
@@ -385,14 +399,19 @@ async def retire_workers_for_dynamic_memory_pressure(
             worker.current_input = None
 
         await asyncio.gather(
-            *(worker.retire_for_dynamic_memory_pressure() for _, worker in selected_worker_memory)
+            *(
+                worker.retire_for_dynamic_memory_pressure()
+                for _, worker in selected_worker_memory
+            )
         )
 
 
 class WorkerClient:
     def __init__(self, image: str):
         self.container_name = f"worker_{uuid4().hex[:8]}"
-        self.container_name += f"--node_{INSTANCE_NAME[11:]}" if IN_LOCAL_DEV_MODE else ""
+        self.container_name += (
+            f"--node_{INSTANCE_NAME[11:]}" if IN_LOCAL_DEV_MODE else ""
+        )
         self.port = None
         self.image = image
         self.docker = aiodocker.Docker()
@@ -427,7 +446,9 @@ class WorkerClient:
         if IN_LOCAL_DEV_MODE:
             host_pwd = os.environ["HOST_PWD"]
             host_home_dir = os.environ["HOST_HOME_DIR"]
-            worker_python_environment_dir = f"{host_pwd}/_worker_service_python_env/{INSTANCE_NAME}"
+            worker_python_environment_dir = (
+                f"{host_pwd}/_worker_service_python_env/{INSTANCE_NAME}"
+            )
             host_config["NetworkMode"] = "local-burla-cluster"
             binds.extend(
                 [
@@ -435,12 +456,15 @@ class WorkerClient:
                     f"{host_pwd}/_shared_workspace:/workspace/shared",
                     f"{worker_python_environment_dir}:/worker_service_python_env",
                     f"{host_pwd}/_node_auth:/root/.config/burla",
+                    f"{host_pwd}/client:/opt/burla/client:ro",
                 ]
             )
         else:
             host_config["CgroupParent"] = "burla-workers.slice"
             if NUM_GPUS != 0:
-                host_config["DeviceRequests"] = [{"Count": -1, "Capabilities": [["gpu"]]}]
+                host_config["DeviceRequests"] = [
+                    {"Count": -1, "Capabilities": [["gpu"]]}
+                ]
                 host_config["Runtime"] = "nvidia"
             binds.extend(
                 [
@@ -465,7 +489,7 @@ class WorkerClient:
                 "oom_kills=$(oom_kill_count); "
                 f"while true; do python /opt/burla/worker_server.py {WORKER_INTERNAL_PORT} {__version__}; "
                 "next_oom_kills=$(oom_kill_count); "
-                "if [ \"$next_oom_kills\" != \"$oom_kills\" ]; then "
+                'if [ "$next_oom_kills" != "$oom_kills" ]; then '
                 f"echo '{OOM_KILL_MARKER_PREFIX}'\"$oom_kills->$next_oom_kills\"; "
                 "fi; "
                 "oom_kills=$next_oom_kills; "
@@ -481,7 +505,9 @@ class WorkerClient:
             "HostConfig": host_config,
         }
 
-        self.container = await self.docker.containers.run(config=config, name=self.container_name)
+        self.container = await self.docker.containers.run(
+            config=config, name=self.container_name
+        )
         self.container_id = self.container.id
 
     async def _get_host_port(self):
@@ -490,12 +516,16 @@ class WorkerClient:
             if port_info:
                 return int(port_info[0]["HostPort"])
             await asyncio.sleep(0.5)
-        raise RuntimeError(f"Failed to get port for container {self.container_name} in 10s")
+        raise RuntimeError(
+            f"Failed to get port for container {self.container_name} in 10s"
+        )
 
     async def _get_worker_host_pid(self) -> int:
         # Docker's /top endpoint returns host PIDs of every process in the container.
         # aiodocker doesn't expose a wrapper for it so we call it via the internal client.
-        data = await self.docker._query_json(f"containers/{self.container_id}/top", method="GET")
+        data = await self.docker._query_json(
+            f"containers/{self.container_id}/top", method="GET"
+        )
         for row in data.get("Processes", []):
             cmd = row[-1]
             # The shell wrapper's CMD also contains worker_server.py because the script text
@@ -526,7 +556,9 @@ class WorkerClient:
     def _capture_container_output_chunk(self, container_output_chunk: str):
         if self.log_writer is None:
             return
-        asyncio.create_task(self.log_writer.capture_container_output(container_output_chunk))
+        asyncio.create_task(
+            self.log_writer.capture_container_output(container_output_chunk)
+        )
 
     async def _ensure_log_writer(self):
         current_job = SELF["current_job"]
@@ -544,19 +576,31 @@ class WorkerClient:
             return error.traceback_str
         error_info = getattr(error, "burla_error_info", None)
         if error_info and error_info.get("traceback_dict"):
-            traceback_object = Traceback.from_dict(error_info["traceback_dict"]).as_traceback()
-            return "".join(traceback.format_exception(type(error), error, traceback_object))
-        return "".join(traceback.format_exception(type(error), error, error.__traceback__))
+            traceback_object = Traceback.from_dict(
+                error_info["traceback_dict"]
+            ).as_traceback()
+            return "".join(
+                traceback.format_exception(type(error), error, traceback_object)
+            )
+        return "".join(
+            traceback.format_exception(type(error), error, error.__traceback__)
+        )
 
     async def boot(self):
         await self._start_container()
         self.python_version = await self._get_python_version()
-        self.port = WORKER_INTERNAL_PORT if IN_LOCAL_DEV_MODE else await self._get_host_port()
+        self.port = (
+            WORKER_INTERNAL_PORT if IN_LOCAL_DEV_MODE else await self._get_host_port()
+        )
         boot_started_at = time.perf_counter()
         while True:
             try:
-                connection_host = self.container_name if IN_LOCAL_DEV_MODE else "127.0.0.1"
-                connection_port = WORKER_INTERNAL_PORT if IN_LOCAL_DEV_MODE else self.port
+                connection_host = (
+                    self.container_name if IN_LOCAL_DEV_MODE else "127.0.0.1"
+                )
+                connection_port = (
+                    WORKER_INTERNAL_PORT if IN_LOCAL_DEV_MODE else self.port
+                )
                 self.reader, self.writer = await asyncio.open_connection(
                     connection_host, connection_port
                 )
@@ -566,14 +610,20 @@ class WorkerClient:
                 await self.writer.drain()
                 await self.reader.readexactly(1)
                 break
-            except (ConnectionRefusedError, ConnectionResetError, asyncio.IncompleteReadError):
+            except (
+                ConnectionRefusedError,
+                ConnectionResetError,
+                asyncio.IncompleteReadError,
+            ):
                 if self.writer is not None:
                     self.writer.close()
                     self.writer = None
                 container_info = await self.container.show()
                 if not container_info["State"]["Running"]:
                     await self._log_container_failure()
-                    raise RuntimeError(f"Container {self.container_name} stopped while booting.")
+                    raise RuntimeError(
+                        f"Container {self.container_name} stopped while booting."
+                    )
                 if time.perf_counter() - boot_started_at > WORKER_BOOT_TIMEOUT_SECONDS:
                     raise _worker_boot_timeout_error(await self._get_logs())
                 await asyncio.sleep(0.1)
@@ -636,7 +686,11 @@ class WorkerClient:
             SELF["reboot_containers_after_job"] = True
             await SELF["inputs_queue"].put((input_index, input_pkl), len(input_pkl))
 
-            reason = "worker process exit" if isinstance(error, WorkerProcessTerminatedError) else "worker OOM"
+            reason = (
+                "worker process exit"
+                if isinstance(error, WorkerProcessTerminatedError)
+                else "worker OOM"
+            )
             msg = (
                 f"Node parallelism decreased from {old_parallelism} to {new_parallelism} "
                 "due to memory pressure."
@@ -679,8 +733,12 @@ class WorkerClient:
     def _serialize_error(self, error: Exception):
         if isinstance(error, WorkerFunctionError):
             return error.error_info_pkl
-        traceback_str = "".join(traceback.format_exception(type(error), error, error.__traceback__))
-        return pickle.dumps({"traceback_str": traceback_str, "is_infrastructure_error": True})
+        traceback_str = "".join(
+            traceback.format_exception(type(error), error, error.__traceback__)
+        )
+        return pickle.dumps(
+            {"traceback_str": traceback_str, "is_infrastructure_error": True}
+        )
 
     async def _process_inputs(self):
         while True:
@@ -719,12 +777,16 @@ class WorkerClient:
                     return
                 else:
                     if self.log_writer is not None:
-                        await self.log_writer.write_error(input_index, self._traceback_string(error))
+                        await self.log_writer.write_error(
+                            input_index, self._traceback_string(error)
+                        )
                     result = (input_index, True, self._serialize_error(error))
                 stop_after_result = True
             except BaseException as error:
                 if self.log_writer is not None:
-                    await self.log_writer.write_error(input_index, self._traceback_string(error))
+                    await self.log_writer.write_error(
+                        input_index, self._traceback_string(error)
+                    )
                 result = (input_index, True, self._serialize_error(error))
             finally:
                 if self.log_writer is not None:
@@ -764,7 +826,9 @@ class WorkerClient:
 
     async def call_function(self, input_index: int, argument_bytes: bytes):
         try:
-            payload = pickle.dumps({"input_index": input_index, "argument_bytes": argument_bytes})
+            payload = pickle.dumps(
+                {"input_index": input_index, "argument_bytes": argument_bytes}
+            )
             self.writer.write(b"c")
             self.writer.write(len(payload).to_bytes(8, "big"))
             self.writer.write(payload)
@@ -802,8 +866,12 @@ class WorkerClient:
         reconnect_started_at = time.perf_counter()
         while True:
             try:
-                connection_host = self.container_name if IN_LOCAL_DEV_MODE else "127.0.0.1"
-                connection_port = WORKER_INTERNAL_PORT if IN_LOCAL_DEV_MODE else self.port
+                connection_host = (
+                    self.container_name if IN_LOCAL_DEV_MODE else "127.0.0.1"
+                )
+                connection_port = (
+                    WORKER_INTERNAL_PORT if IN_LOCAL_DEV_MODE else self.port
+                )
                 self.reader, self.writer = await asyncio.open_connection(
                     connection_host, connection_port
                 )
@@ -813,11 +881,18 @@ class WorkerClient:
                 await self.writer.drain()
                 await self.reader.readexactly(1)
                 break
-            except (ConnectionRefusedError, ConnectionResetError, asyncio.IncompleteReadError):
+            except (
+                ConnectionRefusedError,
+                ConnectionResetError,
+                asyncio.IncompleteReadError,
+            ):
                 if self.writer is not None:
                     self.writer.close()
                     self.writer = None
-                if time.perf_counter() - reconnect_started_at > WORKER_BOOT_TIMEOUT_SECONDS:
+                if (
+                    time.perf_counter() - reconnect_started_at
+                    > WORKER_BOOT_TIMEOUT_SECONDS
+                ):
                     raise _worker_boot_timeout_error(await self._get_logs())
                 await asyncio.sleep(0.05)
         self.is_idle = True

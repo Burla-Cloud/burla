@@ -35,6 +35,7 @@ from main_service import (
 from main_service import cluster_state, history
 from main_service.helpers import Logger, parse_version
 from main_service.node import Node
+from main_service.transport_tls import cluster_ca_pem
 from main_service.providers.catalog import (
     gpu_machine_prefix,
     gpu_machine_type,
@@ -112,19 +113,25 @@ def _select_ready_nodes_from_state(
     machine_prefix = gpu_machine_prefix(func_gpu, CLOUD_PROVIDER)
     all_nodes = cluster_state.list_nodes()
     unfiltered_ready = [
-        n for n in all_nodes
-        if n.get("status") == "READY" and not n.get("reserved_for_job")
+        n
+        for n in all_nodes
+        if n.get("status") == "READY"
+        and not n.get("current_job")
+        and not n.get("reserved_for_job")
+        and cluster_state.node_is_fresh(n)
     ]
     ready_after_image = unfiltered_ready
     if image:
         ready_after_image = [
-            n for n in unfiltered_ready
+            n
+            for n in unfiltered_ready
             if image in [c["image"] for c in n.get("containers") or []]
         ]
     ready_after_filters = ready_after_image
     if machine_prefix:
         ready_after_filters = [
-            n for n in ready_after_image
+            n
+            for n in ready_after_image
             if (n.get("machine_type") or "").startswith(machine_prefix)
         ]
 
@@ -216,9 +223,8 @@ def _grow_if_needed(
         # hardware. Local dev stays homogeneous because node containers
         # hard-code 2 workers regardless of the advertised machine_type
         # (see INSTANCE_N_CPUS).
-        pack_by_size = (
-            not IN_LOCAL_DEV_MODE
-            and is_packable_cpu_machine(configured_machine_type)
+        pack_by_size = not IN_LOCAL_DEV_MODE and is_packable_cpu_machine(
+            configured_machine_type
         )
 
         if pack_by_size:
@@ -232,7 +238,8 @@ def _grow_if_needed(
     # node that can't run a single call, and the client would then send
     # parallelism=0 to it, producing a misleading 409 from the node.
     node_machine_types = [
-        mt for mt in node_machine_types
+        mt
+        for mt in node_machine_types
         if parallelism_capacity(mt, func_cpu, func_ram) > 0
     ]
     if not node_machine_types:
@@ -256,7 +263,9 @@ def _grow_if_needed(
     return [
         {
             "instance_name": name,
-            "target_parallelism": parallelism_capacity(machine_type, func_cpu, func_ram),
+            "target_parallelism": parallelism_capacity(
+                machine_type, func_cpu, func_ram
+            ),
         }
         for name, machine_type in zip(node_instance_names, node_machine_types)
     ]
@@ -382,17 +391,21 @@ async def start_job(
             "requested_func_gpu": func_gpu,
         }
         if reason == "image_mismatch":
-            detail["available_images"] = sorted({
-                c["image"]
-                for n in unfiltered_ready
-                for c in (n.get("containers") or [])
-            })
+            detail["available_images"] = sorted(
+                {
+                    c["image"]
+                    for n in unfiltered_ready
+                    for c in (n.get("containers") or [])
+                }
+            )
         elif reason == "gpu_mismatch":
-            detail["available_machine_types"] = sorted({
-                n.get("machine_type")
-                for n in ready_after_image
-                if n.get("machine_type")
-            })
+            detail["available_machine_types"] = sorted(
+                {
+                    n.get("machine_type")
+                    for n in ready_after_image
+                    if n.get("machine_type")
+                }
+            )
         raise HTTPException(status_code=409, detail=detail)
 
     # --- grow, if requested and short on capacity ---
@@ -412,7 +425,7 @@ async def start_job(
             add_background_task=add_background_task,
         )
 
-    # --- create the job (in memory: synchronous and instant) ---
+    # --- create the job and claim warm nodes atomically ---
     job = {
         "n_inputs": n_inputs,
         "func_cpu": func_cpu,
@@ -434,11 +447,14 @@ async def start_job(
         "client_has_all_results": False,
         "fail_reason": [],
     }
-    await asyncio.to_thread(cluster_state.create_job, job_id, job)
+    selected_instance_names = [node["instance_name"] for node in ready]
+    if not cluster_state.admit_job(job_id, job, selected_instance_names):
+        raise HTTPException(status_code=503, detail={"error": "nodes_busy"})
 
     return {
         "ready_nodes": ready,
         "booting_nodes": booting_nodes,
+        "cluster_ca": None if IN_LOCAL_DEV_MODE else cluster_ca_pem(),
     }
 
 
@@ -463,14 +479,20 @@ async def get_cluster_state():
         status = data.get("status")
         if status == "BOOTING":
             booting_count += 1
-        elif status == "RUNNING":
+        elif status == "RUNNING" and cluster_state.node_is_fresh(data):
             running_count += 1
-        elif status == "READY" and not data.get("reserved_for_job"):
+        elif (
+            status == "READY"
+            and not data.get("current_job")
+            and not data.get("reserved_for_job")
+            and cluster_state.node_is_fresh(data)
+        ):
             ready_nodes.append(data)
     return {
         "booting_count": booting_count,
         "running_count": running_count,
         "ready_nodes": ready_nodes,
+        "cluster_ca": None if IN_LOCAL_DEV_MODE else cluster_ca_pem(),
     }
 
 
@@ -501,7 +523,9 @@ _FAIL_LOG_TOKENS = ("Error", "error", "failed", "Traceback", "Exception")
 # from innocuous info logs and fall back cleanly.
 @router.get("/v1/cluster/nodes/{node_id}/fail_reason")
 async def get_node_fail_reason(node_id: str):
-    reason = await asyncio.to_thread(history.first_failure_log, node_id, _FAIL_LOG_TOKENS)
+    reason = await asyncio.to_thread(
+        history.first_failure_log, node_id, _FAIL_LOG_TOKENS
+    )
     if reason:
         return {"reason": reason}
     raise HTTPException(status_code=404, detail="no failure log for node")

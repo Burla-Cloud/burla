@@ -1,6 +1,6 @@
 #### Main Service
 
-The "main service" is a fastapi webservice deployed as a single always-on VM (the cluster's "head node"), on GCE or EC2.  
+The "main service" is a fastapi webservice deployed as a single always-on VM (the cluster's "head node"), on GCE or EC2.
 This service is responsible for:
 
 - Adding/removing/managing nodes in the cluster (via a compute-provider interface, GCP or AWS).
@@ -8,8 +8,8 @@ This service is responsible for:
 - Persisting job/node history to SQLite on its disk (`/var/lib/burla/history.db`) for the dashboard.
 - Hosting the cluster-management dashboard (react/ts)
 
-There is no external database. The head is a stateful singleton:  
-It is currently not possible to run more than one "main-service" instance in any single cloud account.  
+There is no external database. The head is a stateful singleton:
+It is currently not possible to run more than one "main-service" instance in any single cloud account.
 It is currently not possible to run more than one "cluster" using a single "main-service".  
 
 #### Dev:

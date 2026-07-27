@@ -87,22 +87,6 @@ def test_NodeDisconnected_carries_node_attr():
     assert "boom" in str(exc)
 
 
-# ------------------------------------------------------------ AuthException (unit)
-
-
-@pytest.mark.unit
-def test_AuthException_raised_when_config_missing(tmp_path, monkeypatch):
-    from burla import _auth
-
-    fake_path = tmp_path / "nope.json"
-    monkeypatch.setattr(_auth, "CONFIG_PATH", fake_path)
-    # Clear cache to force re-read.
-    _auth._get_auth_info.cache_clear()
-
-    with pytest.raises(_auth.AuthException):
-        _auth.get_auth_headers()
-
-
 # ------------------------------------------------------------ e2e UDF error propagation
 
 

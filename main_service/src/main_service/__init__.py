@@ -8,12 +8,10 @@ import aiohttp
 import logging as python_logging
 from uuid import uuid4
 from time import time, sleep
-from typing import Callable, Optional
+from typing import Callable
 from pathlib import Path
 from contextlib import asynccontextmanager
 
-import google.auth
-from google.cloud import firestore, logging, secretmanager
 from fastapi.responses import Response, FileResponse, RedirectResponse
 from fastapi import FastAPI, Request, BackgroundTasks, Depends, status
 from fastapi.staticfiles import StaticFiles
@@ -22,11 +20,8 @@ from starlette.middleware.sessions import SessionMiddleware
 from starlette.datastructures import UploadFile
 from jinja2 import Environment, FileSystemLoader
 
-os.environ["GRPC_VERBOSITY"] = "ERROR"
-os.environ["GLOG_minloglevel"] = "2"
-
-CURRENT_BURLA_VERSION = "1.5.10"
-MIN_COMPATIBLE_CLIENT_VERSION = "1.5.10"
+CURRENT_BURLA_VERSION = "1.6.0"
+MIN_COMPATIBLE_CLIENT_VERSION = "1.6.0"
 
 # In this mode EVERYTHING runs locally in docker containers.
 # possible modes: local-dev-mode (everything local), remote-dev-mode (only main-service local), prod
@@ -34,18 +29,79 @@ IN_LOCAL_DEV_MODE = os.environ.get("IN_LOCAL_DEV_MODE") == "True"
 # This is needed because remote-dev-mode is not local-dev-mode, and needs local redirect on login.
 REDIRECT_LOCALLY_ON_LOGIN = os.environ.get("REDIRECT_LOCALLY_ON_LOGIN") == "True"
 
-CREDENTIALS, PROJECT_ID = google.auth.default()
+# "gcp" or "aws" - which cloud this cluster boots node VMs in.
+CLOUD_PROVIDER = os.environ.get("CLOUD_PROVIDER", "gcp")
+
 BURLA_BACKEND_URL = "https://backend.burla.dev"
-GCL_CLIENT = logging.Client().logger("main_service")
-DB = firestore.Client(database="burla")
+
+
+def _resolve_project_id() -> str:
+    """The cluster identifier used by backend.burla.dev and cloud APIs.
+    On GCP it's the GCP project id; on AWS it's set at install time."""
+    project_id = os.environ.get("PROJECT_ID") or os.environ.get("GOOGLE_CLOUD_PROJECT")
+    if project_id:
+        return project_id
+    import google.auth
+
+    _, project_id = google.auth.default()
+    return project_id
+
+
+PROJECT_ID = _resolve_project_id()
 
 STATIC_FILES_ENV = Environment(loader=FileSystemLoader("src/main_service/static"))
-secret_client = secretmanager.SecretManagerServiceClient()
-secret_name = f"projects/{PROJECT_ID}/secrets/burla-cluster-id-token/versions/latest"
-response = secret_client.access_secret_version(request={"name": secret_name})
-CLUSTER_ID_TOKEN = response.payload.data.decode("UTF-8")
 
-DEFAULT_CONFIG = {  # <- config used only when config is missing from firestore
+
+def _resolve_cluster_id_token() -> str:
+    token = os.environ.get("CLUSTER_ID_TOKEN")
+    if token:
+        return token
+    if IN_LOCAL_DEV_MODE:
+        return "local-dev-token"
+    raise RuntimeError("CLUSTER_ID_TOKEN env var is required outside local-dev mode.")
+
+
+CLUSTER_ID_TOKEN = _resolve_cluster_id_token()
+
+# Base URL node VMs use to reach this service. Nodes run in the same VPC as
+# the head VM, so this is the head's internal IP (or the docker network
+# hostname in local-dev). The public dashboard URL is separate.
+MAIN_SERVICE_PORT = int(os.environ.get("PORT", 5001))
+
+
+def _resolve_self_url_for_nodes() -> str:
+    if IN_LOCAL_DEV_MODE:
+        return f"http://main_service:{MAIN_SERVICE_PORT}"
+    override = os.environ.get("MAIN_SERVICE_URL_FOR_NODES")
+    if override:
+        return override.rstrip("/")
+    import requests as _requests
+
+    if CLOUD_PROVIDER == "aws":
+        token_response = _requests.put(
+            "http://169.254.169.254/latest/api/token",
+            headers={"X-aws-ec2-metadata-token-ttl-seconds": "60"},
+            timeout=5,
+        )
+        ip_response = _requests.get(
+            "http://169.254.169.254/latest/meta-data/local-ipv4",
+            headers={"X-aws-ec2-metadata-token": token_response.text},
+            timeout=5,
+        )
+        internal_ip = ip_response.text.strip()
+    else:
+        ip_response = _requests.get(
+            "http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/ip",
+            headers={"Metadata-Flavor": "Google"},
+            timeout=5,
+        )
+        internal_ip = ip_response.text.strip()
+    return f"http://{internal_ip}:{MAIN_SERVICE_PORT}"
+
+
+MAIN_SERVICE_URL_FOR_NODES = _resolve_self_url_for_nodes()
+
+DEFAULT_CONFIG = {  # <- config used only when no config has ever been saved
     "Nodes": [
         {
             "containers": [
@@ -53,101 +109,31 @@ DEFAULT_CONFIG = {  # <- config used only when config is missing from firestore
                     "image": "python:3.12",
                 },
             ],
-            "machine_type": "n4-standard-4",
-            "gcp_region": "us-central1",
+            "machine_type": "n4-standard-4" if CLOUD_PROVIDER == "gcp" else "m7i.2xlarge",
+            # Region nodes boot in. Field is named gcp_region for historical
+            # reasons; on AWS it holds an AWS region (e.g. us-east-1).
+            "gcp_region": "us-central1" if CLOUD_PROVIDER == "gcp" else "us-east-1",
             "quantity": 1,
             "inactivity_shutdown_time_sec": 60 * 10,
         }
     ],
-    # Same bucket that `burla install` creates via `gcloud storage buckets create ...`
-    # Used by storage.py and node boot to mount /workspace/shared in every container.
+    # Bucket FUSE-mounted at /workspace/shared in every container.
+    # GCS bucket on GCP, S3 bucket on AWS - same name convention.
     "gcs_bucket_name": f"{PROJECT_ID}-burla-shared-workspace",
 }
 
-# `burla install` no longer seeds `cluster_config`, so main_service is the
-# only thing that can guarantee it exists. Seed at startup before anything
-# (LOCAL_DEV_CONFIG below, storage.py at import, etc.) reads it.
-_cluster_config_ref = DB.collection("cluster_config").document("cluster_config")
-if not _cluster_config_ref.get().exists:
-    _cluster_config_ref.set(DEFAULT_CONFIG)
+from main_service import history
+
+if history.get_cluster_config() is None:
+    history.save_cluster_config(DEFAULT_CONFIG)
 
 LOCAL_DEV_CONFIG = None
 if IN_LOCAL_DEV_MODE:
-    LOCAL_DEV_CONFIG = _cluster_config_ref.get().to_dict()
+    LOCAL_DEV_CONFIG = history.get_cluster_config()
     LOCAL_DEV_CONFIG["Nodes"][0]["machine_type"] = "n4-standard-2"
     LOCAL_DEV_CONFIG["Nodes"][0]["quantity"] = 2
 
-
-# ------------------------------------------------------------------
-# In-process caches backed by firestore on_snapshot listeners.
-#
-# These kill the per-request firestore query on the burla client's hot path:
-# - NODES_CACHE: `POST /v1/jobs/{id}/start`, `GET /v1/cluster/state`, and
-#                `GET /v1/cluster/nodes/{id}` all answer from this dict.
-# - CLUSTER_CONFIG_CACHE: read by `_get_cluster_config` when sizing growth
-#                         inside `POST /v1/jobs/{id}/start`.
-#
-# The listeners run in firestore's own thread pool (not the asyncio loop).
-# Accessors hold the corresponding threading.Lock briefly when reading or
-# mutating the cache so snapshot callbacks and endpoint handlers can coexist.
-#
-# A listener's first fire delivers every currently-matching doc, so cold
-# start is warm within a few hundred ms of process boot.
-# ------------------------------------------------------------------
-
-# Keyed by instance_name. Holds every node the client might ask about:
-# active (BOOTING/RUNNING/READY) plus FAILED so a client polling a node that
-# fell over between ticks can still see the FAILED status.
-NODES_CACHE: dict[str, dict] = {}
-_nodes_cache_lock = threading.Lock()
-_nodes_cache_watcher = None
-# Set once the nodes listener's first fire completes. Lifespan waits on this
-# so no endpoint request is served while NODES_CACHE is still empty from
-# warm-up and could return spurious "no nodes" 404s.
-_nodes_cache_ready = threading.Event()
-_NODES_CACHE_READY_TIMEOUT_SEC = 10
-
-CLUSTER_CONFIG_CACHE: Optional[dict] = None
-_config_cache_lock = threading.Lock()
-_config_cache_watcher = None
-
-_ACTIVE_NODE_STATUSES = ["BOOTING", "RUNNING", "READY", "FAILED"]
-
-
-def _on_nodes_snapshot(_query_snapshot, changes, _read_time):
-    with _nodes_cache_lock:
-        for change in changes:
-            doc_id = change.document.id
-            data = change.document.to_dict() or {}
-            if change.type.name == "REMOVED":
-                NODES_CACHE.pop(doc_id, None)
-                continue
-            if data.get("status") in _ACTIVE_NODE_STATUSES:
-                NODES_CACHE[doc_id] = data
-            else:
-                NODES_CACHE.pop(doc_id, None)
-    # First fire delivers the full matching set; everything after is deltas.
-    # Either way the cache is now valid to serve.
-    _nodes_cache_ready.set()
-
-
-def _on_config_snapshot(_query_snapshot, changes, _read_time):
-    global CLUSTER_CONFIG_CACHE
-    with _config_cache_lock:
-        for change in changes:
-            if change.document.id == "cluster_config":
-                CLUSTER_CONFIG_CACHE = change.document.to_dict() or {}
-
-
-def _start_caches():
-    global _nodes_cache_watcher, _config_cache_watcher
-    nodes_filter = firestore.FieldFilter("status", "in", _ACTIVE_NODE_STATUSES)
-    _nodes_cache_watcher = (
-        DB.collection("nodes").where(filter=nodes_filter).on_snapshot(_on_nodes_snapshot)
-    )
-    _config_cache_watcher = DB.collection("cluster_config").on_snapshot(_on_config_snapshot)
-
-
+from main_service import cluster_state
 from main_service.helpers import (
     ChattyClientEndpointFilter,
     Logger,
@@ -155,8 +141,8 @@ from main_service.helpers import (
     is_chatty_client_path,
 )
 
-# Silence uvicorn access logs for the two endpoints the burla client polls
-# on a tight loop during every job (cluster state + per-node status).
+# Silence uvicorn access logs for the endpoints polled on a tight loop during
+# every job (cluster state + per-node status + node state pushes).
 python_logging.getLogger("uvicorn.access").addFilter(ChattyClientEndpointFilter())
 
 
@@ -242,6 +228,7 @@ from main_service.endpoints.settings import router as settings_router
 from main_service.endpoints.jobs import router as jobs_router
 from main_service.endpoints.storage import router as storage_router
 from main_service.endpoints.client import router as client_router
+from main_service.endpoints.nodes import router as nodes_router
 
 
 @asynccontextmanager
@@ -265,26 +252,13 @@ async def lifespan(app: FastAPI):
         else:
             print(f"FAILED to rebuild frontend?, check logs with `Cmd + Shift + U`.")
 
-    _start_caches()
-    # Block traffic until the nodes listener has delivered its first fire.
-    # Without this, requests arriving within the ~100-500ms cache warm-up
-    # window see an empty NODES_CACHE and can spuriously 404. If firestore
-    # is unreachable we time out and proceed anyway (degraded to old race
-    # behavior rather than failing startup outright).
-    warmed = await asyncio.to_thread(_nodes_cache_ready.wait, _NODES_CACHE_READY_TIMEOUT_SEC)
-    if not warmed:
-        print(
-            f"NODES_CACHE did not warm within {_NODES_CACHE_READY_TIMEOUT_SEC}s; "
-            "serving with empty cache.",
-            file=sys.stderr,
-        )
+    cluster_state.set_event_loop(asyncio.get_running_loop())
+    cluster_state.load_from_history()
+    reaper_task = asyncio.create_task(cluster_state.job_reaper_loop(logger=Logger()))
     try:
         yield
     finally:
-        if _nodes_cache_watcher is not None:
-            _nodes_cache_watcher.unsubscribe()
-        if _config_cache_watcher is not None:
-            _config_cache_watcher.unsubscribe()
+        reaper_task.cancel()
 
 
 app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None)
@@ -295,6 +269,7 @@ app.include_router(settings_router)
 app.include_router(jobs_router)
 app.include_router(storage_router)
 app.include_router(client_router)
+app.include_router(nodes_router)
 
 # Allow cross-origin requests for local development and to satisfy Syncfusion preflights
 app.add_middleware(
@@ -397,10 +372,10 @@ async def catch_errors(request: Request, call_next):
 # Auth validation cache.
 #
 # The burla client hits main_service many times during a single
-# `remote_parallel_map` (heartbeat every 2 s, plus result polls,
-# node polls, etc.). Without this cache, each one triggers a
-# round-trip to `backend.burla.dev/users:validate` (~100-200 ms), which
-# both slows every client call AND loads up the central auth service.
+# `remote_parallel_map` (result polls, node polls, etc). Without this cache,
+# each one triggers a round-trip to `backend.burla.dev/users:validate`
+# (~100-200 ms), which both slows every client call AND loads up the central
+# auth service.
 #
 # A successful validation is trusted for `_AUTH_CACHE_TTL_SEC`. On a cache
 # miss (never validated, or the entry expired) the middleware re-validates
@@ -454,6 +429,11 @@ async def validate_requests(request: Request, call_next):
       - use client_id to get auth info, set auth cookie -> redirect here again but with auth cookie
       - here again with auth cookie -> access granted
     """
+    # Node services (and VM startup scripts) authenticate with the cluster
+    # token - they push state / logs and read job + peer views.
+    if request.headers.get("Authorization") == f"Bearer {CLUSTER_ID_TOKEN}":
+        return await call_next(request)
+
     # Local-dev bypass: the auth middleware normally validates every request
     # against backend.burla.dev, which requires a Google/Microsoft login. In
     # local-dev there is no real user flow, so stamp a fake session and let
@@ -483,7 +463,7 @@ async def validate_requests(request: Request, call_next):
         return await call_next(request)
 
     # Allow Server-Sent Events to pass through without auth to prevent proxy/login HTML from breaking the stream
-    # These endpoints read from Firestore only and do not perform privileged actions.
+    # These endpoints read in-memory state only and do not perform privileged actions.
     accept_header = request.headers.get("accept", "")
     if "text/event-stream" in accept_header:
         return await call_next(request)

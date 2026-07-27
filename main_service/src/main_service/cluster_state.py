@@ -1,0 +1,392 @@
+"""
+Authoritative in-memory live cluster state.
+
+main_service is a single always-on process; every node pushes its state here
+over HTTP (see endpoints/nodes.py) and every reader (job start, dashboards,
+the burla client) is served from these dicts. Firestore is gone - the only
+persistence is the SQLite history store, written on transitions so the
+dashboard can show the past after a head restart.
+
+Mutations can arrive from the event loop (endpoints) and from worker threads
+(Node.start runs in a ThreadPoolExecutor), so a threading.Lock guards state
+and pub/sub events are delivered with call_soon_threadsafe.
+"""
+
+import asyncio
+import threading
+from time import time
+
+from main_service import history
+
+_lock = threading.RLock()
+
+# instance_name -> node dict (same field names the firestore docs used).
+# DELETED entries are kept (not dropped) so a deleted VM whose push loop is
+# still running can't resurrect itself; readers filter them out. Instance
+# names are never reused, and the head reloads only active nodes at startup,
+# so this can't grow unboundedly.
+NODES: dict[str, dict] = {}
+
+# job_id -> job dict. Same fields the firestore job docs used, plus
+# "assigned_nodes": {instance_name: {"current_num_results", "client_contact_last_1s",
+# "last_push_at"}}. Terminal jobs stay in memory (they're small) and are
+# persisted to history on every status transition.
+JOBS: dict[str, dict] = {}
+
+ACTIVE_NODE_STATUSES = ("BOOTING", "RUNNING", "READY", "FAILED")
+TERMINAL_JOB_STATUSES = ("COMPLETED", "FAILED", "CANCELED")
+
+_loop: asyncio.AbstractEventLoop | None = None
+_node_event_queues: set[asyncio.Queue] = set()
+_job_event_queues: set[asyncio.Queue] = set()
+_node_log_queues: dict[str, set[asyncio.Queue]] = {}
+
+
+def set_event_loop(loop: asyncio.AbstractEventLoop):
+    global _loop
+    _loop = loop
+
+
+def load_from_history():
+    """Rebuild live state after a head restart. Node pushes (~1s cadence)
+    correct any staleness within seconds; jobs whose nodes died while the
+    head was down are cleaned up by the reaper."""
+    with _lock:
+        for node in history.active_nodes():
+            NODES.setdefault(node["instance_name"], node)
+        for job_id, job in history.running_jobs():
+            job.pop("n_results", None)
+            job["assigned_nodes"] = {}
+            JOBS.setdefault(job_id, job)
+
+
+def _publish(queues, event: dict):
+    if _loop is None:
+        return
+    for queue in list(queues):
+        _loop.call_soon_threadsafe(queue.put_nowait, event)
+
+
+# ------------------------------------------------------------------ subscriptions
+
+
+def subscribe_node_events() -> asyncio.Queue:
+    queue = asyncio.Queue()
+    with _lock:
+        _node_event_queues.add(queue)
+    return queue
+
+
+def subscribe_job_events() -> asyncio.Queue:
+    queue = asyncio.Queue()
+    with _lock:
+        _job_event_queues.add(queue)
+    return queue
+
+
+def subscribe_node_logs(instance_name: str) -> asyncio.Queue:
+    queue = asyncio.Queue()
+    with _lock:
+        _node_log_queues.setdefault(instance_name, set()).add(queue)
+    return queue
+
+
+def unsubscribe(queue: asyncio.Queue):
+    with _lock:
+        _node_event_queues.discard(queue)
+        _job_event_queues.discard(queue)
+        for queues in _node_log_queues.values():
+            queues.discard(queue)
+
+
+# ------------------------------------------------------------------ nodes
+
+
+def list_nodes() -> list[dict]:
+    with _lock:
+        return [
+            dict(node) for node in NODES.values() if node.get("status") != "DELETED"
+        ]
+
+
+def get_node(instance_name: str) -> dict | None:
+    """Live view: DELETED nodes read as absent (the client treats a 404 on a
+    node it was polling as FAILED, same as the old cache behavior)."""
+    with _lock:
+        node = NODES.get(instance_name)
+        if node is None or node.get("status") == "DELETED":
+            return None
+        return dict(node)
+
+
+def update_node(instance_name: str, updates: dict) -> dict:
+    """Merge `updates` into the node's state and return the merged view.
+
+    Rules (previously enforced by scattered read-then-write firestore code):
+    - BOOTING/READY/RUNNING never overwrite a terminal DELETED/FAILED status.
+    - DELETED never overwrites FAILED (failed nodes stay visible for debugging).
+    - DELETED nodes are persisted to history then dropped from memory.
+    """
+    with _lock:
+        node = NODES.get(instance_name, {"instance_name": instance_name})
+        current_status = node.get("status")
+        new_status = updates.get("status")
+
+        if new_status:
+            terminal = current_status in ("DELETED", "FAILED")
+            downgrade = new_status in ("BOOTING", "READY", "RUNNING")
+            if terminal and downgrade:
+                updates = {k: v for k, v in updates.items() if k != "status"}
+                new_status = None
+            if new_status == "DELETED" and current_status == "FAILED":
+                updates = {k: v for k, v in updates.items() if k != "status"}
+                new_status = None
+
+        node.update(updates)
+        status_changed = new_status is not None and new_status != current_status
+        NODES[instance_name] = node
+        merged = dict(node)
+
+    if status_changed:
+        history.upsert_node(instance_name, merged)
+    if status_changed or "host" in updates or "current_job" in updates:
+        deleted = merged.get("status") == "DELETED"
+        _publish(_node_event_queues, {"deleted": deleted, **merged})
+    return merged
+
+
+def remove_node(instance_name: str):
+    """Drop a node from live state without marking it DELETED (dev cleanup)."""
+    with _lock:
+        node = NODES.pop(instance_name, None)
+    if node:
+        _publish(_node_event_queues, {"deleted": True, **node})
+
+
+def add_node_log(instance_name: str, msg: str, ts: float | None = None):
+    ts = ts if ts is not None else time()
+    history.add_node_logs(instance_name, [{"msg": msg, "ts": ts}])
+    with _lock:
+        queues = set(_node_log_queues.get(instance_name, ()))
+    _publish(queues, {"msg": msg, "ts": ts})
+
+
+def add_node_logs(instance_name: str, logs: list[dict]):
+    history.add_node_logs(instance_name, logs)
+    with _lock:
+        queues = set(_node_log_queues.get(instance_name, ()))
+    for log in logs:
+        _publish(queues, {"msg": log.get("msg", ""), "ts": log.get("ts")})
+
+
+# ------------------------------------------------------------------ jobs
+
+
+def create_job(job_id: str, job: dict):
+    job = dict(job)
+    job["assigned_nodes"] = {}
+    with _lock:
+        JOBS[job_id] = job
+        snapshot = dict(job)
+    history.upsert_job(job_id, snapshot)
+    _publish(_job_event_queues, {"job_id": job_id, **_job_summary(snapshot)})
+
+
+def _get_or_load_job(job_id: str) -> dict | None:
+    """Must be called with _lock held. Lazily reloads a job from history
+    after a head restart so in-flight jobs keep working."""
+    job = JOBS.get(job_id)
+    if job is not None:
+        return job
+    stored = history.get_job(job_id)
+    if stored is None:
+        return None
+    stored.pop("n_results", None)
+    stored["assigned_nodes"] = {}
+    JOBS[job_id] = stored
+    return stored
+
+
+def get_job(job_id: str) -> dict | None:
+    with _lock:
+        job = _get_or_load_job(job_id)
+        if job is None:
+            return None
+        view = {k: v for k, v in job.items() if k != "assigned_nodes"}
+        view["n_results"] = sum(
+            n.get("current_num_results", 0) for n in job["assigned_nodes"].values()
+        )
+        return view
+
+
+def update_job(job_id: str, updates: dict, append_fail_reason: str | None = None) -> bool:
+    """Merge updates into a job. Returns False if the job doesn't exist.
+
+    Status rule: FAILED/CANCELED always apply; COMPLETED only applies while
+    the job is RUNNING (a node reporting completion must not overwrite a
+    cancellation another writer already recorded).
+    """
+    with _lock:
+        job = _get_or_load_job(job_id)
+        if job is None:
+            return False
+        updates = dict(updates)
+        new_status = updates.get("status")
+        if new_status == "COMPLETED" and job.get("status") != "RUNNING":
+            updates.pop("status")
+            new_status = None
+        job.update(updates)
+        if append_fail_reason is not None:
+            reasons = job.setdefault("fail_reason", [])
+            if append_fail_reason not in reasons:
+                reasons.append(append_fail_reason)
+        status_changed = new_status is not None
+        snapshot = dict(job)
+
+    if status_changed:
+        history.upsert_job(job_id, snapshot)
+    _publish(_job_event_queues, {"job_id": job_id, **_job_summary(snapshot)})
+    return True
+
+
+def update_job_progress(
+    job_id: str,
+    instance_name: str,
+    current_num_results: int | None = None,
+    client_contact_last_1s: bool | None = None,
+):
+    with _lock:
+        job = _get_or_load_job(job_id)
+        if job is None:
+            return
+        progress = job["assigned_nodes"].setdefault(
+            instance_name, {"current_num_results": 0, "client_contact_last_1s": True}
+        )
+        if current_num_results is not None:
+            progress["current_num_results"] = current_num_results
+        if client_contact_last_1s is not None:
+            progress["client_contact_last_1s"] = client_contact_last_1s
+        progress["last_push_at"] = time()
+
+
+def job_view(job_id: str) -> dict:
+    """The signal set a node needs each push: replaces the per-job firestore
+    on_snapshot watch, the assigned_nodes quorum read, and the completion
+    count aggregation."""
+    with _lock:
+        job = _get_or_load_job(job_id)
+        if job is None:
+            return {"exists": False}
+        assigned = job["assigned_nodes"]
+        return {
+            "exists": True,
+            "status": job.get("status"),
+            "all_inputs_uploaded": bool(job.get("all_inputs_uploaded")),
+            "client_has_all_results": bool(job.get("client_has_all_results")),
+            "dashboard_canceled": bool(job.get("dashboard_canceled")),
+            "cluster_shutdown": bool(job.get("cluster_shutdown")),
+            "cluster_restarted": bool(job.get("cluster_restarted")),
+            "any_node_client_contact": any(
+                progress.get("client_contact_last_1s") for progress in assigned.values()
+            ),
+            "total_num_results": sum(
+                progress.get("current_num_results", 0) for progress in assigned.values()
+            ),
+            "n_inputs": job.get("n_inputs"),
+        }
+
+
+def running_job_ids() -> list[str]:
+    with _lock:
+        return [job_id for job_id, job in JOBS.items() if job.get("status") == "RUNNING"]
+
+
+def peers_for_job(job_id: str) -> dict:
+    """RUNNING nodes assigned to this job (the input-stealing ring) plus the
+    ids of nodes still BOOTING, so a stealer can tell whether expected nodes
+    might still join."""
+    with _lock:
+        peers = [
+            {"instance_name": name, "host": node.get("host")}
+            for name, node in sorted(NODES.items())
+            if node.get("status") == "RUNNING" and node.get("current_job") == job_id
+        ]
+        booting = [
+            name for name, node in NODES.items() if node.get("status") == "BOOTING"
+        ]
+    return {"peers": peers, "booting_node_ids": booting}
+
+
+def _job_summary(job: dict) -> dict:
+    assigned = job.get("assigned_nodes") or {}
+    return {
+        "status": job.get("status"),
+        "user": job.get("user", "Unknown"),
+        "function_name": job.get("function_name", "Unknown"),
+        "n_inputs": job.get("n_inputs", 0),
+        "n_results": sum(p.get("current_num_results", 0) for p in assigned.values()),
+        "started_at": job.get("started_at"),
+    }
+
+
+def job_summary(job_id: str) -> dict | None:
+    with _lock:
+        job = JOBS.get(job_id)
+        return _job_summary(job) if job else None
+
+
+def persist_job(job_id: str):
+    with _lock:
+        job = JOBS.get(job_id)
+        snapshot = dict(job) if job else None
+    if snapshot:
+        history.upsert_job(job_id, snapshot)
+
+
+# ------------------------------------------------------------------ job reaper
+
+# A RUNNING job whose nodes have all stopped pushing state was previously
+# detected by the dashboard's SSE stream (only while someone had it open).
+# The head now owns that watchdog. 300s matches the old threshold.
+REAPER_JOB_SILENCE_SEC = 300
+REAPER_INTERVAL_SEC = 10
+
+
+async def job_reaper_loop(logger=None):
+    while True:
+        await asyncio.sleep(REAPER_INTERVAL_SEC)
+        now = time()
+        with _lock:
+            candidates = []
+            for job_id, job in JOBS.items():
+                if job.get("status") != "RUNNING" or job.get("client_has_all_results"):
+                    continue
+                if now - (job.get("started_at") or now) < REAPER_JOB_SILENCE_SEC:
+                    continue
+                assigned = job["assigned_nodes"]
+                last_push = max(
+                    (p.get("last_push_at", 0) for p in assigned.values()), default=0
+                )
+                nodes_on_job = any(
+                    node.get("current_job") == job_id for node in NODES.values()
+                )
+                n_results = sum(p.get("current_num_results", 0) for p in assigned.values())
+                n_inputs = job.get("n_inputs") or 0
+                all_results_in = n_inputs > 0 and n_results >= n_inputs
+                dead = (now - last_push) > REAPER_JOB_SILENCE_SEC and not nodes_on_job
+                if dead and not all_results_in:
+                    candidates.append(job_id)
+
+        for job_id in candidates:
+            reason = 'main_svc: job is "running" but no nodes working on it ???'
+            update_job(job_id, {"status": "FAILED"}, append_fail_reason=reason)
+            history.add_job_logs(
+                job_id,
+                [{
+                    "logs": [{"timestamp": now, "message": "Job failed due to internal cluster error."}],
+                    "timestamp": now,
+                    "is_error": True,
+                }],
+            )
+            if logger is not None:
+                logger.log(f"Reaped stalled job {job_id}", severity="WARNING")

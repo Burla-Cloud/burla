@@ -18,18 +18,6 @@ class _SizedQueue:
         self.items.append((item, size_bytes))
 
 
-class _LogWriter:
-    def __init__(self):
-        self.errors = []
-        self.warnings = []
-
-    async def write_error(self, input_index, message):
-        self.errors.append((input_index, message))
-
-    async def write_warning(self, input_index, message):
-        self.warnings.append((input_index, message))
-
-
 class _NodeLogger:
     entries = []
 
@@ -66,10 +54,6 @@ async def _fake_restart_container(self):
     self.reader = object()
 
 
-async def _fake_retire_for_dynamic_memory_pressure(self):
-    self.kill_count += 1
-
-
 def _load_worker_client_module(monkeypatch):
     _NodeLogger.entries = []
     fake_node_service = types.ModuleType("node_service")
@@ -79,6 +63,7 @@ def _load_worker_client_module(monkeypatch):
     fake_node_service.IN_LOCAL_DEV_MODE = True
     fake_node_service.NUM_GPUS = 0
     fake_node_service.Logger = _NodeLogger
+    fake_node_service.head_client = object()
     fake_node_service.__version__ = "test"
     monkeypatch.setitem(sys.modules, "node_service", fake_node_service)
 
@@ -113,7 +98,7 @@ def _setup_dynamic_worker_pair(module):
     worker.retired = False
     other_worker.retired = False
     worker.is_idle = False
-    worker.log_writer = _LogWriter()
+    worker.current_input = (0, b"input")
     worker.logstream_task = None
     worker.container = types.SimpleNamespace(delete=lambda force: None)
     worker.writer = _Writer()
@@ -131,21 +116,6 @@ def _setup_dynamic_worker_pair(module):
             "reboot_containers_after_job": False,
             "current_job": "job-test",
         }
-    )
-    return worker
-
-
-def _worker(module, input_index, rss_bytes):
-    worker = module.WorkerClient.__new__(module.WorkerClient)
-    worker.retired = False
-    worker.is_idle = False
-    worker.current_input = (input_index, b"input")
-    worker.log_writer = _LogWriter()
-    worker.logstream_task = None
-    worker.kill_count = 0
-    worker.memory_rss_bytes = lambda: rss_bytes
-    worker.retire_for_dynamic_memory_pressure = types.MethodType(
-        _fake_retire_for_dynamic_memory_pressure, worker
     )
     return worker
 
@@ -189,7 +159,6 @@ def test_dynamic_oom_requeues_input_and_retires_worker(monkeypatch):
             },
         )
     ]
-    assert "lower node parallelism" in worker.log_writer.errors[0][1]
 
 
 @pytest.mark.unit
@@ -211,8 +180,6 @@ def test_dynamic_worker_exit_requeues_input_and_retires_worker(monkeypatch):
         module.Logger.entries[0][0]
         == "Node parallelism decreased from 2 to 1 due to memory pressure."
     )
-    assert "worker died" in worker.log_writer.errors[0][1]
-    assert "lower node parallelism" in worker.log_writer.errors[0][1]
 
 
 @pytest.mark.unit
@@ -220,6 +187,7 @@ def test_dynamic_oom_at_one_worker_returns_terminal_error(monkeypatch):
     module = _load_worker_client_module(monkeypatch)
     worker = module.WorkerClient.__new__(module.WorkerClient)
     worker.retired = False
+    worker.current_input = (3, b"input")
     module.SELF.update(
         {
             "workers": [worker],

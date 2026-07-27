@@ -5,18 +5,17 @@ from typing import Optional
 from uuid import uuid4
 
 import asyncio
-from google.cloud.firestore_v1.async_client import AsyncClient
 from fastapi import APIRouter, Path, Query, Depends, Response, Request
 
 from node_service import (
     SELF,
     PROJECT_ID,
-    INSTANCE_NAME,
     IN_LOCAL_DEV_MODE,
     NODE_AUTH_CREDENTIALS_PATH,
     get_request_json,
     get_logger,
     get_request_files,
+    head_client,
 )
 from node_service.helpers import Logger
 from node_service.job_watcher import job_watcher_logged
@@ -220,17 +219,16 @@ async def execute(
             workers_to_leave_idle.append(worker)
 
     if not workers_to_assign:
-        # `on_job_start` kicked the RUNNING firestore write off the critical path
-        # as a background task. Wait for it to land before flipping the node doc
-        # back to READY, otherwise the two writes can race and leave firestore
-        # stuck in RUNNING.
+        # `on_job_start` kicked the RUNNING push to the head off the critical
+        # path as a background task. Wait for it to land before flipping the
+        # node back to READY, otherwise the two pushes can race and leave the
+        # head stuck seeing RUNNING.
         await SELF["on_job_start_task"]
 
         SELF["RUNNING"] = False
         SELF["current_job"] = None
-        async_db = AsyncClient(project=PROJECT_ID, database="burla")
-        node_doc = async_db.collection("nodes").document(INSTANCE_NAME)
-        await node_doc.update({"status": "READY", "current_job": None})
+        SELF["reported_status"] = "READY"
+        await head_client.push_state(status="READY", current_job=None)
 
         requested_parallelism = request_json["parallelism"]
         if requested_parallelism <= 0:

@@ -6,27 +6,20 @@ import traceback
 
 import aiodocker
 from fastapi import APIRouter, Depends, Response
-from google.cloud import firestore
-from google.cloud.compute_v1 import InstancesClient
-from google.auth.transport.requests import Request
-from google.cloud.firestore import AsyncClient
 
 from node_service import (
-    ASYNC_DB,
     PROJECT_ID,
     SELF,
     REINIT_SELF,
-    CREDENTIALS,
     INSTANCE_N_CPUS,
     INSTANCE_NAME,
     IN_LOCAL_DEV_MODE,
     BURLA_BACKEND_URL,
     CLUSTER_ID_TOKEN,
     NUM_GPUS,
-    GCL_CLIENT,
     get_logger,
     get_add_background_task_function,
-    __version__,
+    head_client,
 )
 from node_service.helpers import Logger
 from node_service.worker_client import WorkerClient
@@ -42,13 +35,13 @@ async def shutdown_node(logger: Logger = Depends(get_logger)):
     """
     SELF["job_watcher_stop_event"].set()
     SELF["current_parallelism"] = 0
+    SELF["SHUTTING_DOWN"] = True
     await logger.log(f"Received shutdown request for node {INSTANCE_NAME}.")
 
-    async_db = AsyncClient(project=PROJECT_ID, database="burla")
-    doc_ref = async_db.collection("nodes").document(INSTANCE_NAME)
-    snapshot = await doc_ref.get()
-    if snapshot.exists and snapshot.to_dict().get("status") != "FAILED":
-        await doc_ref.update({"status": "DELETED", "ended_at": time()})
+    # FAILED nodes keep their status so they remain visible for debugging.
+    if not SELF["FAILED"]:
+        SELF["reported_status"] = "DELETED"
+        await head_client.push_state(status="DELETED", ended_at=time())
 
 
 @router.post("/reboot")
@@ -106,8 +99,7 @@ async def _LOCAL_DEV_ONLY_pull_image_if_missing(
         except aiodocker.DockerError as e:
             if "Unauthenticated request" in str(e):
                 print("Image is not public, trying again with credentials ...")
-                CREDENTIALS.refresh(Request())
-                auth_config = {"username": "oauth2accesstoken", "password": CREDENTIALS.token}
+                auth_config = _gcp_artifact_registry_auth()
                 await docker.images.pull(image, auth=auth_config)
             else:
                 raise
@@ -121,6 +113,17 @@ async def _LOCAL_DEV_ONLY_pull_image_if_missing(
                     f"Image {image} not found after pulling!\nDid vm run out of disk space?"
                 )
             raise
+
+
+def _gcp_artifact_registry_auth() -> dict:
+    """Private-image pulls from Google Artifact Registry. Only reachable on
+    GCP (local-dev containers mount gcloud creds; GCE VMs use ADC)."""
+    import google.auth
+    from google.auth.transport.requests import Request
+
+    credentials, _ = google.auth.default()
+    credentials.refresh(Request())
+    return {"username": "oauth2accesstoken", "password": credentials.token}
 
 
 async def _pull_image_if_missing(image: str, logger: Logger, docker: aiodocker.Docker):
@@ -170,23 +173,22 @@ async def _pull_image_if_missing(image: str, logger: Logger, docker: aiodocker.D
 
     # if failed and image is in GAR, try again using service account credentials
     if docker_pull_failed:
-        svc_email = getattr(CREDENTIALS, "service_account_email", "<no svc account email found>")
         msg = f"Failed to pull image: {image}\n"
-        msg += "Trying again using the service account credentials attached to this VM:\n"
-        await logger.log(f"{msg}\n{svc_email}")
+        msg += "Trying again using the service account credentials attached to this VM."
+        await logger.log(msg)
 
         if image.startswith("https://"):
             host = f'https://{image.split("/")[2]}'
         else:
             host = f'https://{image.split("/")[0]}'
 
-        CREDENTIALS.refresh(Request())
-        login_cmd = f"docker login {host} -u oauth2accesstoken --password {CREDENTIALS.token}"
+        auth_config = _gcp_artifact_registry_auth()
+        login_cmd = f"docker login {host} -u oauth2accesstoken --password {auth_config['password']}"
         returncode, stdout, stderr = await _run_command(login_cmd, raise_error=False)
         if returncode != 0:
             msg = f"CMD `docker pull {image}` failed with error:\n{docker_pull_stderr}\n"
-            msg += f"Following attempt to login to {host} using service account: "
-            msg += f"`{svc_email}` also failed with error:\n{stderr}\n"
+            msg += f"Following attempt to login to {host} using the VM's service account "
+            msg += f"also failed with error:\n{stderr}\n"
             raise Exception(msg)
 
         await _run_command(f"docker pull {image}")
@@ -208,9 +210,7 @@ async def _remove_container(container_id: str, logger: Logger):
         container = docker.containers.container(container_id)
         await container.delete(force=True)
     except Exception as e:
-        node_doc = ASYNC_DB.collection("nodes").document(INSTANCE_NAME)
-        status = (await node_doc.get()).to_dict().get("status")
-        if status not in ("DELETED", "FAILED"):
+        if not (SELF["SHUTTING_DOWN"] or SELF["FAILED"]):
             msg = f"Failed to remove container {container_id}: {e}"
             await logger.log(msg, severity="WARNING")
     finally:
@@ -227,6 +227,7 @@ def _schedule_container_removal(
 
 
 RESERVATION_ASSIGNMENT_TIMEOUT_SEC = 60
+RESERVATION_POLL_INTERVAL_SEC = 2
 
 
 async def _watch_reservation(job_id: str):
@@ -236,32 +237,25 @@ async def _watch_reservation(job_id: str):
     arrives within `RESERVATION_ASSIGNMENT_TIMEOUT_SEC`. In either case, clear the reservation
     so another job can use this node.
     """
-    sync_db = firestore.Client(project=PROJECT_ID, database="burla")
-    loop = asyncio.get_running_loop()
-    reservation_ended = asyncio.Event()
-
-    def _on_job_snapshot(doc_snapshot, changes, read_time):
-        for change in changes:
-            data = change.document.to_dict()
-            if data and data.get("status") != "RUNNING":
-                loop.call_soon_threadsafe(reservation_ended.set)
-                return
-
-    watch = sync_db.collection("jobs").document(job_id).on_snapshot(_on_job_snapshot)
+    started_at = time()
     try:
-        await asyncio.wait_for(
-            reservation_ended.wait(),
-            timeout=RESERVATION_ASSIGNMENT_TIMEOUT_SEC,
-        )
-    except (asyncio.TimeoutError, asyncio.CancelledError):
-        pass
-    finally:
-        watch.unsubscribe()
+        while time() - started_at < RESERVATION_ASSIGNMENT_TIMEOUT_SEC:
+            await asyncio.sleep(RESERVATION_POLL_INTERVAL_SEC)
+            try:
+                job = await head_client.get_job(job_id)
+            except Exception:
+                # A transient head outage must not kill this task: an uncleared
+                # reservation pins the inactivity watchdog and immortalizes
+                # the VM (observed with grow nodes booted mid-shutdown).
+                continue
+            if job is None or job.get("status") != "RUNNING":
+                break
+    except asyncio.CancelledError:
+        return
 
     if SELF["reserved_for_job"] == job_id:
         SELF["reserved_for_job"] = None
-        node_doc = ASYNC_DB.collection("nodes").document(INSTANCE_NAME)
-        await node_doc.update({"reserved_for_job": None})
+        await head_client.push_state(reserved_for_job=None)
 
 
 async def reboot_containers(
@@ -276,30 +270,28 @@ async def reboot_containers(
     # immediately stop watcher thread, this IS set in REINIT_SELF below
     # but watcher breaks sometimes if it's not set right away.
     SELF["job_watcher_stop_event"].set()
+    # Set before the direct push so the 1s push loop can't race in a stale
+    # READY/RUNNING between the push below and REINIT_SELF.
+    SELF["reported_status"] = "BOOTING"
 
     try:
-        db = firestore.Client(project=PROJECT_ID, database="burla")
-        node_doc = db.collection("nodes").document(INSTANCE_NAME)
-        current_status = node_doc.get().to_dict().get("status")
-        if current_status in ("DELETED", "FAILED"):
-            return
-
-        node_doc.update(
-            {
-                "status": "BOOTING",
-                "current_job": None,
-                "parallelism": None,
-                "target_parallelism": None,
-                "started_booting_at": time(),
-                "all_inputs_received": False,
-            }
+        # The head refuses to downgrade a terminal DELETED/FAILED status; a
+        # terminal status in the response means this node was deleted or
+        # failed externally and should not keep booting.
+        view = await head_client.push_state(
+            status="BOOTING",
+            current_job=None,
+            started_booting_at=time(),
         )
+        if view.get("status") in ("DELETED", "FAILED"):
+            return
 
         # reset state of the node service, except current_container_config, and the job_watcher.
         current_container_config = SELF["current_container_config"]
         reserved_for_job = SELF["reserved_for_job"]
         REINIT_SELF(SELF)
         SELF["BOOTING"] = True
+        SELF["reported_status"] = "BOOTING"
         SELF["current_container_config"] = current_container_config
         SELF["reserved_for_job"] = reserved_for_job
         if new_container_config:
@@ -375,16 +367,19 @@ async def reboot_containers(
         await asyncio.gather(*[worker.boot() for worker in workers[1:]])
         SELF["BOOTING"] = False
 
-        # main_service writes the host field after creating the VM/container.
-        # Wait for that before marking READY so clients never see READY with host=None.
-        while node_doc.get().to_dict().get("host") is None:
-            await asyncio.sleep(1)
+        # main_service learns the host when it creates the VM/container and
+        # hands it down in state-push responses. Wait for it before marking
+        # READY so clients never see READY with host=None.
+        while SELF["host"] is None:
+            view = await head_client.push_state(status="BOOTING")
+            SELF["host"] = view.get("host")
+            if view.get("status") in ("DELETED", "FAILED"):
+                return
+            if SELF["host"] is None:
+                await asyncio.sleep(1)
 
-        current_status = node_doc.get().to_dict().get("status")
-        if current_status in ("DELETED", "FAILED"):
-            return
-
-        node_doc.update({"status": "READY"})
+        SELF["reported_status"] = "READY"
+        await head_client.push_state(status="READY")
 
         if SELF["reserved_for_job"]:
             SELF["watch_reservation_task"] = asyncio.create_task(
@@ -393,28 +388,19 @@ async def reboot_containers(
 
     except Exception as parent_exception:
         SELF["FAILED"] = True
+        SELF["reported_status"] = "FAILED"
         try:
-            # using `logger` here makes this appear in node logs in dashboard, this makes it too
-            # hard for users to find their container error (by putting a big traceback below),
-            # which is why we log directly to gcl instead of using the `logger` instance
-            # it's possible this hides important `reboot_containers` errors from users,
-            # im gonna wait until that's an issue ti fix
-            msg = f"Error from Node-Service:\n{traceback.format_exc()}"
-            GCL_CLIENT.log_struct(dict(message=msg), severity="ERROR")
+            # Full tracebacks stay out of the dashboard's node-log view (it
+            # makes users' container errors too hard to find), so print the
+            # traceback here and send only the short message to the head.
+            print(f"Error from Node-Service:\n{traceback.format_exc()}")
 
-            node_doc.update({"status": "FAILED"})
+            await head_client.push_state(status="FAILED")
             msg = f"Error from Node-Service: {str(parent_exception)}"
-            node_doc.collection("logs").document().set({"msg": msg, "ts": time()})
+            await head_client.post_node_logs([{"msg": msg, "ts": time()}])
 
             if not IN_LOCAL_DEV_MODE:
-                instance_client = InstancesClient()
-                silly = instance_client.aggregated_list(project=PROJECT_ID)
-                vms_per_zone = [getattr(vms_in_zone, "instances", []) for _, vms_in_zone in silly]
-                vms = [vm for vms_in_zone in vms_per_zone for vm in vms_in_zone]
-                vm = next((vm for vm in vms if vm.name == INSTANCE_NAME), None)
-                if vm:
-                    zone = vm.zone.split("/")[-1]
-                    instance_client.delete(project=PROJECT_ID, zone=zone, instance=INSTANCE_NAME)
+                await head_client.request_self_delete()
         except Exception as e:
             raise e from parent_exception
         raise parent_exception

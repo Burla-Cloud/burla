@@ -1,14 +1,15 @@
 #### Main Service
 
-The "main service" is a fastapi webservice designed to be deployed in [google-cloud-run](cloud.google.com/run).  
-This service acts as a traditional "head node" would, as well as handing other responsibilities.  
+The "main service" is a fastapi webservice deployed as a single always-on VM (the cluster's "head node"), on GCE or EC2.
 This service is responsible for:
 
-- Adding/removing/managing nodes in the cluster.
+- Adding/removing/managing nodes in the cluster (via a compute-provider interface, GCP or AWS).
+- Holding the cluster's live coordination state in memory (nodes push state to it over HTTP every ~1s).
+- Persisting job/node history to SQLite on its disk (`/var/lib/burla/history.db`) for the dashboard.
 - Hosting the cluster-management dashboard (react/ts)
 
-Every "main service" instance has it's own [google-cloud-firestore](cloud.google.com/firestore) database associated with it.  
-It is currently not possible to run more than one "main-service" instance in any single google-cloud-project.  
+There is no external database. The head is a stateful singleton:
+It is currently not possible to run more than one "main-service" instance in any single cloud account.
 It is currently not possible to run more than one "cluster" using a single "main-service".  
 
 #### Dev:

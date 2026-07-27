@@ -82,8 +82,8 @@ def install_signal_handlers(
             fail_reason = "Cancel signal from client."
 
         if job_failed:
-            # Best effort - if main_service is unreachable the node will still
-            # detect the disconnect via its own job-doc liveness check and the
+            # Best effort - if main_service is unreachable the nodes will still
+            # detect the disconnect via their direct-heartbeat quorum and the
             # client exits either way.
             ClusterClient.patch_job_sync(
                 job_id,

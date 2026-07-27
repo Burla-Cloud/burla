@@ -3,10 +3,10 @@ Scenario 5: detach / background job completes after client disconnect.
 
 Submits a slow-ish job with `detach=True`, verifies the client returns
 cleanly after uploading all inputs (stdout: "Done uploading inputs!"),
-then polls Firestore until the job transitions to COMPLETED and the
-`assigned_nodes` counters sum to n_inputs. This exercises the
-`is_background_job` path in job_watcher where client-disconnect does NOT
-mark the job FAILED as long as all_inputs_uploaded is True.
+then polls the head until the job transitions to COMPLETED and its
+result counters sum to n_inputs. This exercises the `is_background_job`
+path in job_watcher where client-disconnect does NOT mark the job FAILED
+as long as all_inputs_uploaded is True.
 """
 
 from __future__ import annotations
@@ -21,10 +21,10 @@ pytestmark = [pytest.mark.e2e, pytest.mark.slow]
 def test_detach_and_complete_async(
     rpm_subprocess,
     local_dev_cluster,
-    firestore_db,
+    main_http_client,
     wait_for_fixture,
 ):
-    # UDF with a small sleep so the job takes a few seconds — long enough
+    # UDF with a small sleep so the job takes a few seconds, long enough
     # for detach semantics to be meaningful (inputs upload well before
     # work is done, client exits while work continues).
     source = (
@@ -47,24 +47,20 @@ def test_detach_and_complete_async(
         f"stdout was:\n{combined_out[:500]}"
     )
 
-    # The job should be in firestore as is_background_job=True and still
-    # running at the moment the client exited. Wait for it to finish.
-    from google.cloud.firestore_v1.base_query import FieldFilter
-
+    # The head should know the job as is_background_job=True with all inputs
+    # uploaded at the moment the client exited. Wait for it to finish.
     def _bg_job():
-        docs = (
-            firestore_db.collection("jobs")
-            .where(filter=FieldFilter("function_name", "==", "test_function"))
-            .stream()
-        )
+        jobs = main_http_client.get("/v1/jobs?page=0").json()["jobs"]
         candidates = []
-        for doc in docs:
-            data = doc.to_dict() or {}
-            if not data.get("is_background_job"):
+        for summary in jobs:
+            if summary.get("function_name") != "test_function":
                 continue
-            if data.get("started_at", 0) < before_start - 5:
+            if summary.get("started_at", 0) < before_start - 5:
                 continue
-            candidates.append((doc.id, data))
+            job = main_http_client.get(f"/v1/jobs/{summary['jobId']}").json()
+            if not job.get("is_background_job"):
+                continue
+            candidates.append((summary["jobId"], job))
         if not candidates:
             return None
         # Most-recent started_at wins.
@@ -78,10 +74,12 @@ def test_detach_and_complete_async(
 
     # Poll until the job reaches a terminal state.
     def _terminal():
-        doc = firestore_db.collection("jobs").document(job_id).get()
-        data = doc.to_dict() if doc.exists else None
-        if data and data.get("status") in {"COMPLETED", "FAILED", "CANCELED"}:
-            return data
+        resp = main_http_client.get(f"/v1/jobs/{job_id}")
+        if resp.status_code != 200:
+            return None
+        job = resp.json()
+        if job.get("status") in {"COMPLETED", "FAILED", "CANCELED"}:
+            return job
         return None
 
     final = wait_for_fixture(
@@ -93,10 +91,8 @@ def test_detach_and_complete_async(
         f"background job ended with status={final['status']} fail_reason={final.get('fail_reason')}"
     )
 
-    # assigned_nodes counters must account for all inputs.
-    assigned = list(
-        firestore_db.collection("jobs").document(job_id).collection("assigned_nodes").stream()
+    # Per-node result counters must account for all inputs.
+    stats = main_http_client.get(f"/v1/jobs/{job_id}/result-stats").json()
+    assert stats["n_results"] == len(inputs), (
+        f"n_results {stats['n_results']} != n_inputs {len(inputs)}"
     )
-    assert assigned, "no assigned_nodes docs written"
-    total = sum(doc.to_dict().get("current_num_results", 0) for doc in assigned)
-    assert total == len(inputs), f"assigned_nodes sum {total} != n_inputs {len(inputs)}"

@@ -48,7 +48,7 @@ def test_post_settings_local_dev_forces_n4_standard_2(
         pytest.skip("auth required")
     # POST /v1/settings also reconciles authorized users with backend.burla.dev.
     # That backend call may 500 depending on cluster metadata; in that case the
-    # firestore doc still got updated, so we verify via GET.
+    # settings were still saved, so we verify via GET.
     if resp.status_code not in (200, 204, 500):
         pytest.fail(f"unexpected status {resp.status_code}: {resp.text}")
 

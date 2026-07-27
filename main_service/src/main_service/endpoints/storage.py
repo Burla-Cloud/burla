@@ -4,52 +4,28 @@ import secrets
 import threading
 import zipfile
 from pathlib import Path
-from time import sleep
 from typing import Any, Callable, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
-from google.cloud import storage
-from google.api_core.exceptions import GoogleAPIError, NotFound, PermissionDenied
-from google.auth import default, impersonated_credentials
 
-from main_service import PROJECT_ID, DB, get_add_background_task_function
-
+from main_service import CLOUD_PROVIDER, get_add_background_task_function, history
+from main_service.blobstore import BlobNotFound, get_blob_store
 
 router = APIRouter()
 
-# This makes it possible to create signed url's for any blobs created with this client.
-source_creds, project_id = default()
-signing_creds = impersonated_credentials.Credentials(
-    source_credentials=source_creds,
-    target_principal=f"burla-main-service@{PROJECT_ID}.iam.gserviceaccount.com",
-    target_scopes=["https://www.googleapis.com/auth/devstorage.read_write"],
-)
-
-# When this service is deployed during install (after it's service-account was just created),
-# it sometimes does not have permission to pull this doc yet, but will within ~30s.
-n_retries = 0
-while True:
-    try:
-        cluster_config = DB.collection("cluster_config").document("cluster_config").get().to_dict()
-        break
-    except PermissionDenied as e:
-        if n_retries > 30:
-            raise e
-        n_retries += 1
-        sleep(2)
-
-gcs_client_impersonated = storage.Client(project=project_id, credentials=signing_creds)
-GCS_BUCKET_IMPERSONATED = gcs_client_impersonated.bucket(cluster_config["gcs_bucket_name"])
-
-gcs_client = storage.Client(project=project_id)
-GCS_BUCKET = gcs_client.bucket(cluster_config["gcs_bucket_name"])
+_cluster_config = history.get_cluster_config()
+STORE = get_blob_store(_cluster_config["gcs_bucket_name"])
 
 BATCH_DELETE_BACKGROUND_THRESHOLD = 1000
 BATCH_DELETE_CHUNK_SIZE = 1000
 BATCH_DOWNLOAD_TOKEN_TTL_SECONDS = 300
 BATCH_DOWNLOAD_TOKENS: Dict[str, Dict[str, Any]] = {}
 BATCH_DOWNLOAD_TOKENS_LOCK = threading.Lock()
+
+S3_UPLOAD_SESSION_TTL_SECONDS = 24 * 3600
+S3_UPLOAD_SESSIONS: Dict[str, Dict[str, Any]] = {}
+S3_UPLOAD_SESSIONS_LOCK = threading.Lock()
 
 
 def error_response(message: str, code: str = "400") -> Dict[str, Any]:
@@ -124,13 +100,13 @@ def build_directory_metadata(
     }
 
 
-def build_file_metadata(blob: storage.Blob, directory_prefix: str) -> Dict[str, Any]:
-    name = blob.name[len(directory_prefix) :]
+def build_file_metadata(blob_meta: dict, directory_prefix: str) -> Dict[str, Any]:
+    name = blob_meta["name"][len(directory_prefix) :]
     directory_path = directory_path_for_response(directory_prefix)
     return {
         "name": name,
-        "size": blob.size or 0,
-        "dateModified": isoformat_value(blob.updated),
+        "size": blob_meta["size"] or 0,
+        "dateModified": isoformat_value(blob_meta["updated"]),
         "type": "file",
         "isFile": True,
         "hasChild": False,
@@ -167,11 +143,10 @@ def is_file_entry(entry: Dict[str, Any]) -> bool:
 
 
 def folder_exists(prefix: str) -> bool:
-    if GCS_BUCKET.get_blob(prefix):
+    if STORE.get_blob_metadata(prefix):
         return True
-    iterator = GCS_BUCKET.list_blobs(prefix=prefix, max_results=1)
-    for blob in iterator:
-        if blob.name == prefix:
+    for blob_meta in STORE.list_prefix(prefix, max_results=2):
+        if blob_meta["name"] == prefix:
             continue
         return True
     return False
@@ -199,11 +174,11 @@ def collect_blob_names(
                 names.append(blob_name)
         else:
             prefix = f"{directory_prefix}{entry_name}/"
-            for blob in GCS_BUCKET.list_blobs(prefix=prefix):
-                if blob.name in seen:
+            for blob_meta in STORE.list_prefix(prefix):
+                if blob_meta["name"] in seen:
                     continue
-                seen.add(blob.name)
-                names.append(blob.name)
+                seen.add(blob_meta["name"])
+                names.append(blob_meta["name"])
                 if limit is not None and len(names) >= limit:
                     truncated = True
                     return names, truncated
@@ -220,13 +195,7 @@ def delete_blobs_in_batches(blob_names: List[str]) -> None:
         return
 
     for group in chunked(blob_names, BATCH_DELETE_CHUNK_SIZE):
-        with gcs_client.batch():
-            for blob_name in group:
-                blob = GCS_BUCKET.blob(blob_name)
-                try:
-                    blob.delete(client=gcs_client)
-                except NotFound:
-                    continue
+        STORE.delete_batch(group)
 
 
 def schedule_background_delete(directory_prefix: str, items: List[Dict[str, Any]]) -> None:
@@ -234,17 +203,11 @@ def schedule_background_delete(directory_prefix: str, items: List[Dict[str, Any]
     delete_blobs_in_batches(blob_names)
 
 
-def delete_prefix(prefix: str) -> None:
-    blobs = GCS_BUCKET.list_blobs(prefix=prefix)
-    for blob in blobs:
-        blob.delete()
-
-
 def move_prefix(source_prefix: str, destination_prefix: str) -> None:
-    blobs = list(GCS_BUCKET.list_blobs(prefix=source_prefix))
-    for blob in blobs:
-        destination_name = destination_prefix + blob.name[len(source_prefix) :]
-        GCS_BUCKET.rename_blob(blob, destination_name)
+    blob_metas = list(STORE.list_prefix(source_prefix))
+    for blob_meta in blob_metas:
+        destination_name = destination_prefix + blob_meta["name"][len(source_prefix) :]
+        STORE.rename(blob_meta["name"], destination_name)
 
 
 def extract_paging(payload: Dict[str, Any]) -> tuple[int, int]:
@@ -284,20 +247,15 @@ def get_directory_page(
     take: int,
 ) -> tuple[List[Dict[str, Any]], int, bool]:
     needed = skip + take + 1
-    iterator = GCS_BUCKET.list_blobs(
-        prefix=directory_prefix,
-        delimiter="/",
-        max_results=max(needed, 1),
-    )
 
     entries: List[Dict[str, Any]] = []
     seen = 0
     remaining_needed = skip + take
     has_more = False
 
-    for page in iterator.pages:
+    for prefixes, file_metas in STORE.iter_pages(directory_prefix, max_results=max(needed, 1)):
         # folders
-        for prefix in getattr(page, "prefixes", []):
+        for prefix in prefixes:
             if seen >= remaining_needed:
                 has_more = True
                 break
@@ -311,8 +269,8 @@ def get_directory_page(
             break
 
         # files
-        for blob in page:
-            if blob.name == directory_prefix or blob.name.endswith("/"):
+        for blob_meta in file_metas:
+            if blob_meta["name"] == directory_prefix or blob_meta["name"].endswith("/"):
                 continue
 
             if seen >= remaining_needed:
@@ -320,7 +278,7 @@ def get_directory_page(
                 break
 
             if seen >= skip:
-                entries.append(build_file_metadata(blob, directory_prefix))
+                entries.append(build_file_metadata(blob_meta, directory_prefix))
 
             seen += 1
 
@@ -386,16 +344,14 @@ def create_action(payload: Dict[str, Any]) -> Dict[str, Any]:
     for raw_name in unique_names:
         name = validate_entry_name(raw_name)
         folder_prefix = f"{directory_prefix}{name}/"
-        file_blob = GCS_BUCKET.get_blob(f"{directory_prefix}{name}")
-        if file_blob is not None:
+        if STORE.get_blob_metadata(f"{directory_prefix}{name}") is not None:
             raise ValueError(f"A file named '{name}' already exists")
         if folder_exists(folder_prefix):
             metadata = build_directory_metadata(folder_prefix, directory_prefix, True)
             entries.append(metadata)
             continue
-        if GCS_BUCKET.get_blob(folder_prefix) is None:
-            marker_blob = GCS_BUCKET.blob(folder_prefix)
-            marker_blob.upload_from_string(b"", content_type="application/x-directory")
+        if STORE.get_blob_metadata(folder_prefix) is None:
+            STORE.upload_empty(folder_prefix, content_type="application/x-directory")
         metadata = build_directory_metadata(folder_prefix, directory_prefix, False)
         metadata["dateModified"] = isoformat_value(
             datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
@@ -460,21 +416,18 @@ def move_action(payload: Dict[str, Any]) -> Dict[str, Any]:
             source_key = f"{source_directory_prefix}{name}"
             destination_key = f"{target_directory_prefix}{name}"
             if source_key == destination_key:
-                existing_blob = GCS_BUCKET.get_blob(source_key)
-                if not existing_blob:
-                    raise NotFound(f"File '{name}' not found")
-                entries.append(build_file_metadata(existing_blob, target_directory_prefix))
+                existing = STORE.get_blob_metadata(source_key)
+                if not existing:
+                    raise BlobNotFound(f"File '{name}' not found")
+                entries.append(build_file_metadata(existing, target_directory_prefix))
                 continue
-            if GCS_BUCKET.get_blob(destination_key):
+            if STORE.get_blob_metadata(destination_key):
                 raise ValueError(f"A file named '{name}' already exists at the destination")
-            blob = GCS_BUCKET.get_blob(source_key)
-            if not blob:
-                raise NotFound(f"File '{name}' not found")
-            GCS_BUCKET.rename_blob(blob, destination_key)
-            updated_blob = GCS_BUCKET.get_blob(destination_key)
-            if not updated_blob:
-                raise NotFound(f"File '{name}' not found after move")
-            entries.append(build_file_metadata(updated_blob, target_directory_prefix))
+            STORE.rename(source_key, destination_key)
+            updated = STORE.get_blob_metadata(destination_key)
+            if not updated:
+                raise BlobNotFound(f"File '{name}' not found after move")
+            entries.append(build_file_metadata(updated, target_directory_prefix))
         else:
             source_prefix = f"{source_directory_prefix}{name}/"
             destination_prefix = f"{target_directory_prefix}{name}/"
@@ -511,14 +464,11 @@ def rename_action(payload: Dict[str, Any]) -> Dict[str, Any]:
     if is_file_entry(item):
         source_key = f"{directory_prefix}{current_name}"
         destination_key = f"{directory_prefix}{new_name}"
-        blob = GCS_BUCKET.get_blob(source_key)
-        if not blob:
-            raise NotFound(f"File '{current_name}' not found")
-        GCS_BUCKET.rename_blob(blob, destination_key)
-        updated_blob = GCS_BUCKET.get_blob(destination_key)
-        if not updated_blob:
-            raise NotFound(f"File '{new_name}' not found after rename")
-        metadata = build_file_metadata(updated_blob, directory_prefix)
+        STORE.rename(source_key, destination_key)
+        updated = STORE.get_blob_metadata(destination_key)
+        if not updated:
+            raise BlobNotFound(f"File '{new_name}' not found after rename")
+        metadata = build_file_metadata(updated, directory_prefix)
     else:
         source_prefix = f"{directory_prefix}{current_name}/"
         destination_prefix = f"{directory_prefix}{new_name}/"
@@ -550,9 +500,9 @@ def details_action(payload: Dict[str, Any]) -> Dict[str, Any]:
         return {"details": []}
     details: List[Dict[str, Any]] = []
     for name in names:
-        file_blob = GCS_BUCKET.get_blob(f"{directory_prefix}{name}")
-        if file_blob is not None:
-            details.append(build_file_metadata(file_blob, directory_prefix))
+        file_meta = STORE.get_blob_metadata(f"{directory_prefix}{name}")
+        if file_meta is not None:
+            details.append(build_file_metadata(file_meta, directory_prefix))
             continue
         folder_prefix = f"{directory_prefix}{name}/"
         if folder_exists(folder_prefix):
@@ -580,9 +530,9 @@ async def filemanager_endpoint(
         if action == "details":
             return details_action(request_json)
         return error_response("Unsupported action", "400")
-    except NotFound as not_found_error:
+    except BlobNotFound as not_found_error:
         return error_response(str(not_found_error), "404")
-    except (GoogleAPIError, ValueError) as api_error:
+    except ValueError as api_error:
         return error_response(str(api_error), "400")
 
 
@@ -595,16 +545,83 @@ async def upload_stub():
 def signed_resumable(
     object_name: str = Query(...), content_type: str = Query("application/octet-stream")
 ):
-    blob = GCS_BUCKET_IMPERSONATED.blob(object_name)
-    url = blob.generate_signed_url(
-        version="v4",
-        expiration=datetime.timedelta(days=7),
-        method="POST",
-        service_account_email=f"burla-main-service@{PROJECT_ID}.iam.gserviceaccount.com",
-        content_type=content_type,
-        headers={"x-goog-resumable": "start"},
-    )
-    return {"url": url}
+    return {"url": STORE.resumable_upload_url(object_name, content_type)}
+
+
+# ------------------------------------------------------------------
+# S3 resumable-upload proxy.
+#
+# The dashboard uploader speaks the GCS resumable protocol (POST for a
+# session -> Location header, then chunked PUTs with Content-Range answered
+# by 308 + Range until the final chunk). On AWS these two endpoints speak
+# that same protocol on top of an S3 multipart upload so the frontend needs
+# no cloud-specific code. 8 MB frontend chunks satisfy S3's 5 MB minimum
+# part size for all but the last part.
+# ------------------------------------------------------------------
+
+
+def _prune_expired_upload_sessions(now: datetime.datetime):
+    expired = [
+        token for token, session in S3_UPLOAD_SESSIONS.items() if session["expires_at"] <= now
+    ]
+    for token in expired:
+        del S3_UPLOAD_SESSIONS[token]
+
+
+@router.post("/storage/s3-upload-session")
+def start_s3_upload_session(
+    request: Request,
+    object_name: str = Query(...),
+    content_type: str = Query("application/octet-stream"),
+):
+    upload_id = STORE.start_multipart(object_name, content_type)
+    token = secrets.token_urlsafe(24)
+    now = datetime.datetime.now(datetime.timezone.utc)
+    with S3_UPLOAD_SESSIONS_LOCK:
+        _prune_expired_upload_sessions(now)
+        S3_UPLOAD_SESSIONS[token] = {
+            "object_name": object_name,
+            "upload_id": upload_id,
+            "parts": [],
+            "bytes_received": 0,
+            "expires_at": now + datetime.timedelta(seconds=S3_UPLOAD_SESSION_TTL_SECONDS),
+        }
+    session_url = f"{request.base_url}storage/s3-upload/{token}"
+    return Response(status_code=201, headers={"Location": session_url})
+
+
+@router.put("/storage/s3-upload/{token}")
+async def s3_upload_chunk(token: str, request: Request):
+    with S3_UPLOAD_SESSIONS_LOCK:
+        session = S3_UPLOAD_SESSIONS.get(token)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Upload session not found or expired")
+
+    content_range = request.headers.get("Content-Range", "")
+    # "bytes start-end/total"
+    try:
+        byte_range, total_str = content_range.replace("bytes ", "").split("/")
+        start_str, end_str = byte_range.split("-")
+        start, end, total = int(start_str), int(end_str), int(total_str)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Bad Content-Range: {content_range!r}")
+
+    body = await request.body()
+    part_number = len(session["parts"]) + 1
+    etag = STORE.upload_part(session["object_name"], session["upload_id"], part_number, body)
+
+    with S3_UPLOAD_SESSIONS_LOCK:
+        session["parts"].append({"PartNumber": part_number, "ETag": etag})
+        session["bytes_received"] = end + 1
+
+    if end + 1 >= total:
+        STORE.complete_multipart(session["object_name"], session["upload_id"], session["parts"])
+        with S3_UPLOAD_SESSIONS_LOCK:
+            S3_UPLOAD_SESSIONS.pop(token, None)
+        return Response(status_code=200)
+
+    headers = {"Range": f"bytes=0-{end}"}
+    return Response(status_code=308, headers=headers)
 
 
 def sanitize_object_name(raw_name: str) -> str:
@@ -670,18 +687,13 @@ def sanitize_folder_prefix(raw_prefix: Optional[str]) -> str:
 @router.get("/signed-download")
 def signed_download(object_name: str = Query(...), download_name: Optional[str] = Query(None)):
     sanitized_object_name = sanitize_object_name(object_name)
-    blob = GCS_BUCKET_IMPERSONATED.blob(sanitized_object_name)
-    if not blob.exists():
-        raise HTTPException(status_code=404, detail=f"File '{sanitized_object_name}' not found")
     fallback_name = sanitized_object_name.split("/")[-1] or "download"
     safe_download_name = (download_name or fallback_name).replace('"', "").replace("'", "")
     disposition = f'attachment; filename="{safe_download_name}"'
-    url = blob.generate_signed_url(
-        version="v4",
-        expiration=datetime.timedelta(days=7),
-        method="GET",
-        response_disposition=disposition,
-    )
+    try:
+        url = STORE.signed_download_url(sanitized_object_name, disposition)
+    except BlobNotFound:
+        raise HTTPException(status_code=404, detail=f"File '{sanitized_object_name}' not found")
     return {"url": url}
 
 
@@ -812,9 +824,20 @@ def build_batch_download_response(
                         return
                     ensure_directory_hierarchy(root, "/".join(parents))
 
+                def copy_blob_into_archive(blob_name: str, archive_path: str) -> None:
+                    with archive.open(archive_path, "w") as target:
+                        source = STORE.open_read(blob_name)
+                        try:
+                            while True:
+                                chunk = source.read(1024 * 1024)
+                                if not chunk:
+                                    break
+                                target.write(chunk)
+                        finally:
+                            source.close()
+
                 for request in file_requests:
-                    blob = GCS_BUCKET.get_blob(request["object_name"])
-                    if blob is None:
+                    if STORE.get_blob_metadata(request["object_name"]) is None:
                         raise HTTPException(
                             status_code=404, detail=f"File '{request['object_name']}' not found"
                         )
@@ -822,23 +845,17 @@ def build_batch_download_response(
                     if archive_path in written_entries:
                         continue
                     ensure_parent_directories("", archive_path)
-                    with blob.open("rb") as source, archive.open(archive_path, "w") as target:
-                        while True:
-                            chunk = source.read(1024 * 1024)
-                            if not chunk:
-                                break
-                            target.write(chunk)
+                    copy_blob_into_archive(request["object_name"], archive_path)
                     written_entries.add(archive_path)
                 for request in folder_requests:
                     prefix = request["prefix"]
                     archive_root = request["archive_root"]
                     ensure_directory_entry(archive_root)
                     added_content = False
-                    blobs = GCS_BUCKET.list_blobs(prefix=prefix)
-                    for blob in blobs:
-                        if blob.name == prefix:
+                    for blob_meta in STORE.list_prefix(prefix):
+                        if blob_meta["name"] == prefix:
                             continue
-                        relative_path = blob.name[len(prefix) :]
+                        relative_path = blob_meta["name"][len(prefix) :]
                         if not relative_path:
                             continue
                         sanitized_relative = sanitize_archive_item_path(
@@ -848,12 +865,7 @@ def build_batch_download_response(
                         if archive_path in written_entries:
                             continue
                         ensure_parent_directories(archive_root, sanitized_relative)
-                        with blob.open("rb") as source, archive.open(archive_path, "w") as target:
-                            while True:
-                                chunk = source.read(1024 * 1024)
-                                if not chunk:
-                                    break
-                                target.write(chunk)
+                        copy_blob_into_archive(blob_meta["name"], archive_path)
                         written_entries.add(archive_path)
                         added_content = True
                     if not added_content:
@@ -876,10 +888,8 @@ def build_batch_download_response(
             error = stream_errors[0]
             if isinstance(error, HTTPException):
                 raise error
-            if isinstance(error, NotFound):
+            if isinstance(error, BlobNotFound):
                 raise HTTPException(status_code=404, detail=str(error)) from error
-            if isinstance(error, GoogleAPIError):
-                raise HTTPException(status_code=400, detail=str(error)) from error
             raise error
 
     headers = {"Content-Disposition": f'attachment; filename="{archive_name}"'}

@@ -1,44 +1,25 @@
-import os
 import sys
 import json
 import requests
+import textwrap
 import traceback
 from dataclasses import dataclass, asdict
-from requests.exceptions import ConnectionError, ConnectTimeout, Timeout
+from requests.exceptions import ConnectionError, ConnectTimeout, HTTPError, Timeout
 from time import sleep, time
 from uuid import uuid4
 from typing import Optional
 
-import docker
-from docker.errors import APIError
-from google.cloud import resourcemanager_v3
-from google.auth.transport.requests import Request
-from google.api_core.exceptions import NotFound, ServiceUnavailable, Conflict
-from google.api_core.retry import Retry, if_transient_error
-from google.cloud.compute_v1 import MachineTypesClient, AggregatedListMachineTypesRequest
-from google.cloud import firestore
-from google.cloud.firestore import DocumentSnapshot
-from google.cloud.compute_v1 import (
-    AttachedDisk,
-    NetworkInterface,
-    AttachedDiskInitializeParams,
-    Metadata,
-    Items,
-    AccessConfig,
-    ServiceAccount,
-    Tags,
-    InstancesClient,
-    Instance,
-    Scheduling,
-)
-
 from main_service import (
     PROJECT_ID,
-    CREDENTIALS,
     IN_LOCAL_DEV_MODE,
     CURRENT_BURLA_VERSION,
+    MAIN_SERVICE_URL_FOR_NODES,
+    CLUSTER_ID_TOKEN,
 )
+from main_service import cluster_state
 from main_service.helpers import Logger, format_traceback
+from main_service.providers import get_provider, InstanceDeletedMidBoot
+from main_service.providers.catalog import machine_spec
 
 
 @dataclass
@@ -55,107 +36,69 @@ class Container:
         return asdict(self)
 
 
-# This is 100% guessed, is used for unimportant estimates / ranking
-TOTAL_BOOT_TIME = 60
-TOTAL_REBOOT_TIME = 30
-
-client = resourcemanager_v3.ProjectsClient(credentials=CREDENTIALS)
-project = client.get_project(name=f"projects/{PROJECT_ID}")
-GCE_DEFAULT_SVC = f"{project.name.split('/')[-1]}-compute@developer.gserviceaccount.com"
-
 NODE_BOOT_TIMEOUT = 60 * 10
-
-# Retries GCE API calls (unary RPCs and polling done by ExtendedOperation.result()) on
-# transient network errors, e.g. requests.exceptions.ConnectionError from
-# "Remote end closed connection". Operation-level errors like ZONE_RESOURCE_POOL_EXHAUSTED
-# are set on the future via set_exception and not raised from _refresh, so this retry
-# does not hide them.
-GCE_TRANSIENT_RETRY = Retry(predicate=if_transient_error)
 NODE_SERVICE_RESERVED_MEMORY_GB = 4
-
-
-def zones_supporting_machine_type(
-    region_name: str, machine_type_name: str, machine_types_client=None
-):
-    name_filter = f"name={machine_type_name}"
-    request = AggregatedListMachineTypesRequest(project=PROJECT_ID, filter=name_filter)
-    client = machine_types_client or MachineTypesClient()
-    zone_generator = client.aggregated_list(request=request, retry=GCE_TRANSIENT_RETRY)
-    for zone, matches in zone_generator:
-        if matches.machine_types and zone.startswith(f"zones/{region_name}"):
-            yield zone.split("/")[1]
 
 
 class Node:
 
     def __init__(self):
         # Prevents instantiation of nodes that do not exist.
-        raise NotImplementedError("Please use `Node.start`, or `Node.from_snapshot`")
+        raise NotImplementedError("Please use `Node.start`, or `Node.from_state`")
 
     @classmethod
-    def from_snapshot(
+    def from_state(
         cls,
-        db: firestore.Client,
         logger: Logger,
-        node_snapshot: DocumentSnapshot,
+        node_dict: dict,
         auth_headers: dict,
-        instance_client: Optional[InstancesClient] = None,
+        provider=None,
     ):
-        node_doc = node_snapshot.to_dict()
         self = cls.__new__(cls)
-        self.node_ref = node_snapshot.reference
-        self.db = db
         self.logger = logger
-        self.instance_name = node_doc["instance_name"]
-        self.machine_type = node_doc["machine_type"]
-        self.containers = [Container.from_dict(c) for c in node_doc["containers"]]
-        self.started_booting_at = node_doc["started_booting_at"]
-        self.inactivity_shutdown_time_sec = node_doc["inactivity_shutdown_time_sec"]
-        self.host = node_doc["host"]
-        self.zone = node_doc["zone"]
-        self.current_job = node_doc["current_job"]
-        self.is_booting = node_doc["status"] == "BOOTING"
-        self.instance_client = instance_client
+        self.instance_name = node_dict["instance_name"]
+        self.machine_type = node_dict.get("machine_type")
+        self.containers = [Container.from_dict(c) for c in node_dict.get("containers") or []]
+        self.started_booting_at = node_dict.get("started_booting_at")
+        self.inactivity_shutdown_time_sec = node_dict.get("inactivity_shutdown_time_sec")
+        self.host = node_dict.get("host")
+        self.zone = node_dict.get("zone")
+        self.current_job = node_dict.get("current_job")
+        self.is_booting = node_dict.get("status") == "BOOTING"
         self.auth_headers = auth_headers
+        self.provider = provider or get_provider()
         return self
 
     @classmethod
     def start(
         cls,
-        db: firestore.Client,
         logger: Logger,
         machine_type: str,
-        gcp_region: str,
+        region: str,
         containers: list[Container],
         auth_headers: dict,
         spot: bool = False,
         service_port: int = 8080,  # <- this needs to be open in your cloud firewall!
-        as_local_container: bool = False,
-        sync_gcs_bucket_name: Optional[str] = None,  # <- not a uri, just the name
-        instance_client: Optional[InstancesClient] = None,
-        machine_types_client: Optional[MachineTypesClient] = None,
+        sync_bucket_name: Optional[str] = None,  # <- not a uri, just the name
+        provider=None,
         inactivity_shutdown_time_sec: Optional[int] = None,
         disk_size: Optional[int] = None,
         instance_name: Optional[str] = None,
         reserved_for_job: Optional[str] = None,
     ):
         self = cls.__new__(cls)
-        self.db = db
         self.logger = logger
-        self.gcp_region = gcp_region
+        self.region = region
         self.machine_type = machine_type
         self.containers = containers
         self.auth_headers = auth_headers
         self.spot = spot
         self.port = service_port
-        self.sync_gcs_bucket_name = sync_gcs_bucket_name
+        self.sync_bucket_name = sync_bucket_name
         self.inactivity_shutdown_time_sec = inactivity_shutdown_time_sec
         self.reserved_for_job = reserved_for_job
         self.disk_size = disk_size if disk_size else 20  # minimum is 10 due to disk image
-        self.instance_client = instance_client if instance_client else InstancesClient()
-        self.machine_types_client = (
-            machine_types_client if machine_types_client else MachineTypesClient()
-        )
+        self.provider = provider or get_provider()
 
         self.instance_name = instance_name if instance_name else f"burla-node-{uuid4().hex[:8]}"
         self.started_booting_at = time()
@@ -163,84 +106,90 @@ class Node:
         self.host = None
         self.zone = None
         self.current_job = None
-        self.node_ref = self.db.collection("nodes").document(self.instance_name)
+        self.num_gpus = machine_spec(machine_type)["gpus"] if not IN_LOCAL_DEV_MODE else 0
 
-        self.num_gpus = 0
-        if machine_type.startswith("a"):
-            self.num_gpus = int(machine_type.split("-")[-1][:-1])
-
-        if machine_type.startswith("n4"):
-            self.disk_image = "projects/burla-prod/global/images/burla-node-nogpu-2"
-        elif machine_type.startswith("a2") or machine_type.startswith("a3"):
-            self.disk_image = "projects/burla-prod/global/images/burla-node-gpu-2"
-        else:
-            raise ValueError(f"Invalid machine type: {machine_type}")
-
-        current_state = dict(self.__dict__)  # <- create copy to modify / save
-        current_state["status"] = "BOOTING"
-        current_state["containers"] = [container.to_dict() for container in containers]
-        attrs_to_not_save = [
-            "db",
-            "logger",
-            "instance_client",
-            "machine_types_client",
-            "node_ref",
-            "auth_headers",
-            "is_booting",
-        ]
-        current_state = {k: v for k, v in current_state.items() if k not in attrs_to_not_save}
-        self.node_ref.set(current_state)
+        cluster_state.update_node(
+            self.instance_name,
+            {
+                "instance_name": self.instance_name,
+                "status": "BOOTING",
+                "machine_type": machine_type,
+                "gcp_region": region,
+                "containers": [container.to_dict() for container in containers],
+                "started_booting_at": self.started_booting_at,
+                "inactivity_shutdown_time_sec": inactivity_shutdown_time_sec,
+                "disk_size": self.disk_size,
+                "num_gpus": self.num_gpus,
+                "spot": spot,
+                "port": service_port,
+                "sync_gcs_bucket_name": sync_bucket_name,
+                "host": None,
+                "zone": None,
+                "current_job": None,
+                "reserved_for_job": reserved_for_job,
+            },
+        )
 
         try:
-            if as_local_container:
-                self.__start_svc_in_local_container()
+            if IN_LOCAL_DEV_MODE:
+                self.host = self.provider.create_node_container(
+                    instance_name=self.instance_name,
+                    port=self.port,
+                    containers=[c.to_dict() for c in containers],
+                    inactivity_shutdown_time_sec=inactivity_shutdown_time_sec,
+                    reserved_for_job=reserved_for_job,
+                )
             else:
-                self.__start_svc_in_vm(disk_image=self.disk_image, disk_size=self.disk_size)
+                self.host, self.zone = self.provider.create_instance(
+                    instance_name=self.instance_name,
+                    machine_type=machine_type,
+                    region=region,
+                    disk_size=self.disk_size,
+                    spot=spot,
+                    num_gpus=self.num_gpus,
+                    port=self.port,
+                    startup_script=self.__get_startup_script(),
+                    shutdown_script=self.__get_shutdown_script(),
+                    on_log=lambda msg: cluster_state.add_node_log(self.instance_name, msg),
+                )
+                self.host = f"http://{self.host}:{self.port}"
+
+            # The node polls its state-push responses for `host` and won't mark
+            # itself READY until it appears.
+            cluster_state.update_node(self.instance_name, {"host": self.host, "zone": self.zone})
 
             start = time()
-            last_fs_check = start
             status = self.status()
             while status not in ("READY", "RUNNING"):
                 sleep(1)
                 booting_too_long = (time() - start) > NODE_BOOT_TIMEOUT
                 status = self.status()
 
-                # Startup-script trap writes FAILED to Firestore directly,
-                # bypassing the HTTP path self.status() checks.
-                if status == "BOOTING" and (time() - last_fs_check) >= 2:
-                    last_fs_check = time()
-                    fs_status = (self.node_ref.get().to_dict() or {}).get("status")
-                    if fs_status == "FAILED":
+                # Startup-script trap reports FAILED over HTTP, bypassing the
+                # node_service path self.status() checks.
+                if status == "BOOTING":
+                    state = cluster_state.get_node(self.instance_name)
+                    if state and state.get("status") == "FAILED":
                         status = "FAILED"
 
                 if status == "FAILED" or booting_too_long:
                     msg = f"Node {self.instance_name} Failed to start! (timeout={booting_too_long})"
                     raise Exception(msg)
+        except InstanceDeletedMidBoot:
+            raise
         except Exception as e:
-            self.node_ref.update({"status": "FAILED"})
-            log = {"msg": traceback.format_exc(), "ts": time()}
-            self.node_ref.collection("logs").document().set(log)
+            cluster_state.update_node(self.instance_name, {"status": "FAILED"})
+            cluster_state.add_node_log(self.instance_name, traceback.format_exc())
             self.delete()
             raise e
 
-        self.node_ref.update(dict(host=self.host, zone=self.zone))  # node svc marks itself as ready
         self.is_booting = False
         return self
 
     def delete(self):
-        node_snapshot = self.node_ref.get()
-        node_is_failed = node_snapshot.exists and node_snapshot.to_dict().get("status") == "FAILED"
-
-        if not node_is_failed:
-            self.node_ref.update({"status": "DELETED"})
-
-        if not self.instance_client:
-            self.instance_client = InstancesClient()
-        try:
-            kwargs = dict(project=PROJECT_ID, zone=self.zone, instance=self.instance_name)
-            self.instance_client.delete(**kwargs, retry=GCE_TRANSIENT_RETRY)
-        except (NotFound, ValueError):
-            pass  # these errors mean it was already deleted.
+        # FAILED nodes keep their status so the doc remains visible for debugging.
+        cluster_state.update_node(self.instance_name, {"status": "DELETED", "ended_at": time()})
+        self.provider.delete_instance(self.instance_name, self.zone)
 
     def status(self):
         """Returns one of: `BOOTING`, `RUNNING`, `READY`, `FAILED`"""
@@ -250,7 +199,10 @@ class Node:
                 response = requests.get(f"{self.host}/", timeout=2, headers=self.auth_headers)
                 response.raise_for_status()
                 return response.json()["status"]
-            except (ConnectionError, ConnectTimeout, Timeout):
+            except (ConnectionError, ConnectTimeout, Timeout, HTTPError):
+                # Transient error responses during boot (e.g. a 500 while the
+                # service warms up) must not insta-fail the node; the boot
+                # timeout still bounds how long we wait.
                 if self.is_booting:
                     return "BOOTING"
                 else:
@@ -265,258 +217,77 @@ class Node:
         else:
             raise Exception("Node not booting but also has no hostname?")
 
-    def __start_svc_in_local_container(self):
-        image = f"us-docker.pkg.dev/{PROJECT_ID}/burla-node-service/burla-node-service:latest"
-        docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
-        host_config = docker_client.create_host_config(
-            port_bindings={self.port: self.port},
-            network_mode="local-burla-cluster",
-            binds={
-                f"{os.environ['HOST_HOME_DIR']}/.config/gcloud": "/root/.config/gcloud",
-                f"{os.environ['HOST_PWD']}/node_service": "/opt/burla/node_service",
-                f"{os.environ['HOST_PWD']}/_shared_workspace": "/workspace/shared",
-                f"{os.environ['HOST_PWD']}/_worker_service_python_env": "/worker_service_python_env",
-                f"{os.environ['HOST_PWD']}/_python_version_marker": "/python_version_marker",
-                # node_auth bind: see NODE_AUTH_DIR in node_service/__init__.py.
-                f"{os.environ['HOST_PWD']}/_node_auth": "/opt/burla/node_auth",
-                "/var/run/docker.sock": "/var/run/docker.sock",
-            },
-        )
-
-        try:
-            docker_client.pull(image)
-        except APIError as e:
-            if "Unauthenticated request" in str(e):
-                CREDENTIALS.refresh(Request())
-                auth_config = {"username": "oauth2accesstoken", "password": CREDENTIALS.token}
-                docker_client.pull(image, auth_config=auth_config)
-            else:
-                raise
-
-        cmd_script = f"""
-            # We can't run gcsfuse in dev mode (without some very complicated hacks)
-            # It's not compatible with macos and is very annoying to setup in docker with volumes.
-            # 
-            # mkdir -p /workspace/shared /var/cache/gcsfuse
-            # gcsfuse \
-            #     --client-protocol=http2 \
-            #     --only-dir=shared_workspace \
-            #     --metadata-cache-ttl-secs=1 \
-            #     --cache-dir=/var/cache/gcsfuse \
-            #     {self.sync_gcs_bucket_name} /workspace/shared
-            cd /opt/burla/node_service
-            uv run -m uvicorn node_service:app --host 0.0.0.0 --port {self.port} --workers 1 \
-                --timeout-keep-alive 600 --reload
-        """.strip()
-        container_name = f"node_{self.instance_name[11:]}"
-        container = docker_client.create_container(
-            image=image,
-            command=["-c", cmd_script],
-            entrypoint=["bash"],
-            name=container_name,
-            ports=[self.port],
-            host_config=host_config,
-            environment={
-                "GOOGLE_CLOUD_PROJECT": PROJECT_ID,
-                "IN_LOCAL_DEV_MODE": IN_LOCAL_DEV_MODE,
-                "HOST_HOME_DIR": os.environ["HOST_HOME_DIR"],
-                "HOST_PWD": os.environ["HOST_PWD"],
-                "INSTANCE_NAME": self.instance_name,
-                "CONTAINERS": json.dumps([c.to_dict() for c in self.containers]),
-                "INACTIVITY_SHUTDOWN_TIME_SEC": self.inactivity_shutdown_time_sec,
-                "RESERVED_FOR_JOB": self.reserved_for_job or "",
-                "NUM_GPUS": 0,
-            },
-            detach=True,
-        )
-        docker_client.start(container=container.get("Id"))
-        self.host = f"http://{container_name}:{self.port}"
-        self.node_ref.update(dict(host=self.host))
-
-    def __start_svc_in_vm(self, disk_image: str, disk_size: int):
-        disk_params = AttachedDiskInitializeParams(source_image=disk_image, disk_size_gb=disk_size)
-        disk = AttachedDisk(auto_delete=True, boot=True, initialize_params=disk_params)
-
-        network_name = "global/networks/default"
-        access_config = AccessConfig(name="External NAT", type="ONE_TO_ONE_NAT")
-        network_interface = NetworkInterface(name=network_name, access_configs=[access_config])
-
-        can_live_migrate = (not self.spot) and self.num_gpus == 0
-
-        if self.spot:
-            scheduling = Scheduling(
-                provisioning_model="SPOT",
-                instance_termination_action="DELETE",
-                on_host_maintenance="TERMINATE",
-                automatic_restart=False,
-            )
-        elif can_live_migrate:
-            scheduling = Scheduling(
-                provisioning_model="STANDARD",
-                on_host_maintenance="MIGRATE",
-                automatic_restart=False,
-            )
-        else:
-            scheduling = Scheduling(
-                provisioning_model="STANDARD",
-                on_host_maintenance="TERMINATE",
-                automatic_restart=False,
-            )
-
-        access_anything_scope = "https://www.googleapis.com/auth/cloud-platform"
-        service_account = ServiceAccount(email=GCE_DEFAULT_SVC, scopes=[access_anything_scope])
-
-        startup_script = self.__get_startup_script()
-        shutdown_script = self.__get_shutdown_script()
-        startup_script_metadata = Items(key="startup-script", value=startup_script)
-        shutdown_script_metadata = Items(key="shutdown-script", value=shutdown_script)
-        exhausted_zones = []
-        zones = list(
-            zones_supporting_machine_type(
-                self.gcp_region, self.machine_type, self.machine_types_client
-            )
-        )
-        if not zones:
-            msg = f"None of the zones in region {self.gcp_region} "
-            raise Exception(msg + f"support the machine type {self.machine_type}.")
-
-        for zone in zones:
-            msg = f"Attempting to provision {self.machine_type} in zone: {zone}"
-            self.node_ref.collection("logs").document().set({"msg": msg, "ts": time()})
-            try:
-                instance = Instance(
-                    name=self.instance_name,
-                    machine_type=f"zones/{zone}/machineTypes/{self.machine_type}",
-                    disks=[disk],
-                    network_interfaces=[network_interface],
-                    service_accounts=[service_account],
-                    metadata=Metadata(items=[startup_script_metadata, shutdown_script_metadata]),
-                    tags=Tags(items=["burla-cluster-node"]),
-                    scheduling=scheduling,
-                )
-                kw = dict(project=PROJECT_ID, zone=zone, instance_resource=instance)
-                operation = self.instance_client.insert(**kw, retry=GCE_TRANSIENT_RETRY)
-                operation.result(retry=GCE_TRANSIENT_RETRY)
-                instance_created = True
-                break
-            except ServiceUnavailable:  # not enough instances in this zone, try next zone.
-                exhausted_zones.append(zone)
-                instance_created = False
-                msg = f"No available capacity for {self.machine_type} in zone: {zone}"
-                self.node_ref.collection("logs").document().set({"msg": msg, "ts": time()})
-            except Conflict:
-                raise Exception(f"Node {self.instance_name} deleted while starting.")
-
-        if not instance_created and exhausted_zones:
-            msg = f"ZONE_RESOURCE_POOL_EXHAUSTED: {exhausted_zones} currently have no "
-            msg += f"available capacity for VM {self.machine_type}\n"
-            raise Exception(msg)
-
-        kw = dict(project=PROJECT_ID, zone=zone, instance=self.instance_name)
-        instance_info = self.instance_client.get(**kw, retry=GCE_TRANSIENT_RETRY)
-        external_ip = instance_info.network_interfaces[0].access_configs[0].nat_i_p
-
-        self.host = f"http://{external_ip}:{self.port}"
-        self.zone = zone
-        self.node_ref.update(dict(host=self.host, zone=self.zone))
-        msg = f"Successfully provisioned {self.machine_type} in zone: {zone}"
-        msg += "\nWaiting for startup script ..."
-        self.node_ref.collection("logs").document().set({"msg": msg, "ts": time()})
-
     def __get_startup_script(self):
-        return f"""
-        #! /bin/bash        
+        mount_script = ""
+        if self.sync_bucket_name and self.sync_bucket_name != "None":
+            mount_script = self.provider.mount_shared_workspace_script(self.sync_bucket_name)
+
+        # cloud-init (EC2 user-data) only executes scripts whose shebang is at
+        # byte 0, so the indented template must be dedented + stripped. GCE's
+        # guest agent tolerates either form.
+        script = f"""
+        #! /bin/bash
         set -Eeuo pipefail
+
+        HEAD_URL="{MAIN_SERVICE_URL_FOR_NODES}"
+        AUTH_HEADER="Authorization: Bearer {CLUSTER_ID_TOKEN}"
+        NODE_NAME="{self.instance_name}"
+
+        report_log() {{
+            payload=$(jq -n --arg msg "$1" --arg ts "$(date +%s)" \\
+                '{{"logs":[{{"msg":$msg,"ts":($ts|tonumber)}}]}}')
+            curl -sS -o /dev/null -X POST "$HEAD_URL/v1/nodes/$NODE_NAME/logs:batch" \\
+                -H "$AUTH_HEADER" -H "Content-Type: application/json" -d "$payload" || true
+        }}
+
         handle_error() {{
-        	ACCESS_TOKEN=$(curl -s -H "Metadata-Flavor: Google" \
-        	"http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token" \
-        	| jq -r .access_token)
-        
-        	MSG="Startup script failed! See Google Cloud Logging. Deleting VM {self.instance_name} ... "
+            MSG="Startup script failed! Deleting VM $NODE_NAME ... "
             echo "$MSG"
-        	DB_BASE_URL="https://firestore.googleapis.com/v1/projects/{PROJECT_ID}/databases/burla/documents"
-        	payload=$(jq -n --arg msg "$MSG" --arg ts "$(date +%s)" '{{"fields":{{"msg":{{"stringValue":$msg}},"ts":{{"integerValue":$ts}},}}}}')
-        	curl -sS -o /dev/null -X POST "$DB_BASE_URL/nodes/{self.instance_name}/logs" \
-                -H "Authorization: Bearer $ACCESS_TOKEN" \
-                -H "Content-Type: application/json" \
-                -d "$payload" || true
-
-            # set status as FAILED
-            status_payload=$(jq -n --arg ts "$(date +%s)" '{{"fields":{{"status":{{"stringValue":"FAILED"}},"ended_at":{{"integerValue":$ts}}}}}}')
-            curl -sS -o /dev/null -X PATCH "$DB_BASE_URL/nodes/{self.instance_name}?updateMask.fieldPaths=status&updateMask.fieldPaths=ended_at" \
-                -H "Authorization: Bearer $ACCESS_TOKEN" \
-                -H "Content-Type: application/json" \
-                -d "$status_payload" || true
-
-            # delete vm
-        	INSTANCE_NAME=$(curl -s -H "Metadata-Flavor: Google" \
-            "http://metadata.google.internal/computeMetadata/v1/instance/name")
-        	ZONE=$(curl -s -H "Metadata-Flavor: Google" \
-            "http://metadata.google.internal/computeMetadata/v1/instance/zone" | awk -F/ '{{print $NF}}')
-        	curl -sS -X DELETE \
-            -H "Authorization: Bearer $ACCESS_TOKEN" \
-            "https://compute.googleapis.com/compute/v1/projects/{PROJECT_ID}/zones/$ZONE/instances/$INSTANCE_NAME" || true
-        	exit 1
+            report_log "$MSG"
+            status_payload=$(jq -n --arg ts "$(date +%s)" \\
+                '{{"status":"FAILED","ended_at":($ts|tonumber)}}')
+            curl -sS -o /dev/null -X PUT "$HEAD_URL/v1/nodes/$NODE_NAME/state" \\
+                -H "$AUTH_HEADER" -H "Content-Type: application/json" -d "$status_payload" || true
+            curl -sS -o /dev/null -X POST "$HEAD_URL/v1/nodes/$NODE_NAME/self_delete" \\
+                -H "$AUTH_HEADER" || true
+            exit 1
         }}
         trap 'handle_error' ERR
-
-        DB_BASE_URL="https://firestore.googleapis.com/v1/projects/{PROJECT_ID}/databases/burla/documents"
-        ACCESS_TOKEN=$(curl -s -H "Metadata-Flavor: Google" \
-        "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token" \
-        | jq -r .access_token)
 
         # make docker pull faster, this seems to actually do nothing at all.
         # TODO: figure out why/if this doesn't work.
         mkdir -p /etc/docker
         jq '. + {{"max-concurrent-downloads": 32}}' /etc/docker/daemon.json 2>/dev/null || echo '{{}}' | jq '. + {{"max-concurrent-downloads": 32}}' > /etc/docker/daemon.json
-        killall -HUP dockerd || open -a Docker
+        killall -HUP dockerd || true
 
-        # start gcsfuse
+        # mount shared workspace bucket at /workspace/shared
         cd /
         mkdir -p /workspace/shared
-        if [ "{self.sync_gcs_bucket_name}" != "None" ]; then
-            mkdir -p /var/cache/gcsfuse
-            gcsfuse \
-                --client-protocol=http2 \
-                --metadata-cache-ttl-secs=1 \
-                --cache-dir=/var/cache/gcsfuse \
-                {self.sync_gcs_bucket_name} /workspace/shared
-
-            MSG="Started GCSFuse: syncing /workspace/shared with gs://{self.sync_gcs_bucket_name}"
-            echo "$MSG"
-            payload=$(jq -n --arg msg "$MSG" --arg ts "$(date +%s)" '{{"fields":{{"msg":{{"stringValue":$msg}},"ts":{{"integerValue":$ts}}}}}}')
-            curl -sS -o /dev/null -X POST "$DB_BASE_URL/nodes/{self.instance_name}/logs" \
-                -H "Authorization: Bearer $ACCESS_TOKEN" \
-                -H "Content-Type: application/json" \
-                -d "$payload"
-        fi
-
-        # authenticate docker:
-        echo "$ACCESS_TOKEN" | docker login -u oauth2accesstoken --password-stdin https://us-docker.pkg.dev
+        {mount_script}
 
         # make uv work, this is an oopsie from when building the disk image:
         export PATH="/root/.cargo/bin:$PATH"
         export PATH="/root/.local/bin:$PATH"
 
-        MSG="Installing Burla node service v{CURRENT_BURLA_VERSION} ..."
-        echo "$MSG"
-        payload=$(jq -n --arg msg "$MSG" --arg ts "$(date +%s)" '{{"fields":{{"msg":{{"stringValue":$msg}},"ts":{{"integerValue":$ts}}}}}}')
-        curl -sS -o /dev/null -X POST "$DB_BASE_URL/nodes/{self.instance_name}/logs" \
-            -H "Authorization: Bearer $ACCESS_TOKEN" \
-            -H "Content-Type: application/json" \
-            -d "$payload"
+        report_log "Installing Burla node service v{CURRENT_BURLA_VERSION} ..."
 
         export NUM_GPUS="{self.num_gpus}"
-        export INSTANCE_NAME="{self.instance_name}"
+        export INSTANCE_NAME="$NODE_NAME"
         export PROJECT_ID="{PROJECT_ID}"
         export CONTAINERS='{json.dumps([c.to_dict() for c in self.containers])}'
         export INACTIVITY_SHUTDOWN_TIME_SEC="{self.inactivity_shutdown_time_sec}"
         export RESERVED_FOR_JOB="{self.reserved_for_job or ''}"
+        export MAIN_SERVICE_URL="$HEAD_URL"
+        export CLUSTER_ID_TOKEN="{CLUSTER_ID_TOKEN}"
 
         cd /opt/burla
         git fetch --depth=1 origin "{CURRENT_BURLA_VERSION}"
         git reset --hard FETCH_HEAD
 
+        # Node images ship a pre-warmed /opt/burla/.venv; newer uv refuses to
+        # overwrite an existing venv unless told to (older uv, as baked into
+        # the GCP images, ignores this env var and overwrites regardless).
+        export UV_VENV_CLEAR=1
         uv venv --python 3.13 --seed
         uv pip install ./node_service
 
@@ -529,56 +300,60 @@ class Node:
         # worker_server.py run its own download path rather than killing the VM via the
         # outer trap.
         (
-            FIRST_IMAGE=$(echo "$CONTAINERS" | python3 -c \
+            FIRST_IMAGE=$(echo "$CONTAINERS" | python3 -c \\
                 'import json,sys; d=json.load(sys.stdin); print(d[0]["image"] if d else "")')
             [ -n "$FIRST_IMAGE" ] || exit 0
             docker pull "$FIRST_IMAGE" >/dev/null
-            PY_VERSION=$(docker run --rm --entrypoint python "$FIRST_IMAGE" -c \
+            PY_VERSION=$(docker run --rm --entrypoint python "$FIRST_IMAGE" -c \\
                 'import sys; print(f"{{sys.version_info.major}}.{{sys.version_info.minor}}")')
             mkdir -p /worker_service_python_env/bin
             cp "$(command -v uv)" /worker_service_python_env/bin/uv
-            uv pip install \
-                --python-version "$PY_VERSION" \
-                --python-platform x86_64-manylinux2014 \
-                --target /worker_service_python_env \
+            uv pip install \\
+                --python-version "$PY_VERSION" \\
+                --python-platform x86_64-manylinux2014 \\
+                --target /worker_service_python_env \\
                 "burla=={CURRENT_BURLA_VERSION}"
         ) || true
-        
+
         total_memory_kb=$(awk '/MemTotal/ {{print $2}}' /proc/meminfo)
         worker_memory_kb=$((total_memory_kb - {NODE_SERVICE_RESERVED_MEMORY_GB} * 1024 * 1024))
         if [ "$worker_memory_kb" -lt $((1024 * 1024)) ]; then
             worker_memory_kb=$((1024 * 1024))
         fi
 
-        printf '[Slice]\nMemoryMin={NODE_SERVICE_RESERVED_MEMORY_GB}G\nCPUWeight=1000\n' \
+        printf '[Slice]\\nMemoryMin={NODE_SERVICE_RESERVED_MEMORY_GB}G\\nCPUWeight=1000\\n' \\
             >/etc/systemd/system/burla-node-service.slice
-        printf '[Slice]\nMemoryMax=%sK\nCPUWeight=80\n' "$worker_memory_kb" \
+        printf '[Slice]\\nMemoryMax=%sK\\nCPUWeight=80\\n' "$worker_memory_kb" \\
             >/etc/systemd/system/burla-workers.slice
 
         systemctl daemon-reload
         systemctl start burla-node-service.slice burla-workers.slice
 
-        systemd-run \
-            --unit=burla-node-service \
-            --slice=burla-node-service.slice \
-            --property=MemoryMin={NODE_SERVICE_RESERVED_MEMORY_GB}G \
-            --property=CPUWeight=1000 \
-            --property=OOMScoreAdjust=-900 \
-            --setenv=NUM_GPUS="$NUM_GPUS" \
-            --setenv=INSTANCE_NAME="$INSTANCE_NAME" \
-            --setenv=PROJECT_ID="$PROJECT_ID" \
-            --setenv=CONTAINERS="$CONTAINERS" \
-            --setenv=INACTIVITY_SHUTDOWN_TIME_SEC="$INACTIVITY_SHUTDOWN_TIME_SEC" \
-            --setenv=RESERVED_FOR_JOB="$RESERVED_FOR_JOB" \
-            --collect \
+        systemd-run \\
+            --unit=burla-node-service \\
+            --slice=burla-node-service.slice \\
+            --property=MemoryMin={NODE_SERVICE_RESERVED_MEMORY_GB}G \\
+            --property=CPUWeight=1000 \\
+            --property=OOMScoreAdjust=-900 \\
+            --setenv=NUM_GPUS="$NUM_GPUS" \\
+            --setenv=INSTANCE_NAME="$INSTANCE_NAME" \\
+            --setenv=PROJECT_ID="$PROJECT_ID" \\
+            --setenv=CONTAINERS="$CONTAINERS" \\
+            --setenv=INACTIVITY_SHUTDOWN_TIME_SEC="$INACTIVITY_SHUTDOWN_TIME_SEC" \\
+            --setenv=RESERVED_FOR_JOB="$RESERVED_FOR_JOB" \\
+            --setenv=MAIN_SERVICE_URL="$MAIN_SERVICE_URL" \\
+            --setenv=CLUSTER_ID_TOKEN="$CLUSTER_ID_TOKEN" \\
+            --collect \\
             /opt/burla/.venv/bin/python -m uvicorn node_service:app --host 0.0.0.0 --port {self.port} --workers 1 --timeout-keep-alive 600
 
         journalctl -fu burla-node-service
         """
+        return textwrap.dedent(script).strip() + "\n"
 
     def __get_shutdown_script(self):
-        return f"""
+        script = f"""
         #! /bin/bash
         # Tell the node_service this VM is being shutdown so it can reassign inputs and stuff.
         curl -X POST "http://localhost:{self.port}/shutdown"
         """
+        return textwrap.dedent(script).strip() + "\n"

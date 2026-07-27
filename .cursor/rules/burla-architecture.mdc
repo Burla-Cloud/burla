@@ -5,42 +5,45 @@ alwaysApply: true
 
 # Burla Architecture
 
-Burla is a distributed compute system with one user-facing function: `remote_parallel_map(function, inputs)`. It runs a Python function across many VMs in the user's GCP project. Self-hosted, GCP-only.
+Burla is a distributed compute system with one user-facing function: `remote_parallel_map(function, inputs)`. It runs a Python function across many VMs in the user's cloud account. Self-hosted; runs on GCP or AWS (identical behavior, selected by the `CLOUD_PROVIDER` env var on the head).
 
 ## The four services
 
 | Service | Runtime | Purpose |
 |---------|---------|---------|
 | `client/` (pypi: `burla`) | User's laptop / notebook | Entry point (`remote_parallel_map`). Pickles UDF, picks nodes, uploads inputs, streams results. |
-| `main_service/` | Google Cloud Run (one per GCP project) | Head node. Boots/deletes VMs, hosts the React dashboard, handles auth. |
-| `node_service/` | Runs on each Compute Engine VM | Per-VM orchestrator. Owns input/results queues, spawns workers, runs job watcher. |
+| `main_service/` (the "head") | One small always-on VM per cluster (GCE or EC2) | Holds authoritative live cluster state in memory, persists history to SQLite on its disk, boots/deletes node VMs, hosts the React dashboard, handles auth. |
+| `node_service/` | Runs on each node VM | Per-VM orchestrator. Owns input/results queues, spawns workers, runs job watcher. |
 | `worker_service/` (the file `node_service/src/node_service/worker_server.py`) | Inside user's Docker container, one per CPU core | Executes user code. Talks to `node_service` over a raw TCP socket, not HTTP. |
 
-There is no separate `worker_service/` top-level directory — the worker script lives next to `node.py` in the node_service and is mounted into each container at runtime.
+There is no separate `worker_service/` top-level directory: the worker script lives next to `node.py` in the node_service and is mounted into each container at runtime.
 
 ## Data flow
 
-- Client → `main_service` (HTTP): grow cluster, auth.
-- Client → `node_service` (HTTP): upload UDF + inputs, poll results.
-- `main_service` → VMs: boot/delete Compute Engine instances.
+- Client → `main_service` (HTTP): start job (node selection + grow), job signals, auth.
+- Client → `node_service` (HTTP): upload UDF + inputs, poll results, direct heartbeats.
+- Node → `main_service` (HTTP): state push every ~1s (`PUT /v1/nodes/{id}/state`); the response carries `host` and the job signal set back down (cancel, `all_inputs_uploaded`, `client_has_all_results`, quorum info). Logs batch-POST to the head.
+- `main_service` → VMs: boot/delete instances via a compute-provider interface (`main_service/src/main_service/providers/`, GCE + EC2 implementations).
 - `node_service` → `worker_server.py` (TCP bytes): run UDF.
-- All three services ↔ Firestore (`burla` db): nodes, cluster_config, jobs, status, logs.
 
-Inputs can also move node-to-node mid-job via `/jobs/{job_id}/input_transfer` — nodes with surplus inputs push them to nodes with less, so the cluster self-balances.
+Inputs also move node-to-node mid-job via `/jobs/{job_id}/get_inputs` + `/jobs/{job_id}/ack_transfer` (pull-based work stealing): the peer list comes from the head's `/v1/jobs/{id}/peers`.
 
 ## State / coordination
 
-- Firestore database: `burla` (not `(default)`).
-- Key collections: `nodes` (one doc per VM + `logs` subcollection), `cluster_config` (single doc `cluster_config`), `jobs` (job metadata, cancellation flag, counters).
-- In-memory node state lives in the `SELF` dict in [node_service/src/node_service/__init__.py](../../node_service/src/node_service/__init__.py) — reset by `REINIT_SELF`.
+There is no database in the live path. Coordination state is head-centric:
+
+- Live state (nodes + jobs) lives in [main_service/src/main_service/cluster_state.py](../../main_service/src/main_service/cluster_state.py): plain dicts, mutated by node pushes and endpoints, with in-memory pub/sub feeding the dashboard SSE streams.
+- History (job records, job/node logs, usage, cluster_config) lives in SQLite via [main_service/src/main_service/history.py](../../main_service/src/main_service/history.py) at `/var/lib/burla/history.db`. Written on transitions; never read in the live path. The head reloads active nodes + running jobs from it at startup.
+- In-memory node state lives in the `SELF` dict in [node_service/src/node_service/__init__.py](../../node_service/src/node_service/__init__.py): reset by `REINIT_SELF`. `SELF["reported_status"]` is what the push loop reports to the head.
+- The head is a stateful singleton: exactly one always-on instance per cluster.
 
 ## Dev modes
 
 Set via `IN_LOCAL_DEV_MODE` env var.
 
-- **local-dev-mode**: everything runs locally in Docker containers on one machine. `make local-dev`. Uses `LOCAL_DEV_CONFIG` hard-coded in `main_service/__init__.py` (2x n4-standard-2 nodes).
-- **remote-dev-mode**: only `main_service` runs locally, node VMs are real GCP instances.
-- **prod**: `main_service` on Cloud Run, nodes on Compute Engine.
+- **local-dev-mode**: everything runs locally in Docker containers on one machine. `make local-dev`. Uses `LOCAL_DEV_CONFIG` hard-coded in `main_service/__init__.py` (2x n4-standard-2 nodes). Fully offline: no cloud credentials required by the services themselves.
+- **remote-dev-mode**: only `main_service` runs locally, node VMs are real GCP instances (nodes reach the head at the dev VM's internal IP, port 5001).
+- **prod**: `main_service` on a head VM (GCE `create-with-container` / EC2 + docker), nodes on Compute Engine or EC2.
 
 ## Version compatibility
 
@@ -48,4 +51,4 @@ Set via `IN_LOCAL_DEV_MODE` env var.
 
 ## Deeper context
 
-For subsystem details — end-to-end job lifecycle, node boot / cluster growth, Firestore document shapes, and the full source-file index — use the `burla-deep-dive` skill at [.cursor/skills/burla-deep-dive/SKILL.md](../skills/burla-deep-dive/SKILL.md).
+For subsystem details: end-to-end job lifecycle, node boot / cluster growth, head state shapes, and the full source-file index: use the `burla-deep-dive` skill at [.cursor/skills/burla-deep-dive/SKILL.md](../skills/burla-deep-dive/SKILL.md).

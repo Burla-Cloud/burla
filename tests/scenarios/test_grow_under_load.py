@@ -19,7 +19,6 @@ pytestmark = [pytest.mark.e2e, pytest.mark.slow]
 def test_grow_under_load(
     rpm_subprocess,
     local_dev_cluster,
-    firestore_db,
     main_http_client,
     wait_for_fixture,
 ):
@@ -45,18 +44,20 @@ def test_grow_under_load(
     assert len(result["outputs"]) == 200
     assert set(result["outputs"]) == {x * 2 for x in range(200)}
 
-    # After the job finishes, `reserved_for_job` is cleared on every node —
+    # After the job finishes, `reserved_for_job` is cleared on every node:
     # `on_job_start` clears it the moment the reserved job's assignment lands.
     # Check for the stable signature instead: grow-booted nodes get
     # `inactivity_shutdown_time_sec == 60` (GROW_INACTIVITY_SHUTDOWN_TIME_SEC).
+    # The live node list only shows nodes that still exist, but grow nodes
+    # idle for 60s before self-deleting so they're still visible right after
+    # the job completes.
     recent_cutoff = time.time() - 600
     grow_signature_nodes = []
-    for doc in firestore_db.collection("nodes").stream():
-        data = doc.to_dict() or {}
+    for data in main_http_client.get("/v1/cluster/nodes").json()["nodes"]:
         if data.get("started_booting_at", 0) < recent_cutoff:
             continue
         if data.get("inactivity_shutdown_time_sec") == 60:
-            grow_signature_nodes.append((doc.id, data))
+            grow_signature_nodes.append((data.get("instance_name"), data))
 
     if not grow_signature_nodes and n_ready_before + n_booting_before <= 1:
         pytest.fail(

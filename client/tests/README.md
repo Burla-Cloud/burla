@@ -1,7 +1,7 @@
 ### How to run the tests
 
 **All tiers except `test-unit` must run on a dev VM, not on your laptop.** The
-cluster tests need real Docker-in-Docker, real Firestore, real GCE-style
+cluster tests need real Docker-in-Docker, real GCE-style
 networking, and scratch `_node_auth` / `_shared_workspace` directories that get
 wiped between runs — all of which work reliably only on a dev VM. Running
 `make -f makefile local-dev` on a laptop is unsupported and will break in ways that look

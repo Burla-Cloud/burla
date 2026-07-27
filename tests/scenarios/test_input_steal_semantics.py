@@ -25,7 +25,11 @@ def _node_port(host: str) -> str:
 
 
 def _local_url(host: str) -> str:
-    # On the VM, nodes bind to the host on their docker port, reachable at localhost:<port>.
+    # local-dev node hosts are docker network names (`http://node_xxx:8081`),
+    # reachable from the VM at localhost:<port>. Remote nodes advertise a
+    # public IP that is directly reachable.
+    if "node_" not in host:
+        return host
     port = _node_port(host)
     return f"http://localhost:{port}"
 
@@ -33,7 +37,6 @@ def _local_url(host: str) -> str:
 def test_input_steal_between_nodes(
     rpm_subprocess,
     local_dev_cluster,
-    firestore_db,
     main_http_client,
     burla_auth_headers,
     wait_for_fixture,
@@ -75,13 +78,13 @@ def test_input_steal_between_nodes(
             ]
             if len(ready_and_running) >= 2:
                 return ready_and_running
-            # Also check firestore directly in case cache is stale.
-            docs = list(firestore_db.collection("nodes").stream())
-            running = []
-            for d in docs:
-                data = d.to_dict() or {}
-                if data.get("status") == "RUNNING" and data.get("current_job"):
-                    running.append(data)
+            # ready_nodes only lists READY nodes; nodes already flipped to
+            # RUNNING show up in the full live-node list instead.
+            all_nodes = main_http_client.get("/v1/cluster/nodes").json()["nodes"]
+            running = [
+                n for n in all_nodes
+                if n.get("status") == "RUNNING" and n.get("current_job")
+            ]
             return running if len(running) >= 2 else None
 
         nodes = wait_for_fixture(_two_active_nodes, timeout=60)

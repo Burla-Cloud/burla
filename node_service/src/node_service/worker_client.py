@@ -15,12 +15,12 @@ from tblib import Traceback
 
 from node_service import (
     SELF,
-    ASYNC_DB,
     INSTANCE_NAME,
     IN_LOCAL_DEV_MODE,
     NUM_GPUS,
     Logger,
     __version__,
+    head_client,
 )
 
 RESULTS_QUEUE_RAM_LIMIT_BYTES = int(psutil.virtual_memory().total * 0.5)
@@ -149,7 +149,6 @@ class JobLogWriter:
         self.lock = asyncio.Lock()
         self.stop_event = asyncio.Event()
         self.pending_flush_event = asyncio.Event()
-        self.logs_collection = ASYNC_DB.collection("jobs").document(job_id).collection("logs")
         self.log_buffers = {}
         self.pending_documents = []
         self.active_input_index = None
@@ -176,7 +175,7 @@ class JobLogWriter:
             return
         document = {
             "logs": log_buffer["logs"],
-            "timestamp": datetime.now(timezone.utc),
+            "timestamp": time.time(),
             "input_index": input_index,
         }
         if is_error:
@@ -207,7 +206,7 @@ class JobLogWriter:
 
     def _parse_container_log_line(self, container_log_line: str):
         timestamp_string, _, message = container_log_line.partition(" ")
-        timestamp = datetime.fromisoformat(timestamp_string.replace("Z", "+00:00"))
+        timestamp = datetime.fromisoformat(timestamp_string.replace("Z", "+00:00")).timestamp()
         return timestamp, message
 
     def _capture_container_log_line_locked(self, container_log_line: str):
@@ -243,8 +242,8 @@ class JobLogWriter:
         async with self.lock:
             self.pending_documents.append(
                 {
-                    "logs": [{"timestamp": datetime.now(timezone.utc), "message": traceback_str}],
-                    "timestamp": datetime.now(timezone.utc),
+                    "logs": [{"timestamp": time.time(), "message": traceback_str}],
+                    "timestamp": time.time(),
                     "input_index": input_index,
                     "is_error": True,
                 }
@@ -255,8 +254,8 @@ class JobLogWriter:
         async with self.lock:
             self.pending_documents.append(
                 {
-                    "logs": [{"timestamp": datetime.now(timezone.utc), "message": message}],
-                    "timestamp": datetime.now(timezone.utc),
+                    "logs": [{"timestamp": time.time(), "message": message}],
+                    "timestamp": time.time(),
                     "input_index": input_index,
                     "severity": "WARNING",
                 }
@@ -280,10 +279,12 @@ class JobLogWriter:
             if not document.get("is_error"):
                 SELF["pending_logs"].append(document)
 
-        batch = ASYNC_DB.batch()
-        for document in documents:
-            batch.set(self.logs_collection.document(), document)
-        await batch.commit()
+        try:
+            await head_client.post_job_logs(self.job_id, documents)
+        except Exception as e:
+            # The client still gets these logs live via /results (pending_logs
+            # above); only the dashboard's persistent copy is lost.
+            print(f"failed to forward {len(documents)} job log docs to head: {e}")
 
     async def _flush_loop(self):
         while True:
@@ -608,13 +609,27 @@ class WorkerClient:
         error: WorkerOutOfMemoryError | WorkerProcessTerminatedError,
     ):
         async with SELF["dynamic_ram_lock"]:
-            active_workers = [worker for worker in SELF["workers"] if not worker.retired]
-            if len(active_workers) <= 1:
+            # A memory-pressure retirement already requeued this input (it
+            # clears current_input before killing the process). Requeueing or
+            # delivering here too would run the input twice.
+            if self.current_input is None:
+                return None
+            # The monitor loop may have already retired this worker when its
+            # process died (NoSuchProcess), so "terminal" means no OTHER
+            # active worker is left to retry the input.
+            other_active_workers = [
+                worker
+                for worker in SELF["workers"]
+                if not worker.retired and worker is not self
+            ]
+            if not other_active_workers:
                 if isinstance(error, WorkerOutOfMemoryError):
                     error = _dynamic_terminal_oom_error()
+                self.retired = True
+                SELF["reboot_containers_after_job"] = True
                 return (input_index, True, self._serialize_error(error))
 
-            old_parallelism = len(active_workers)
+            old_parallelism = len(other_active_workers) + 1
             new_parallelism = old_parallelism - 1
             self.retired = True
             self.is_idle = True
@@ -694,6 +709,14 @@ class WorkerClient:
                     )
                     if result is None:
                         return
+                    # Terminal: no other worker is left to retry this input.
+                    # Deliver here, bypassing the `self.retired` early-return
+                    # below: the RAM monitor races this handler (it retires a
+                    # worker the moment its process disappears) and used to
+                    # win, swallowing the error and hanging the job.
+                    await SELF["results_queue"].put(result, len(result[2]))
+                    SELF["num_results_received"] += 1
+                    return
                 else:
                     if self.log_writer is not None:
                         await self.log_writer.write_error(input_index, self._traceback_string(error))

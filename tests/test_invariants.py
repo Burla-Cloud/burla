@@ -4,8 +4,8 @@ Python packages.
 
 - Version string must match between client, main_service, node_service.
 - MIN_COMPATIBLE_CLIENT_VERSION <= CURRENT_BURLA_VERSION.
-- Firestore database is always "burla" (no `firestore.Client()` without it).
-- The client package (`burla`) never directly imports the firestore client.
+- No package touches Firestore (the database was removed in 1.6.0; live
+  state lives in main_service memory, history in SQLite on the head).
 """
 
 from __future__ import annotations
@@ -75,33 +75,21 @@ def test_MIN_COMPATIBLE_CLIENT_VERSION_is_le_CURRENT():
     )
 
 
-def test_firestore_client_always_has_database_burla():
-    """Every firestore.Client(...) / AsyncClient(...) call in main_service
-    and node_service must specify database='burla'."""
-    for svc in ("main_service", "node_service"):
-        for path in (REPO_ROOT / svc / "src").rglob("*.py"):
+def test_no_package_imports_firestore():
+    """Firestore is gone: coordination is head-centric HTTP, history is
+    SQLite. Nothing may import it back in."""
+    for pkg_dir in (
+        REPO_ROOT / "client" / "src" / "burla",
+        REPO_ROOT / "main_service" / "src" / "main_service",
+        REPO_ROOT / "node_service" / "src" / "node_service",
+    ):
+        for path in pkg_dir.rglob("*.py"):
             text = path.read_text()
-            for match in re.finditer(r"firestore\.(Client|AsyncClient)\(([^)]*)\)", text):
-                args = match.group(2)
-                assert "burla" in args, (
-                    f"{path.relative_to(REPO_ROOT)}: firestore client without "
-                    f"database=burla: {match.group(0)}"
-                )
-
-
-def test_client_package_does_not_import_google_cloud_firestore():
-    """The burla client must not touch firestore directly — it goes through
-    main_service HTTP endpoints."""
-    client_dir = REPO_ROOT / "client" / "src" / "burla"
-    for path in client_dir.rglob("*.py"):
-        text = path.read_text()
-        # Allow `from google.cloud import logging` etc., but `firestore`
-        # must not appear in any import.
-        for line in text.splitlines():
-            if line.strip().startswith(("import ", "from ")) and "firestore" in line:
-                pytest.fail(
-                    f"{path.relative_to(REPO_ROOT)} imports firestore: {line.strip()}"
-                )
+            for line in text.splitlines():
+                if line.strip().startswith(("import ", "from ")) and "firestore" in line:
+                    pytest.fail(
+                        f"{path.relative_to(REPO_ROOT)} imports firestore: {line.strip()}"
+                    )
 
 
 def test_client_tests_subprocess_pattern_uses_spawn_context():

@@ -8,4 +8,5 @@ ADD . /burla/main_service
 WORKDIR /burla/main_service
 RUN uv pip install --system -e .
 
-CMD ["python", "-m", "uvicorn", "main_service:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "1", "--timeout-keep-alive", "60"]
+# PORT is 80 on head VMs (containers run with host networking there).
+CMD ["sh", "-c", "python -m uvicorn main_service:app --host 0.0.0.0 --port ${PORT:-8080} --workers 1 --timeout-keep-alive 60"]

@@ -6,32 +6,18 @@ import aiohttp
 from time import time
 from uuid import uuid4
 
-from google.cloud import firestore
-from google.cloud.firestore import ArrayUnion
-from google.cloud.firestore_v1.async_client import AsyncClient
-from google.cloud.firestore import FieldFilter, And
-from google.cloud.firestore_v1.field_path import FieldPath
-
 from node_service import (
-    PROJECT_ID,
     SELF,
     INSTANCE_NAME,
     NODE_AUTH_CREDENTIALS_PATH,
     REINIT_SELF,
+    head_client,
 )
 from node_service.helpers import Logger, format_traceback
 from node_service.lifecycle_endpoints import reboot_containers
 
 EMPTY_NEIGHBOR_TIMEOUT_SEC = 120
 CLIENT_CONTACT_TIMEOUT_SEC = 5
-# Time we'll tolerate without a fresh `jobs/{id}` update_time before treating
-# the client as disconnected. Client heartbeats fire every 2s and go
-# client -> main_service -> firestore, which can take 100-400ms; 8s gives
-# comfortable headroom against main_service hiccups without meaningfully
-# delaying detection of real client crashes (the direct
-# `/client-heartbeat` path, governed by CLIENT_CONTACT_TIMEOUT_SEC above,
-# is the primary signal).
-JOB_DOC_CONTACT_TIMEOUT_SEC = 8
 ACK_RETRY_TIMEOUT_SEC = 600
 ACK_RETRY_DELAY_SEC = 15
 WORKER_CLEANUP_TIMEOUT_SEC = 120
@@ -39,45 +25,41 @@ WORKER_CLEANUP_TIMEOUT_SEC = 120
 SEC_NEIGHBOR_HAD_NO_INPUTS = 0
 
 
-def _lifecycle_canceled(job_dict: dict) -> bool:
+def _lifecycle_canceled(job_view: dict) -> bool:
     return (
-        job_dict.get("cluster_shutdown")
-        or job_dict.get("cluster_restarted")
-        or job_dict.get("dashboard_canceled")
-        or job_dict.get("status") == "CANCELED"
+        job_view.get("cluster_shutdown")
+        or job_view.get("cluster_restarted")
+        or job_view.get("dashboard_canceled")
+        or job_view.get("status") == "CANCELED"
     )
 
 
-async def get_neighbor(async_db, node_ids_expected):
-    status_filter = FieldFilter("status", "==", "RUNNING")
-    job_filter = FieldFilter("current_job", "==", SELF["current_job"])
-    query = async_db.collection("nodes").where(filter=And([status_filter, job_filter]))
-    query = query.order_by(FieldPath.document_id())
-    nodes = [node async for node in query.stream()]
-    self_index = [i for i, n in enumerate(nodes) if n.id == INSTANCE_NAME]
+async def get_neighbor(node_ids_expected):
+    """Pick the next RUNNING node after this one in the (name-sorted) ring of
+    nodes assigned to this job. Peer list comes from the head."""
+    response = await head_client.get_peers(SELF["current_job"])
+    peers = response["peers"]
+    self_index = [i for i, p in enumerate(peers) if p["instance_name"] == INSTANCE_NAME]
 
-    running_node_ids = {n.id for n in nodes}
+    running_node_ids = {p["instance_name"] for p in peers}
     missing_node_ids = [nid for nid in node_ids_expected if nid not in running_node_ids]
-    still_booting = False
-    if missing_node_ids:
-        booting_filter = FieldFilter("status", "==", "BOOTING")
-        query = async_db.collection("nodes").where(filter=booting_filter).stream()
-        booting_nodes = {n.id async for n in query}
-        still_booting = any(nid in booting_nodes for nid in missing_node_ids)
+    still_booting = bool(missing_node_ids) and any(
+        nid in response["booting_node_ids"] for nid in missing_node_ids
+    )
 
     neighbor_id, neighbor_host = None, None
-    if self_index and len(nodes) > 1:
-        neighbors = nodes[self_index[0] + 1 :] + nodes[: self_index[0]]
-        neighbor_id = neighbors[0].id
-        neighbor_host = neighbors[0].to_dict()["host"]
+    if self_index and len(peers) > 1:
+        neighbors = peers[self_index[0] + 1 :] + peers[: self_index[0]]
+        neighbor_id = neighbors[0]["instance_name"]
+        neighbor_host = neighbors[0]["host"]
     return neighbor_id, neighbor_host, still_booting
 
 
-async def _input_steal_loop(async_db, session, logger, job_started_at, node_ids_expected):
+async def _input_steal_loop(session, logger, job_started_at, node_ids_expected):
     global SEC_NEIGHBOR_HAD_NO_INPUTS
 
     should_steal = lambda: SELF["all_inputs_uploaded"] and (time() - job_started_at > 10)
-    neighbor_id, neighbor_host, nodes_might_join = await get_neighbor(async_db, node_ids_expected)
+    neighbor_id, neighbor_host, nodes_might_join = await get_neighbor(node_ids_expected)
     if not (neighbor_id or nodes_might_join):
         return
     neighbor_had_no_inputs_at = None
@@ -90,8 +72,7 @@ async def _input_steal_loop(async_db, session, logger, job_started_at, node_ids_
             continue
 
         if nodes_might_join and (time() - job_started_at > 60):
-            _get_neighbor = get_neighbor(async_db, node_ids_expected)
-            neighbor_id, neighbor_host, nodes_might_join = await _get_neighbor
+            neighbor_id, neighbor_host, nodes_might_join = await get_neighbor(node_ids_expected)
             if not (neighbor_id or nodes_might_join):
                 return
 
@@ -146,9 +127,10 @@ async def _input_steal_loop(async_db, session, logger, job_started_at, node_ids_
                 f"{ACK_RETRY_TIMEOUT_SEC}s. Failing job to preserve exactly-once semantics."
             )
             await logger.log(reason, "ERROR")
-            job_doc = async_db.collection("jobs").document(SELF["current_job"])
             try:
-                await job_doc.update({"status": "FAILED", "fail_reason": ArrayUnion([reason])})
+                await head_client.update_job(
+                    SELF["current_job"], {"status": "FAILED"}, append_fail_reason=reason
+                )
             except Exception:
                 pass
             return
@@ -163,71 +145,41 @@ async def _input_steal_loop(async_db, session, logger, job_started_at, node_ids_
             await asyncio.sleep(1)
 
 
+async def _push_progress() -> dict:
+    """Push this node's job progress and return the fresh job view."""
+    view = await head_client.push_state(include_job_progress=True)
+    head_client.apply_job_signals(view.get("job"))
+    return view.get("job") or {"exists": False}
+
+
 async def _job_watcher(
     n_inputs: int,
     is_background_job: bool,
     job_started_at: float,
     node_ids_expected: list,
     logger: Logger,
-    async_db: AsyncClient,
     session: aiohttp.ClientSession,
-    exit_stack: list,
 ):
     # Module-global: reset per-job so prior-job state doesn't leak in.
     global SEC_NEIGHBOR_HAD_NO_INPUTS
     SEC_NEIGHBOR_HAD_NO_INPUTS = 0
 
-    sync_db = firestore.Client(project=PROJECT_ID, database="burla")
-    job_doc = async_db.collection("jobs").document(SELF["current_job"])
-    sync_job_doc = sync_db.collection("jobs").document(SELF["current_job"])
-    # main_service writes this doc fire-and-forget, so fast networks can race it.
-    for _ in range(40):
-        snapshot = await job_doc.get()
-        if snapshot.exists:
-            break
-        await asyncio.sleep(0.05)
-    try:
-        last_job_doc_update_time = snapshot.update_time.timestamp()
-    except AttributeError as e:
-        raise RuntimeError(f"Job doc {SELF['current_job']} did not appear after 2s") from e
-    node_docs_collection = job_doc.collection("assigned_nodes")
-    node_doc = node_docs_collection.document(INSTANCE_NAME)
-    await node_doc.set({"current_num_results": 0, "client_contact_last_1s": True})
+    # First push registers this node's progress with the head (the
+    # `assigned_nodes` entry) and returns the job's current signal set.
+    # The job was created synchronously inside `POST /v1/jobs/{id}/start`,
+    # before the client could possibly have contacted this node.
+    job_view = await _push_progress()
+    if not job_view.get("exists"):
+        raise RuntimeError(f"Job {SELF['current_job']} does not exist on the head.")
+
+    steal_task = asyncio.create_task(
+        _input_steal_loop(session, logger, job_started_at, node_ids_expected)
+    )
 
     JOB_FAILED = False
     JOB_CANCELED = False
-
-    def _on_job_snapshot(doc_snapshot, changes, read_time):
-        nonlocal JOB_FAILED, JOB_CANCELED, last_job_doc_update_time
-        for change in changes:
-            last_job_doc_update_time = change.document.update_time.timestamp()
-            job_dict = change.document.to_dict()
-            if job_dict["all_inputs_uploaded"] == True:
-                SELF["all_inputs_uploaded"] = True
-            if job_dict.get("cluster_shutdown"):
-                SELF["pending_cluster_shutdown"] = True
-            if job_dict.get("cluster_restarted"):
-                SELF["pending_cluster_restarted"] = True
-            if job_dict.get("dashboard_canceled"):
-                SELF["pending_dashboard_canceled"] = True
-            if job_dict["status"] == "FAILED":
-                JOB_FAILED = True
-                break
-            elif job_dict["status"] == "CANCELED":
-                JOB_CANCELED = True
-                break
-
-    # Client intentionally updates the job doc every few seconds to signal it's still connected.
-    job_watch = sync_job_doc.on_snapshot(_on_job_snapshot)
-    exit_stack.append(job_watch.unsubscribe)
-
-    steal_task = asyncio.create_task(
-        _input_steal_loop(async_db, session, logger, job_started_at, node_ids_expected)
-    )
-
     last_results_update_time = time()
     last_reported_result_count = 0
-    last_reported_client_contact_last_1s = True
     while not SELF["job_watcher_stop_event"].is_set():
 
         SELF["current_parallelism"] = sum(
@@ -241,39 +193,47 @@ async def _job_watcher(
         await asyncio.sleep(0.2 if slow_poll else 0.02)
         pending_results_empty = SELF["pending_result_batch"] is None
 
-        # Update num results in db?
+        # Signals delivered by the 1s state-push loop (or a direct push below).
+        job_view = SELF.get("job_view") or job_view
+        if job_view.get("status") == "FAILED":
+            JOB_FAILED = True
+        elif job_view.get("status") == "CANCELED":
+            JOB_CANCELED = True
+
+        # Client still listening? (the direct /client-heartbeat is the signal;
+        # the head aggregates every node's flag for the quorum check below)
+        sec_since_last_activity = time() - SELF["last_client_activity_timestamp"]
+        client_contact_last_1s = sec_since_last_activity < CLIENT_CONTACT_TIMEOUT_SEC
+        active_request = SELF["active_client_request_count"] > 0 and sec_since_last_activity < 15
+        client_contact_last_1s = client_contact_last_1s or active_request
+        contact_flag_changed = client_contact_last_1s != SELF["client_contact_last_1s"]
+        SELF["client_contact_last_1s"] = client_contact_last_1s
+
+        # Push progress immediately on meaningful changes; the 1s loop covers
+        # the steady state.
         current_num_results = SELF["num_results_received"]
         results_changed = current_num_results != last_reported_result_count
         seconds_since_results_update = time() - last_results_update_time
         workers_busy = not input_queue_empty or not all_workers_idle
         stale_update = workers_busy and seconds_since_results_update > 2
-        should_update_results = (input_queue_empty and results_changed) or stale_update
-        if should_update_results:
-            await node_doc.update({"current_num_results": current_num_results})
+        should_push = (input_queue_empty and results_changed) or stale_update or contact_flag_changed
+        if should_push:
+            job_view = await _push_progress()
             last_results_update_time = time()
             last_reported_result_count = current_num_results
 
-        # Client still listening?
         client_disconnected = False
-        sec_since_last_activity = time() - SELF["last_client_activity_timestamp"]
-        client_contact_last_1s = sec_since_last_activity < CLIENT_CONTACT_TIMEOUT_SEC
-        active_request = SELF["active_client_request_count"] > 0 and sec_since_last_activity < 15
-        client_contact_last_1s = client_contact_last_1s or active_request
-        if client_contact_last_1s != last_reported_client_contact_last_1s:
-            await node_doc.update({"client_contact_last_1s": client_contact_last_1s})
-            last_reported_client_contact_last_1s = client_contact_last_1s
         if not client_contact_last_1s:
-            seconds_since_job_doc_update = time() - last_job_doc_update_time
-            if seconds_since_job_doc_update > JOB_DOC_CONTACT_TIMEOUT_SEC:
-                node_dicts = [d.to_dict() for d in await node_docs_collection.get()]
-                client_disconnected = not any(d["client_contact_last_1s"] for d in node_dicts)
+            client_disconnected = not job_view.get("any_node_client_contact")
         must_be_connected = not is_background_job or not SELF["all_inputs_uploaded"]
-        if client_disconnected and must_be_connected:
-            if _lifecycle_canceled((await job_doc.get()).to_dict()):
+        if client_disconnected and must_be_connected and not (JOB_FAILED or JOB_CANCELED):
+            if _lifecycle_canceled(job_view):
                 JOB_CANCELED = True
             else:
                 JOB_FAILED = True
-                await job_doc.update({"status": "FAILED", "fail_reason": ArrayUnion(["Client DC"])})
+                await head_client.update_job(
+                    SELF["current_job"], {"status": "FAILED"}, append_fail_reason="Client DC"
+                )
                 await logger.log("Client disconnected!")
 
         # Neighbor had no inputs for too long?
@@ -282,7 +242,7 @@ async def _job_watcher(
                 steal_task.cancel()
                 msg = f"Neighbor had no extra inputs for {EMPTY_NEIGHBOR_TIMEOUT_SEC}s"
                 await logger.log(msg + ", done working on job!")
-                await reset_workers(logger, async_db)
+                await reset_workers(logger)
                 break
 
         # Job over?
@@ -290,21 +250,28 @@ async def _job_watcher(
         all_uploaded = SELF["all_inputs_uploaded"]
         all_inputs_processed = all_uploaded and input_queue_empty and all_workers_idle
         if all_inputs_processed and client_disconnected and pending_results_empty:
-            node_docs = await node_docs_collection.get()
-            result_count = sum(doc.to_dict()["current_num_results"] for doc in node_docs)
-            job_completed = n_inputs == result_count
+            job_view = await _push_progress()
+            job_completed = n_inputs == job_view.get("total_num_results")
         elif all_inputs_processed:
-            job_completed = (await job_doc.get()).to_dict()["client_has_all_results"]
+            job_view = await _push_progress()
+            job_completed = job_view.get("client_has_all_results")
         if job_completed or JOB_FAILED or JOB_CANCELED:
             steal_task.cancel()
-            status = sync_job_doc.get().to_dict()["status"]
-            status = status if status in ["FAILED", "CANCELED"] else "COMPLETED"
+            if JOB_FAILED:
+                status = "FAILED"
+            elif JOB_CANCELED:
+                status = "CANCELED"
+            else:
+                # job_view is fresh here (the completion branches above just
+                # pushed); another node may have failed/canceled first.
+                status = job_view.get("status")
+                status = status if status in ["FAILED", "CANCELED"] else "COMPLETED"
             await logger.log(f"Job is {status}! (id={SELF['current_job']})")
             try:
-                sync_job_doc.update({"status": status})
+                await head_client.update_job(SELF["current_job"], {"status": status})
             except Exception:
                 pass
-            await reset_workers(logger, async_db)
+            await reset_workers(logger)
             break
 
     steal_task.cancel()
@@ -315,19 +282,15 @@ async def job_watcher_logged(
 ):
     logger = Logger()  # new logger has no request attached like the one in execute job did.
 
-    exit_stack = []
     async with aiohttp.ClientSession() as session:
         try:
-            async_db = AsyncClient(project=PROJECT_ID, database="burla")
             await _job_watcher(
                 n_inputs,
                 is_background_job,
                 job_started_at,
                 node_ids_expected,
                 logger,
-                async_db,
                 session,
-                exit_stack,
             )
         except Exception as e:
             exc_type, exc_value, exc_traceback = sys.exc_info()
@@ -335,17 +298,15 @@ async def job_watcher_logged(
             traceback_str = format_traceback(tb_details)
             await logger.log(str(e), "ERROR", traceback=traceback_str)
             try:
-                job_doc = async_db.collection("jobs").document(SELF["current_job"])
-                await job_doc.update({"status": "FAILED", "fail_reason": ArrayUnion([str(e)])})
+                await head_client.update_job(
+                    SELF["current_job"], {"status": "FAILED"}, append_fail_reason=str(e)
+                )
             except Exception:
                 pass
-            await reset_workers(logger, async_db)
-        finally:
-            for cleanup in exit_stack:
-                cleanup()
+            await reset_workers(logger)
 
 
-async def reinit_node(assigned_workers: list, async_db: AsyncClient):
+async def reinit_node(assigned_workers: list):
     current_workers = assigned_workers + SELF["idle_workers"]
     for w in current_workers:
         w.is_idle = True
@@ -356,11 +317,11 @@ async def reinit_node(assigned_workers: list, async_db: AsyncClient):
     SELF["current_container_config"] = current_container_config
     SELF["workers"] = current_workers
     SELF["authorized_users"] = authorized_users
-    node_doc = async_db.collection("nodes").document(INSTANCE_NAME)
-    await node_doc.update({"status": "READY", "current_job": None, "reserved_for_job": None})
+    SELF["reported_status"] = "READY"
+    await head_client.push_state(status="READY", current_job=None, reserved_for_job=None)
 
 
-async def reset_workers(logger: Logger, async_db: AsyncClient):
+async def reset_workers(logger: Logger):
     # Stops idle or reassigned workers from holding creds for a finished job.
     NODE_AUTH_CREDENTIALS_PATH.unlink(missing_ok=True)
     monitor_task = SELF["dynamic_ram_monitor_task"]
@@ -379,8 +340,8 @@ async def reset_workers(logger: Logger, async_db: AsyncClient):
                 timeout=WORKER_CLEANUP_TIMEOUT_SEC,
             )
         except Exception as e:
-            node_doc = async_db.collection("nodes").document(INSTANCE_NAME)
-            await node_doc.update({"status": "FAILED"})
+            SELF["reported_status"] = "FAILED"
+            await head_client.push_state(status="FAILED")
             await logger.log(f"Timed out rebooting worker containers: {e}", severity="ERROR")
         return
     try:
@@ -390,9 +351,7 @@ async def reset_workers(logger: Logger, async_db: AsyncClient):
         )
     except Exception as e:
         # dont throw errors if node deleting
-        node_doc = async_db.collection("nodes").document(INSTANCE_NAME)
-        current_status = (await node_doc.get()).to_dict().get("status")
-        if current_status in ("DELETED", "FAILED"):
+        if SELF["SHUTTING_DOWN"] or SELF["FAILED"]:
             return
 
         await logger.log(f"Error resetting workers: {e}", severity="ERROR")
@@ -403,10 +362,11 @@ async def reset_workers(logger: Logger, async_db: AsyncClient):
                 timeout=WORKER_CLEANUP_TIMEOUT_SEC,
             )
         except Exception as reboot_error:
-            await node_doc.update({"status": "FAILED"})
+            SELF["reported_status"] = "FAILED"
+            await head_client.push_state(status="FAILED")
             await logger.log(
                 f"Timed out rebooting worker containers after reset failure: {reboot_error}",
                 severity="ERROR",
             )
         return
-    await reinit_node(SELF["workers"], async_db)
+    await reinit_node(SELF["workers"])

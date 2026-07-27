@@ -12,6 +12,11 @@ from burla import _BURLA_BACKEND_URL, __version__
 from burla._helpers import run_command, VerboseCalledProcessError
 from burla._reporting import log_telemetry
 
+HEAD_VM_NAME = "burla-main-service"
+HEAD_MACHINE_TYPE = "e2-small"
+HEAD_REGION = "us-central1"
+HEAD_ZONE = "us-central1-a"
+
 
 class InstallError(Exception):
     def __init__(self):
@@ -31,15 +36,24 @@ class AuthError(Exception):
         super().__init__(message)
 
 
-def install():
-    """Install or Update the Burla cluster in your current default Google Cloud Project.
+def install(cloud: str = "gcp"):
+    """Install or Update the Burla cluster.
 
-    - Run: `gcloud config get project` to view your default project.
-    - Run: `gcloud config set project <new-project-id>` to change your default project.
+    - `burla install` installs into your current default Google Cloud project.
+      Run: `gcloud config get project` to view your default project.
+      Run: `gcloud config set project <new-project-id>` to change your default project.
+    - `burla install --cloud=aws` installs into your current default AWS account/region.
     """
     try:
         with yaspin() as spinner:
-            _install(spinner)
+            if cloud == "aws":
+                from burla._install_aws import install_aws
+
+                install_aws(spinner)
+            elif cloud == "gcp":
+                _install_gcp(spinner)
+            else:
+                raise ValueError(f"Unknown cloud: {cloud!r}. Use 'gcp' or 'aws'.")
     except Exception as e:
         # Report errors back to Burla's cloud.
         exc_type, exc_value, exc_traceback = sys.exc_info()
@@ -69,15 +83,9 @@ def install():
             raise e
 
 
-def _install(spinner):
+def _install_gcp(spinner):
     log_telemetry("Somebody is running `burla install`!")
     _check_gcloud_is_installed(spinner)
-
-    # TODO: re-enable
-    # If I remember correctly this was disabled because in the case that the user is not logged in,
-    # instead of throwing an error, gcloud simple freezes for almost 2 minutes.
-    # I could be wrong I don't fully remember why I commented this out.
-    # _check_gcloud_is_logged_in(spinner)
 
     PROJECT_ID = _get_gcloud_GCP_project_id(spinner)
     log_telemetry("Installer has gcloud and is logged in.", project_id=PROJECT_ID)
@@ -85,21 +93,21 @@ def _install(spinner):
     spinner.text = "Enabling required services ... "
     spinner.start()
     run_command("gcloud services enable compute.googleapis.com")
-    run_command("gcloud services enable run.googleapis.com")
-    run_command("gcloud services enable firestore.googleapis.com")
     run_command("gcloud services enable cloudresourcemanager.googleapis.com")
     run_command("gcloud services enable secretmanager.googleapis.com")
     run_command("gcloud services enable storage.googleapis.com")
-    run_command("gcloud services enable logging.googleapis.com")
     run_command("gcloud services enable iamcredentials.googleapis.com")
     spinner.text = "Enabling required services... Done."
     spinner.ok("✓")
 
     _open_port_8080_to_VMs_with_tag_burla_cluster_node(spinner)
+    _open_port_80_to_head_vm(spinner)
 
     _create_gcs_bucket(spinner, PROJECT_ID)
 
     # create cluster id token secret (must exist for service accounts to be created)
+    # The secret is only read by `burla login`'s ADC bootstrap path - services
+    # receive the token as an env var.
     cmd = 'gcloud secrets create burla-cluster-id-token --replication-policy="automatic"'
     create_cmd_result = run_command(cmd, raise_error=False)
     cmd_threw_error = create_cmd_result.returncode != 0
@@ -110,73 +118,24 @@ def _install(spinner):
     # create service accounts: main-service, compute-engine-default
     main_svc_account_email = _create_service_accounts(spinner, PROJECT_ID)
 
-    _create_firestore_database(spinner, PROJECT_ID)
-
     cluster_id_token = _register_cluster_and_save_cluster_id_token(spinner, PROJECT_ID)
 
-    # Deploy dashboard as google cloud run service
-    spinner.text = "Deploying burla-main-service to Google Cloud Run ... "
-    spinner.start()
-    image_name = f"us-docker.pkg.dev/burla-prod/burla-main-service/burla-main-service:{__version__}"
-    run_command(
-        f"gcloud run deploy burla-main-service "
-        f"--image={image_name} "
-        f"--project {PROJECT_ID} "
-        f"--region=us-central1 "
-        f"--service-account {main_svc_account_email} "
-        f"--min-instances 0 "
-        f"--max-instances 5 "
-        f"--memory 4Gi "
-        f"--cpu 1 "
-        f"--timeout 60 "
-        f"--concurrency 20 "
-        f"--allow-unauthenticated"
-    )
-    run_command(
-        f"gcloud run services update-traffic burla-main-service "
-        f"--project {PROJECT_ID} "
-        f"--region=us-central1 "
-        f"--to-latest"
-    )
+    dashboard_url = _deploy_head_vm(spinner, PROJECT_ID, main_svc_account_email, cluster_id_token)
+
+    # remove the old Cloud Run deployment if upgrading from a pre-1.6 cluster.
+    cmd = "gcloud run services delete burla-main-service --region=us-central1 --quiet"
+    run_command(cmd, raise_error=False)
 
     # register dashboard url so burla website login page can send user to this instance.
-    result = run_command(
-        f"gcloud beta run domain-mappings list "
-        f"--region=us-central1 "
-        f"--filter='spec.routeName=burla-main-service' "
-        f"--format='value(metadata.name)'"
-    )
-    mapped_domains = result.stdout.decode().splitlines() if result.stdout else []
-    if mapped_domains:
-        dashboard_url = f"https://{mapped_domains[0]}"
-    else:
-        result = run_command("gcloud run services describe burla-main-service --region us-central1")
-        dashboard_url = None
-        for line in result.stdout.decode().splitlines():
-            if line.startswith("URL:"):
-                dashboard_url = line.split()[1]
-        if not dashboard_url:
-            spinner.fail("✗")
-            raise Exception("Dashboard URL not returned by: gcloud run services describe ...")
-
     url = f"{_BURLA_BACKEND_URL}/v1/clusters/{PROJECT_ID}/dashboard_url"
     headers = {"Authorization": f"Bearer {cluster_id_token}"}
     response = requests.post(url, json={"dashboard_url": dashboard_url}, headers=headers)
     response.raise_for_status()
-    spinner.text = "Deploying Burla-Main-Service to Google Cloud Run ... Done."
-    spinner.ok("✓")
 
     # update cluster version recorded in burla's cloud
-    cmd = "gcloud secrets versions access latest --secret=burla-cluster-id-token"
-    result = run_command(cmd, raise_error=False)
-    if result.returncode != 0:
-        spinner.fail("✗")
-        raise VerboseCalledProcessError(cmd, result.stderr)
-    else:
-        headers = {"Authorization": f"Bearer {result.stdout.decode().strip()}"}
-        url = f"{_BURLA_BACKEND_URL}/v1/clusters/{PROJECT_ID}/version"
-        response = requests.put(url, json={"version": __version__}, headers=headers)
-        response.raise_for_status()
+    url = f"{_BURLA_BACKEND_URL}/v1/clusters/{PROJECT_ID}/version"
+    response = requests.put(url, json={"version": __version__}, headers=headers)
+    response.raise_for_status()
 
     # print success message
     msg = f"\nSuccessfully installed Burla v{__version__}!\n"
@@ -191,6 +150,81 @@ def _install(spinner):
     log_telemetry("Burla successfully installed!", project_id=PROJECT_ID)
 
 
+def _deploy_head_vm(spinner, PROJECT_ID, main_svc_account_email, cluster_id_token):
+    """One small always-on VM runs main_service. It holds live cluster state
+    in memory and job/node history in SQLite on its disk (/var/lib/burla)."""
+    spinner.text = "Deploying burla-main-service VM ... "
+    spinner.start()
+
+    # Static IP so the dashboard URL survives VM restarts.
+    cmd = f"gcloud compute addresses create {HEAD_VM_NAME} --region={HEAD_REGION}"
+    result = run_command(cmd, raise_error=False)
+    if result.returncode != 0 and "already exists" not in result.stderr.decode():
+        spinner.fail("✗")
+        raise VerboseCalledProcessError(cmd, result.stderr)
+    cmd = (
+        f"gcloud compute addresses describe {HEAD_VM_NAME} "
+        f"--region={HEAD_REGION} --format='value(address)'"
+    )
+    static_ip = run_command(cmd).stdout.decode().strip()
+
+    image_name = f"us-docker.pkg.dev/burla-prod/burla-main-service/burla-main-service:{__version__}"
+    container_env = (
+        f"PROJECT_ID={PROJECT_ID},"
+        f"CLUSTER_ID_TOKEN={cluster_id_token},"
+        f"CLOUD_PROVIDER=gcp,"
+        f"PORT=80,"
+        f"HISTORY_DB_PATH=/var/lib/burla/history.db"
+    )
+    create_cmd = (
+        f"gcloud compute instances create-with-container {HEAD_VM_NAME} "
+        f"--zone={HEAD_ZONE} "
+        f"--machine-type={HEAD_MACHINE_TYPE} "
+        f"--address={static_ip} "
+        f"--tags=burla-head "
+        f"--service-account={main_svc_account_email} "
+        f"--scopes=https://www.googleapis.com/auth/cloud-platform "
+        f"--boot-disk-size=20GB "
+        f"--container-image={image_name} "
+        f"--container-restart-policy=always "
+        f"--container-env='{container_env}' "
+        f"--container-mount-host-path=mount-path=/var/lib/burla,host-path=/var/lib/burla,mode=rw"
+    )
+    result = run_command(create_cmd, raise_error=False)
+    if result.returncode != 0 and "already exists" in result.stderr.decode():
+        # Upgrading: point the existing VM at the new image + env.
+        update_cmd = (
+            f"gcloud compute instances update-container {HEAD_VM_NAME} "
+            f"--zone={HEAD_ZONE} "
+            f"--container-image={image_name} "
+            f"--container-env='{container_env}'"
+        )
+        run_command(update_cmd)
+    elif result.returncode != 0:
+        spinner.fail("✗")
+        raise VerboseCalledProcessError(create_cmd, result.stderr)
+
+    dashboard_url = f"http://{static_ip}"
+
+    spinner.text = "Deploying burla-main-service VM ... waiting for it to serve traffic ..."
+    start = time()
+    while time() - start < 300:
+        try:
+            response = requests.get(f"{dashboard_url}/version", timeout=3)
+            if response.status_code == 200:
+                break
+        except requests.RequestException:
+            pass
+        sleep(5)
+    else:
+        spinner.fail("✗")
+        raise Exception(f"burla-main-service VM never became reachable at {dashboard_url}")
+
+    spinner.text = "Deploying burla-main-service VM ... Done."
+    spinner.ok("✓")
+    return dashboard_url
+
+
 def _check_gcloud_is_installed(spinner):
     spinner.text = "Checking for gcloud ... "
     spinner.start()
@@ -202,34 +236,6 @@ def _check_gcloud_is_installed(spinner):
         log_telemetry("User does not have gcloud installed.")
         sys.exit(1)
     spinner.text = "Checking for gcloud ... Done."
-    spinner.ok("✓")
-
-
-def _check_gcloud_is_logged_in(spinner):
-    spinner.text = "Checking for gcloud credentials ... "
-    spinner.start()
-    cmd = "gcloud auth list --filter=status:ACTIVE --format='value(account)'"
-    result = run_command(cmd, raise_error=False)
-    if result.returncode != 0 and result.stdout == b"":
-        spinner.fail("✗")
-        msg = "ERROR: You are not logged in with gcloud.\n"
-        msg += "Please run 'gcloud auth login' before installing Burla."
-        print("")
-        print(msg, file=sys.stderr)
-        log_telemetry("User has gcloud but is not logged in.")
-        sys.exit(1)
-
-    cmd = "gcloud auth application-default print-access-token 2>/dev/null"
-    result = run_command(cmd, raise_error=False)
-    if result.returncode != 0 and result.stdout == b"":
-        spinner.fail("✗")
-        msg = "ERROR: Application default credentials not found.\n"
-        msg += "Please run 'gcloud auth application-default login' before installing Burla."
-        print("")
-        print(msg, file=sys.stderr)
-        log_telemetry("User has gcloud but is not logged in with application-default credentials.")
-        sys.exit(1)
-    spinner.text = "Checking for gcloud credentials ... Done."
     spinner.ok("✓")
 
 
@@ -274,6 +280,30 @@ def _open_port_8080_to_VMs_with_tag_burla_cluster_node(spinner):
         raise VerboseCalledProcessError(cmd, result.stderr)
     else:
         spinner.text = "Opening port 8080 to VM's with tag 'burla-cluster-node' ... Done."
+        spinner.ok("✓")
+
+
+def _open_port_80_to_head_vm(spinner):
+    spinner.text = "Opening port 80 to the VM with tag 'burla-head' ... "
+    spinner.start()
+    cmd = (
+        "gcloud compute firewall-rules create burla-head-firewall "
+        "--direction=INGRESS "
+        "--priority=1000 "
+        "--network=default "
+        "--action=ALLOW "
+        "--rules=tcp:80 "
+        "--target-tags=burla-head"
+    )
+    result = run_command(cmd, raise_error=False)
+    if result.returncode != 0 and "already exists" in result.stderr.decode():
+        spinner.text = "Opening port 80 to the VM with tag 'burla-head' ... Rule already exists."
+        spinner.ok("✓")
+    elif result.returncode != 0:
+        spinner.fail("✗")
+        raise VerboseCalledProcessError(cmd, result.stderr)
+    else:
+        spinner.text = "Opening port 80 to the VM with tag 'burla-head' ... Done."
         spinner.ok("✓")
 
 
@@ -402,15 +432,6 @@ def _create_service_accounts(spinner, PROJECT_ID):
     sleep(5)
 
     # apply roles to burla-main-service svc account:
-    # can't attach `burla db only` condition to this, in addition to others for some reason:
-    cmd = f"gcloud projects add-iam-policy-binding {PROJECT_ID}"
-    cmd += f" --member=serviceAccount:{main_svc_email} --role=roles/datastore.user"
-    cmd += f" --condition=None"
-    run_command(cmd)
-    cmd = f"gcloud projects add-iam-policy-binding {PROJECT_ID}"
-    cmd += f" --member=serviceAccount:{main_svc_email} --role=roles/logging.logWriter"
-    cmd += f" --condition=None"
-    run_command(cmd)
     cmd = f"gcloud projects add-iam-policy-binding {PROJECT_ID}"
     cmd += f" --member=serviceAccount:{main_svc_email} --role=roles/compute.instanceAdmin.v1"
     cmd += f" --condition=None"
@@ -424,16 +445,7 @@ def _create_service_accounts(spinner, PROJECT_ID):
     cmd += f" --member=serviceAccount:{main_svc_email} --role=roles/iam.serviceAccountTokenCreator"
     cmd += f" --condition=None"
     run_command(cmd)
-    cmd = f"gcloud secrets add-iam-policy-binding burla-cluster-id-token"
-    cmd += f' --member="serviceAccount:{main_svc_email}"'
-    cmd += f' --role="roles/secretmanager.secretAccessor"'
-    run_command(cmd)
 
-    # allow compute engine service account to use burla token secret
-    cmd = f"gcloud secrets add-iam-policy-binding burla-cluster-id-token"
-    cmd += f' --member="serviceAccount:{compute_engine_email}"'
-    cmd += f' --role="roles/secretmanager.secretAccessor"'
-    run_command(cmd)
     # allow dashboard to create vm instances having the default compute engine service account
     cmd = f"gcloud iam service-accounts add-iam-policy-binding {compute_engine_email}"
     cmd += f' --member="serviceAccount:{main_svc_email}"'
@@ -446,27 +458,3 @@ def _create_service_accounts(spinner, PROJECT_ID):
         spinner.text = "Creating service accounts ... Done."
     spinner.ok("✓")
     return main_svc_email
-
-
-def _create_firestore_database(spinner, PROJECT_ID):
-    spinner.text = "Creating Firestore database ... "
-    spinner.start()
-    cmd = "gcloud firestore databases create --database=burla"
-    cmd += f" --location=us-central1 --type=firestore-native"
-    result = run_command(cmd, raise_error=False)
-    already_exists = False
-    if result.returncode != 0 and "already exists" in result.stderr.decode():
-        already_exists = True
-    elif result.returncode != 0:
-        spinner.fail("✗")
-        raise VerboseCalledProcessError(cmd, result.stderr)
-
-    # cluster_config doc is self-seeded by main_service's `_get_cluster_config`
-    # on first dashboard / cluster-grow request (using DEFAULT_CONFIG in
-    # main_service/__init__.py).
-
-    if already_exists:
-        spinner.text = "Creating Firestore database ... Database already exists."
-    else:
-        spinner.text = "Creating Firestore database ... Done."
-    spinner.ok("✓")

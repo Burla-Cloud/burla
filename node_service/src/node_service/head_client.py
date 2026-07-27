@@ -1,0 +1,118 @@
+"""
+HTTP client for the head (main_service). Replaces every Firestore read/write/
+watch this service used to make. Authenticates with the cluster token.
+
+The core pattern is `push_state`: the node reports its status (and, mid-job,
+its progress) and the response carries the head's current view back down:
+`host` (needed while booting) and the job signal set (cancellation,
+all_inputs_uploaded, client_has_all_results, quorum info). A background loop
+in __init__.py calls it every second; transition points call it directly.
+"""
+
+import asyncio
+from typing import Optional
+
+import aiohttp
+
+from node_service import SELF, INSTANCE_NAME, MAIN_SERVICE_URL, CLUSTER_ID_TOKEN
+
+_HEADERS = {"Authorization": f"Bearer {CLUSTER_ID_TOKEN}"}
+_TIMEOUT = aiohttp.ClientTimeout(total=10)
+
+_session: Optional[aiohttp.ClientSession] = None
+
+
+def _get_session() -> aiohttp.ClientSession:
+    global _session
+    if _session is None or _session.closed:
+        _session = aiohttp.ClientSession(timeout=_TIMEOUT)
+    return _session
+
+
+async def push_state(
+    status: Optional[str] = None,
+    include_job_progress: bool = False,
+    **fields,
+) -> dict:
+    """PUT this node's state to the head; returns the head's view:
+    {"status", "host", "reserved_for_job", "job": {...} | None}."""
+    body = dict(fields)
+    if status is not None:
+        body["status"] = status
+    if include_job_progress and SELF["current_job"]:
+        body["job_progress"] = {
+            "job_id": SELF["current_job"],
+            "current_num_results": SELF["num_results_received"],
+            "client_contact_last_1s": SELF.get("client_contact_last_1s", True),
+        }
+    session = _get_session()
+    url = f"{MAIN_SERVICE_URL}/v1/nodes/{INSTANCE_NAME}/state"
+    async with session.put(url, json=body, headers=_HEADERS) as response:
+        response.raise_for_status()
+        return await response.json()
+
+
+def apply_job_signals(job_view: Optional[dict]):
+    """Copy the job signal set from a push response into SELF, mirroring what
+    the old per-job firestore on_snapshot callback did."""
+    if not job_view or not job_view.get("exists"):
+        return
+    if job_view.get("all_inputs_uploaded"):
+        SELF["all_inputs_uploaded"] = True
+    if job_view.get("cluster_shutdown"):
+        SELF["pending_cluster_shutdown"] = True
+    if job_view.get("cluster_restarted"):
+        SELF["pending_cluster_restarted"] = True
+    if job_view.get("dashboard_canceled"):
+        SELF["pending_dashboard_canceled"] = True
+    SELF["job_view"] = job_view
+
+
+async def get_job(job_id: str) -> Optional[dict]:
+    session = _get_session()
+    url = f"{MAIN_SERVICE_URL}/v1/jobs/{job_id}"
+    async with session.get(url, headers=_HEADERS) as response:
+        if response.status == 404:
+            return None
+        response.raise_for_status()
+        return await response.json()
+
+
+async def update_job(job_id: str, updates: dict, append_fail_reason: Optional[str] = None):
+    body = dict(updates)
+    if append_fail_reason is not None:
+        body["fail_reason_append"] = append_fail_reason
+    session = _get_session()
+    url = f"{MAIN_SERVICE_URL}/v1/jobs/{job_id}"
+    async with session.patch(url, json=body, headers=_HEADERS) as response:
+        response.raise_for_status()
+
+
+async def get_peers(job_id: str) -> dict:
+    """{"peers": [{"instance_name", "host"}, ...], "booting_node_ids": [...]}"""
+    session = _get_session()
+    url = f"{MAIN_SERVICE_URL}/v1/jobs/{job_id}/peers"
+    async with session.get(url, headers=_HEADERS) as response:
+        response.raise_for_status()
+        return await response.json()
+
+
+async def post_node_logs(logs: list[dict]):
+    session = _get_session()
+    url = f"{MAIN_SERVICE_URL}/v1/nodes/{INSTANCE_NAME}/logs:batch"
+    async with session.post(url, json={"logs": logs}, headers=_HEADERS) as response:
+        response.raise_for_status()
+
+
+async def post_job_logs(job_id: str, documents: list[dict]):
+    session = _get_session()
+    url = f"{MAIN_SERVICE_URL}/v1/jobs/{job_id}/logs:batch"
+    async with session.post(url, json={"documents": documents}, headers=_HEADERS) as response:
+        response.raise_for_status()
+
+
+async def request_self_delete():
+    session = _get_session()
+    url = f"{MAIN_SERVICE_URL}/v1/nodes/{INSTANCE_NAME}/self_delete"
+    async with session.post(url, headers=_HEADERS) as response:
+        response.raise_for_status()

@@ -73,6 +73,7 @@ def _shutdown_cluster_for_upgrade(
     if _BURLA_BACKEND_URL != "https://backend.burla.dev" and fallback_url not in urls:
         urls.append(fallback_url)
 
+    timeout_sec = 10 if _BURLA_BACKEND_URL != "https://backend.burla.dev" else 60
     for candidate_url in urls:
         if not candidate_url.startswith("https://") and (
             _BURLA_BACKEND_URL == "https://backend.burla.dev"
@@ -81,12 +82,12 @@ def _shutdown_cluster_for_upgrade(
                 "Refusing to send the cluster token over HTTP during upgrade"
             )
         start = time()
-        while time() - start < 60:
+        while time() - start < timeout_sec:
             try:
                 response = requests.post(
                     f"{candidate_url}/v1/cluster/shutdown",
                     headers=headers,
-                    timeout=60,
+                    timeout=timeout_sec,
                 )
                 response.raise_for_status()
                 return
@@ -105,11 +106,11 @@ def _head_startup_script(
 ) -> str:
     node_source_ref = os.environ.get("BURLA_NODE_SOURCE_REF", __version__)
     caddy_config = f"""{dashboard_hostname} {{
-  reverse_proxy 127.0.0.1:5001
+  reverse_proxy burla-main-service:5001
 }}
-https://$PRIVATE_IP:8443 {{
+:8443 {{
   tls /etc/burla/tls/head.pem /etc/burla/tls/head.key
-  reverse_proxy 127.0.0.1:5001
+  reverse_proxy burla-main-service:5001
 }}
 """
     caddy_config_b64 = base64.b64encode(caddy_config.encode()).decode()
@@ -124,34 +125,41 @@ https://$PRIVATE_IP:8443 {{
       https://us-docker.pkg.dev
     docker pull "{image}"
     docker pull caddy:2.10.2-alpine
+    docker network create burla-head || true
     old_containers=$(docker ps -aq --filter name=klt-)
     [ -z "$old_containers" ] || docker rm -f $old_containers
     docker rm -f burla-main-service burla-head-caddy || true
-    docker run -d --restart=always --network=host --name=burla-main-service \\
+    docker run -d --restart=always --network=burla-head --name=burla-main-service \\
       -v /var/lib/burla:/var/lib/burla \\
       -e PROJECT_ID="{project_id}" \\
       -e CLUSTER_ID_TOKEN="{cluster_id_token}" \\
       -e CLOUD_PROVIDER=gcp \\
-      -e BIND_HOST=127.0.0.1 \\
+      -e BIND_HOST=0.0.0.0 \\
       -e PORT=5001 \\
       -e INTERNAL_TLS_PORT=8443 \\
       -e HISTORY_DB_PATH=/var/lib/burla/history.db \\
       -e BURLA_BACKEND_URL="{_BURLA_BACKEND_URL}" \\
       -e BURLA_NODE_SOURCE_REF="{node_source_ref}" \\
       "{image}"
-    until curl --fail --silent http://127.0.0.1:5001/version >/dev/null; do
+    until docker exec burla-main-service \\
+      python -c 'import urllib.request; urllib.request.urlopen("http://127.0.0.1:5001/version")' \\
+      >/dev/null 2>&1; do
       sleep 1
     done
-    PRIVATE_IP=$(curl -sS -H "Metadata-Flavor: Google" \\
-      http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/ip)
+    rm -rf /etc/burla/Caddyfile
     echo "{caddy_config_b64}" | base64 -d > /etc/burla/Caddyfile
-    sed -i "s/\\$PRIVATE_IP/$PRIVATE_IP/g" /etc/burla/Caddyfile
-    docker run -d --restart=always --network=host --name=burla-head-caddy \\
+    docker run -d --restart=always --network=burla-head --name=burla-head-caddy \\
+      -p 80:80 -p 443:443 -p 8443:8443 \\
       -v /etc/burla/Caddyfile:/etc/caddy/Caddyfile:ro \\
       -v /var/lib/burla/tls/head.pem:/etc/burla/tls/head.pem:ro \\
       -v /var/lib/burla/tls/head.key:/etc/burla/tls/head.key:ro \\
       -v /var/lib/burla/caddy:/data \\
       caddy:2.10.2-alpine caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
+    sleep 3
+    if [ "$(docker inspect --format '{{{{.State.Running}}}}' burla-head-caddy)" != "true" ]; then
+      docker logs burla-head-caddy
+      exit 1
+    fi
     """
     return textwrap.dedent(script)
 
@@ -371,7 +379,8 @@ def _deploy_head_vm(spinner, PROJECT_ID, main_svc_account_email, cluster_id_toke
         "Deploying burla-main-service VM ... waiting for it to serve traffic ..."
     )
     start = time()
-    while time() - start < 300:
+    timeout_sec = 90 if _BURLA_BACKEND_URL != "https://backend.burla.dev" else 300
+    while time() - start < timeout_sec:
         try:
             response = requests.get(
                 f"{dashboard_url}/version",

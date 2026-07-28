@@ -145,10 +145,8 @@ remote-dev:
 		$${IMAGE_NAME} -m uvicorn main_service:app --host 0.0.0.0 --port 5001 --reload \
 			--reload-exclude main_service/frontend/node_modules/ --timeout-graceful-shutdown 0; \
 	while [ ! -f ./_history_db/tls/head.pem ]; do sleep 1; done; \
-	PRIVATE_IP=$$(curl -sS -H "Metadata-Flavor: Google" \
-		http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/ip); \
-	printf 'https://%s:8443 {\n  tls /etc/burla/tls/head.pem /etc/burla/tls/head.key\n  reverse_proxy 127.0.0.1:5001\n}\n' \
-		"$${PRIVATE_IP}" > ./_history_db/Caddyfile; \
+	printf ':8443 {\n  tls /etc/burla/tls/head.pem /etc/burla/tls/head.key\n  reverse_proxy 127.0.0.1:5001\n}\n' \
+		> ./_history_db/Caddyfile; \
 	docker run -d --network=host --name=burla-head-caddy \
 		-v $(PWD)/_history_db/Caddyfile:/etc/caddy/Caddyfile:ro \
 		-v $(PWD)/_history_db/tls/head.pem:/etc/burla/tls/head.pem:ro \

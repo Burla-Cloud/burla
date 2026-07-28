@@ -305,7 +305,7 @@ class Node:
         }}
 
         handle_error() {{
-            MSG="Startup script failed! Deleting VM $NODE_NAME ... "
+            MSG="Startup script failed at line $1 with exit code $2! Deleting VM $NODE_NAME ... "
             echo "$MSG"
             report_log "$MSG"
             status_payload=$(jq -n --arg ts "$(date +%s)" \\
@@ -318,7 +318,7 @@ class Node:
                 -H "$AUTH_HEADER" || true
             exit 1
         }}
-        trap 'handle_error' ERR
+        trap 'handle_error "$LINENO" "$?"' ERR
 
         openssl ecparam -name prime256v1 -genkey -noout -out "$TLS_DIR/node.key"
         chmod 600 "$TLS_DIR/node.key"
@@ -334,6 +334,7 @@ class Node:
         done
         echo "$cert_response" | jq -r .certificate > "$TLS_DIR/node.pem"
 
+        rm -rf /etc/burla/caddy/Caddyfile
         echo "{caddy_config_b64}" | base64 -d > /etc/burla/caddy/Caddyfile
 
         # mount shared workspace bucket at /workspace/shared

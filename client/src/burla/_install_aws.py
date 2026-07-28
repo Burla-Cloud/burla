@@ -83,20 +83,13 @@ def _head_setup_commands(
             "until curl --fail --silent http://127.0.0.1:5001/version >/dev/null; "
             "do sleep 1; done"
         ),
-        (
-            "IMDS_TOKEN=$(curl -sS -X PUT "
-            "-H 'X-aws-ec2-metadata-token-ttl-seconds: 300' "
-            "http://169.254.169.254/latest/api/token); "
-            "PRIVATE_IP=$(curl -sS "
-            '-H "X-aws-ec2-metadata-token: $IMDS_TOKEN" '
-            "http://169.254.169.254/latest/meta-data/local-ipv4)"
-        ),
+        "rm -rf /etc/burla/Caddyfile",
         (
             "cat > /etc/burla/Caddyfile <<EOF\n"
             f"{dashboard_hostname} {{\n"
             "  reverse_proxy 127.0.0.1:5001\n"
             "}\n"
-            "https://$PRIVATE_IP:8443 {\n"
+            ":8443 {\n"
             "  tls /etc/burla/tls/head.pem /etc/burla/tls/head.key\n"
             "  reverse_proxy 127.0.0.1:5001\n"
             "}\n"

@@ -1,3 +1,5 @@
+import asyncio
+
 import docker
 from time import time
 
@@ -47,7 +49,9 @@ def _shutdown_cluster(logger: Logger, auth_headers: dict):
     provider = get_provider()
 
     active_statuses = ("READY", "BOOTING", "RUNNING")
-    active_nodes = [n for n in cluster_state.list_nodes() if n.get("status") in active_statuses]
+    active_nodes = [
+        n for n in cluster_state.list_nodes() if n.get("status") in active_statuses
+    ]
     for node_dict in active_nodes:
         node = Node.from_state(logger, node_dict, auth_headers, provider)
         futures.append(executor.submit(node.delete))
@@ -110,7 +114,9 @@ def _start_nodes(
         for index in range(quantity):
             if IN_LOCAL_DEV_MODE:
                 node_service_port += 1
-            instance_name = None if node_instance_names is None else node_instance_names[index]
+            instance_name = (
+                None if node_instance_names is None else node_instance_names[index]
+            )
             machine_type = (
                 node_machine_types[index]
                 if node_machine_types is not None
@@ -175,7 +181,9 @@ def _mark_running_jobs_with_lifecycle_event(event: str, message: str):
         "event": event,
     }
     extra = (
-        {"cluster_restarted": True} if event == "cluster_restarted" else {"cluster_shutdown": True}
+        {"cluster_restarted": True}
+        if event == "cluster_restarted"
+        else {"cluster_shutdown": True}
     )
     for job_id in running_job_ids:
         history.add_job_logs(job_id, [log_doc])
@@ -204,7 +212,9 @@ def restart_cluster(
     auth_headers: dict = Depends(get_auth_headers),
     add_background_task=Depends(get_add_background_task_function),
 ):
-    _mark_running_jobs_with_lifecycle_event("cluster_restarted", "The cluster was restarted.")
+    _mark_running_jobs_with_lifecycle_event(
+        "cluster_restarted", "The cluster was restarted."
+    )
     add_background_task(_restart_cluster, logger, auth_headers)
 
 
@@ -215,9 +225,11 @@ async def shutdown_cluster(
 ):
     start = time()
 
-    _mark_running_jobs_with_lifecycle_event("cluster_shutdown", "The cluster was shut down.")
+    _mark_running_jobs_with_lifecycle_event(
+        "cluster_shutdown", "The cluster was shut down."
+    )
     log_telemetry("Cluster turned off.", severity="INFO")
-    _shutdown_cluster(logger, auth_headers)
+    await asyncio.to_thread(_shutdown_cluster, logger, auth_headers)
 
     duration = time() - start
     logger.log(f"Shut down after {duration//60}m {duration%60}s")

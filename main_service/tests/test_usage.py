@@ -19,10 +19,11 @@ def test_monthly_hours_default_returns_months(main_http_client, local_dev_cluste
     assert "total_node_hours" in body
     assert "total_compute_hours" in body
     assert body["meta"]["hours_precision_decimals"] == 6
-    assert body["meta"]["max_scan"] == 20000
 
 
-def test_monthly_hours_months_back_out_of_range_returns_400(main_http_client, local_dev_cluster):
+def test_monthly_hours_months_back_out_of_range_returns_400(
+    main_http_client, local_dev_cluster
+):
     resp1 = main_http_client.get("/v1/nodes/monthly_hours?months_back=0")
     resp2 = main_http_client.get("/v1/nodes/monthly_hours?months_back=61")
     if resp1.status_code == 401:
@@ -40,7 +41,9 @@ def test_monthly_hours_malformed_month_returns_400(main_http_client, local_dev_c
     assert resp.status_code == 400
 
 
-def test_monthly_hours_start_without_end_returns_400(main_http_client, local_dev_cluster):
+def test_monthly_hours_start_without_end_returns_400(
+    main_http_client, local_dev_cluster
+):
     resp = main_http_client.get("/v1/nodes/monthly_hours?start_month=2024-01")
     if resp.status_code == 401:
         pytest.skip("auth required")

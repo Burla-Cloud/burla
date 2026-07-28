@@ -40,6 +40,10 @@ def _new_ca():
         .not_valid_after(now + timedelta(days=5 * 365))
         .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
         .add_extension(
+            x509.SubjectKeyIdentifier.from_public_key(key.public_key()),
+            critical=False,
+        )
+        .add_extension(
             x509.KeyUsage(
                 digital_signature=True,
                 key_encipherment=False,
@@ -95,17 +99,34 @@ def _new_leaf(
             x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]),
             critical=False,
         )
+        .add_extension(
+            x509.SubjectKeyIdentifier.from_public_key(public_key),
+            critical=False,
+        )
+        .add_extension(
+            x509.AuthorityKeyIdentifier.from_issuer_public_key(issuer_key.public_key()),
+            critical=False,
+        )
         .sign(issuer_key, hashes.SHA256())
     )
 
 
 def ensure_cluster_tls(head_private_ip: str):
     TLS_DIR.mkdir(parents=True, exist_ok=True)
+    regenerated_ca = False
     if not CA_KEY_PATH.exists():
         _new_ca()
+        regenerated_ca = True
+    else:
+        ca_certificate = x509.load_pem_x509_certificate(CA_CERT_PATH.read_bytes())
+        try:
+            ca_certificate.extensions.get_extension_for_class(x509.SubjectKeyIdentifier)
+        except x509.ExtensionNotFound:
+            _new_ca()
+            regenerated_ca = True
 
     issuer_key, issuer_cert = _load_ca()
-    regenerate_head = not HEAD_KEY_PATH.exists()
+    regenerate_head = regenerated_ca or not HEAD_KEY_PATH.exists()
     if not regenerate_head:
         head_cert = x509.load_pem_x509_certificate(HEAD_CERT_PATH.read_bytes())
         sans = head_cert.extensions.get_extension_for_class(

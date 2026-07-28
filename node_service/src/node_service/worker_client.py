@@ -921,7 +921,10 @@ class WorkerClient:
         if IN_LOCAL_DEV_MODE:
             await self.container.restart(t=0)
         else:
-            os.killpg(self.worker_host_pid, signal.SIGKILL)
+            try:
+                os.killpg(self.worker_host_pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
         await self._reconnect()
 
     async def _kill_worker_process(self):

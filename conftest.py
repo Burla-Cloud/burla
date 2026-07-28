@@ -213,15 +213,35 @@ def _wait_for_clean_cluster(
     )
 
 
-def _restart_cluster(auth_headers: dict[str, str]) -> None:
+def _restart_cluster(auth_headers: dict[str, str]) -> set[str]:
     import requests
 
+    old_active_names = {
+        node["instance_name"]
+        for node in _active_node_docs()
+        if node.get("status") in {"BOOTING", "READY", "RUNNING"}
+    }
     resp = requests.post(
         f"{DASHBOARD_URL}/v1/cluster/restart",
         headers=auth_headers,
         timeout=10,
     )
     resp.raise_for_status()
+    return old_active_names
+
+
+def _wait_for_replacement_nodes(old_active_names: set[str], timeout: float) -> None:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        current_active_names = {
+            node["instance_name"]
+            for node in _active_node_docs()
+            if node.get("status") in {"BOOTING", "READY", "RUNNING"}
+        }
+        if old_active_names.isdisjoint(current_active_names):
+            return
+        time.sleep(0.5)
+    raise AssertionError("cluster restart did not replace the previous nodes")
 
 
 @pytest.fixture
@@ -297,7 +317,8 @@ def local_dev_cluster(burla_auth_headers) -> dict[str, Any]:
         )
         is not None
     ):
-        _restart_cluster(burla_auth_headers)
+        old_active_names = _restart_cluster(burla_auth_headers)
+        _wait_for_replacement_nodes(old_active_names, CLEAN_CLUSTER_TIMEOUT_SEC)
         state = _wait_for_clean_cluster(
             burla_auth_headers,
             expected_ready_nodes,

@@ -190,11 +190,15 @@ class AWSProvider:
         cached = _instance_ids.pop(instance_name, None)
         if cached:
             instance_id, region = cached
+            ec2 = self._ec2(region)
             # A just-created id can be invisible for a few seconds (same
             # eventual consistency as describe_instances in create_instance).
             for attempt in range(5):
                 try:
-                    self._ec2(region).terminate_instances(InstanceIds=[instance_id])
+                    ec2.terminate_instances(InstanceIds=[instance_id])
+                    ec2.get_waiter("instance_terminated").wait(
+                        InstanceIds=[instance_id]
+                    )
                     return
                 except ClientError as error:
                     if error.response["Error"]["Code"] != "InvalidInstanceID.NotFound":
@@ -218,6 +222,7 @@ class AWSProvider:
         ]
         if instance_ids:
             ec2.terminate_instances(InstanceIds=instance_ids)
+            ec2.get_waiter("instance_terminated").wait(InstanceIds=instance_ids)
 
     def mount_shared_workspace_script(self, bucket_name: str) -> str:
         return f"""

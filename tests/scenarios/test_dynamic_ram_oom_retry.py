@@ -20,6 +20,17 @@ def _oom_like_source(marker_path: str, always_kill: bool = False):
     )
 
 
+def _real_oom_source():
+    return (
+        "def test_function(x):\n"
+        "    if x == 3:\n"
+        "        chunks = []\n"
+        "        while True:\n"
+        "            chunks.append(bytearray(256 * 1024 * 1024))\n"
+        "    return x\n"
+    )
+
+
 def test_dynamic_func_ram_retries_after_worker_oom(rpm_subprocess, local_dev_cluster):
     marker_path = f"/workspace/shared/dynamic-ram-retry-{uuid.uuid4().hex}"
     result = rpm_subprocess(
@@ -35,10 +46,11 @@ def test_dynamic_func_ram_retries_after_worker_oom(rpm_subprocess, local_dev_clu
     assert sorted(result["outputs"]) == list(range(8))
 
 
-def test_integer_func_ram_oom_fails_with_clear_message(rpm_subprocess, local_dev_cluster):
-    marker_path = f"/workspace/shared/integer-ram-oom-{uuid.uuid4().hex}"
+def test_integer_func_ram_oom_fails_with_clear_message(
+    rpm_subprocess, local_dev_cluster
+):
     result = rpm_subprocess(
-        _oom_like_source(marker_path),
+        _real_oom_source(),
         list(range(8)),
         timeout_seconds=120,
         func_ram=4,

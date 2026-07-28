@@ -92,6 +92,8 @@ def _shutdown_cluster_for_upgrade(
                 return
             except requests.RequestException:
                 sleep(5)
+    if _BURLA_BACKEND_URL != "https://backend.burla.dev":
+        return
     raise Exception(f"Existing cluster did not shut down through {urls}")
 
 
@@ -114,6 +116,11 @@ https://$PRIVATE_IP:8443 {{
     script = f"""#!/bin/bash
     set -euo pipefail
     mkdir -p /var/lib/burla/tls /var/lib/burla/caddy /etc/burla
+    ACCESS_TOKEN=$(curl -sS -H "Metadata-Flavor: Google" \\
+      http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token \\
+      | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')
+    echo "$ACCESS_TOKEN" | docker login -u oauth2accesstoken --password-stdin \\
+      https://us-docker.pkg.dev
     docker pull "{image}"
     docker pull caddy:2.10.2-alpine
     old_containers=$(docker ps -aq --filter name=klt-)
@@ -636,6 +643,10 @@ def _create_service_accounts(spinner, PROJECT_ID):
     run_command(cmd)
     cmd = f"gcloud projects add-iam-policy-binding {PROJECT_ID}"
     cmd += f" --member=serviceAccount:{main_svc_email} --role=roles/storage.objectUser"
+    cmd += f" --condition=None"
+    run_command(cmd)
+    cmd = f"gcloud projects add-iam-policy-binding {PROJECT_ID}"
+    cmd += f" --member=serviceAccount:{main_svc_email} --role=roles/artifactregistry.reader"
     cmd += f" --condition=None"
     run_command(cmd)
     # allow main-service to create signed GCS url's for uploading/downloading from filemanager

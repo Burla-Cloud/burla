@@ -273,7 +273,7 @@ class Node:
             )
         ca_pem_b64 = base64.b64encode(cluster_ca_pem().encode()).decode()
         caddy_config = f""":{self.port} {{
-    tls /etc/caddy/tls/node.pem /etc/caddy/tls/node.key
+    tls /etc/caddy/node.pem /etc/caddy/node.key
     reverse_proxy 127.0.0.1:8081
 }}
 """
@@ -408,11 +408,16 @@ class Node:
         systemctl start burla-node-service.slice burla-workers.slice
         docker rm -f burla-node-caddy || true
         docker pull caddy:2.10.2-alpine
-        docker run -d --restart=always --network=host --name=burla-node-caddy \\
-            -v /etc/burla/tls/node.pem:/etc/caddy/tls/node.pem:ro \\
-            -v /etc/burla/tls/node.key:/etc/caddy/tls/node.key:ro \\
-            -v /etc/burla/caddy:/etc/caddy:ro \\
-            caddy:2.10.2-alpine caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
+        if ! CADDY_OUTPUT=$(docker run -d --restart=always --network=host \\
+            --name=burla-node-caddy \\
+            -v /etc/burla/tls/node.pem:/etc/caddy/node.pem:ro \\
+            -v /etc/burla/tls/node.key:/etc/caddy/node.key:ro \\
+            -v /etc/burla/caddy/Caddyfile:/etc/caddy/Caddyfile:ro \\
+            caddy:2.10.2-alpine caddy run \\
+            --config /etc/caddy/Caddyfile --adapter caddyfile 2>&1); then
+            report_log "Node Caddy failed: $CADDY_OUTPUT"
+            handle_error "$LINENO" 1
+        fi
 
         systemd-run \\
             --unit=burla-node-service \\

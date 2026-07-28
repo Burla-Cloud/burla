@@ -39,14 +39,22 @@ def _main_service_image(project_id: str) -> str:
     )
 
 
+def _gcp_ownership_payload() -> dict:
+    access_token = run_command("gcloud auth print-access-token").stdout.decode().strip()
+    return {"cloud": "gcp", "access_token": access_token}
+
+
 def _register_dashboard(
-    project_id: str, cluster_id_token: str, public_ipv4: str
+    project_id: str,
+    cluster_id_token: str,
+    public_ipv4: str,
+    ownership: dict,
 ) -> str:
     headers = {"Authorization": f"Bearer {cluster_id_token}"}
     url = f"{_BURLA_BACKEND_URL}/v1/clusters/{project_id}/dashboard"
     response = requests.post(
         url,
-        json={"public_ipv4": public_ipv4},
+        json={"public_ipv4": public_ipv4, "ownership": ownership},
         headers=headers,
     )
     response.raise_for_status()
@@ -330,7 +338,12 @@ def _deploy_head_vm(spinner, PROJECT_ID, main_svc_account_email, cluster_id_toke
             f"http://{static_ip}",
         )
 
-    dashboard_url = _register_dashboard(PROJECT_ID, cluster_id_token, static_ip)
+    dashboard_url = _register_dashboard(
+        PROJECT_ID,
+        cluster_id_token,
+        static_ip,
+        _gcp_ownership_payload(),
+    )
     image_name = _main_service_image(PROJECT_ID)
     startup_script = _head_startup_script(
         PROJECT_ID,
@@ -560,10 +573,9 @@ def _register_cluster_and_save_cluster_id_token(spinner, PROJECT_ID):
         cluster_id_token = result.stdout.decode().strip()
 
     new_cluster = False
-    access_token = run_command("gcloud auth print-access-token").stdout.decode().strip()
     response = requests.post(
         f"{_BURLA_BACKEND_URL}/v1/clusters/{PROJECT_ID}",
-        json={"cloud": "gcp", "access_token": access_token},
+        json=_gcp_ownership_payload(),
     )
     if response.status_code == 403:
         spinner.fail("✗")

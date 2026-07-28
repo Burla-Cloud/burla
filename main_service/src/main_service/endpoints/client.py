@@ -477,7 +477,7 @@ async def get_cluster_state():
     ready_nodes = []
     for data in nodes_snapshot:
         status = data.get("status")
-        if status == "BOOTING":
+        if status == "BOOTING" and not data.get("loaded_from_history"):
             booting_count += 1
         elif status == "RUNNING" and cluster_state.node_is_fresh(data):
             running_count += 1

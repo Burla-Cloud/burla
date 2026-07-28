@@ -54,6 +54,7 @@ def load_from_history():
     with _lock:
         for node in history.active_nodes():
             node.pop("last_push_at", None)
+            node["loaded_from_history"] = True
             NODES.setdefault(node["instance_name"], node)
         for job_id, job in history.running_jobs():
             job.pop("n_results", None)
@@ -172,7 +173,10 @@ def update_node(instance_name: str, updates: dict) -> dict:
 
 
 def record_node_push(instance_name: str, updates: dict) -> dict:
-    return update_node(instance_name, {**updates, "last_push_at": time()})
+    return update_node(
+        instance_name,
+        {**updates, "last_push_at": time(), "loaded_from_history": False},
+    )
 
 
 def remove_node(instance_name: str):
@@ -371,7 +375,9 @@ def peers_for_job(job_id: str) -> dict:
             and node_is_fresh(node, now)
         ]
         booting = [
-            name for name, node in NODES.items() if node.get("status") == "BOOTING"
+            name
+            for name, node in NODES.items()
+            if node.get("status") == "BOOTING" and not node.get("loaded_from_history")
         ]
     return {"peers": peers, "booting_node_ids": booting}
 

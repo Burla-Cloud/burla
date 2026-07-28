@@ -416,19 +416,7 @@ def _create_security_groups(spinner, region):
     return node_sg, head_sg
 
 
-def _register_cluster_and_save_token(spinner, project_id, region):
-    spinner.text = "Registering cluster ... "
-    spinner.start()
-
-    cluster_id_token = None
-    existing = _aws(
-        f'ssm get-parameter --region {region} --name "{CLUSTER_TOKEN_PARAMETER}" '
-        f'--with-decryption --query "Parameter.Value" --output json',
-        raise_error=False,
-    )
-    if existing:
-        cluster_id_token = existing
-
+def _aws_ownership_payload(region: str) -> dict:
     import boto3
 
     sts_url = boto3.client("sts", region_name=region).generate_presigned_url(
@@ -444,14 +432,30 @@ def _register_cluster_and_save_token(spinner, project_id, region):
         },
         ExpiresIn=60,
     )
+    return {
+        "cloud": "aws",
+        "sts_url": sts_url,
+        "ec2_dry_run_url": ec2_dry_run_url,
+    }
+
+
+def _register_cluster_and_save_token(spinner, project_id, region):
+    spinner.text = "Registering cluster ... "
+    spinner.start()
+
+    cluster_id_token = None
+    existing = _aws(
+        f'ssm get-parameter --region {region} --name "{CLUSTER_TOKEN_PARAMETER}" '
+        f'--with-decryption --query "Parameter.Value" --output json',
+        raise_error=False,
+    )
+    if existing:
+        cluster_id_token = existing
+
     new_cluster = False
     response = requests.post(
         f"{_BURLA_BACKEND_URL}/v1/clusters/{project_id}",
-        json={
-            "cloud": "aws",
-            "sts_url": sts_url,
-            "ec2_dry_run_url": ec2_dry_run_url,
-        },
+        json=_aws_ownership_payload(region),
     )
     if response.status_code == 403:
         from burla._install import AuthError
@@ -687,7 +691,12 @@ def _deploy_head_instance(spinner, project_id, region, head_sg_id) -> str:
             cluster_id_token,
             f"http://{public_ip}",
         )
-    dashboard_url = _register_dashboard(project_id, cluster_id_token, public_ip)
+    dashboard_url = _register_dashboard(
+        project_id,
+        cluster_id_token,
+        public_ip,
+        _aws_ownership_payload(region),
+    )
     image = _main_service_image()
     commands = _head_setup_commands(
         project_id,

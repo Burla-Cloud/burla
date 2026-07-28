@@ -164,9 +164,13 @@ async def _input_steal_loop(session, logger, job_started_at, node_ids_expected):
 
 async def _push_progress() -> dict:
     """Push this node's job progress and return the fresh job view."""
-    view = await head_client.push_state(include_job_progress=True)
-    head_client.apply_job_signals(view.get("job"))
-    return view.get("job") or {"exists": False}
+    while True:
+        try:
+            view = await head_client.push_state(include_job_progress=True)
+            head_client.apply_job_signals(view.get("job"))
+            return view.get("job") or {"exists": False}
+        except (aiohttp.ClientError, asyncio.TimeoutError, OSError):
+            await asyncio.sleep(1)
 
 
 async def _job_watcher(

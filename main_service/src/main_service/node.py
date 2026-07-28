@@ -411,7 +411,7 @@ class Node:
             -v /etc/burla/tls/node.pem:/etc/caddy/tls/node.pem:ro \\
             -v /etc/burla/tls/node.key:/etc/caddy/tls/node.key:ro \\
             -v /etc/burla/caddy:/etc/caddy:ro \\
-            caddy:2.10.2-alpine run --config /etc/caddy/Caddyfile --adapter caddyfile
+            caddy:2.10.2-alpine caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
 
         systemd-run \\
             --unit=burla-node-service \\

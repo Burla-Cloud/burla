@@ -108,7 +108,7 @@ def _head_setup_commands(
             "-v /var/lib/burla/tls/head.pem:/etc/burla/tls/head.pem:ro "
             "-v /var/lib/burla/tls/head.key:/etc/burla/tls/head.key:ro "
             "-v /var/lib/burla/caddy:/data "
-            "caddy:2.10.2-alpine run --config /etc/caddy/Caddyfile --adapter caddyfile"
+            "caddy:2.10.2-alpine caddy run --config /etc/caddy/Caddyfile --adapter caddyfile"
         ),
     ]
 

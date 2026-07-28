@@ -153,7 +153,7 @@ remote-dev:
 		-v $(PWD)/_history_db/Caddyfile:/etc/caddy/Caddyfile:ro \
 		-v $(PWD)/_history_db/tls/head.pem:/etc/burla/tls/head.pem:ro \
 		-v $(PWD)/_history_db/tls/head.key:/etc/burla/tls/head.key:ro \
-		caddy:2.10.2-alpine run --config /etc/caddy/Caddyfile --adapter caddyfile; \
+		caddy:2.10.2-alpine caddy run --config /etc/caddy/Caddyfile --adapter caddyfile; \
 	docker logs -f main_service
 
 dev-images:

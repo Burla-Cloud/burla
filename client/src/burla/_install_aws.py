@@ -48,6 +48,15 @@ def _head_setup_commands(
     dashboard_hostname: str,
 ) -> list[str]:
     node_source_ref = os.environ.get("BURLA_NODE_SOURCE_REF", __version__)
+    registry = image.split("/", 1)[0]
+    registry_login_commands = []
+    if ".dkr.ecr." in registry and registry.endswith(".amazonaws.com"):
+        registry_login_commands = [
+            (
+                f"aws ecr get-login-password --region {region} "
+                f"| docker login --username AWS --password-stdin {registry}"
+            )
+        ]
     return [
         "set -euo pipefail",
         "export DEBIAN_FRONTEND=noninteractive",
@@ -56,6 +65,7 @@ def _head_setup_commands(
         "systemctl enable --now docker",
         "systemctl enable --now snap.amazon-ssm-agent.amazon-ssm-agent.service || true",
         "mkdir -p /var/lib/burla/tls /var/lib/burla/caddy /etc/burla",
+        *registry_login_commands,
         f'docker pull "{image}"',
         "docker pull caddy:2.10.2-alpine",
         (
@@ -344,6 +354,16 @@ def _create_iam(spinner, account_id, bucket_name):
                 "Effect": "Allow",
                 "Action": "iam:PassRole",
                 "Resource": f"arn:aws:iam::{account_id}:role/burla-node",
+            },
+            {
+                "Effect": "Allow",
+                "Action": [
+                    "ecr:GetAuthorizationToken",
+                    "ecr:BatchCheckLayerAvailability",
+                    "ecr:GetDownloadUrlForLayer",
+                    "ecr:BatchGetImage",
+                ],
+                "Resource": "*",
             },
             {"Effect": "Allow", "Action": "s3:*", "Resource": bucket_arns},
         ],

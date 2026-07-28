@@ -66,9 +66,8 @@ def test_integer_func_ram_oom_fails_with_clear_message(
 
 
 def test_dynamic_func_ram_oom_at_one_worker_fails(rpm_subprocess, local_dev_cluster):
-    marker_path = f"/workspace/shared/dynamic-ram-terminal-oom-{uuid.uuid4().hex}"
     result = rpm_subprocess(
-        _oom_like_source(marker_path, always_kill=True),
+        _real_oom_source(),
         [3],
         timeout_seconds=120,
         func_ram="dynamic",

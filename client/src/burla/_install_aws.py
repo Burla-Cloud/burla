@@ -58,12 +58,13 @@ def _head_setup_commands(
             )
         ]
     return [
-        "set -euo pipefail",
+        "set -eu",
         "export DEBIAN_FRONTEND=noninteractive",
         "apt-get update",
         "apt-get install -y docker.io awscli",
         "systemctl enable --now docker",
         "systemctl enable --now snap.amazon-ssm-agent.amazon-ssm-agent.service || true",
+        "systemctl disable --now burla-main-service.service || true",
         "mkdir -p /var/lib/burla/tls /var/lib/burla/caddy /etc/burla",
         *registry_login_commands,
         f'docker pull "{image}"',
@@ -505,7 +506,7 @@ def _register_cluster_and_save_token(spinner, project_id, region):
             run_command(
                 f"aws ssm put-parameter --region {region} "
                 f'--name "{CLUSTER_TOKEN_PARAMETER}" --type SecureString '
-                f"--value file://{token_file.name}"
+                f"--value file://{token_file.name} --overwrite"
             )
 
     # ensure installer is authorized

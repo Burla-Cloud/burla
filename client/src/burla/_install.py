@@ -115,7 +115,8 @@ https://$PRIVATE_IP:8443 {{
     caddy_config_b64 = base64.b64encode(caddy_config.encode()).decode()
     script = f"""#!/bin/bash
     set -euo pipefail
-    mkdir -p /var/lib/burla/tls /var/lib/burla/caddy /etc/burla
+    export DOCKER_CONFIG=/var/lib/burla/docker-config
+    mkdir -p "$DOCKER_CONFIG" /var/lib/burla/tls /var/lib/burla/caddy /etc/burla
     ACCESS_TOKEN=$(curl -sS -H "Metadata-Flavor: Google" \\
       http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token \\
       | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')

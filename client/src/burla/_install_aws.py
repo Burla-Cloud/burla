@@ -577,20 +577,17 @@ def _ensure_node_ami(spinner, region, node_profile) -> str:
         f"aws ec2 wait instance-exists --region {region} --instance-ids {builder_id}",
         raise_error=False,
     )
-    # The setup script powers the instance off when it finishes. One waiter
-    # round caps at 10 minutes; slow apt mirrors can exceed that.
+    # Direct polling lets slow package mirrors exceed AWS's 10-minute waiter cap.
+    deadline = time() + 3600
     state = None
-    for _ in range(3):
-        run_command(
-            f"aws ec2 wait instance-stopped --region {region} --instance-ids {builder_id}",
-            raise_error=False,
-        )
+    while time() < deadline:
         state = _aws(
             f"ec2 describe-instances --region {region} --instance-ids {builder_id} "
             f'--query "Reservations[0].Instances[0].State.Name" --output json'
         )
         if state == "stopped":
             break
+        sleep(15)
     if state != "stopped":
         spinner.fail("✗")
         raise Exception(

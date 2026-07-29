@@ -463,26 +463,24 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
                                 <div className="flex flex-col space-y-2">
                                     <label className={labelClass}>GPUs per VM</label>
                                     <Select
-                                        disabled={!isEditing || gpuVariant === "None"}
-                                        value={gpuVariant === "None" ? "0" : gpusPerVm.toString()}
-                                        onValueChange={(val) => {
-                                            const count = parseInt(val, 10);
-                                            if (count === 0) {
-                                                setGpuVariant("None");
-                                            } else {
-                                                setGpusPerVm(count);
-                                            }
-                                        }}
+                                        disabled={
+                                            !isEditing ||
+                                            gpuVariant === "None" ||
+                                            // only one size sold (e.g. AWS A100s): nothing to choose
+                                            VARIANT_INFO[gpuVariant].length === 1
+                                        }
+                                        value={gpuVariant === "None" ? "-" : gpusPerVm.toString()}
+                                        onValueChange={(val) => setGpusPerVm(parseInt(val, 10))}
                                     >
                                         <SelectTrigger className="w-full h-9.5">
                                             <SelectValue>
-                                                {gpuVariant === "None" ? "0" : gpusPerVm.toString()}
+                                                {gpuVariant === "None" ? "-" : gpusPerVm.toString()}
                                             </SelectValue>
                                         </SelectTrigger>
                                         <SelectContent>
                                             {(gpuVariant === "None"
-                                                ? [0]
-                                                : [0, ...VARIANT_INFO[gpuVariant]]
+                                                ? []
+                                                : VARIANT_INFO[gpuVariant]
                                             ).map((n) => (
                                                 <SelectItem key={n} value={n.toString()}>
                                                     {n}

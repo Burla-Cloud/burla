@@ -47,15 +47,11 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
                   { label: "80vCPU / 320G RAM", value: "n4-standard-80" },
               ];
 
-        // AWS sells A100s only in 8-GPU machines; H100s come as 1-GPU (p5.4xlarge)
-        // or 8-GPU (p5.48xlarge). No 2x/4x sizes exist on AWS.
+        // No GPU machines are offered on AWS yet: providers/aws.py rejects GPU nodes
+        // until the burla node AMI ships with NVIDIA drivers. Temporary; the AWS
+        // shapes (p4d/p4de/p5) come back here once that lands.
         const gpuCpuMap = isAws
-            ? {
-                  "8x A100 40G": { label: "96vCPU / 1152G RAM", value: "p4d.24xlarge" },
-                  "8x A100 80G": { label: "96vCPU / 1152G RAM", value: "p4de.24xlarge" },
-                  "1x H100 80G": { label: "16vCPU / 256G RAM", value: "p5.4xlarge" },
-                  "8x H100 80G": { label: "192vCPU / 2048G RAM", value: "p5.48xlarge" },
-              }
+            ? {}
             : {
                   "1x A100 40G": { label: "12vCPU / 85G RAM", value: "a2-highgpu-1g" },
                   "2x A100 40G": { label: "24vCPU / 170G RAM", value: "a2-highgpu-2g" },
@@ -434,7 +430,7 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
                                 <div className="flex flex-col space-y-2">
                                     <label className={labelClass}>GPU</label>
                                     <Select
-                                        disabled={!isEditing}
+                                        disabled={!isEditing || isAws}
                                         value={gpuVariant}
                                         onValueChange={(val) => {
                                             setGpuVariant(val);
@@ -457,6 +453,12 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
                                             ))}
                                         </SelectContent>
                                     </Select>
+                                    {isAws && (
+                                        <span className="text-xs text-amber-600 mt-1">
+                                            GPUs aren't available on AWS clusters yet, we're
+                                            working on it! (they work on GCP)
+                                        </span>
+                                    )}
                                 </div>
 
                                 {/* GPUs per VM */}

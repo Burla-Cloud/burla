@@ -95,6 +95,22 @@ export const GCP_MACHINE_PRICING_MAPPING: Record<
   "m7i.16xlarge": { type: "CPU", on_demand_price: 3.2256 },
 };
 
+// AWS machine specs for cluster-status displays (mirrors main_service/providers/catalog.py).
+export const AWS_MACHINE_SPECS: Record<string, { cpus: number; ram: string; gpu: string | null }> =
+  {
+    "m7i.large": { cpus: 2, ram: "8G", gpu: null },
+    "m7i.xlarge": { cpus: 4, ram: "16G", gpu: null },
+    "m7i.2xlarge": { cpus: 8, ram: "32G", gpu: null },
+    "m7i.4xlarge": { cpus: 16, ram: "64G", gpu: null },
+    "m7i.8xlarge": { cpus: 32, ram: "128G", gpu: null },
+    "m7i.12xlarge": { cpus: 48, ram: "192G", gpu: null },
+    "m7i.16xlarge": { cpus: 64, ram: "256G", gpu: null },
+    "m7i.24xlarge": { cpus: 96, ram: "384G", gpu: null },
+    "p4d.24xlarge": { cpus: 96, ram: "1152G", gpu: "8x A100 40G" },
+    "p4de.24xlarge": { cpus: 96, ram: "1152G", gpu: "8x A100 80G" },
+    "p5.48xlarge": { cpus: 192, ram: "2048G", gpu: "8x H100 80G" },
+  };
+
 export function getVmCategory(machineType: string): VmType | null {
   const mt = String(machineType || "");
   const mapped = GCP_MACHINE_MAPPING[mt];

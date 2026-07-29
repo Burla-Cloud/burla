@@ -13,6 +13,7 @@ import { Switch } from "@/components/ui/switch";
 import { Cpu, X, ChevronRight, Copy } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { BurlaNode, NodeStatus } from "@/types/coreTypes";
+import { AWS_MACHINE_SPECS } from "@/types/constants";
 
 interface NodesListProps {
     nodes: BurlaNode[];
@@ -95,6 +96,9 @@ remote_parallel_map(my_function, list(range(1000)))`;
     };
 
     const extractCpuCount = (type: string): number | null => {
+        const awsSpec = AWS_MACHINE_SPECS[type.toLowerCase()];
+        if (awsSpec) return awsSpec.cpus;
+
         const customMatch = type.match(/^custom-(\d+)-/);
         if (customMatch) return parseInt(customMatch[1], 10);
 
@@ -125,6 +129,9 @@ remote_parallel_map(my_function, list(range(1000)))`;
     const parseGpuDisplay = (type: string): string => {
         const lower = type.toLowerCase();
 
+        const awsSpec = AWS_MACHINE_SPECS[lower];
+        if (awsSpec) return awsSpec.gpu ?? "-";
+
         const gpuPatterns: { prefix: string; model: string; vram: string }[] = [
             { prefix: "a2-highgpu-", model: "A100", vram: "40G" },
             { prefix: "a2-ultragpu-", model: "A100", vram: "80G" },
@@ -148,6 +155,9 @@ remote_parallel_map(my_function, list(range(1000)))`;
 
     const parseRamDisplay = (type: string): string => {
         const lower = type.toLowerCase();
+
+        const awsSpec = AWS_MACHINE_SPECS[lower];
+        if (awsSpec) return awsSpec.ram;
 
         if (lower.startsWith("n4-standard-")) {
             const cpu = extractCpuCount(type);

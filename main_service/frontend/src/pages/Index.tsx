@@ -7,6 +7,7 @@ import { useCluster } from "@/contexts/ClusterContext";
 import { useEffect, useMemo, useState } from "react";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { AWS_MACHINE_SPECS } from "@/types/constants";
 
 const ACTIVE_STATUSES = new Set(["BOOTING", "READY", "RUNNING"]);
 
@@ -46,6 +47,9 @@ const Dashboard = () => {
     const countedNodes = useMemo(() => nodes.filter((n) => ACTIVE_STATUSES.has(n.status)), [nodes]);
 
     const extractCpuCount = (type: string): number | null => {
+        const awsSpec = AWS_MACHINE_SPECS[type.toLowerCase()];
+        if (awsSpec) return awsSpec.cpus;
+
         const customMatch = type.match(/^custom-(\d+)-/);
         if (customMatch) return parseInt(customMatch[1], 10);
 
@@ -89,6 +93,10 @@ const Dashboard = () => {
 
     const parseRamDisplay = (type: string): string => {
         const lower = type.toLowerCase();
+
+        const awsSpec = AWS_MACHINE_SPECS[lower];
+        if (awsSpec) return awsSpec.ram;
+
         if (lower.startsWith("n4-standard-")) {
             const cpu = extractCpuCount(type);
             return cpu !== null ? `${cpu * 4}G` : "-";

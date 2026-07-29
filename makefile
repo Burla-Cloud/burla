@@ -10,7 +10,7 @@ define UV_ZSH_ENV
 	uv python pin --project $(PROJECT_ABS) $(1) >/dev/null 2>&1
 	uv sync --project $(PROJECT_ABS) --group $(2) >/dev/null 2>&1
 	tmp_dir=$$(mktemp -d); \
-	printf 'PROMPT="($(1)-$(2)) %%c %%%% "\nexport BURLA_CLUSTER_DASHBOARD_URL=http://localhost:5001\n' > $$tmp_dir/.zshrc; \
+	printf 'PROMPT="($(1)-$(2)) %%c %%%% "\nexport BURLA_CLUSTER_DASHBOARD_URL=http://localhost:5001\nexport BURLA_BACKEND_URL=$${BURLA_BACKEND_URL:-https://test.backend.burla.dev}\n' > $$tmp_dir/.zshrc; \
 	trap 'rm -rf $$tmp_dir' EXIT; \
 	ZDOTDIR=$$tmp_dir uv run --project $(PROJECT_ABS) --group $(2) zsh -i
 endef
@@ -70,7 +70,7 @@ stop:
 local-dev:
 	set -e; \
 	PROJECT_ID=$$(gcloud config get-value project 2>/dev/null); \
-	BACKEND_URL=$${BURLA_BACKEND_URL:-https://backend.burla.dev}; \
+	BACKEND_URL=$${BURLA_BACKEND_URL:-https://test.backend.burla.dev}; \
 	TOKEN_SECRET=$${BURLA_CLUSTER_TOKEN_SECRET:-burla-cluster-id-token}; \
 	IMAGE_NAME=$$( echo \
 		"us-docker.pkg.dev/$${PROJECT_ID}/burla-main-service/burla-main-service:latest" \
@@ -123,7 +123,7 @@ remote-dev:
 	set -e; \
 	trap 'docker rm -f main_service burla-head-caddy >/dev/null 2>&1 || true' EXIT; \
 	PROJECT_ID=$$(gcloud config get-value project 2>/dev/null); \
-	BACKEND_URL=$${BURLA_BACKEND_URL:-https://backend.burla.dev}; \
+	BACKEND_URL=$${BURLA_BACKEND_URL:-https://test.backend.burla.dev}; \
 	TOKEN_SECRET=$${BURLA_CLUSTER_TOKEN_SECRET:-burla-cluster-id-token}; \
 	CLUSTER_ID_TOKEN=$$(gcloud secrets versions access latest --secret=$${TOKEN_SECRET}); \
 	IMAGE_NAME=$$( echo \

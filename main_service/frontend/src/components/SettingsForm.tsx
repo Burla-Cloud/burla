@@ -428,7 +428,26 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
 
                                 {/* GPU */}
                                 <div className="flex flex-col space-y-2">
-                                    <label className={labelClass}>GPU</label>
+                                    <div className="flex items-center gap-1">
+                                        <label className={labelClass}>GPU</label>
+                                        {isAws && (
+                                            <TooltipProvider>
+                                                <Tooltip>
+                                                    <TooltipTrigger asChild>
+                                                        <InfoIcon className="h-4 w-4 text-amber-500 hover:text-amber-600 cursor-help -mt-2" />
+                                                    </TooltipTrigger>
+                                                    <TooltipContent>
+                                                        <p>
+                                                            GPUs aren't available on AWS clusters
+                                                            yet, we're working on it!
+                                                            <br />
+                                                            (they work on GCP)
+                                                        </p>
+                                                    </TooltipContent>
+                                                </Tooltip>
+                                            </TooltipProvider>
+                                        )}
+                                    </div>
                                     <Select
                                         disabled={!isEditing || isAws}
                                         value={gpuVariant}
@@ -453,12 +472,6 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
                                             ))}
                                         </SelectContent>
                                     </Select>
-                                    {isAws && (
-                                        <span className="text-xs text-amber-600 mt-1">
-                                            GPUs aren't available on AWS clusters yet, we're
-                                            working on it! (they work on GCP)
-                                        </span>
-                                    )}
                                 </div>
 
                                 {/* GPUs per VM */}

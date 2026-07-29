@@ -25,32 +25,50 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
         const { settings, setSettings } = useSettings();
         const users = settings.users ?? [];
         const [newUser, setNewUser] = useState("");
+        const isAws = settings.cloudProvider === "aws";
 
-        const cpuOptions = [
-            { label: "2vCPU / 8G RAM", value: "n4-standard-2" },
-            { label: "4vCPU / 16G RAM", value: "n4-standard-4" },
-            { label: "8vCPU / 32G RAM", value: "n4-standard-8" },
-            { label: "16vCPU / 64G RAM", value: "n4-standard-16" },
-            { label: "32vCPU / 128G RAM", value: "n4-standard-32" },
-            { label: "64vCPU / 256G RAM", value: "n4-standard-64" },
-            { label: "80vCPU / 320G RAM", value: "n4-standard-80" },
-        ];
+        // Machine lists mirror main_service/providers/catalog.py for each cloud.
+        const cpuOptions = isAws
+            ? [
+                  { label: "2vCPU / 8G RAM", value: "m7i.large" },
+                  { label: "4vCPU / 16G RAM", value: "m7i.xlarge" },
+                  { label: "8vCPU / 32G RAM", value: "m7i.2xlarge" },
+                  { label: "16vCPU / 64G RAM", value: "m7i.4xlarge" },
+                  { label: "32vCPU / 128G RAM", value: "m7i.8xlarge" },
+                  { label: "64vCPU / 256G RAM", value: "m7i.16xlarge" },
+              ]
+            : [
+                  { label: "2vCPU / 8G RAM", value: "n4-standard-2" },
+                  { label: "4vCPU / 16G RAM", value: "n4-standard-4" },
+                  { label: "8vCPU / 32G RAM", value: "n4-standard-8" },
+                  { label: "16vCPU / 64G RAM", value: "n4-standard-16" },
+                  { label: "32vCPU / 128G RAM", value: "n4-standard-32" },
+                  { label: "64vCPU / 256G RAM", value: "n4-standard-64" },
+                  { label: "80vCPU / 320G RAM", value: "n4-standard-80" },
+              ];
 
-        const gpuCpuMap = {
-            "1x A100 40G": { label: "12vCPU / 85G RAM", value: "a2-highgpu-1g" },
-            "2x A100 40G": { label: "24vCPU / 170G RAM", value: "a2-highgpu-2g" },
-            "4x A100 40G": { label: "48vCPU / 340G RAM", value: "a2-highgpu-4g" },
-            "8x A100 40G": { label: "96vCPU / 680G RAM", value: "a2-highgpu-8g" },
-            "1x A100 80G": { label: "12vCPU / 170G RAM", value: "a2-ultragpu-1g" },
-            "2x A100 80G": { label: "24vCPU / 340G RAM", value: "a2-ultragpu-2g" },
-            "4x A100 80G": { label: "48vCPU / 680G RAM", value: "a2-ultragpu-4g" },
-            "8x A100 80G": { label: "96vCPU / 1360G RAM", value: "a2-ultragpu-8g" },
-            "1x H100 80G": { label: "26vCPU / 234G RAM", value: "a3-highgpu-1g" },
-            "2x H100 80G": { label: "52vCPU / 468G RAM", value: "a3-highgpu-2g" },
-            "4x H100 80G": { label: "104vCPU / 936G RAM", value: "a3-highgpu-4g" },
-            "8x H100 80G": { label: "208vCPU / 1872G RAM", value: "a3-highgpu-8g" },
-            "8x H200 141G": { label: "224vCPU / 2952G RAM", value: "a3-ultragpu-8g" },
-        };
+        // AWS has no single-GPU A100/H100 machines, only the 8-GPU p4/p5 families.
+        const gpuCpuMap = isAws
+            ? {
+                  "8x A100 40G": { label: "96vCPU / 1152G RAM", value: "p4d.24xlarge" },
+                  "8x A100 80G": { label: "96vCPU / 1152G RAM", value: "p4de.24xlarge" },
+                  "8x H100 80G": { label: "192vCPU / 2048G RAM", value: "p5.48xlarge" },
+              }
+            : {
+                  "1x A100 40G": { label: "12vCPU / 85G RAM", value: "a2-highgpu-1g" },
+                  "2x A100 40G": { label: "24vCPU / 170G RAM", value: "a2-highgpu-2g" },
+                  "4x A100 40G": { label: "48vCPU / 340G RAM", value: "a2-highgpu-4g" },
+                  "8x A100 40G": { label: "96vCPU / 680G RAM", value: "a2-highgpu-8g" },
+                  "1x A100 80G": { label: "12vCPU / 170G RAM", value: "a2-ultragpu-1g" },
+                  "2x A100 80G": { label: "24vCPU / 340G RAM", value: "a2-ultragpu-2g" },
+                  "4x A100 80G": { label: "48vCPU / 680G RAM", value: "a2-ultragpu-4g" },
+                  "8x A100 80G": { label: "96vCPU / 1360G RAM", value: "a2-ultragpu-8g" },
+                  "1x H100 80G": { label: "26vCPU / 234G RAM", value: "a3-highgpu-1g" },
+                  "2x H100 80G": { label: "52vCPU / 468G RAM", value: "a3-highgpu-2g" },
+                  "4x H100 80G": { label: "104vCPU / 936G RAM", value: "a3-highgpu-4g" },
+                  "8x H100 80G": { label: "208vCPU / 1872G RAM", value: "a3-highgpu-8g" },
+                  "8x H200 141G": { label: "224vCPU / 2952G RAM", value: "a3-ultragpu-8g" },
+              };
 
         // Build variant -> supported counts (e.g., "A100 40G" -> [1,2,4,8,16])
         const VARIANT_INFO: Record<string, number[]> = {};
@@ -148,8 +166,6 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
         const labelClass = "block text-sm font-medium text-gray-500 mb-1";
 
         // --- REGION LOGIC ---
-        const isAws = settings.cloudProvider === "aws";
-
         // Region lists for each GPU type
         const GCP_REGION_OPTIONS = {
             "A100 40G": [

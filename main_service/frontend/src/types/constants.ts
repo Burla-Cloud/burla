@@ -39,6 +39,18 @@ export const GCP_MACHINE_MAPPING: Record<string, VmType> = {
   "n4-standard-32": "CPU",
   "n4-standard-64": "CPU",
   "n4-standard-80": "CPU",
+
+  // AWS
+  "p4d.24xlarge": "A100",
+  "p4de.24xlarge": "A100",
+  "p5.48xlarge": "H100",
+
+  "m7i.large": "CPU",
+  "m7i.xlarge": "CPU",
+  "m7i.2xlarge": "CPU",
+  "m7i.4xlarge": "CPU",
+  "m7i.8xlarge": "CPU",
+  "m7i.16xlarge": "CPU",
 };
 
 export const GCP_MACHINE_PRICING_MAPPING: Record<
@@ -69,6 +81,18 @@ export const GCP_MACHINE_PRICING_MAPPING: Record<
   "n4-standard-32": { type: "CPU", on_demand_price: 1.4512 },
   "n4-standard-64": { type: "CPU", on_demand_price: 2.9024 },
   "n4-standard-80": { type: "CPU", on_demand_price: 3.628 },
+
+  // AWS on-demand (us-east-1)
+  "p4d.24xlarge": { type: "A100", on_demand_price: 32.7726 },
+  "p4de.24xlarge": { type: "A100", on_demand_price: 40.9657 },
+  "p5.48xlarge": { type: "H100", on_demand_price: 98.32 },
+
+  "m7i.large": { type: "CPU", on_demand_price: 0.1008 },
+  "m7i.xlarge": { type: "CPU", on_demand_price: 0.2016 },
+  "m7i.2xlarge": { type: "CPU", on_demand_price: 0.4032 },
+  "m7i.4xlarge": { type: "CPU", on_demand_price: 0.8064 },
+  "m7i.8xlarge": { type: "CPU", on_demand_price: 1.6128 },
+  "m7i.16xlarge": { type: "CPU", on_demand_price: 3.2256 },
 };
 
 export function getVmCategory(machineType: string): VmType | null {
@@ -76,8 +100,8 @@ export function getVmCategory(machineType: string): VmType | null {
   const mapped = GCP_MACHINE_MAPPING[mt];
   if (mapped) return mapped;
 
-  // fallback: any n4 is CPU
-  if (mt.startsWith("n4-")) return "CPU";
+  // fallback: any n4 (GCP) or m7i (AWS) is CPU
+  if (mt.startsWith("n4-") || mt.startsWith("m7i.")) return "CPU";
 
   return null;
 }

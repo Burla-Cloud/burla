@@ -17,6 +17,7 @@ const defaultSettings: SettingsData = {
     users: [],
     burlaVersion: " :( ",
     googleCloudProjectId: " :) ",
+    cloudProvider: "gcp",
 };
 
 const SettingsContext = createContext<SettingsContextType | undefined>(undefined);

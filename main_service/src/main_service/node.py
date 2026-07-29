@@ -11,6 +11,7 @@ from typing import Optional
 
 from main_service import (
     PROJECT_ID,
+    BURLA_BACKEND_URL,
     IN_LOCAL_DEV_MODE,
     CURRENT_BURLA_VERSION,
     MAIN_SERVICE_URL_FOR_NODES,
@@ -274,6 +275,7 @@ class Node:
         export NUM_GPUS="{self.num_gpus}"
         export INSTANCE_NAME="$NODE_NAME"
         export PROJECT_ID="{PROJECT_ID}"
+        export BURLA_BACKEND_URL="{BURLA_BACKEND_URL}"
         export CONTAINERS='{json.dumps([c.to_dict() for c in self.containers])}'
         export INACTIVITY_SHUTDOWN_TIME_SEC="{self.inactivity_shutdown_time_sec}"
         export RESERVED_FOR_JOB="{self.reserved_for_job or ''}"

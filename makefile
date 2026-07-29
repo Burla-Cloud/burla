@@ -10,7 +10,7 @@ define UV_ZSH_ENV
 	uv python pin --project $(PROJECT_ABS) $(1) >/dev/null 2>&1
 	uv sync --project $(PROJECT_ABS) --group $(2) >/dev/null 2>&1
 	tmp_dir=$$(mktemp -d); \
-	printf 'PROMPT="($(1)-$(2)) %%c %%%% "\nexport BURLA_CLUSTER_DASHBOARD_URL=http://localhost:5001\n' > $$tmp_dir/.zshrc; \
+	printf 'PROMPT="($(1)-$(2)) %%c %%%% "\nexport BURLA_CLUSTER_DASHBOARD_URL=http://localhost:5001\nexport BURLA_BACKEND_URL=$${BURLA_BACKEND_URL:-https://test.backend.burla.dev}\n' > $$tmp_dir/.zshrc; \
 	trap 'rm -rf $$tmp_dir' EXIT; \
 	ZDOTDIR=$$tmp_dir uv run --project $(PROJECT_ABS) --group $(2) zsh -i
 endef
@@ -102,6 +102,7 @@ local-dev:
 		-e IN_LOCAL_DEV_MODE=True \
 		-e CLUSTER_ID_TOKEN=$${CLUSTER_ID_TOKEN} \
 		-e REDIRECT_LOCALLY_ON_LOGIN=True \
+		-e BURLA_BACKEND_URL=$${BURLA_BACKEND_URL:-https://test.backend.burla.dev} \
 		-e HOST_PWD=$(PWD) \
 		-e HOST_HOME_DIR=$${HOME} \
 		-p 5001:5001 \
@@ -133,6 +134,7 @@ remote-dev:
 		-e GOOGLE_CLOUD_PROJECT=$${PROJECT_ID} \
 		-e CLUSTER_ID_TOKEN=$${CLUSTER_ID_TOKEN} \
 		-e REDIRECT_LOCALLY_ON_LOGIN=True \
+		-e BURLA_BACKEND_URL=$${BURLA_BACKEND_URL:-https://test.backend.burla.dev} \
 		-p 5001:5001 \
 		--entrypoint python \
 		$${IMAGE_NAME} -m uvicorn main_service:app --host 0.0.0.0 --port 5001 --reload \

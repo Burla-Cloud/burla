@@ -22,7 +22,7 @@ from starlette.datastructures import UploadFile
 
 __version__ = "1.6.0"
 PROJECT_ID = os.environ["PROJECT_ID"]
-BURLA_BACKEND_URL = "https://backend.burla.dev"
+BURLA_BACKEND_URL = os.environ.get("BURLA_BACKEND_URL", "https://backend.burla.dev")
 
 IN_LOCAL_DEV_MODE = os.environ.get("IN_LOCAL_DEV_MODE") == "True"  # Cluster running locally
 

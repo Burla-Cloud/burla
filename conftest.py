@@ -29,6 +29,9 @@ from typing import Any, Callable, Iterable
 
 import pytest
 
+# the test suite must never touch the production backend
+os.environ.setdefault("BURLA_BACKEND_URL", "https://test.backend.burla.dev")
+
 DASHBOARD_URL = os.environ.get("BURLA_CLUSTER_DASHBOARD_URL", "http://localhost:5001")
 EXPECTED_GCP_PROJECT = os.environ.get("BURLA_TEST_PROJECT", "burla-test")
 READINESS_TIMEOUT_SEC = 30

@@ -32,7 +32,8 @@ REDIRECT_LOCALLY_ON_LOGIN = os.environ.get("REDIRECT_LOCALLY_ON_LOGIN") == "True
 # "gcp" or "aws" - which cloud this cluster boots node VMs in.
 CLOUD_PROVIDER = os.environ.get("CLOUD_PROVIDER", "gcp")
 
-BURLA_BACKEND_URL = "https://backend.burla.dev"
+BURLA_BACKEND_URL = os.environ.get("BURLA_BACKEND_URL", "https://backend.burla.dev")
+print(f"Using Burla backend: {BURLA_BACKEND_URL}")
 
 
 def _resolve_project_id() -> str:

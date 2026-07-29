@@ -4,6 +4,7 @@ from fastapi import APIRouter, Request
 
 from main_service import (
     PROJECT_ID,
+    BURLA_BACKEND_URL,
     CLUSTER_ID_TOKEN,
     CURRENT_BURLA_VERSION,
     IN_LOCAL_DEV_MODE,

@@ -7,7 +7,7 @@ from platformdirs import user_config_dir
 
 # needed so main_service can associate a client version with a request
 __version__ = "1.6.0"
-_BURLA_BACKEND_URL = "https://backend.burla.dev"
+_BURLA_BACKEND_URL = os.environ.get("BURLA_BACKEND_URL", "https://backend.burla.dev")
 
 _appdata_dir = Path(user_config_dir(appname="burla", appauthor="burla"))
 CONFIG_PATH = _appdata_dir / Path("burla_credentials.json")

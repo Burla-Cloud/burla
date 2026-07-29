@@ -2,7 +2,7 @@ import "./syncfusion-license";
 import { createRoot } from "react-dom/client";
 import App from "./App.tsx";
 import "./index.css";
-import { registerLicense, Observer } from "@syncfusion/ej2-base";
+import { Observer } from "@syncfusion/ej2-base";
 
 type SyncfusionObserverPrototype = {
     notExist(prop: string): boolean;
@@ -30,7 +30,6 @@ if (originalNotExist && !Reflect.has(observerPrototype, "__burlaPatchedNotExist"
 }
 
 // Register Syncfusion license key before any Syncfusion components are used
-registerLicense(import.meta.env.VITE_SYNCFUSION_LICENSE_KEY as string);
 
 let authRedirectInProgress = false;
 const redirectToLogin = () => {

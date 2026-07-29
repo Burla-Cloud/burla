@@ -13,7 +13,7 @@ from pathlib import Path
 from contextlib import asynccontextmanager
 from urllib.parse import urlparse
 
-from fastapi.responses import Response, FileResponse, RedirectResponse
+from fastapi.responses import Response, FileResponse, HTMLResponse, RedirectResponse
 from fastapi import FastAPI, Request, BackgroundTasks, Depends, status
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -368,6 +368,10 @@ def version():
     return {"version": CURRENT_BURLA_VERSION, "project": PROJECT_ID}
 
 
+# Injected at request time so the key never lives in the public repo's committed bundles.
+SYNCFUSION_LICENSE_KEY = os.environ.get("SYNCFUSION_LICENSE_KEY", "")
+
+
 # don't move this! must be declared before static files are mounted to the same path below.
 @app.get("/")
 @app.get("/jobs")
@@ -375,7 +379,9 @@ def version():
 @app.get("/settings")
 @app.get("/filesystem")
 def dashboard():
-    return FileResponse("src/main_service/static/index.html")
+    html = Path("src/main_service/static/index.html").read_text()
+    inject = f'<script>window.__SYNCFUSION_LICENSE_KEY__ = "{SYNCFUSION_LICENSE_KEY}";</script>'
+    return HTMLResponse(html.replace("</head>", f"{inject}</head>"))
 
 
 @app.get("/favicon.png")

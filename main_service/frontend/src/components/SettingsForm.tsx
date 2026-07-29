@@ -47,11 +47,13 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
                   { label: "80vCPU / 320G RAM", value: "n4-standard-80" },
               ];
 
-        // AWS has no single-GPU A100/H100 machines, only the 8-GPU p4/p5 families.
+        // AWS sells A100s only in 8-GPU machines; H100s come as 1-GPU (p5.4xlarge)
+        // or 8-GPU (p5.48xlarge). No 2x/4x sizes exist on AWS.
         const gpuCpuMap = isAws
             ? {
                   "8x A100 40G": { label: "96vCPU / 1152G RAM", value: "p4d.24xlarge" },
                   "8x A100 80G": { label: "96vCPU / 1152G RAM", value: "p4de.24xlarge" },
+                  "1x H100 80G": { label: "16vCPU / 256G RAM", value: "p5.4xlarge" },
                   "8x H100 80G": { label: "192vCPU / 2048G RAM", value: "p5.48xlarge" },
               }
             : {
@@ -255,14 +257,18 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
                 { value: "us-west-2", label: "us-west-2" },
             ],
             "H100 80G": [
-                // p5.48xlarge
+                // union of p5.4xlarge and p5.48xlarge availability
                 { value: "us-east-1", label: "us-east-1" },
                 { value: "us-east-2", label: "us-east-2" },
                 { value: "us-west-2", label: "us-west-2" },
                 { value: "eu-central-1", label: "eu-central-1" },
                 { value: "eu-north-1", label: "eu-north-1" },
+                { value: "eu-west-2", label: "eu-west-2" },
+                { value: "ap-south-1", label: "ap-south-1" },
                 { value: "ap-northeast-1", label: "ap-northeast-1" },
                 { value: "ap-southeast-2", label: "ap-southeast-2" },
+                { value: "ap-southeast-3", label: "ap-southeast-3" },
+                { value: "sa-east-1", label: "sa-east-1" },
             ],
             None: [
                 { value: "us-east-1", label: "us-east-1" },

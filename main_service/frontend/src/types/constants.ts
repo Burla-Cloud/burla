@@ -43,6 +43,7 @@ export const GCP_MACHINE_MAPPING: Record<string, VmType> = {
   // AWS
   "p4d.24xlarge": "A100",
   "p4de.24xlarge": "A100",
+  "p5.4xlarge": "H100",
   "p5.48xlarge": "H100",
 
   "m7i.large": "CPU",
@@ -85,6 +86,7 @@ export const GCP_MACHINE_PRICING_MAPPING: Record<
   // AWS on-demand (us-east-1)
   "p4d.24xlarge": { type: "A100", on_demand_price: 32.7726 },
   "p4de.24xlarge": { type: "A100", on_demand_price: 40.9657 },
+  "p5.4xlarge": { type: "H100", on_demand_price: 6.88 },
   "p5.48xlarge": { type: "H100", on_demand_price: 98.32 },
 
   "m7i.large": { type: "CPU", on_demand_price: 0.1008 },
@@ -108,6 +110,7 @@ export const AWS_MACHINE_SPECS: Record<string, { cpus: number; ram: string; gpu:
     "m7i.24xlarge": { cpus: 96, ram: "384G", gpu: null },
     "p4d.24xlarge": { cpus: 96, ram: "1152G", gpu: "8x A100 40G" },
     "p4de.24xlarge": { cpus: 96, ram: "1152G", gpu: "8x A100 80G" },
+    "p5.4xlarge": { cpus: 16, ram: "256G", gpu: "1x H100 80G" },
     "p5.48xlarge": { cpus: 192, ram: "2048G", gpu: "8x H100 80G" },
   };
 

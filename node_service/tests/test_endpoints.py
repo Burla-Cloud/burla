@@ -40,8 +40,10 @@ def test_root_returns_ready_when_no_job_active(node_http_client, any_ready_node)
         client.close()
 
 
-def test_root_requires_auth(any_ready_node):
+def test_root_requires_auth(any_ready_node, main_http_client):
     """Hitting `/` without auth headers returns 401."""
+    import ssl
+
     import httpx
 
     host = any_ready_node["host"]
@@ -49,7 +51,9 @@ def test_root_requires_auth(any_ready_node):
         port = host.rsplit(":", 1)[-1]
         host = f"http://localhost:{port}"
 
-    resp = httpx.get(f"{host}/", timeout=5)
+    cluster_ca = main_http_client.get("/v1/cluster/state").json().get("cluster_ca")
+    verify = ssl.create_default_context(cadata=cluster_ca) if cluster_ca else True
+    resp = httpx.get(f"{host}/", timeout=5, verify=verify)
     assert resp.status_code in (200, 401)  # If no authorized_users, 401; otherwise 200
     if resp.status_code == 200:
         pytest.skip("node has local-dev auth bypass; cannot test 401")
@@ -102,8 +106,10 @@ def test_ack_transfer_404_when_wrong_job_id(node_http_client, any_ready_node):
         client.close()
 
 
-def test_shutdown_requires_localhost(any_ready_node):
+def test_shutdown_requires_localhost(any_ready_node, main_http_client):
     """POST /shutdown returns 403 for any non-localhost caller."""
+    import ssl
+
     import httpx
 
     host = any_ready_node["host"]
@@ -111,10 +117,12 @@ def test_shutdown_requires_localhost(any_ready_node):
         port = host.rsplit(":", 1)[-1]
         host = f"http://localhost:{port}"
 
+    cluster_ca = main_http_client.get("/v1/cluster/state").json().get("cluster_ca")
+    verify = ssl.create_default_context(cadata=cluster_ca) if cluster_ca else True
     # From the test process, the request_client.host varies — it may be 127.0.0.1
     # if Docker port-binding is used (most common in local-dev), or the Docker
     # bridge IP otherwise.
-    resp = httpx.post(f"{host}/shutdown", timeout=2)
+    resp = httpx.post(f"{host}/shutdown", timeout=2, verify=verify)
     assert resp.status_code in (200, 403, 499)  # accepted or rejected
     # Do NOT let this test leak a real shutdown into other tests — if it
     # succeeded, we've damaged the cluster state.

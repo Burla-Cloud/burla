@@ -37,16 +37,17 @@ def test_api_user_endpoint_returns_session_info_in_local_dev(
 
 
 def test_sf_paths_bypass_auth(main_http_client, local_dev_cluster):
-    """Filemanager endpoints are reachable without special auth headers."""
+    """Filemanager endpoints are reachable without special auth headers.
+    (409 = auth was bypassed but the shared filesystem is disabled.)"""
     resp = main_http_client.post(
         "/api/sf/filemanager", json={"action": "read", "path": "/"}
     )
-    assert resp.status_code in (200, 400)
+    assert resp.status_code in (200, 400, 409)
 
 
 def test_signed_resumable_bypasses_auth(main_http_client, local_dev_cluster):
     resp = main_http_client.get("/signed-resumable?object_name=x")
-    assert resp.status_code == 200
+    assert resp.status_code in (200, 409)
 
 
 def test_sse_endpoints_bypass_auth(main_http_client, local_dev_cluster):

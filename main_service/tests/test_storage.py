@@ -9,6 +9,13 @@ import pytest
 pytestmark = pytest.mark.service
 
 
+@pytest.fixture(autouse=True)
+def _requires_shared_filesystem(main_http_client, burla_auth_headers):
+    settings = main_http_client.get("/v1/settings", headers=burla_auth_headers).json()
+    if not settings.get("filesystemEnabled", True):
+        pytest.skip("shared filesystem is disabled on this cluster")
+
+
 def test_filemanager_read_returns_shape(main_http_client, local_dev_cluster):
     resp = main_http_client.post(
         "/api/sf/filemanager",

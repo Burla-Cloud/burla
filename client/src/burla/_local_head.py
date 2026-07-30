@@ -340,15 +340,16 @@ def _pid_alive(pid: int) -> bool:
 
 def _main_service_pythonpath() -> str | None:
     """The wheel vendors main_service next to burla; a repo checkout keeps it
-    in main_service/src. Returns an extra PYTHONPATH entry for the latter."""
+    in main_service/src. The repo copy wins when both exist (editable installs
+    leave a stale snapshot of main_service in site-packages)."""
     import importlib.util
 
+    repo_root = Path(__file__).resolve().parents[3]
+    repo_copy = repo_root / "main_service" / "src" / "main_service"
+    if repo_copy.exists():
+        return str(repo_copy.parent)
     if importlib.util.find_spec("main_service") is not None:
         return None
-    repo_root = Path(__file__).resolve().parents[3]
-    vendored = repo_root / "main_service" / "src" / "main_service"
-    if vendored.exists():
-        return str(vendored.parent)
     raise LocalHeadError(
         "The main_service package is missing from this Burla installation. "
         "Reinstall with `pip install --force-reinstall burla`."

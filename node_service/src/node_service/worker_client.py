@@ -159,7 +159,15 @@ class JobLogWriter:
         self.pending_documents = []
         self.active_input_index = None
         self.partial_container_output = ""
+        self.input_end_events = {}
         self.flush_task = asyncio.create_task(self._flush_loop())
+
+    def _end_event(self, input_index: int) -> asyncio.Event:
+        event = self.input_end_events.get(input_index)
+        if event is None:
+            event = asyncio.Event()
+            self.input_end_events[input_index] = event
+        return event
 
     def _get_log_buffer(self, input_index: int):
         if input_index not in self.log_buffers:
@@ -189,6 +197,11 @@ class JobLogWriter:
         if is_error:
             document["is_error"] = True
         self.pending_documents.append(document)
+        # Client-visible immediately: logs for an input must be fetchable
+        # before its result is (the client stops polling once it has every
+        # result). The flush loop only handles the head's persistent copy.
+        if not is_error:
+            SELF["pending_logs"].append(document)
         self.log_buffers[input_index] = {"logs": [], "size_bytes": 0}
 
     def _queue_all_buffers_locked(self):
@@ -231,6 +244,7 @@ class JobLogWriter:
             input_index = int(stripped_message.removeprefix(LOG_END_MARKER_PREFIX))
             self._queue_document_locked(input_index)
             self.active_input_index = None
+            self._end_event(input_index).set()
             self.pending_flush_event.set()
             return
         if _is_worker_internal_log_message(stripped_message):
@@ -264,17 +278,26 @@ class JobLogWriter:
 
     async def write_warning(self, input_index: int, message: str):
         async with self.lock:
-            self.pending_documents.append(
-                {
-                    "logs": [{"timestamp": time.time(), "message": message}],
-                    "timestamp": time.time(),
-                    "input_index": input_index,
-                    "severity": "WARNING",
-                }
-            )
+            document = {
+                "logs": [{"timestamp": time.time(), "message": message}],
+                "timestamp": time.time(),
+                "input_index": input_index,
+                "severity": "WARNING",
+            }
+            self.pending_documents.append(document)
+            SELF["pending_logs"].append(document)
             self.pending_flush_event.set()
 
     async def finish_input(self, input_index: int):
+        # UDF prints ride the container log stream, which can trail the TCP
+        # result by a few ms; wait for the end-of-input marker so this
+        # input's logs are client-visible before its result is released.
+        # (2s cap: a crashed container never prints the marker.)
+        try:
+            await asyncio.wait_for(self._end_event(input_index).wait(), timeout=2)
+        except asyncio.TimeoutError:
+            pass
+        self.input_end_events.pop(input_index, None)
         async with self.lock:
             self._queue_document_locked(input_index)
             self.pending_flush_event.set()
@@ -286,10 +309,6 @@ class JobLogWriter:
                 return
             documents = self.pending_documents
             self.pending_documents = []
-
-        for document in documents:
-            if not document.get("is_error"):
-                SELF["pending_logs"].append(document)
 
         try:
             await head_client.post_job_logs(self.job_id, documents)

@@ -24,16 +24,27 @@ clusters point at a test relay via `BURLA_RELAY_HOST` (see the makefile).
 
 ## Deploy (Burla-operated)
 
-One VM per region, in a Burla-owned project:
+One VM per region, in a Burla-owned project/account:
 
 ```bash
+# GCP:
 ./deploy_relay.sh --project burla-prod --region us-central1 \
+    --subdomain-host relay.burla.dev
+# AWS:
+./deploy_relay_aws.sh --profile burla-prod --region us-east-1 \
     --subdomain-host relay.burla.dev
 ```
 
 Then create the printed DNS records (`*.relay.burla.dev` and apex A records).
 Local stack for development: `docker compose up` (see `e2e/run_e2e.sh` for the
 end-to-end test).
+
+**The test relay is live**: `relay.test-clusters.burla.dev` (EC2 `burla-relay`
+in the burla-test AWS account, elastic IP 35.174.220.176, validating tokens
+against test.backend.burla.dev). Its DNS lives in the Route53 zone for
+`test-clusters.burla.dev` in the same account, so no registrar access is
+needed. Dev clusters point at it via `BURLA_RELAY_HOST` (the makefile's
+remote-dev default).
 
 ## Remaining integration points outside this repo
 

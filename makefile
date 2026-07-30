@@ -141,7 +141,7 @@ remote-dev:
 		-e GOOGLE_CLOUD_PROJECT=$${PROJECT_ID} \
 		-e CLUSTER_ID_TOKEN=$${CLUSTER_ID_TOKEN} \
 		-e BURLA_BACKEND_URL=$${BACKEND_URL} \
-		-e BURLA_RELAY_HOST=$${BURLA_RELAY_HOST:-test.relay.burla.dev} \
+		-e BURLA_RELAY_HOST=$${BURLA_RELAY_HOST:-relay.test-clusters.burla.dev} \
 		-e REDIRECT_LOCALLY_ON_LOGIN=True \
 		-p 127.0.0.1:5001:5001 \
 		--entrypoint python \

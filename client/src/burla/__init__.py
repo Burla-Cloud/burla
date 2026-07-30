@@ -28,6 +28,9 @@ def get_cluster_dashboard_url() -> str:
     Resolve the main_service URL. `BURLA_CLUSTER_DASHBOARD_URL` wins if set -
     this is how `make local-dev` / `make remote-dev` point the client at the
     in-shell dev server without mutating the user's credentials file.
+
+    With no deployed cluster (the default), Burla runs the cluster head on
+    this machine: see `burla._local_head`.
     """
     override = os.environ.get("BURLA_CLUSTER_DASHBOARD_URL")
     if override:
@@ -35,11 +38,36 @@ def get_cluster_dashboard_url() -> str:
         if not override.startswith("https://") and not _local_dashboard_url(override):
             raise ValueError("BURLA_CLUSTER_DASHBOARD_URL must use HTTPS")
         return override
-    if not CONFIG_PATH.exists():
-        from burla._auth import bootstrap_from_adc
 
-        bootstrap_from_adc()
+    if not CONFIG_PATH.exists():
+        # A deployed cluster is used when one is reachable (via `burla login`
+        # or the ADC bootstrap); otherwise default to client-hosted mode.
+        from burla._auth import (
+            ADCBootstrapException,
+            ADCProjectException,
+            ADCSecretPermissionException,
+            BurlaNotInstalledException,
+            bootstrap_from_adc,
+        )
+
+        try:
+            bootstrap_from_adc()
+        except (
+            ADCBootstrapException,
+            ADCProjectException,
+            ADCSecretPermissionException,
+            BurlaNotInstalledException,
+        ):
+            from burla._local_head import ensure_local_head
+
+            return ensure_local_head()
+
     config = json.loads(CONFIG_PATH.read_text())
+    if config.get("mode") == "client_hosted" or not config.get("cluster_dashboard_url"):
+        from burla._local_head import ensure_local_head
+
+        return ensure_local_head()
+
     dashboard_url = config["cluster_dashboard_url"].rstrip("/")
     if not dashboard_url.startswith("https://") and not _local_dashboard_url(
         dashboard_url
@@ -62,7 +90,7 @@ def get_cluster_dashboard_url() -> str:
 
 
 from burla._auth import login
-from burla._install import install
+from burla._deploy import deploy
 from burla._remote_parallel_map import remote_parallel_map
 
 worker_cache = {}
@@ -73,10 +101,35 @@ def version():
     print(__version__)
 
 
+def dashboard(cloud: str = None):
+    """Open the Burla dashboard, hosted on this machine.
+
+    Starts the cluster head locally if it isn't already running - from there
+    you can boot nodes, watch jobs, and change settings. No deployment or
+    special cloud permissions needed (only permission to boot VMs).
+    """
+    import webbrowser
+
+    from burla._local_head import ensure_local_head
+
+    url = ensure_local_head(cloud=cloud)
+    print(f"Burla dashboard is running at {url}")
+    webbrowser.open(url)
+
+
+def install(cloud: str = "gcp"):
+    """Deprecated: use `burla deploy` (or nothing at all - `remote_parallel_map`
+    and `burla dashboard` now work with zero deployment)."""
+    print("`burla install` is now `burla deploy`, deploying ...")
+    deploy(cloud=cloud)
+
+
 def init_cli():
     Fire(
         {
             "login": login,
+            "deploy": deploy,
+            "dashboard": dashboard,
             "install": install,
             "--version": version,
             "-v": version,

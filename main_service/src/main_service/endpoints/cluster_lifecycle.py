@@ -1,6 +1,5 @@
 import asyncio
 
-import docker
 from time import time
 
 from fastapi import APIRouter, Depends
@@ -31,6 +30,7 @@ GROW_INACTIVITY_SHUTDOWN_TIME_SEC = 60
 def _remove_local_dev_cluster_containers():
     if not IN_LOCAL_DEV_MODE:
         return
+    import docker
 
     docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
     for container in docker_client.containers(all=True):
@@ -151,6 +151,8 @@ def _start_nodes(
 
     # kill any local containers that shouldn't be running anymore
     if IN_LOCAL_DEV_MODE and n_nodes_to_add is None:
+        import docker
+
         docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
         node_ids = [name[11:] for name in node_instance_names]
         for container in docker_client.containers(all=True):

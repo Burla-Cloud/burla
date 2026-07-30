@@ -111,7 +111,16 @@ def _new_leaf(
     )
 
 
-def ensure_cluster_tls(head_private_ip: str):
+def ensure_cluster_tls(head_host: str):
+    """`head_host` is the hostname nodes dial the head at: the head VM's
+    private IP normally, or a relay hostname in client-hosted mode."""
+    try:
+        head_ip = ipaddress.ip_address(head_host)
+        ip_addresses, dns_names = [head_host], []
+    except ValueError:
+        head_ip = None
+        ip_addresses, dns_names = [], [head_host]
+
     TLS_DIR.mkdir(parents=True, exist_ok=True)
     regenerated_ca = False
     if not CA_KEY_PATH.exists():
@@ -132,9 +141,10 @@ def ensure_cluster_tls(head_private_ip: str):
         sans = head_cert.extensions.get_extension_for_class(
             x509.SubjectAlternativeName
         ).value
-        regenerate_head = ipaddress.ip_address(
-            head_private_ip
-        ) not in sans.get_values_for_type(x509.IPAddress)
+        if head_ip is not None:
+            regenerate_head = head_ip not in sans.get_values_for_type(x509.IPAddress)
+        else:
+            regenerate_head = head_host not in sans.get_values_for_type(x509.DNSName)
         regenerate_head = regenerate_head or (
             head_cert.not_valid_after_utc
             <= datetime.now(timezone.utc) + timedelta(days=365)
@@ -147,8 +157,9 @@ def ensure_cluster_tls(head_private_ip: str):
             head_key.public_key(),
             issuer_key,
             issuer_cert,
-            [head_private_ip],
+            ip_addresses,
             5 * 365,
+            dns_names=dns_names,
         )
         _write_private_key(HEAD_KEY_PATH, head_key)
         HEAD_CERT_PATH.write_bytes(head_cert.public_bytes(serialization.Encoding.PEM))

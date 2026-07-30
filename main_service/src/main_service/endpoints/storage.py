@@ -12,10 +12,21 @@ from fastapi.responses import StreamingResponse
 from main_service import CLOUD_PROVIDER, get_add_background_task_function, history
 from main_service.blobstore import BlobNotFound, get_blob_store
 
-router = APIRouter()
-
 _cluster_config = history.get_cluster_config()
-STORE = get_blob_store(_cluster_config["gcs_bucket_name"])
+_bucket_name = _cluster_config.get("gcs_bucket_name")
+# No bucket = shared filesystem disabled (the client-hosted default: no
+# storage permissions needed). Every endpoint below 409s via this dependency.
+STORE = get_blob_store(_bucket_name) if _bucket_name else None
+
+
+def _require_filesystem():
+    if STORE is None:
+        raise HTTPException(
+            status_code=409, detail="The shared filesystem is disabled on this cluster."
+        )
+
+
+router = APIRouter(dependencies=[Depends(_require_filesystem)])
 
 BATCH_DELETE_BACKGROUND_THRESHOLD = 1000
 BATCH_DELETE_CHUNK_SIZE = 1000

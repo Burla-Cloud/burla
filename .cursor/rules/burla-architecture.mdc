@@ -11,9 +11,9 @@ Burla is a distributed compute system with one user-facing function: `remote_par
 
 | Service | Runtime | Purpose |
 |---------|---------|---------|
-| `client/` (pypi: `burla`) | User's laptop / notebook | Entry point (`remote_parallel_map`). Pickles UDF, picks nodes, uploads inputs, streams results. |
-| `main_service/` (the "head") | One small always-on VM per cluster (GCE or EC2) | Holds authoritative live cluster state in memory, persists history to SQLite on its disk, boots/deletes node VMs, hosts the React dashboard, handles auth. |
-| `node_service/` | Runs on each node VM | Per-VM orchestrator. Owns input/results queues, spawns workers, runs job watcher. |
+| `client/` (pypi: `burla`) | User's laptop / notebook | Entry point (`remote_parallel_map`). Pickles UDF, picks nodes, uploads inputs, streams results. Ships a vendored copy of `main_service` so the head can run client-hosted. |
+| `main_service/` (the "head") | Default: inside the `burla` pip package on the user's machine (`IN_CLIENT_HOSTED_MODE`, started by rpm / `burla dashboard`, see `client/src/burla/_local_head.py`). Optional via `burla deploy`: one small always-on VM (GCE or EC2). | Holds authoritative live cluster state in memory, persists history to SQLite, boots/deletes node VMs, hosts the React dashboard, handles auth. |
+| `node_service/` | Runs on each node VM | Per-VM orchestrator. Owns input/results queues, spawns workers, runs job watcher. Nodes carry no cloud credentials unless the shared filesystem is enabled; they self-poweroff when idle or orphaned. |
 | `worker_service/` (the file `node_service/src/node_service/worker_server.py`) | Inside user's Docker container, one per CPU core | Executes user code. Talks to `node_service` over a raw TCP socket, not HTTP. |
 
 There is no separate `worker_service/` top-level directory: the worker script lives next to `node.py` in the node_service and is mounted into each container at runtime.

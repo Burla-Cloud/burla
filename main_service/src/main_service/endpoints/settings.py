@@ -41,6 +41,7 @@ def get_settings(request: Request):
         "burlaVersion": CURRENT_BURLA_VERSION,
         "googleCloudProjectId": PROJECT_ID,
         "cloudProvider": CLOUD_PROVIDER,
+        "filesystemEnabled": bool(config_dict.get("gcs_bucket_name")),
     }
 
 

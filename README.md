@@ -60,16 +60,9 @@ You'll need Python 3.11+, a Google Cloud project with billing enabled, and the [
 
 ```bash
 pip install burla
-burla install
 ```
 
-`burla install` deploys Burla into the project your gcloud CLI points at: it enables the required APIs, creates a service account with a minimum set of permissions, and deploys the dashboard to Cloud Run. Running it again upgrades an existing installation in place. The exact permissions it uses are listed in the [CLI reference](https://docs.burla.dev/cli-reference).
-
-Once installed:
-
-1. Open the dashboard URL printed by the installer and hit **⏻ Start** to boot machines. Idle nodes shut themselves down after 10 minutes.
-2. Run `burla login` to connect your machine to the cluster.
-3. Run your first job:
+That's the whole setup. If you can boot a VM in your cloud project, you can use Burla: no service accounts, buckets, firewall rules, or IAM changes are needed.
 
 ```python
 from burla import remote_parallel_map
@@ -80,6 +73,10 @@ def my_function(x):
 
 results = remote_parallel_map(my_function, list(range(1000)))
 ```
+
+Burla runs its cluster coordinator on your machine and boots VMs in your project using your own credentials (the VMs carry no credentials at all, and shut themselves down when idle). Run `burla dashboard` to open the cluster dashboard locally, boot machines manually, watch jobs, or change machine types.
+
+**Deploying for a team (optional):** `burla deploy` moves the coordinator and dashboard onto a small always-on VM so teammates can share one cluster. This is the only step that requires elevated permissions (service-account and IAM setup); the exact list is in the [CLI reference](https://docs.burla.dev/cli-reference). After deploying, teammates connect with `burla login`.
 
 See the [getting started guide](https://docs.burla.dev/get-started) for a full walkthrough.
 

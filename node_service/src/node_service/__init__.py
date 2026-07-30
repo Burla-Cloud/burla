@@ -183,6 +183,22 @@ from node_service.lifecycle_endpoints import (
 )
 
 
+def _poweroff_self():
+    """Last-resort shutdown that needs zero cloud credentials: on AWS the
+    instance terminates itself (InstanceInitiatedShutdownBehavior=terminate);
+    on GCP it stops, billing only its disk until a head reaps it
+    (delete_stopped_instances)."""
+    import subprocess
+
+    subprocess.Popen(["systemctl", "poweroff"])
+
+
+# If the head stays unreachable this long with no client activity (e.g. the
+# laptop hosting it was closed), the node assumes it's orphaned and powers
+# itself off so it can't run up a bill forever.
+ORPHANED_SHUTDOWN_TIME_SEC = 15 * 60
+
+
 async def shutdown_if_idle_for_too_long(logger: Logger):
     """WARNING: Errors from this function are completely hidden!"""
 
@@ -199,16 +215,21 @@ async def shutdown_if_idle_for_too_long(logger: Logger):
 
     SELF["SHUTTING_DOWN"] = True
 
-    if not SELF["FAILED"]:
-        SELF["reported_status"] = "DELETED"
-        await head_client.push_state(status="DELETED", ended_at=time())
+    try:
+        if not SELF["FAILED"]:
+            SELF["reported_status"] = "DELETED"
+            await head_client.push_state(status="DELETED", ended_at=time())
 
-    msg = f"Node has been idle for {INACTIVITY_SHUTDOWN_TIME_SEC // 60} minutes.\n"
-    msg += f"SHUTTING DOWN NODE {INSTANCE_NAME} DUE TO INACTIVITY."
-    await logger.log(msg, severity="WARNING")
+        msg = f"Node has been idle for {INACTIVITY_SHUTDOWN_TIME_SEC // 60} minutes.\n"
+        msg += f"SHUTTING DOWN NODE {INSTANCE_NAME} DUE TO INACTIVITY."
+        await logger.log(msg, severity="WARNING")
 
-    # The head owns cloud APIs; it deletes this VM.
-    await head_client.request_self_delete()
+        # The head owns cloud APIs; it deletes this VM.
+        await head_client.request_self_delete()
+    finally:
+        # If the head is gone (client-hosted head whose laptop closed), the
+        # requests above fail - power off so the VM never idles forever.
+        _poweroff_self()
 
 
 async def _state_push_loop(logger: Logger):
@@ -251,7 +272,10 @@ async def _state_push_loop(logger: Logger):
                 SELF["job_watcher_stop_event"].set()
                 print("Head reports this node as DELETED; requesting VM deletion.")
                 if not IN_LOCAL_DEV_MODE:
-                    await head_client.request_self_delete()
+                    try:
+                        await head_client.request_self_delete()
+                    finally:
+                        _poweroff_self()
                 continue
             if SELF["current_job"]:
                 head_client.apply_job_signals(view.get("job"))
@@ -261,6 +285,16 @@ async def _state_push_loop(logger: Logger):
             # nodes keep working and re-sync on the next successful push.
             if consecutive_failures in (1, 10, 60):
                 print(f"state push to head failed ({consecutive_failures}x): {e}")
+            head_gone_sec = consecutive_failures * STATE_PUSH_INTERVAL_SEC
+            client_idle_sec = time() - SELF["last_client_activity_timestamp"]
+            orphaned = (
+                head_gone_sec >= ORPHANED_SHUTDOWN_TIME_SEC
+                and client_idle_sec >= ORPHANED_SHUTDOWN_TIME_SEC
+            )
+            if orphaned and not IN_LOCAL_DEV_MODE:
+                SELF["SHUTTING_DOWN"] = True
+                print(f"Head unreachable for {head_gone_sec}s; powering off.")
+                _poweroff_self()
 
 
 @asynccontextmanager

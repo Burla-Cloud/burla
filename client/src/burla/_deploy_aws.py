@@ -1,7 +1,7 @@
 """
-`burla install --cloud=aws`.
+`burla deploy --cloud=aws`.
 
-Mirrors the GCP install: IAM roles, security groups, an S3 shared-workspace
+Mirrors the GCP deploy: IAM roles, security groups, an S3 shared-workspace
 bucket, a node AMI (the EC2 twin of the GCP disk image), and one small
 always-on head EC2 instance running main_service.
 """
@@ -18,16 +18,13 @@ import requests
 
 from burla import _BURLA_BACKEND_URL, __version__
 from burla._helpers import run_command, VerboseCalledProcessError
-from burla._install import RELAY_HOST, RELAY_SERVER_ADDR, RELAY_SERVER_PORT, FRP_VERSION
+from burla._deploy import RELAY_HOST, RELAY_SERVER_ADDR, RELAY_SERVER_PORT, FRP_VERSION
 from burla._reporting import log_telemetry
 
 HEAD_INSTANCE_TYPE = "t3.small"
 AMI_BUILDER_INSTANCE_TYPE = "t3.large"
 MAIN_SERVICE_IMAGE = (
     "us-docker.pkg.dev/burla-prod/burla-main-service/burla-main-service"
-)
-CLUSTER_TOKEN_PARAMETER = os.environ.get(
-    "BURLA_CLUSTER_TOKEN_PARAMETER", "/burla/cluster-id-token"
 )
 
 
@@ -47,6 +44,7 @@ def _head_setup_commands(
     region: str,
     image: str,
     dashboard_hostname: str,
+    cluster_id_token: str,
 ) -> list[str]:
     node_source_ref = os.environ.get("BURLA_NODE_SOURCE_REF", __version__)
     registry = image.split("/", 1)[0]
@@ -70,11 +68,7 @@ def _head_setup_commands(
         *registry_login_commands,
         f'docker pull "{image}"',
         "docker pull caddy:2.10.2-alpine",
-        (
-            "CLUSTER_ID_TOKEN=$(aws ssm get-parameter "
-            f'--region {region} --name "{CLUSTER_TOKEN_PARAMETER}" '
-            "--with-decryption --query Parameter.Value --output text)"
-        ),
+        f'CLUSTER_ID_TOKEN="{cluster_id_token}"',
         "docker rm -f burla-main-service burla-head-caddy burla-head-frpc || true",
         (
             "docker run -d --restart=always --network=host --name=burla-main-service "
@@ -87,6 +81,7 @@ def _head_setup_commands(
             "-e PORT=5001 "
             "-e INTERNAL_TLS_PORT=8443 "
             "-e HISTORY_DB_PATH=/var/lib/burla/history.db "
+            f'-e SHARED_WORKSPACE_BUCKET="{project_id}-burla-shared-workspace" '
             f'-e BURLA_BACKEND_URL="{_BURLA_BACKEND_URL}" '
             f'-e BURLA_RELAY_HOST="{RELAY_HOST}" '
             f'-e BURLA_RELAY_SERVER_ADDR="{RELAY_SERVER_ADDR}" '
@@ -205,8 +200,8 @@ def _aws(cmd: str, parse_json: bool = True, raise_error: bool = True):
     return stdout
 
 
-def install_aws(spinner):
-    log_telemetry("Somebody is running `burla install --cloud=aws`!")
+def deploy_aws(spinner):
+    log_telemetry("Somebody is running `burla deploy --cloud=aws`!")
 
     spinner.text = "Checking for aws CLI ... "
     spinner.start()
@@ -235,14 +230,16 @@ def install_aws(spinner):
     _, head_sg_id = _create_security_groups(spinner, region)
     cluster_id_token = _register_cluster_and_save_token(spinner, project_id, region)
     _ensure_node_ami(spinner, region, node_profile)
-    dashboard_url = _deploy_head_instance(spinner, project_id, region, head_sg_id)
+    dashboard_url = _deploy_head_instance(
+        spinner, project_id, region, head_sg_id, cluster_id_token
+    )
 
     headers = {"Authorization": f"Bearer {cluster_id_token}"}
     url = f"{_BURLA_BACKEND_URL}/v1/clusters/{project_id}/version"
     response = requests.put(url, json={"version": __version__}, headers=headers)
     response.raise_for_status()
 
-    msg = f"\nSuccessfully installed Burla v{__version__} on AWS!\n"
+    msg = f"\nSuccessfully deployed Burla v{__version__} on AWS!\n"
     msg += f"Quickstart:\n"
     msg += f"  1. Open your new cluster dashboard: {dashboard_url}\n"
     msg += f'  2. Hit "⏻ Start" to boot some machines.\n'
@@ -251,7 +248,7 @@ def install_aws(spinner):
     msg += f"Don't hesitate to E-Mail jake@burla.dev, thank you for using Burla!"
     spinner.write(msg)
 
-    log_telemetry("Burla successfully installed on AWS!", project_id=project_id)
+    log_telemetry("Burla successfully deployed on AWS!", project_id=project_id)
 
 
 def _create_s3_bucket(spinner, bucket_name, region):
@@ -373,7 +370,6 @@ def _create_iam(spinner, account_id, bucket_name):
                     "ec2:DescribeSubnets",
                     "ec2:DescribeSecurityGroups",
                     "ec2:CreateTags",
-                    "ssm:GetParameter",
                 ],
                 "Resource": "*",
             },
@@ -484,55 +480,21 @@ def _aws_ownership_payload(region: str) -> dict:
 
 
 def _register_cluster_and_save_token(spinner, project_id, region):
+    """The cluster token lives in Burla's local state dir (and, for clusters
+    installed before 1.7, in SSM, which is read as a fallback)."""
+    from burla._deploy import AuthError
+    from burla._local_head import LocalHeadError, get_or_register_cluster_token
+
     spinner.text = "Registering cluster ... "
     spinner.start()
 
-    cluster_id_token = None
-    existing = _aws(
-        f'ssm get-parameter --region {region} --name "{CLUSTER_TOKEN_PARAMETER}" '
-        f'--with-decryption --query "Parameter.Value" --output json',
-        raise_error=False,
-    )
-    if existing:
-        cluster_id_token = existing
-
-    new_cluster = False
-    response = requests.post(
-        f"{_BURLA_BACKEND_URL}/v1/clusters/{project_id}",
-        json=_aws_ownership_payload(region),
-    )
-    if response.status_code == 403:
-        from burla._install import AuthError
-
-        spinner.fail("✗")
-        raise AuthError()
-    elif response.status_code == 200:
-        cluster_id_token = response.json()["token"]
-        new_cluster = True
-    elif response.status_code != 409:
-        spinner.fail("✗")
-        raise Exception(
-            f"Error registering cluster: {response.status_code} {response.text}"
-        )
-
-    if cluster_id_token is None:
-        from burla._install import AuthError
-
+    try:
+        cluster_id_token = get_or_register_cluster_token("aws", project_id, region)
+    except LocalHeadError:
         spinner.fail("✗")
         raise AuthError()
 
-    headers = {"Authorization": f"Bearer {cluster_id_token}"}
-    if new_cluster:
-        with tempfile.NamedTemporaryFile("w") as token_file:
-            token_file.write(cluster_id_token)
-            token_file.flush()
-            run_command(
-                f"aws ssm put-parameter --region {region} "
-                f'--name "{CLUSTER_TOKEN_PARAMETER}" --type SecureString '
-                f"--value file://{token_file.name} --overwrite"
-            )
-
-    # ensure installer is authorized
+    # ensure deployer is authorized
     installer_email = None
     arn = _aws("sts get-caller-identity --query Arn --output json")
     if arn and "@" in arn:
@@ -542,7 +504,7 @@ def _register_cluster_and_save_token(spinner, project_id, region):
         users_url = f"{_BURLA_BACKEND_URL}/v1/clusters/{project_id}/users"
         requests.post(users_url, json={"new_user": installer_email}, headers=headers)
     else:
-        msg = "Could not infer your email from your AWS identity. After install, run "
+        msg = "Could not infer your email from your AWS identity. After deploying, run "
         msg += "`burla login` to authorize yourself against this cluster."
         spinner.write(msg)
 
@@ -579,13 +541,16 @@ def _ensure_node_ami(spinner, region, node_profile) -> str:
     spinner.start()
 
     base_ami = _latest_ubuntu_ami(region)
+    # The builder only apt-gets and clones a public repo, so client-hosted
+    # mode (node_profile=None, no IAM permissions) builds it profile-less.
+    profile_arg = f"--iam-instance-profile Name={node_profile} " if node_profile else ""
     with tempfile.NamedTemporaryFile("w", suffix=".sh") as user_data_file:
         user_data_file.write(_NODE_AMI_SETUP_SCRIPT)
         user_data_file.flush()
         instance = _aws(
             f"ec2 run-instances --region {region} --image-id {base_ami} "
             f"--instance-type {AMI_BUILDER_INSTANCE_TYPE} "
-            f"--iam-instance-profile Name={node_profile} "
+            f"{profile_arg}"
             f"--block-device-mappings "
             f'\'[{{"DeviceName":"/dev/sda1","Ebs":{{"VolumeSize":20,"VolumeType":"gp3"}}}}]\' '
             f"--user-data file://{user_data_file.name} "
@@ -684,7 +649,7 @@ def _run_head_update(region: str, instance_id: str, commands: list[str]):
         raise Exception(invocation["StandardErrorContent"])
 
 
-def _deploy_head_instance(spinner, project_id, region, head_sg_id) -> str:
+def _deploy_head_instance(spinner, project_id, region, head_sg_id, cluster_id_token) -> str:
     spinner.text = "Deploying burla-main-service instance ... "
     spinner.start()
 
@@ -720,12 +685,8 @@ def _deploy_head_instance(spinner, project_id, region, head_sg_id) -> str:
         )
         existing["State"]["Name"] = "running"
 
-    from burla._install import _register_dashboard, _shutdown_cluster_for_upgrade
+    from burla._deploy import _register_dashboard, _shutdown_cluster_for_upgrade
 
-    cluster_id_token = _aws(
-        f'ssm get-parameter --region {region} --name "{CLUSTER_TOKEN_PARAMETER}" '
-        f'--with-decryption --query "Parameter.Value" --output json'
-    )
     dashboard_url = f"https://{project_id}.{RELAY_HOST}"
     if existing:
         _shutdown_cluster_for_upgrade(
@@ -746,6 +707,7 @@ def _deploy_head_instance(spinner, project_id, region, head_sg_id) -> str:
         region,
         image,
         urlparse(dashboard_url).hostname,
+        cluster_id_token,
     )
     if existing:
         head_id = existing["InstanceId"]

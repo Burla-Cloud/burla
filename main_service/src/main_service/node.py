@@ -13,6 +13,7 @@ from typing import Optional
 from main_service import (
     PROJECT_ID,
     IN_LOCAL_DEV_MODE,
+    IN_CLIENT_HOSTED_MODE,
     CURRENT_BURLA_VERSION,
     NODE_SOURCE_REF,
     MAIN_SERVICE_URL_FOR_NODES,
@@ -182,6 +183,9 @@ class Node:
                         on_log=lambda msg: cluster_state.add_node_log(
                             self.instance_name, msg
                         ),
+                        # Only the shared-workspace mount needs cloud
+                        # credentials on the VM.
+                        needs_cloud_credentials=self._filesystem_enabled(),
                     )
                 )
                 # Clients reach the node through the relay on 443; nodes and
@@ -237,12 +241,19 @@ class Node:
         )
         self.provider.delete_instance(self.instance_name, self.zone)
 
+    def _filesystem_enabled(self) -> bool:
+        return bool(self.sync_bucket_name) and self.sync_bucket_name != "None"
+
     def status(self):
         """Returns one of: `BOOTING`, `RUNNING`, `READY`, `FAILED`"""
 
-        # `host` points at the relay; the head shares a VPC with the node so
-        # it polls the private IP directly instead of hairpinning.
-        poll_host = self.peer_host or self.host
+        # `host` points at the relay. A head VM shares a VPC with the node so
+        # it polls the private IP directly; a client-hosted head is outside
+        # the VPC and must go through the relay like any other client.
+        if IN_CLIENT_HOSTED_MODE:
+            poll_host = self.host or self.peer_host
+        else:
+            poll_host = self.peer_host or self.host
 
         if poll_host is not None:
             try:
@@ -277,7 +288,7 @@ class Node:
 
     def __get_startup_script(self):
         mount_script = ""
-        if self.sync_bucket_name and self.sync_bucket_name != "None":
+        if self._filesystem_enabled():
             mount_script = self.provider.mount_shared_workspace_script(
                 self.sync_bucket_name
             )

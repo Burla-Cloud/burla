@@ -117,15 +117,17 @@ local-dev:
 
 # Only the `main_service` is run locally, nodes are started as GCE VM's in the test cloud.
 # Uses the cluster config stored in the head's history db (a fresh one is
-# seeded on first boot). CLUSTER_ID_TOKEN comes from Secret Manager, where
-# `burla install` registers it (the client's ADC login path reads it there).
+# seeded on first boot). CLUSTER_ID_TOKEN comes from Burla's local state dir
+# where `burla deploy` saves it (Secret Manager is the pre-1.7 fallback).
 remote-dev:
 	set -e; \
 	trap 'docker rm -f main_service burla-head-caddy >/dev/null 2>&1 || true' EXIT; \
 	PROJECT_ID=$$(gcloud config get-value project 2>/dev/null); \
 	BACKEND_URL=$${BURLA_BACKEND_URL:-https://test.backend.burla.dev}; \
 	TOKEN_SECRET=$${BURLA_CLUSTER_TOKEN_SECRET:-burla-cluster-id-token}; \
-	CLUSTER_ID_TOKEN=$$(gcloud secrets versions access latest --secret=$${TOKEN_SECRET}); \
+	TOKEN_FILE=$${XDG_DATA_HOME:-$$HOME/.local/share}/burla/clusters/$${PROJECT_ID}/cluster_token; \
+	[ -f "$$TOKEN_FILE" ] || TOKEN_FILE=$$HOME/Library/Application\ Support/burla/clusters/$${PROJECT_ID}/cluster_token; \
+	CLUSTER_ID_TOKEN=$$(cat "$$TOKEN_FILE" 2>/dev/null || gcloud secrets versions access latest --secret=$${TOKEN_SECRET}); \
 	IMAGE_NAME=$$( echo \
 		"us-docker.pkg.dev/$${PROJECT_ID}/burla-main-service/burla-main-service:latest" \
 	); \

@@ -20,9 +20,6 @@ HEAD_VM_NAME = "burla-main-service"
 HEAD_MACHINE_TYPE = "e2-small"
 HEAD_REGION = "us-central1"
 HEAD_ZONE = "us-central1-a"
-CLUSTER_TOKEN_SECRET = os.environ.get(
-    "BURLA_CLUSTER_TOKEN_SECRET", "burla-cluster-id-token"
-)
 
 # All cluster traffic flows through Burla's frp relay: nodes + head dial out
 # to it, so no inbound firewall rules are ever needed in the user's project.
@@ -173,6 +170,7 @@ subdomain = "{project_id}"
       -e PORT=5001 \\
       -e INTERNAL_TLS_PORT=8443 \\
       -e HISTORY_DB_PATH=/var/lib/burla/history.db \\
+      -e SHARED_WORKSPACE_BUCKET="{project_id}-burla-shared-workspace" \\
       -e BURLA_BACKEND_URL="{_BURLA_BACKEND_URL}" \\
       -e BURLA_RELAY_HOST="{RELAY_HOST}" \\
       -e BURLA_RELAY_SERVER_ADDR="{RELAY_SERVER_ADDR}" \\
@@ -216,29 +214,33 @@ class InstallError(Exception):
 
 class AuthError(Exception):
     def __init__(self):
-        message = "Cluster ID secret is missing, but this deployment has already been registered.\n"
-        message += "Because this secret is missing, we cannot verify that you are the owner of this cluster.\n"
+        message = "This cluster is already registered, but this machine doesn't have its token.\n"
+        message += "Because of this we cannot verify that you are the owner of this cluster.\n"
         message += "Please email jake@burla.dev, "
         message += "or DM @jake__z in our Discord to regain access!"
         super().__init__(message)
 
 
-def install(cloud: str = "gcp"):
-    """Install or Update the Burla cluster.
+def deploy(cloud: str = "gcp"):
+    """Deploy (or update) an always-on, shared Burla cluster with a head VM.
 
-    - `burla install` installs into your current default Google Cloud project.
+    Burla works with zero deployment: `remote_parallel_map` and
+    `burla dashboard` run the cluster head on this machine. Deploy when you
+    want the dashboard and cluster to stay up for your whole team.
+
+    - `burla deploy` deploys into your current default Google Cloud project.
       Run: `gcloud config get project` to view your default project.
       Run: `gcloud config set project <new-project-id>` to change your default project.
-    - `burla install --cloud=aws` installs into your current default AWS account/region.
+    - `burla deploy --cloud=aws` deploys into your current default AWS account/region.
     """
     try:
         with yaspin() as spinner:
             if cloud == "aws":
-                from burla._install_aws import install_aws
+                from burla._deploy_aws import deploy_aws
 
-                install_aws(spinner)
+                deploy_aws(spinner)
             elif cloud == "gcp":
-                _install_gcp(spinner)
+                _deploy_gcp(spinner)
             else:
                 raise ValueError(f"Unknown cloud: {cloud!r}. Use 'gcp' or 'aws'.")
     except Exception as e:
@@ -272,37 +274,23 @@ def install(cloud: str = "gcp"):
             raise e
 
 
-def _install_gcp(spinner):
-    log_telemetry("Somebody is running `burla install`!")
+def _deploy_gcp(spinner):
+    log_telemetry("Somebody is running `burla deploy`!")
     _check_gcloud_is_installed(spinner)
 
     PROJECT_ID = _get_gcloud_GCP_project_id(spinner)
-    log_telemetry("Installer has gcloud and is logged in.", project_id=PROJECT_ID)
+    log_telemetry("Deployer has gcloud and is logged in.", project_id=PROJECT_ID)
 
     spinner.text = "Enabling required services ... "
     spinner.start()
     run_command("gcloud services enable compute.googleapis.com")
     run_command("gcloud services enable cloudresourcemanager.googleapis.com")
-    run_command("gcloud services enable secretmanager.googleapis.com")
     run_command("gcloud services enable storage.googleapis.com")
     run_command("gcloud services enable iamcredentials.googleapis.com")
     spinner.text = "Enabling required services... Done."
     spinner.ok("✓")
 
     _create_gcs_bucket(spinner, PROJECT_ID)
-
-    # create cluster id token secret (must exist for service accounts to be created)
-    # The secret is only read by `burla login`'s ADC bootstrap path - services
-    # receive the token as an env var.
-    cmd = (
-        f"gcloud secrets create {CLUSTER_TOKEN_SECRET} "
-        '--replication-policy="automatic"'
-    )
-    create_cmd_result = run_command(cmd, raise_error=False)
-    cmd_threw_error = create_cmd_result.returncode != 0
-    if cmd_threw_error and ("already exists" not in create_cmd_result.stderr.decode()):
-        spinner.fail("✗")
-        raise VerboseCalledProcessError(cmd, create_cmd_result.stderr)
 
     # create service accounts: main-service, compute-engine-default
     main_svc_account_email = _create_service_accounts(spinner, PROJECT_ID)
@@ -323,7 +311,7 @@ def _install_gcp(spinner):
     response.raise_for_status()
 
     # print success message
-    msg = f"\nSuccessfully installed Burla v{__version__}!\n"
+    msg = f"\nSuccessfully deployed Burla v{__version__}!\n"
     msg += f"Quickstart:\n"
     msg += f"  1. Open your new cluster dashboard: {dashboard_url}\n"
     msg += f'  2. Hit "⏻ Start" to boot some machines.\n'
@@ -332,7 +320,7 @@ def _install_gcp(spinner):
     msg += f"Don't hesitate to E-Mail jake@burla.dev, thank you for using Burla!"
     spinner.write(msg)
 
-    log_telemetry("Burla successfully installed!", project_id=PROJECT_ID)
+    log_telemetry("Burla successfully deployed!", project_id=PROJECT_ID)
 
 
 def _deploy_head_vm(spinner, PROJECT_ID, main_svc_account_email, cluster_id_token):
@@ -523,55 +511,23 @@ def _create_gcs_bucket(spinner, PROJECT_ID):
 
 
 def _register_cluster_and_save_cluster_id_token(spinner, PROJECT_ID):
+    """The cluster token lives in Burla's local state dir (and, for clusters
+    installed before 1.7, in Secret Manager, which is read as a fallback)."""
+    from burla._local_head import LocalHeadError, get_or_register_cluster_token
+
     spinner.text = "Registering cluster ... "
     spinner.start()
 
-    # get cluster_id_token secret value
-    cluster_id_token = None
-    cmd = f"gcloud secrets versions access latest --secret={CLUSTER_TOKEN_SECRET}"
-    result = run_command(cmd, raise_error=False)
-    if result.returncode != 0 and "NOT_FOUND" in result.stderr.decode():
-        # means secret exists, but no `latest` version created yet
-        pass
-    elif result.returncode != 0:
-        spinner.fail("✗")
-        raise VerboseCalledProcessError(cmd, result.stderr)
-    else:
-        cluster_id_token = result.stdout.decode().strip()
-
-    new_cluster = False
-    response = requests.post(
-        f"{_BURLA_BACKEND_URL}/v1/clusters/{PROJECT_ID}",
-        json=_gcp_ownership_payload(),
-    )
-    if response.status_code == 403:
-        spinner.fail("✗")
-        raise AuthError()
-    elif response.status_code == 200:
-        cluster_id_token = response.json()["token"]
-        new_cluster = True
-    elif response.status_code != 409:
-        spinner.fail("✗")
-        raise Exception(
-            f"Error registering cluster: {response.status_code} {response.text}"
+    try:
+        cluster_id_token = get_or_register_cluster_token(
+            "gcp", PROJECT_ID, aws_region=None
         )
-
-    if cluster_id_token is None:
+    except LocalHeadError:
         spinner.fail("✗")
         raise AuthError()
 
+    # ensure deployer is authorized
     headers = {"Authorization": f"Bearer {cluster_id_token}"}
-
-    if new_cluster:
-        with tempfile.NamedTemporaryFile("w") as token_file:
-            token_file.write(cluster_id_token)
-            token_file.flush()
-            run_command(
-                f"gcloud secrets versions add {CLUSTER_TOKEN_SECRET} "
-                f"--data-file={token_file.name}"
-            )
-
-    # ensure installer is authorized
     cmd = f'gcloud auth list --filter=status:ACTIVE --format="value(account)"'
     cluster_owner_email = run_command(cmd).stdout.decode().strip()
     users_url = f"{_BURLA_BACKEND_URL}/v1/clusters/{PROJECT_ID}/users"

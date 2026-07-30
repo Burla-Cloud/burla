@@ -31,6 +31,13 @@ IN_LOCAL_DEV_MODE = os.environ.get("IN_LOCAL_DEV_MODE") == "True"
 # This is needed because remote-dev-mode is not local-dev-mode, and needs local redirect on login.
 REDIRECT_LOCALLY_ON_LOGIN = os.environ.get("REDIRECT_LOCALLY_ON_LOGIN") == "True"
 
+# The default way Burla runs: main_service lives inside the `burla` pip
+# package on the user's machine (started by `remote_parallel_map` or
+# `burla dashboard`), boots real cloud VMs with the user's own credentials,
+# and is reachable by nodes through the relay. No head VM, no service
+# accounts, no buckets - see client/src/burla/_local_head.py.
+IN_CLIENT_HOSTED_MODE = os.environ.get("IN_CLIENT_HOSTED_MODE") == "True"
+
 # "gcp" or "aws" - which cloud this cluster boots node VMs in.
 CLOUD_PROVIDER = os.environ.get("CLOUD_PROVIDER", "gcp")
 
@@ -70,7 +77,10 @@ def relay_fqdn(instance_name: str) -> str:
     return f"{instance_name}--{PROJECT_ID}.{BURLA_RELAY_HOST}"
 
 
-STATIC_FILES_ENV = Environment(loader=FileSystemLoader("src/main_service/static"))
+# Package-relative so the vendored copy inside the burla pip package finds
+# its static files no matter what the working directory is.
+STATIC_DIR = Path(__file__).parent / "static"
+STATIC_FILES_ENV = Environment(loader=FileSystemLoader(str(STATIC_DIR)))
 
 
 def _resolve_cluster_id_token() -> str:
@@ -127,6 +137,20 @@ if not IN_LOCAL_DEV_MODE:
 
     ensure_cluster_tls(urlparse(MAIN_SERVICE_URL_FOR_NODES).hostname)
 
+# Bucket FUSE-mounted at /workspace/shared in every container (GCS on GCP,
+# S3 on AWS). Empty/unset disables the shared filesystem entirely - the
+# default in client-hosted mode so users need zero storage permissions.
+# `burla deploy` passes the bucket it created; local-dev keeps the old name
+# because node containers bind-mount a local dir under the same config key.
+def _default_shared_workspace_bucket():
+    bucket = os.environ.get("SHARED_WORKSPACE_BUCKET")
+    if bucket:
+        return bucket
+    if IN_CLIENT_HOSTED_MODE:
+        return None
+    return f"{PROJECT_ID}-burla-shared-workspace"
+
+
 DEFAULT_CONFIG = {  # <- config used only when no config has ever been saved
     "Nodes": [
         {
@@ -145,9 +169,7 @@ DEFAULT_CONFIG = {  # <- config used only when no config has ever been saved
             "inactivity_shutdown_time_sec": 60 * 10,
         }
     ],
-    # Bucket FUSE-mounted at /workspace/shared in every container.
-    # GCS bucket on GCP, S3 bucket on AWS - same name convention.
-    "gcs_bucket_name": f"{PROJECT_ID}-burla-shared-workspace",
+    "gcs_bucket_name": _default_shared_workspace_bucket(),
 }
 
 from main_service import history
@@ -308,15 +330,41 @@ async def lifespan(app: FastAPI):
     cluster_state.set_event_loop(asyncio.get_running_loop())
     cluster_state.load_from_history()
     reaper_task = asyncio.create_task(cluster_state.job_reaper_loop(logger=Logger()))
+    # Client-hosted dashboards are localhost-only; there is no public DNS
+    # lease to renew.
+    run_lease_loop = not IN_LOCAL_DEV_MODE and not IN_CLIENT_HOSTED_MODE
     dashboard_lease_task = (
-        None if IN_LOCAL_DEV_MODE else asyncio.create_task(_dashboard_lease_loop())
+        asyncio.create_task(_dashboard_lease_loop()) if run_lease_loop else None
     )
+
+    tls_proxy_server = None
+    if IN_CLIENT_HOSTED_MODE:
+        # Replaces the head VM's Caddy sidecar: terminates cluster-CA TLS for
+        # node traffic arriving through the relay tunnel.
+        from main_service.tls_proxy import start_tls_proxy
+
+        tls_proxy_server = await start_tls_proxy(
+            listen_port=INTERNAL_TLS_PORT, forward_port=MAIN_SERVICE_PORT
+        )
+
+    if not IN_LOCAL_DEV_MODE:
+        # Credential-less nodes can only stop themselves (a stopped GCP VM
+        # still bills for its disk); actually deleting them requires cloud
+        # credentials, which live here.
+        from main_service.providers import get_provider
+
+        asyncio.create_task(
+            asyncio.to_thread(get_provider().delete_stopped_instances)
+        )
+
     try:
         yield
     finally:
         reaper_task.cancel()
         if dashboard_lease_task is not None:
             dashboard_lease_task.cancel()
+        if tls_proxy_server is not None:
+            tls_proxy_server.close()
 
 
 app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None)
@@ -396,20 +444,23 @@ SYNCFUSION_LICENSE_KEY = os.environ.get("SYNCFUSION_LICENSE_KEY", "")
 @app.get("/settings")
 @app.get("/filesystem")
 def dashboard():
-    html = Path("src/main_service/static/index.html").read_text()
-    inject = f'<script>window.__SYNCFUSION_LICENSE_KEY__ = "{SYNCFUSION_LICENSE_KEY}";</script>'
+    html = (STATIC_DIR / "index.html").read_text()
+    filesystem_enabled = bool((history.get_cluster_config() or {}).get("gcs_bucket_name"))
+    inject = f'<script>window.__SYNCFUSION_LICENSE_KEY__ = "{SYNCFUSION_LICENSE_KEY}";'
+    inject += f"window.__BURLA_FILESYSTEM_ENABLED__ = {json.dumps(filesystem_enabled)};</script>"
     return HTMLResponse(html.replace("</head>", f"{inject}</head>"))
 
 
 @app.get("/favicon.png")
 def favicon():
     headers = {"Cache-Control": "no-store"}
-    path = "src/main_service/static/favicon.png"
-    return FileResponse(path, media_type="image/png", headers=headers)
+    return FileResponse(
+        STATIC_DIR / "favicon.png", media_type="image/png", headers=headers
+    )
 
 
 # must be mounted after the above endpoint (`/`) is declared, or this will overwrite that endpoint.
-app.mount("/", SafeStaticFiles(directory="src/main_service/static"), name="static")
+app.mount("/", SafeStaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
 @app.middleware("http")

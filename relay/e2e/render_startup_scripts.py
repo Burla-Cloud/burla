@@ -49,7 +49,7 @@ if PART == "node":
 
 elif PART == "head":
     sys.path.insert(0, str(REPO_ROOT / "client" / "src"))
-    from burla._install import _head_startup_script
+    from burla._deploy import _head_startup_script
 
     head_script = _head_startup_script(
         "test-project",

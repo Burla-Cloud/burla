@@ -1,0 +1,19 @@
+# Burla relay: frps routes TLS connections by SNI to node/head tunnels.
+# The "https" proxy type is pure SNI passthrough - frps never terminates TLS,
+# so the relay cannot read customer traffic.
+bindPort = 7000
+vhostHTTPSPort = 443
+
+# Public suffix for tunnel hostnames. Nodes register
+# "<instance-name>--<project-id>" and heads register "<project-id>", so a
+# cluster's dashboard is https://<project-id>.<subDomainHost>.
+subDomainHost = "{{ .Envs.FRP_SUBDOMAIN_HOST }}"
+
+# Every login and proxy registration is validated by the auth plugin, which
+# checks the cluster token against backend.burla.dev and enforces that
+# subdomains embed the authenticated project id.
+[[httpPlugins]]
+name = "burla-auth"
+addr = "{{ .Envs.FRP_AUTH_PLUGIN_ADDR }}"
+path = "/handler"
+ops = ["Login", "NewProxy"]

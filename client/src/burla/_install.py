@@ -24,6 +24,13 @@ CLUSTER_TOKEN_SECRET = os.environ.get(
     "BURLA_CLUSTER_TOKEN_SECRET", "burla-cluster-id-token"
 )
 
+# All cluster traffic flows through Burla's frp relay: nodes + head dial out
+# to it, so no inbound firewall rules are ever needed in the user's project.
+RELAY_HOST = os.environ.get("BURLA_RELAY_HOST", "relay.burla.dev").strip().lower()
+RELAY_SERVER_ADDR = os.environ.get("BURLA_RELAY_SERVER_ADDR", RELAY_HOST)
+RELAY_SERVER_PORT = os.environ.get("BURLA_RELAY_SERVER_PORT", "7000")
+FRP_VERSION = "0.70.1"
+
 
 def _main_service_image(project_id: str) -> str:
     override = os.environ.get("BURLA_MAIN_SERVICE_IMAGE")
@@ -49,16 +56,19 @@ def _register_dashboard(
     cluster_id_token: str,
     public_ipv4: str,
     ownership: dict,
-) -> str:
+    dashboard_url: str,
+):
+    """Registers the cluster's relay-hosted dashboard URL so `burla login`
+    hands it out to clients."""
     headers = {"Authorization": f"Bearer {cluster_id_token}"}
     url = f"{_BURLA_BACKEND_URL}/v1/clusters/{project_id}/dashboard"
-    response = requests.post(
-        url,
-        json={"public_ipv4": public_ipv4, "ownership": ownership},
-        headers=headers,
-    )
+    payload = {
+        "public_ipv4": public_ipv4,
+        "ownership": ownership,
+        "dashboard_url": dashboard_url,
+    }
+    response = requests.post(url, json=payload, headers=headers)
     response.raise_for_status()
-    return response.json()["dashboard_url"]
 
 
 def _shutdown_cluster_for_upgrade(
@@ -122,6 +132,23 @@ def _head_startup_script(
 }}
 """
     caddy_config_b64 = base64.b64encode(caddy_config.encode()).decode()
+
+    frpc_config = f"""serverAddr = "{RELAY_SERVER_ADDR}"
+serverPort = {RELAY_SERVER_PORT}
+loginFailExit = false
+user = "{project_id}"
+metadatas.token = "{cluster_id_token}"
+transport.poolCount = 4
+
+[[proxies]]
+name = "{project_id}"
+type = "https"
+localIP = "burla-head-caddy"
+localPort = 443
+subdomain = "{project_id}"
+"""
+    frpc_config_b64 = base64.b64encode(frpc_config.encode()).decode()
+
     script = f"""#!/bin/bash
     set -euo pipefail
     export DOCKER_CONFIG=/var/lib/burla/docker-config
@@ -136,7 +163,7 @@ def _head_startup_script(
     docker network create burla-head || true
     old_containers=$(docker ps -aq --filter name=klt-)
     [ -z "$old_containers" ] || docker rm -f $old_containers
-    docker rm -f burla-main-service burla-head-caddy || true
+    docker rm -f burla-main-service burla-head-caddy burla-head-frpc || true
     docker run -d --restart=always --network=burla-head --name=burla-main-service \\
       -v /var/lib/burla:/var/lib/burla \\
       -e PROJECT_ID="{project_id}" \\
@@ -147,6 +174,9 @@ def _head_startup_script(
       -e INTERNAL_TLS_PORT=8443 \\
       -e HISTORY_DB_PATH=/var/lib/burla/history.db \\
       -e BURLA_BACKEND_URL="{_BURLA_BACKEND_URL}" \\
+      -e BURLA_RELAY_HOST="{RELAY_HOST}" \\
+      -e BURLA_RELAY_SERVER_ADDR="{RELAY_SERVER_ADDR}" \\
+      -e BURLA_RELAY_SERVER_PORT="{RELAY_SERVER_PORT}" \\
       -e BURLA_NODE_SOURCE_REF="{node_source_ref}" \\
       "{image}"
     until docker exec burla-main-service \\
@@ -157,7 +187,7 @@ def _head_startup_script(
     rm -rf /etc/burla/Caddyfile
     echo "{caddy_config_b64}" | base64 -d > /etc/burla/Caddyfile
     docker run -d --restart=always --network=burla-head --name=burla-head-caddy \\
-      -p 80:80 -p 443:443 -p 8443:8443 \\
+      -p 8443:8443 \\
       -v /etc/burla/Caddyfile:/etc/caddy/Caddyfile:ro \\
       -v /var/lib/burla/tls/head.pem:/etc/burla/tls/head.pem:ro \\
       -v /var/lib/burla/tls/head.key:/etc/burla/tls/head.key:ro \\
@@ -168,6 +198,11 @@ def _head_startup_script(
       docker logs burla-head-caddy
       exit 1
     fi
+    echo "{frpc_config_b64}" | base64 -d > /etc/burla/frpc.toml
+    docker pull fatedier/frpc:v{FRP_VERSION}
+    docker run -d --restart=always --network=burla-head --name=burla-head-frpc \\
+      -v /etc/burla/frpc.toml:/etc/frp/frpc.toml:ro \\
+      fatedier/frpc:v{FRP_VERSION} -c /etc/frp/frpc.toml
     """
     return textwrap.dedent(script)
 
@@ -254,9 +289,6 @@ def _install_gcp(spinner):
     spinner.text = "Enabling required services... Done."
     spinner.ok("✓")
 
-    _open_port_8080_to_VMs_with_tag_burla_cluster_node(spinner)
-    _open_head_ports(spinner)
-
     _create_gcs_bucket(spinner, PROJECT_ID)
 
     # create cluster id token secret (must exist for service accounts to be created)
@@ -326,6 +358,7 @@ def _deploy_head_vm(spinner, PROJECT_ID, main_svc_account_email, cluster_id_toke
     )
     existing = run_command(describe_cmd, raise_error=False)
     existing_status = existing.stdout.decode().strip()
+    dashboard_url = f"https://{PROJECT_ID}.{RELAY_HOST}"
     if existing.returncode == 0:
         if existing_status != "RUNNING":
             run_command(
@@ -335,14 +368,15 @@ def _deploy_head_vm(spinner, PROJECT_ID, main_svc_account_email, cluster_id_toke
         _shutdown_cluster_for_upgrade(
             PROJECT_ID,
             cluster_id_token,
-            f"http://{static_ip}",
+            dashboard_url,
         )
 
-    dashboard_url = _register_dashboard(
+    _register_dashboard(
         PROJECT_ID,
         cluster_id_token,
         static_ip,
         _gcp_ownership_payload(),
+        dashboard_url,
     )
     image_name = _main_service_image(PROJECT_ID)
     startup_script = _head_startup_script(
@@ -447,73 +481,6 @@ def _get_gcloud_GCP_project_id(spinner):
     spinner.text = f"Checking for gcloud project ... Using project: {PROJECT_ID}"
     spinner.ok("✓")
     return PROJECT_ID
-
-
-def _open_port_8080_to_VMs_with_tag_burla_cluster_node(spinner):
-    spinner.text = "Opening port 8080 to VM's with tag 'burla-cluster-node' ... "
-    spinner.start()
-    cmd = (
-        "gcloud compute firewall-rules create burla-cluster-node-firewall "
-        "--direction=INGRESS "
-        "--priority=1000 "
-        "--network=default "
-        "--action=ALLOW "
-        "--rules=tcp:8080 "
-        "--target-tags=burla-cluster-node"
-    )
-    result = run_command(cmd, raise_error=False)
-    if result.returncode != 0 and "already exists" in result.stderr.decode():
-        msg = "Opening port 8080 to VM's with tag 'burla-cluster-node' ... "
-        msg += "Rule already exists."
-        spinner.text = msg
-        spinner.ok("✓")
-    elif result.returncode != 0:
-        spinner.fail("✗")
-        raise VerboseCalledProcessError(cmd, result.stderr)
-    else:
-        spinner.text = (
-            "Opening port 8080 to VM's with tag 'burla-cluster-node' ... Done."
-        )
-        spinner.ok("✓")
-
-
-def _open_head_ports(spinner):
-    spinner.text = "Opening HTTPS ports to the VM with tag 'burla-head' ... "
-    spinner.start()
-    existing = run_command(
-        "gcloud compute firewall-rules describe burla-head-firewall",
-        raise_error=False,
-    )
-    if existing.returncode == 0:
-        run_command(
-            "gcloud compute firewall-rules update burla-head-firewall "
-            "--rules=tcp:80,tcp:443"
-        )
-    else:
-        run_command(
-            "gcloud compute firewall-rules create burla-head-firewall "
-            "--direction=INGRESS --priority=1000 --network=default "
-            "--action=ALLOW --rules=tcp:80,tcp:443 --target-tags=burla-head"
-        )
-
-    internal = run_command(
-        "gcloud compute firewall-rules describe burla-head-internal-firewall",
-        raise_error=False,
-    )
-    if internal.returncode == 0:
-        run_command(
-            "gcloud compute firewall-rules update burla-head-internal-firewall "
-            "--rules=tcp:8443 --source-tags=burla-cluster-node"
-        )
-    else:
-        run_command(
-            "gcloud compute firewall-rules create burla-head-internal-firewall "
-            "--direction=INGRESS --priority=1000 --network=default "
-            "--action=ALLOW --rules=tcp:8443 --source-tags=burla-cluster-node "
-            "--target-tags=burla-head"
-        )
-    spinner.text = "Opening HTTPS ports to the VM with tag 'burla-head' ... Done."
-    spinner.ok("✓")
 
 
 def _create_gcs_bucket(spinner, PROJECT_ID):

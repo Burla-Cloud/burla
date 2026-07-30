@@ -18,6 +18,10 @@ from main_service import (
     MAIN_SERVICE_URL_FOR_NODES,
     CLUSTER_ID_TOKEN,
     BURLA_BACKEND_URL,
+    BURLA_RELAY_SERVER_ADDR,
+    BURLA_RELAY_SERVER_PORT,
+    FRP_VERSION,
+    relay_fqdn,
 )
 from main_service import cluster_state
 from main_service.helpers import Logger, format_traceback
@@ -180,7 +184,9 @@ class Node:
                         ),
                     )
                 )
-                self.host = f"https://{self.public_ip}:{self.port}"
+                # Clients reach the node through the relay on 443; nodes and
+                # the head still talk to each other directly over the VPC.
+                self.host = f"https://{relay_fqdn(self.instance_name)}"
                 self.peer_host = f"https://{self.private_ip}:{self.port}"
 
             # The node polls its state-push responses for `host` and won't mark
@@ -234,11 +240,15 @@ class Node:
     def status(self):
         """Returns one of: `BOOTING`, `RUNNING`, `READY`, `FAILED`"""
 
-        if self.host is not None:
+        # `host` points at the relay; the head shares a VPC with the node so
+        # it polls the private IP directly instead of hairpinning.
+        poll_host = self.peer_host or self.host
+
+        if poll_host is not None:
             try:
-                verify = str(CA_CERT_PATH) if self.host.startswith("https://") else True
+                verify = str(CA_CERT_PATH) if poll_host.startswith("https://") else True
                 response = requests.get(
-                    f"{self.host}/",
+                    f"{poll_host}/",
                     timeout=2,
                     headers=self.auth_headers,
                     verify=verify,
@@ -271,6 +281,36 @@ class Node:
             mount_script = self.provider.mount_shared_workspace_script(
                 self.sync_bucket_name
             )
+
+        subdomain = f"{self.instance_name}--{PROJECT_ID}"
+        frp_dir = f"frp_{FRP_VERSION}_linux_amd64"
+        frp_url = (
+            "https://github.com/fatedier/frp/releases/download/"
+            f"v{FRP_VERSION}/{frp_dir}.tar.gz"
+        )
+        relay_tunnel_script = f"""
+        report_log "Connecting relay tunnel {subdomain} ..."
+        curl -fsSL -o /tmp/frp.tgz {frp_url}
+        tar -xzf /tmp/frp.tgz -C /tmp
+        cp /tmp/{frp_dir}/frpc /usr/local/bin/frpc
+        cat > /etc/burla/frpc.toml <<FRPC_EOF
+        serverAddr = "{BURLA_RELAY_SERVER_ADDR}"
+        serverPort = {BURLA_RELAY_SERVER_PORT}
+        loginFailExit = false
+        user = "{PROJECT_ID}"
+        metadatas.token = "{CLUSTER_ID_TOKEN}"
+        transport.poolCount = 4
+
+        [[proxies]]
+        name = "{subdomain}"
+        type = "https"
+        localIP = "127.0.0.1"
+        localPort = {self.port}
+        subdomain = "{subdomain}"
+        FRPC_EOF
+        systemd-run --unit=burla-frpc --property=Restart=always \\
+            /usr/local/bin/frpc -c /etc/burla/frpc.toml"""
+
         ca_pem_b64 = base64.b64encode(cluster_ca_pem().encode()).decode()
         caddy_config = f""":{self.port} {{
     tls /etc/caddy/node.pem /etc/caddy/node.key
@@ -419,6 +459,7 @@ class Node:
             report_log "Node Caddy failed: $CADDY_OUTPUT"
             handle_error "$LINENO" 1
         fi
+{relay_tunnel_script}
 
         systemd-run \\
             --unit=burla-node-service \\

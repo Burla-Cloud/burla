@@ -1,0 +1,13 @@
+# Valid token but a subdomain owned by another project: NewProxy must be
+# rejected so clusters can't hijack each other's hostnames.
+serverAddr = "frps"
+serverPort = 7000
+user = "test-project"
+metadatas.token = "good-token"
+
+[[proxies]]
+name = "victim--other-project"
+type = "https"
+localIP = "node"
+localPort = 8080
+subdomain = "victim--other-project"

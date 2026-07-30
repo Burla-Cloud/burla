@@ -76,8 +76,13 @@ def _new_leaf(
     issuer_cert,
     ip_addresses,
     validity_days: int,
+    dns_names=(),
 ):
     now = datetime.now(timezone.utc)
+    subject_alt_names = [
+        x509.IPAddress(ipaddress.ip_address(address)) for address in ip_addresses
+    ]
+    subject_alt_names += [x509.DNSName(name) for name in dns_names]
     return (
         x509.CertificateBuilder()
         .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, common_name)]))
@@ -87,12 +92,7 @@ def _new_leaf(
         .not_valid_before(now - timedelta(minutes=1))
         .not_valid_after(now + timedelta(days=validity_days))
         .add_extension(
-            x509.SubjectAlternativeName(
-                [
-                    x509.IPAddress(ipaddress.ip_address(address))
-                    for address in ip_addresses
-                ]
-            ),
+            x509.SubjectAlternativeName(subject_alt_names),
             critical=False,
         )
         .add_extension(
@@ -158,7 +158,9 @@ def cluster_ca_pem() -> str:
     return CA_CERT_PATH.read_text()
 
 
-def sign_node_csr(csr_pem: str, public_ip: str, private_ip: str) -> str:
+def sign_node_csr(
+    csr_pem: str, public_ip: str, private_ip: str, dns_names=()
+) -> str:
     csr = x509.load_pem_x509_csr(csr_pem.encode())
     if not csr.is_signature_valid:
         raise ValueError("Invalid certificate signing request")
@@ -170,5 +172,6 @@ def sign_node_csr(csr_pem: str, public_ip: str, private_ip: str) -> str:
         issuer_cert,
         [public_ip, private_ip],
         7,
+        dns_names=dns_names,
     )
     return certificate.public_bytes(serialization.Encoding.PEM).decode()

@@ -1,0 +1,12 @@
+# Wrong cluster token: the auth plugin must reject the login.
+serverAddr = "frps"
+serverPort = 7000
+user = "test-project"
+metadatas.token = "bad-token"
+
+[[proxies]]
+name = "test-node--test-project"
+type = "https"
+localIP = "node"
+localPort = 8080
+subdomain = "test-node--test-project"

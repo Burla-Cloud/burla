@@ -1,0 +1,14 @@
+# Mirrors the frpc config a real node writes in its startup script.
+serverAddr = "frps"
+serverPort = 7000
+loginFailExit = false
+user = "test-project"
+metadatas.token = "good-token"
+transport.poolCount = 4
+
+[[proxies]]
+name = "test-node--test-project"
+type = "https"
+localIP = "node"
+localPort = 8080
+subdomain = "test-node--test-project"

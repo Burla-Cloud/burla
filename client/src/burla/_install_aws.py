@@ -18,6 +18,7 @@ import requests
 
 from burla import _BURLA_BACKEND_URL, __version__
 from burla._helpers import run_command, VerboseCalledProcessError
+from burla._install import RELAY_HOST, RELAY_SERVER_ADDR, RELAY_SERVER_PORT, FRP_VERSION
 from burla._reporting import log_telemetry
 
 HEAD_INSTANCE_TYPE = "t3.small"
@@ -74,7 +75,7 @@ def _head_setup_commands(
             f'--region {region} --name "{CLUSTER_TOKEN_PARAMETER}" '
             "--with-decryption --query Parameter.Value --output text)"
         ),
-        "docker rm -f burla-main-service burla-head-caddy || true",
+        "docker rm -f burla-main-service burla-head-caddy burla-head-frpc || true",
         (
             "docker run -d --restart=always --network=host --name=burla-main-service "
             "-v /var/lib/burla:/var/lib/burla "
@@ -87,6 +88,9 @@ def _head_setup_commands(
             "-e INTERNAL_TLS_PORT=8443 "
             "-e HISTORY_DB_PATH=/var/lib/burla/history.db "
             f'-e BURLA_BACKEND_URL="{_BURLA_BACKEND_URL}" '
+            f'-e BURLA_RELAY_HOST="{RELAY_HOST}" '
+            f'-e BURLA_RELAY_SERVER_ADDR="{RELAY_SERVER_ADDR}" '
+            f'-e BURLA_RELAY_SERVER_PORT="{RELAY_SERVER_PORT}" '
             f'-e BURLA_NODE_SOURCE_REF="{node_source_ref}" '
             f'"{image}"'
         ),
@@ -113,6 +117,28 @@ def _head_setup_commands(
             "-v /var/lib/burla/tls/head.key:/etc/burla/tls/head.key:ro "
             "-v /var/lib/burla/caddy:/data "
             "caddy:2.10.2-alpine caddy run --config /etc/caddy/Caddyfile --adapter caddyfile"
+        ),
+        (
+            "cat > /etc/burla/frpc.toml <<EOF\n"
+            f'serverAddr = "{RELAY_SERVER_ADDR}"\n'
+            f"serverPort = {RELAY_SERVER_PORT}\n"
+            "loginFailExit = false\n"
+            f'user = "{project_id}"\n'
+            'metadatas.token = "$CLUSTER_ID_TOKEN"\n'
+            "transport.poolCount = 4\n"
+            "\n"
+            "[[proxies]]\n"
+            f'name = "{project_id}"\n'
+            'type = "https"\n'
+            'localIP = "127.0.0.1"\n'
+            "localPort = 443\n"
+            f'subdomain = "{project_id}"\n'
+            "EOF"
+        ),
+        (
+            "docker run -d --restart=always --network=host --name=burla-head-frpc "
+            "-v /etc/burla/frpc.toml:/etc/frp/frpc.toml:ro "
+            f"fatedier/frpc:v{FRP_VERSION} -c /etc/frp/frpc.toml"
         ),
     ]
 
@@ -382,7 +408,7 @@ def _create_iam(spinner, account_id, bucket_name):
     return "burla-node"
 
 
-def _get_or_create_security_group(name, description, port, region):
+def _get_or_create_security_group(name, description, region):
     existing = _aws(
         f"ec2 describe-security-groups --region {region} "
         f'--filters Name=group-name,Values={name} --query "SecurityGroups[0].GroupId" --output json',
@@ -390,48 +416,45 @@ def _get_or_create_security_group(name, description, port, region):
     )
     if existing:
         return existing
-    group_id = _aws(
+    return _aws(
         f"ec2 create-security-group --region {region} --group-name {name} "
         f'--description "{description}" --query GroupId --output json'
     )
-    run_command(
-        f"aws ec2 authorize-security-group-ingress --region {region} --group-id {group_id} "
-        f"--protocol tcp --port {port} --cidr 0.0.0.0/0",
-        raise_error=False,
-    )
-    return group_id
 
 
-def _create_security_groups(spinner, region):
-    spinner.text = "Creating security groups ... "
-    spinner.start()
-    node_sg = _get_or_create_security_group(
-        "burla-cluster-node", "Burla node VMs (client + peer traffic)", 8080, region
-    )
-    head_sg = _get_or_create_security_group(
-        "burla-head", "Burla main_service head VM (dashboard + nodes)", 80, region
-    )
-    run_command(
-        f"aws ec2 authorize-security-group-ingress --region {region} "
-        f"--group-id {head_sg} --protocol tcp --port 443 --cidr 0.0.0.0/0",
-        raise_error=False,
-    )
-    internal_permission = [
+def _authorize_ingress_from_group(region, group_id, port, source_group_id):
+    permission = [
         {
             "IpProtocol": "tcp",
-            "FromPort": 8443,
-            "ToPort": 8443,
-            "UserIdGroupPairs": [{"GroupId": node_sg}],
+            "FromPort": port,
+            "ToPort": port,
+            "UserIdGroupPairs": [{"GroupId": source_group_id}],
         }
     ]
     with tempfile.NamedTemporaryFile("w", suffix=".json") as permission_file:
-        json.dump(internal_permission, permission_file)
+        json.dump(permission, permission_file)
         permission_file.flush()
         run_command(
             f"aws ec2 authorize-security-group-ingress --region {region} "
-            f"--group-id {head_sg} --ip-permissions file://{permission_file.name}",
-            raise_error=False,
+            f"--group-id {group_id} --ip-permissions file://{permission_file.name}",
+            raise_error=False,  # fails harmlessly when the rule already exists
         )
+
+
+def _create_security_groups(spinner, region):
+    """All ingress is VPC-internal: clients reach nodes + dashboard through
+    the relay (VMs dial out to it), so nothing is open to the internet."""
+    spinner.text = "Creating security groups ... "
+    spinner.start()
+    node_sg = _get_or_create_security_group(
+        "burla-cluster-node", "Burla node VMs (peer + head traffic)", region
+    )
+    head_sg = _get_or_create_security_group(
+        "burla-head", "Burla main_service head VM (node traffic)", region
+    )
+    _authorize_ingress_from_group(region, node_sg, 8080, node_sg)  # peer transfers
+    _authorize_ingress_from_group(region, node_sg, 8080, head_sg)  # head status polls
+    _authorize_ingress_from_group(region, head_sg, 8443, node_sg)  # node -> head API
     spinner.text = "Creating security groups ... Done."
     spinner.ok("✓")
     return node_sg, head_sg
@@ -703,17 +726,19 @@ def _deploy_head_instance(spinner, project_id, region, head_sg_id) -> str:
         f'ssm get-parameter --region {region} --name "{CLUSTER_TOKEN_PARAMETER}" '
         f'--with-decryption --query "Parameter.Value" --output json'
     )
+    dashboard_url = f"https://{project_id}.{RELAY_HOST}"
     if existing:
         _shutdown_cluster_for_upgrade(
             project_id,
             cluster_id_token,
-            f"http://{public_ip}",
+            dashboard_url,
         )
-    dashboard_url = _register_dashboard(
+    _register_dashboard(
         project_id,
         cluster_id_token,
         public_ip,
         _aws_ownership_payload(region),
+        dashboard_url,
     )
     image = _main_service_image()
     commands = _head_setup_commands(

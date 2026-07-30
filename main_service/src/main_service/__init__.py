@@ -38,6 +38,16 @@ BURLA_BACKEND_URL = os.environ.get(
     "BURLA_BACKEND_URL", "https://backend.burla.dev"
 ).rstrip("/")
 
+# Clients reach nodes and the dashboard through Burla's frp relay: nodes dial
+# out to it, so user projects need zero inbound firewall rules. Dev clusters
+# override this to a test relay (see Makefile).
+BURLA_RELAY_HOST = (
+    os.environ.get("BURLA_RELAY_HOST", "relay.burla.dev").strip().lower().rstrip(".")
+)
+BURLA_RELAY_SERVER_ADDR = os.environ.get("BURLA_RELAY_SERVER_ADDR") or BURLA_RELAY_HOST
+BURLA_RELAY_SERVER_PORT = int(os.environ.get("BURLA_RELAY_SERVER_PORT", 7000))
+FRP_VERSION = "0.70.1"
+
 
 def _resolve_project_id() -> str:
     """The cluster identifier used by backend.burla.dev and cloud APIs.
@@ -52,6 +62,13 @@ def _resolve_project_id() -> str:
 
 
 PROJECT_ID = _resolve_project_id()
+
+
+def relay_fqdn(instance_name: str) -> str:
+    """Hostname the relay routes to this node, e.g.
+    burla-node-1a2b3c4d--my-project.relay.burla.dev"""
+    return f"{instance_name}--{PROJECT_ID}.{BURLA_RELAY_HOST}"
+
 
 STATIC_FILES_ENV = Environment(loader=FileSystemLoader("src/main_service/static"))
 

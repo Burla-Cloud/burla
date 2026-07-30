@@ -17,6 +17,7 @@ import asyncio
 
 from fastapi import APIRouter, Request, Depends, HTTPException
 
+from main_service import relay_fqdn
 from main_service import get_logger, get_add_background_task_function
 from main_service import cluster_state, history
 from main_service.helpers import Logger
@@ -73,10 +74,13 @@ async def issue_node_certificate(instance_name: str, request: Request):
     if node is None or not node.get("public_ip") or not node.get("private_ip"):
         raise HTTPException(status_code=409, detail="Node addresses are not registered")
     body = await request.json()
+    # The client connects to the node's relay hostname, so the cert needs it
+    # as a DNS SAN for client-side hostname verification.
     certificate = sign_node_csr(
         body["csr"],
         node["public_ip"],
         node["private_ip"],
+        dns_names=[relay_fqdn(instance_name)],
     )
     return {"certificate": certificate, "cluster_ca": cluster_ca_pem()}
 

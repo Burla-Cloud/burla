@@ -532,7 +532,14 @@ class WorkerClient:
             "HostConfig": host_config,
         }
         if not IN_LOCAL_DEV_MODE:
-            config["Env"] = ["SSL_CERT_FILE=/etc/burla/ca-bundle.pem"]
+            # The bundle is public CAs + the cluster CA, so pointing every
+            # TLS stack at it (requests ignores SSL_CERT_FILE) changes
+            # nothing for public hosts.
+            config["Env"] = [
+                "SSL_CERT_FILE=/etc/burla/ca-bundle.pem",
+                "REQUESTS_CA_BUNDLE=/etc/burla/ca-bundle.pem",
+                "CURL_CA_BUNDLE=/etc/burla/ca-bundle.pem",
+            ]
 
         self.container = await self.docker.containers.run(
             config=config, name=self.container_name

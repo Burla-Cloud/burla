@@ -471,6 +471,10 @@ class WorkerClient:
                     "/worker_service_python_env:/worker_service_python_env",
                     "/workspace/shared:/workspace/shared",
                     "/opt/burla/node_auth:/root/.config/burla",
+                    # worker_server.py installs burla from this checkout when
+                    # the pre-populated env is missing - installing from PyPI
+                    # instead would break any unreleased version.
+                    "/opt/burla/client:/opt/burla/client:ro",
                 ]
             )
 

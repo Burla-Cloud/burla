@@ -318,8 +318,11 @@ subdomain = "{subdomain}"
 
 
 def _free_port(preferred: int | None = None) -> int:
+    # SO_REUSEADDR matches how uvicorn binds, so a just-killed head's
+    # TIME_WAIT socket doesn't push us off the preferred port.
     if preferred is not None:
         with socket.socket() as probe:
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             try:
                 probe.bind(("127.0.0.1", preferred))
                 return preferred

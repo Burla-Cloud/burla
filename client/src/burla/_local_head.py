@@ -355,9 +355,12 @@ def _main_service_pythonpath() -> str | None:
     )
 
 
-def _head_matches(url: str, project_id: str) -> bool:
+def _head_matches(url: str, project_id: str, cluster_token: str) -> bool:
+    # /version sits behind the auth middleware like everything else;
+    # unauthenticated requests get the login page instead of JSON.
+    headers = {"Authorization": f"Bearer {cluster_token}"}
     try:
-        response = requests.get(f"{url}/version", timeout=2)
+        response = requests.get(f"{url}/version", headers=headers, timeout=2)
         info = response.json()
         return info["version"] == __version__ and info["project"] == project_id
     except Exception:
@@ -392,7 +395,8 @@ def ensure_local_head(cloud: str = None) -> str:
         head_state = json.loads(head_state_path.read_text())
 
     url = head_state.get("url")
-    if url and _head_matches(url, project_id):
+    saved_token = read_saved_cluster_token(project_id)
+    if url and saved_token and _head_matches(url, project_id, saved_token):
         if not _pid_alive(head_state.get("frpc_pid")):
             _respawn_frpc(state_dir, head_state)
         return url
@@ -406,6 +410,7 @@ def ensure_local_head(cloud: str = None) -> str:
     for pid_key in ("head_pid", "frpc_pid"):
         if _pid_alive(head_state.get(pid_key)):
             os.kill(head_state[pid_key], 15)
+        sleep(0.2)
 
     head_port = _free_port(preferred=PREFERRED_HEAD_PORT)
     tls_port = _free_port()
@@ -459,9 +464,21 @@ def ensure_local_head(cloud: str = None) -> str:
         start_new_session=True,
     )
 
+    # Written before the readiness wait so a failed boot never leaks the
+    # process (the next attempt kills whatever pids are recorded here).
+    head_state = {
+        "url": url,
+        "head_pid": head_process.pid,
+        "subdomain": subdomain,
+        "tls_port": tls_port,
+        "project_id": project_id,
+        "cloud": cloud,
+    }
+    head_state_path.write_text(json.dumps(head_state))
+
     start = time()
     while time() - start < 90:
-        if _head_matches(url, project_id):
+        if _head_matches(url, project_id, cluster_token):
             break
         if head_process.poll() is not None:
             log_tail = (state_dir / "head.log").read_text()[-3000:]
@@ -472,16 +489,7 @@ def ensure_local_head(cloud: str = None) -> str:
             f"Burla's local service never became ready (see {state_dir / 'head.log'})."
         )
 
-    head_state = {
-        "url": url,
-        "head_pid": head_process.pid,
-        "subdomain": subdomain,
-        "tls_port": tls_port,
-        "project_id": project_id,
-        "cloud": cloud,
-    }
     _respawn_frpc(state_dir, head_state, cluster_token=cluster_token)
-    head_state_path.write_text(json.dumps(head_state))
     return url
 
 

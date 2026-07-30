@@ -11,6 +11,7 @@ from node_service import (
     SELF,
     PROJECT_ID,
     IN_LOCAL_DEV_MODE,
+    MAIN_SERVICE_URL,
     NODE_AUTH_CREDENTIALS_PATH,
     get_request_json,
     get_logger,
@@ -263,10 +264,10 @@ async def execute(
     # Must land before `load_function` so the `_process_inputs` task it
     # spawns can never observe a missing creds file.
     auth_token = request.headers["Authorization"].removeprefix("Bearer ").strip()
-    cluster_dashboard_url = request_json["cluster_dashboard_url"]
-    # Workers reach main_service by container name, not the host's localhost.
-    if IN_LOCAL_DEV_MODE:
-        cluster_dashboard_url = "http://main_service:5001"
+    # Nested rpm calls reach the head the same way this node does - the
+    # client's own URL may be unreachable from here (e.g. a client-hosted
+    # head is `127.0.0.1` on the user's machine).
+    cluster_dashboard_url = MAIN_SERVICE_URL
     NODE_AUTH_CREDENTIALS_PATH.write_text(
         json.dumps(
             {

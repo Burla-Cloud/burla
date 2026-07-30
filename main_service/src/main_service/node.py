@@ -346,6 +346,7 @@ class Node:
         TLS_DIR="/etc/burla/tls"
         mkdir -p "$TLS_DIR" /etc/burla/caddy
         echo "{ca_pem_b64}" | base64 -d > "$TLS_DIR/ca.pem"
+        cat /etc/ssl/certs/ca-certificates.crt "$TLS_DIR/ca.pem" > "$TLS_DIR/ca-bundle.pem"
 
         report_log() {{
             payload=$(jq -n --arg msg "$1" --arg ts "$(date +%s)" \\

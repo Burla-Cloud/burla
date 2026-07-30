@@ -494,6 +494,10 @@ class WorkerClient:
                     # the pre-populated env is missing - installing from PyPI
                     # instead would break any unreleased version.
                     "/opt/burla/client:/opt/burla/client:ro",
+                    # public CAs + the cluster CA, so nested rpm calls can
+                    # reach the head (cluster-CA cert) without breaking
+                    # public-internet TLS for user code.
+                    "/etc/burla/tls/ca-bundle.pem:/etc/burla/ca-bundle.pem:ro",
                 ]
             )
 
@@ -527,6 +531,8 @@ class WorkerClient:
             "ExposedPorts": {f"{WORKER_INTERNAL_PORT}/tcp": {}},
             "HostConfig": host_config,
         }
+        if not IN_LOCAL_DEV_MODE:
+            config["Env"] = ["SSL_CERT_FILE=/etc/burla/ca-bundle.pem"]
 
         self.container = await self.docker.containers.run(
             config=config, name=self.container_name

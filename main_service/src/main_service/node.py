@@ -410,7 +410,9 @@ class Node:
         export BURLA_BACKEND_URL="{BURLA_BACKEND_URL}"
 
         cd /opt/burla
-        git sparse-checkout set node_service client
+        # main_service is needed because building the client from source
+        # vendors it into the wheel (client-hosted mode).
+        git sparse-checkout set node_service client main_service
         git fetch --depth=1 origin "{NODE_SOURCE_REF}"
         git reset --hard FETCH_HEAD
 

@@ -41,7 +41,9 @@ def test_full_job_lifecycle(
     running_lines = [line for line in stdout_lines if line.startswith("running input ")]
     assert running_lines, "no `running input` stdout lines came back, streaming broken"
 
-    # Head-visible: find the job we just created via function_name.
+    # Head-visible: find the job we just created via function_name. Match on
+    # n_inputs too - job history survives head restarts, so other tests'
+    # completed `test_function` jobs may be newer than ours.
     def _completed_job():
         jobs = main_http_client.get("/v1/jobs?page=0").json()["jobs"]
         most_recent = None
@@ -49,6 +51,8 @@ def test_full_job_lifecycle(
             if job.get("function_name") != "test_function":
                 continue
             if job.get("status") != "COMPLETED":
+                continue
+            if job.get("n_inputs") != N_INPUTS:
                 continue
             if most_recent is None or job.get("started_at", 0) > most_recent.get("started_at", 0):
                 most_recent = job

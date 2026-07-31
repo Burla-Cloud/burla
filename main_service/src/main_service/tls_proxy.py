@@ -13,6 +13,12 @@ import ssl
 
 from main_service.transport_tls import HEAD_CERT_PATH, HEAD_KEY_PATH
 
+# Loopback (host, port) addresses of this proxy's live connections to uvicorn.
+# Relay traffic and the owner's own browser both reach uvicorn from 127.0.0.1;
+# the auth middleware uses this set to tell them apart (relay traffic must
+# still log in, the owner's local traffic must not have to).
+RELAY_CLIENT_ADDRESSES: set[tuple[str, int]] = set()
+
 
 async def _pipe(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
     try:
@@ -40,8 +46,21 @@ async def start_tls_proxy(listen_port: int, forward_port: int):
         except OSError:
             client_writer.close()
             return
-        asyncio.create_task(_pipe(client_reader, upstream_writer))
-        asyncio.create_task(_pipe(upstream_reader, client_writer))
+
+        sockname = upstream_writer.get_extra_info("sockname")
+        proxy_address = (sockname[0], sockname[1])
+        RELAY_CLIENT_ADDRESSES.add(proxy_address)
+
+        async def pipe_both_directions():
+            try:
+                await asyncio.gather(
+                    _pipe(client_reader, upstream_writer),
+                    _pipe(upstream_reader, client_writer),
+                )
+            finally:
+                RELAY_CLIENT_ADDRESSES.discard(proxy_address)
+
+        asyncio.create_task(pipe_both_directions())
 
     return await asyncio.start_server(
         handle, host="0.0.0.0", port=listen_port, ssl=ssl_context

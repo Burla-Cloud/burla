@@ -38,6 +38,13 @@ REDIRECT_LOCALLY_ON_LOGIN = os.environ.get("REDIRECT_LOCALLY_ON_LOGIN") == "True
 # accounts, no buckets - see client/src/burla/_local_head.py.
 IN_CLIENT_HOSTED_MODE = os.environ.get("IN_CLIENT_HOSTED_MODE") == "True"
 
+# The owner's real backend credentials (from burla_credentials.json). Local
+# requests to a client-hosted head are stamped with these instead of being
+# sent through the login flow - they must be real because head -> node calls
+# replay them, and nodes validate them against the backend's user list.
+LOCAL_USER_EMAIL = os.environ.get("BURLA_LOCAL_USER_EMAIL", "")
+LOCAL_USER_TOKEN = os.environ.get("BURLA_LOCAL_USER_TOKEN", "")
+
 # "gcp" or "aws" - which cloud this cluster boots node VMs in.
 CLOUD_PROVIDER = os.environ.get("CLOUD_PROVIDER", "gcp")
 
@@ -584,6 +591,40 @@ async def validate_requests(request: Request, call_next):
                 request.session["name"] = "Local Dev"
                 request.session["profile_pic"] = ""
         return await call_next(request)
+
+    # Client-hosted bypass: this head only listens on 127.0.0.1, so a local
+    # request is the machine's owner - their own dashboard needs no login.
+    # Two kinds of traffic also arrive from 127.0.0.1 and must still log in:
+    # relay-tunnel connections (they come through the in-process TLS proxy,
+    # recognized by their socket address) and cross-site browser requests
+    # (a foreign Origin header means some other webpage sent it).
+    if IN_CLIENT_HOSTED_MODE:
+        from main_service.tls_proxy import RELAY_CLIENT_ADDRESSES
+
+        client_address = (request.client.host, request.client.port)
+        origin = request.headers.get("origin")
+        origin_is_local = origin is None or urlparse(origin).hostname in (
+            "127.0.0.1",
+            "localhost",
+        )
+        is_machine_owner = (
+            request.client.host == "127.0.0.1"
+            and client_address not in RELAY_CLIENT_ADDRESSES
+            and origin_is_local
+        )
+        if is_machine_owner:
+            if not request.session.get("X-User-Email"):
+                header_email = request.headers.get("X-User-Email")
+                header_auth = request.headers.get("Authorization")
+                if header_email and header_auth:
+                    request.session["X-User-Email"] = header_email
+                    request.session["Authorization"] = header_auth
+                else:
+                    request.session["X-User-Email"] = LOCAL_USER_EMAIL
+                    request.session["Authorization"] = f"Bearer {LOCAL_USER_TOKEN}"
+                request.session["name"] = request.session["X-User-Email"]
+                request.session["profile_pic"] = ""
+            return await call_next(request)
 
     # Allow unauthenticated access for storage stub endpoints and resumable signing during development
     # These are non-privileged helpers used by the storage UI.

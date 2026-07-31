@@ -429,6 +429,10 @@ def ensure_local_head() -> str:
     if cloud == "aws":
         _prepare_aws(project_id, aws_region)
 
+    from burla import CONFIG_PATH
+
+    auth_info = json.loads(CONFIG_PATH.read_text())
+
     # Stale processes from an old version/session die before their ports are reused.
     for pid_key in ("head_pid", "frpc_pid"):
         if _pid_alive(head_state.get(pid_key)):
@@ -457,6 +461,10 @@ def ensure_local_head() -> str:
         "HISTORY_DB_PATH": str(state_dir / "history.db"),
         "BURLA_TLS_DIR": str(state_dir / "tls"),
         "REDIRECT_LOCALLY_ON_LOGIN": "True",
+        # The owner's real credentials: local dashboard/browser requests are
+        # stamped with these instead of being asked to log in.
+        "BURLA_LOCAL_USER_EMAIL": auth_info["email"],
+        "BURLA_LOCAL_USER_TOKEN": auth_info["auth_token"],
     }
     if aws_region:
         environment["AWS_REGION"] = aws_region

@@ -14,6 +14,7 @@ from yaspin import yaspin
 
 from burla import (
     _BURLA_BACKEND_URL,
+    _BURLA_ENVIRONMENT,
     _BURLA_NODE_SOURCE_REF,
     _BURLA_RELAY_HOST,
     __version__,
@@ -240,6 +241,9 @@ def deploy(cloud: str = "gcp"):
       Run: `gcloud config set project <new-project-id>` to change your default project.
     - `burla deploy --cloud=aws` deploys into your current default AWS account/region.
     """
+    if _BURLA_ENVIRONMENT != "production":
+        raise RuntimeError("Deployment is only available in production mode.")
+
     try:
         with yaspin() as spinner:
             if cloud == "aws":

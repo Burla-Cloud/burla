@@ -1,6 +1,7 @@
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -164,22 +165,22 @@ def version():
 
 
 def dashboard():
-    """Run the Burla dashboard on this machine.
+    """Open the Burla dashboard hosted on this machine.
 
-    Runs the cluster head in this terminal and opens it in your browser. From
-    there you can boot nodes, watch jobs, and change settings. Press Ctrl-C to
-    stop it.
+    Reuses a healthy cluster head without restarting it. If none is running,
+    starts one in this terminal until Ctrl-C.
     """
     import webbrowser
 
-    from burla._local_head import run_local_head_foreground
+    from burla._local_head import run_local_head_for_dashboard
 
-    def open_dashboard(url: str):
+    def open_dashboard(url: str, is_foreground: bool):
         print(f"Burla dashboard is running at {url}")
-        print("Press Ctrl-C to stop it.")
+        if is_foreground:
+            print("Press Ctrl-C to stop it.")
         webbrowser.open(url)
 
-    run_local_head_foreground(on_ready=open_dashboard)
+    run_local_head_for_dashboard(on_ready=open_dashboard)
 
 
 def _configure_test_shell_prompt(
@@ -264,7 +265,9 @@ def test_shell():
     ):
         environment.pop(name, None)
 
-    shell = environment.get("SHELL", "/bin/zsh")
+    shell = environment.get("SHELL") or shutil.which("zsh") or shutil.which("bash")
+    if shell is None:
+        raise RuntimeError("Test shell requires zsh or bash when SHELL is unset.")
     with tempfile.TemporaryDirectory(prefix="burla-test-shell-") as temp_dir:
         command = _configure_test_shell_prompt(shell, environment, Path(temp_dir))
         result = subprocess.run(command, cwd=_SOURCE_ROOT, env=environment)
@@ -282,16 +285,17 @@ def install(cloud: str = "gcp"):
 def init_cli():
     commands = {
         "login": login,
-        "deploy": deploy,
         "dashboard": dashboard,
         "config": {
             "set": set_config,
             "get": get_config,
         },
-        "install": install,
         "--version": version,
         "-v": version,
     }
+    if _BURLA_ENVIRONMENT == "production":
+        commands["deploy"] = deploy
+        commands["install"] = install
     if _IN_SOURCE_CHECKOUT:
         commands["test-shell"] = test_shell
     Fire(commands)

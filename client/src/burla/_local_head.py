@@ -3,11 +3,12 @@ Client-hosted mode: runs main_service on this machine instead of a head VM.
 
 This is the default way Burla runs. `remote_parallel_map` starts main_service
 as a detached subprocess using the code vendored inside this package. The
-explicit `burla dashboard` command runs that same service in the foreground.
-Both modes also start an frpc tunnel so node VMs can reach the head through the
-relay. Node VMs are booted with the user's own cloud credentials and carry none
-of their own, so the only permissions needed are "can boot VMs". `burla deploy`
-remains the upgrade path to an always-on, shared head VM.
+explicit `burla dashboard` command reuses that service when healthy or runs it
+in the foreground. Both modes also start an frpc tunnel so node VMs can reach
+the head through the relay. Node VMs are booted with the user's own cloud
+credentials and carry none of their own, so the only permissions needed are
+"can boot VMs". `burla deploy` remains the upgrade path to an always-on, shared
+head VM.
 """
 
 import configparser
@@ -448,16 +449,16 @@ def ensure_local_head() -> str:
     return _run_local_head(detached=True)
 
 
-def run_local_head_foreground(
-    on_ready: Callable[[str], None] | None = None,
+def run_local_head_for_dashboard(
+    on_ready: Callable[[str, bool], None] | None = None,
 ) -> None:
-    """Run main_service attached to this terminal until it exits or Ctrl-C."""
+    """Reuse a healthy head or run one here until it exits or Ctrl-C."""
     _run_local_head(detached=False, on_ready=on_ready)
 
 
 def _run_local_head(
     detached: bool,
-    on_ready: Callable[[str], None] | None = None,
+    on_ready: Callable[[str, bool], None] | None = None,
 ) -> str:
     cloud, project_id, aws_region = detect_cloud()
 
@@ -469,14 +470,11 @@ def _run_local_head(
 
     url = head_state.get("url")
     saved_token = read_saved_cluster_token(project_id)
-    if (
-        detached
-        and url
-        and saved_token
-        and _head_matches(url, project_id, saved_token)
-    ):
+    if url and saved_token and _head_matches(url, project_id, saved_token):
         if not _pid_alive(head_state.get("frpc_pid")):
             _respawn_frpc(state_dir, head_state)
+        if on_ready:
+            on_ready(url, False)
         return url
 
     cluster_token = get_or_register_cluster_token(cloud, project_id, aws_region)
@@ -571,7 +569,7 @@ def _run_local_head(
             state_dir, head_state, cluster_token=cluster_token
         )
         if on_ready:
-            on_ready(url)
+            on_ready(url, True)
         return_code = head_process.wait()
         if return_code != 0:
             raise LocalHeadError(
@@ -665,8 +663,6 @@ def _stop_process(process: subprocess.Popen):
 def _clear_process_state(
     head_state_path: Path, head_pid: int, frpc_pid: int | None
 ):
-    if not head_state_path.exists():
-        return
     head_state = json.loads(head_state_path.read_text())
     if head_state.get("head_pid") == head_pid:
         head_state.pop("head_pid")

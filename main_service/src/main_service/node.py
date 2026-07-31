@@ -319,6 +319,7 @@ class Node:
         localPort = {self.port}
         subdomain = "{subdomain}"
         FRPC_EOF
+        chmod 600 /etc/burla/frpc.toml
         systemd-run --unit=burla-frpc --property=Restart=always \\
             /usr/local/bin/frpc -c /etc/burla/frpc.toml"""
 

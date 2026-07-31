@@ -47,6 +47,7 @@ def _head_setup_commands(
     cluster_id_token: str,
 ) -> list[str]:
     node_source_ref = os.environ.get("BURLA_NODE_SOURCE_REF", __version__)
+    relay_subdomain = f"head--{project_id}"
     registry = image.split("/", 1)[0]
     registry_login_commands = []
     if ".dkr.ecr." in registry and registry.endswith(".amazonaws.com"):
@@ -123,13 +124,14 @@ def _head_setup_commands(
             "transport.poolCount = 4\n"
             "\n"
             "[[proxies]]\n"
-            f'name = "{project_id}"\n'
+            f'name = "{relay_subdomain}"\n'
             'type = "https"\n'
             'localIP = "127.0.0.1"\n'
             "localPort = 443\n"
-            f'subdomain = "{project_id}"\n'
+            f'subdomain = "{relay_subdomain}"\n'
             "EOF"
         ),
+        "chmod 600 /etc/burla/frpc.toml",
         (
             "docker run -d --restart=always --network=host --name=burla-head-frpc "
             "-v /etc/burla/frpc.toml:/etc/frp/frpc.toml:ro "
@@ -559,43 +561,48 @@ def _ensure_node_ami(spinner, region, node_profile) -> str:
         )
     builder_id = instance["Instances"][0]["InstanceId"]
 
-    # run-instances is eventually consistent: an immediate describe/wait can
-    # get InvalidInstanceID.NotFound and abort, so wait for visibility first.
-    run_command(
-        f"aws ec2 wait instance-exists --region {region} --instance-ids {builder_id}",
-        raise_error=False,
-    )
-    # Direct polling lets slow package mirrors exceed AWS's 10-minute waiter cap.
-    deadline = time() + 3600
-    state = None
-    while time() < deadline:
-        state = _aws(
-            f"ec2 describe-instances --region {region} --instance-ids {builder_id} "
-            f'--query "Reservations[0].Instances[0].State.Name" --output json'
+    try:
+        # run-instances is eventually consistent: an immediate describe/wait can
+        # get InvalidInstanceID.NotFound and abort, so wait for visibility first.
+        run_command(
+            f"aws ec2 wait instance-exists --region {region} --instance-ids {builder_id}",
+            raise_error=False,
         )
-        if state == "stopped":
-            break
-        sleep(15)
-    if state != "stopped":
-        spinner.fail("✗")
-        raise Exception(
-            f"AMI builder instance {builder_id} never stopped (state={state}). "
-            "Check its console output, then terminate it and re-run install."
-        )
+        # Direct polling lets slow package mirrors exceed AWS's 10-minute waiter cap.
+        deadline = time() + 3600
+        state = None
+        while time() < deadline:
+            state = _aws(
+                f"ec2 describe-instances --region {region} --instance-ids {builder_id} "
+                f'--query "Reservations[0].Instances[0].State.Name" --output json'
+            )
+            if state == "stopped":
+                break
+            sleep(15)
+        if state != "stopped":
+            spinner.fail("✗")
+            raise Exception(
+                f"AMI builder instance {builder_id} never stopped (state={state}). "
+                "Check its console output, then terminate it and re-run deploy."
+            )
 
-    image = _aws(
-        f"ec2 create-image --region {region} --instance-id {builder_id} "
-        f'--name "burla-node-nogpu-{__version__}" --output json'
-    )
-    ami_id = image["ImageId"]
-    run_command(
-        f"aws ec2 create-tags --region {region} --resources {ami_id} "
-        f"--tags Key=burla-node-image,Value=true Key=burla-version,Value={__version__}"
-    )
-    run_command(f"aws ec2 wait image-available --region {region} --image-ids {ami_id}")
-    run_command(
-        f"aws ec2 terminate-instances --region {region} --instance-ids {builder_id}"
-    )
+        image = _aws(
+            f"ec2 create-image --region {region} --instance-id {builder_id} "
+            f'--name "burla-node-nogpu-{__version__}" --output json'
+        )
+        ami_id = image["ImageId"]
+        run_command(
+            f"aws ec2 create-tags --region {region} --resources {ami_id} "
+            f"--tags Key=burla-node-image,Value=true Key=burla-version,Value={__version__}"
+        )
+        run_command(
+            f"aws ec2 wait image-available --region {region} --image-ids {ami_id}"
+        )
+    finally:
+        run_command(
+            f"aws ec2 terminate-instances --region {region} --instance-ids {builder_id}",
+            raise_error=False,
+        )
 
     spinner.text = f"Building node AMI ... Done ({ami_id})."
     spinner.ok("✓")
@@ -687,7 +694,7 @@ def _deploy_head_instance(spinner, project_id, region, head_sg_id, cluster_id_to
 
     from burla._deploy import _register_dashboard, _shutdown_cluster_for_upgrade
 
-    dashboard_url = f"https://{project_id}.{RELAY_HOST}"
+    dashboard_url = f"https://head--{project_id}.{RELAY_HOST}"
     if existing:
         _shutdown_cluster_for_upgrade(
             project_id,

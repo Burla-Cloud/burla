@@ -7,8 +7,8 @@ metadatas.token = "good-token"
 transport.poolCount = 4
 
 [[proxies]]
-name = "test-node--test-project"
+name = "burla-node-1234abcd--test-project"
 type = "https"
 localIP = "node"
 localPort = 8080
-subdomain = "test-node--test-project"
+subdomain = "burla-node-1234abcd--test-project"

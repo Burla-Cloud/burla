@@ -7,12 +7,12 @@ registration (see `httpPlugins` in frps.toml):
   token>`. The token is validated against the Burla backend, which returns
   200 on `GET /v1/clusters/{project_id}/dashboard_url` only for the real
   cluster token.
-- NewProxy: the subdomain must be the project id itself (head/dashboard
-  tunnel) or end with `--<project_id>` (node tunnels), so no cluster can
-  register hostnames that route another cluster's traffic.
+- NewProxy: only the exact deployed-head, client-head, and node hostname
+  shapes for the authenticated project are accepted.
 """
 
 import os
+import re
 import threading
 from time import time
 
@@ -61,6 +61,13 @@ def _token_is_valid(project_id: str, token: str) -> bool:
     return True
 
 
+def _subdomain_belongs_to_project(subdomain: str, project_id: str) -> bool:
+    if subdomain == f"head--{project_id}":
+        return True
+    ephemeral = rf"(?:head|burla-node)-[0-9a-f]{{8}}--{re.escape(project_id)}"
+    return re.fullmatch(ephemeral, subdomain) is not None
+
+
 @app.post("/handler")
 def handler(request: Request, payload: dict):
     op = request.query_params.get("op")
@@ -82,7 +89,7 @@ def handler(request: Request, payload: dict):
             return _reject("only https (SNI passthrough) proxies are allowed")
         if not subdomain:
             return _reject("proxies must set a subdomain")
-        if subdomain != project_id and not subdomain.endswith(f"--{project_id}"):
+        if not _subdomain_belongs_to_project(subdomain, project_id):
             return _reject(
                 f"subdomain {subdomain} does not belong to project {project_id}"
             )

@@ -10,11 +10,12 @@ encrypted with cluster-CA certs, dashboard traffic with the head's ACME cert
 
 Hostname convention (enforced by `auth_plugin.py`):
 
-- `<project-id>.relay.burla.dev` -> deployed head VM (dashboard + API)
-- `<instance-name>--<project-id>.relay.burla.dev` -> one node
+- `head--<project-id>.relay.burla.dev` -> deployed head VM (dashboard + API)
+- `burla-node-<8 hex>--<project-id>.relay.burla.dev` -> one node
 - `head-<random>--<project-id>.relay.burla.dev` -> a client-hosted head
   (main_service running inside the `burla` pip package on a user's machine;
-  the default mode). Same `--<project-id>` ownership rule as nodes.
+  the default mode). The relay accepts only these exact shapes, preventing
+  project IDs containing `--` from colliding with another project's tunnels.
 
 Only client-facing traffic rides the relay. Node-to-node input transfers,
 head-to-node status polls, and node-to-head state pushes stay inside the VPC
@@ -57,7 +58,7 @@ remote-dev default).
    "registered but no dashboard" response must count as valid, since
    client-hosted clusters never register a dashboard.)
 3. **Let's Encrypt rate limits**: each deployed cluster head requests a cert
-   for `<project-id>.relay.burla.dev`. burla.dev is one registered domain, so
+   for `head--<project-id>.relay.burla.dev`. burla.dev is one registered domain, so
    the default 50 certs/week cap applies; request a rate-limit increase before
    this exceeds ~40 new clusters/week. (Client-hosted heads use cluster-CA
    certs, not ACME, so they don't count against this.)

@@ -5,8 +5,8 @@ user = "test-project"
 metadatas.token = "bad-token"
 
 [[proxies]]
-name = "test-node--test-project"
+name = "burla-node-deadbeef--test-project"
 type = "https"
 localIP = "node"
 localPort = 8080
-subdomain = "test-node--test-project"
+subdomain = "burla-node-deadbeef--test-project"

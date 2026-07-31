@@ -51,10 +51,10 @@ def _state_dir(project_id: str) -> Path:
 # ------------------------------------------------------------------ cloud
 
 
-def detect_cloud() -> tuple[str, str, str | None]:
+def detect_cloud(cloud: str | None = None) -> tuple[str, str, str | None]:
     """Returns (cloud, project_id, aws_region). Prefers GCP when both CLIs
-    are configured; BURLA_CLOUD=gcp|aws overrides."""
-    forced = os.environ.get("BURLA_CLOUD", "").lower() or None
+    are configured; the argument or BURLA_CLOUD=gcp|aws overrides."""
+    forced = cloud or os.environ.get("BURLA_CLOUD", "").lower() or None
 
     if forced in (None, "gcp") and shutil.which("gcloud"):
         result = subprocess.run(
@@ -195,7 +195,11 @@ def get_or_register_cluster_token(cloud: str, project_id: str, aws_region: str |
     )
 
 
-def ensure_user_authorized(project_id: str, cluster_token: str):
+def ensure_user_authorized(
+    cloud: str,
+    project_id: str,
+    cluster_token: str,
+):
     """Registers this user against the cluster and mints client credentials,
     without needing Secret Manager (the token came from local state)."""
     from burla import CONFIG_PATH
@@ -204,7 +208,15 @@ def ensure_user_authorized(project_id: str, cluster_token: str):
     if CONFIG_PATH.exists():
         return
 
-    try:
+    if cloud == "aws":
+        result = subprocess.run(
+            ["aws", "sts", "get-caller-identity", "--query", "Arn", "--output", "text"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        identity = result.stdout.strip().rsplit("/", 1)[-1]
+    else:
         import google.auth
         from google.auth.transport.requests import Request
 
@@ -218,24 +230,16 @@ def ensure_user_authorized(project_id: str, cluster_token: str):
             timeout=10,
         )
         response.raise_for_status()
-        email = response.json().get("email")
-    except Exception:
-        email = None
-
-    if not email:
-        raise LocalHeadError(
-            "Burla could not determine your identity from local cloud credentials.\n"
-            "Run `burla login` once, then retry."
-        )
+        identity = response.json()["email"]
 
     headers = {"Authorization": f"Bearer {cluster_token}"}
     users_url = f"{_BURLA_BACKEND_URL}/v1/clusters/{project_id}/users"
-    requests.post(users_url, json={"new_user": email}, headers=headers, timeout=30)
+    requests.post(users_url, json={"new_user": identity}, headers=headers, timeout=30)
 
     response = requests.post(
         f"{_BURLA_BACKEND_URL}/v1/clusters/{project_id}/adc:exchange",
         headers=headers,
-        json={"email": email},
+        json={"email": identity},
         timeout=30,
     )
     response.raise_for_status()
@@ -311,6 +315,7 @@ subdomain = "{subdomain}"
 """
     config_path = state_dir / "frpc.toml"
     config_path.write_text(config)
+    config_path.chmod(0o600)
     return config_path
 
 
@@ -389,8 +394,7 @@ def _prepare_aws(project_id: str, aws_region: str):
 
 def ensure_local_head(cloud: str = None) -> str:
     """Starts (or reuses) the client-hosted main_service and returns its URL."""
-    detected_cloud, project_id, aws_region = detect_cloud()
-    cloud = cloud or detected_cloud
+    cloud, project_id, aws_region = detect_cloud(cloud)
 
     state_dir = _state_dir(project_id)
     head_state_path = state_dir / "head.json"
@@ -406,7 +410,7 @@ def ensure_local_head(cloud: str = None) -> str:
         return url
 
     cluster_token = get_or_register_cluster_token(cloud, project_id, aws_region)
-    ensure_user_authorized(project_id, cluster_token)
+    ensure_user_authorized(cloud, project_id, cluster_token)
     if cloud == "aws":
         _prepare_aws(project_id, aws_region)
 

@@ -165,7 +165,11 @@ DEFAULT_CONFIG = {  # <- config used only when no config has ever been saved
             ),
             # Region nodes boot in. Field is named gcp_region for historical
             # reasons; on AWS it holds an AWS region (e.g. us-east-1).
-            "gcp_region": "us-central1" if CLOUD_PROVIDER == "gcp" else "us-east-1",
+            "gcp_region": (
+                "us-central1"
+                if CLOUD_PROVIDER == "gcp"
+                else os.environ.get("AWS_REGION", "us-east-1")
+            ),
             "quantity": 1,
             "inactivity_shutdown_time_sec": 60 * 10,
         }
@@ -303,6 +307,15 @@ async def _dashboard_lease_loop():
             await asyncio.sleep(6 * 60 * 60)
 
 
+async def _stopped_instance_reaper_loop():
+    from main_service.providers import get_provider
+
+    provider = get_provider()
+    while True:
+        await asyncio.to_thread(provider.delete_stopped_instances)
+        await asyncio.sleep(60)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
 
@@ -348,14 +361,13 @@ async def lifespan(app: FastAPI):
             listen_port=INTERNAL_TLS_PORT, forward_port=MAIN_SERVICE_PORT
         )
 
+    stopped_instance_reaper_task = None
     if not IN_LOCAL_DEV_MODE:
         # Credential-less nodes can only stop themselves (a stopped GCP VM
         # still bills for its disk); actually deleting them requires cloud
         # credentials, which live here.
-        from main_service.providers import get_provider
-
-        asyncio.create_task(
-            asyncio.to_thread(get_provider().delete_stopped_instances)
+        stopped_instance_reaper_task = asyncio.create_task(
+            _stopped_instance_reaper_loop()
         )
 
     try:
@@ -364,6 +376,8 @@ async def lifespan(app: FastAPI):
         reaper_task.cancel()
         if dashboard_lease_task is not None:
             dashboard_lease_task.cancel()
+        if stopped_instance_reaper_task is not None:
+            stopped_instance_reaper_task.cancel()
         if tls_proxy_server is not None:
             tls_proxy_server.close()
 

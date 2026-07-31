@@ -49,6 +49,7 @@ def get_cluster_dashboard_url() -> str:
             BurlaNotInstalledException,
             bootstrap_from_adc,
         )
+        from google.auth.exceptions import DefaultCredentialsError
 
         try:
             bootstrap_from_adc()
@@ -57,6 +58,7 @@ def get_cluster_dashboard_url() -> str:
             ADCProjectException,
             ADCSecretPermissionException,
             BurlaNotInstalledException,
+            DefaultCredentialsError,
         ):
             from burla._local_head import ensure_local_head
 

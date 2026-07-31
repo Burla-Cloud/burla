@@ -120,6 +120,7 @@ def _head_startup_script(
     dashboard_hostname: str,
 ) -> str:
     node_source_ref = os.environ.get("BURLA_NODE_SOURCE_REF", __version__)
+    relay_subdomain = f"head--{project_id}"
     caddy_config = f"""{dashboard_hostname} {{
   reverse_proxy burla-main-service:5001
 }}
@@ -138,11 +139,11 @@ metadatas.token = "{cluster_id_token}"
 transport.poolCount = 4
 
 [[proxies]]
-name = "{project_id}"
+name = "{relay_subdomain}"
 type = "https"
 localIP = "burla-head-caddy"
 localPort = 443
-subdomain = "{project_id}"
+subdomain = "{relay_subdomain}"
 """
     frpc_config_b64 = base64.b64encode(frpc_config.encode()).decode()
 
@@ -197,6 +198,7 @@ subdomain = "{project_id}"
       exit 1
     fi
     echo "{frpc_config_b64}" | base64 -d > /etc/burla/frpc.toml
+    chmod 600 /etc/burla/frpc.toml
     docker pull fatedier/frpc:v{FRP_VERSION}
     docker run -d --restart=always --network=burla-head --name=burla-head-frpc \\
       -v /etc/burla/frpc.toml:/etc/frp/frpc.toml:ro \\
@@ -346,7 +348,7 @@ def _deploy_head_vm(spinner, PROJECT_ID, main_svc_account_email, cluster_id_toke
     )
     existing = run_command(describe_cmd, raise_error=False)
     existing_status = existing.stdout.decode().strip()
-    dashboard_url = f"https://{PROJECT_ID}.{RELAY_HOST}"
+    dashboard_url = f"https://head--{PROJECT_ID}.{RELAY_HOST}"
     if existing.returncode == 0:
         if existing_status != "RUNNING":
             run_command(

@@ -13,7 +13,7 @@ openssl ecparam -name prime256v1 -genkey -noout -out certs/node.key
 openssl req -new -key certs/node.key -subj "/CN=Burla node" -out certs/node.csr
 openssl x509 -req -in certs/node.csr -CA certs/ca.pem -CAkey certs/ca.key \
     -CAcreateserial -days 7 -out certs/node.pem \
-    -extfile <(printf "subjectAltName=DNS:test-node--test-project.relay.test")
+    -extfile <(printf "subjectAltName=DNS:burla-node-1234abcd--test-project.relay.test")
 
 echo "--- starting relay stack"
 docker compose down -v --remove-orphans >/dev/null 2>&1 || true
@@ -23,7 +23,7 @@ cleanup() { docker compose --profile manual down -v --remove-orphans >/dev/null 
 trap cleanup EXIT
 
 echo "--- waiting for the tunnel to come up"
-HOST="test-node--test-project.relay.test"
+HOST="burla-node-1234abcd--test-project.relay.test"
 PASSTHROUGH_OK=""
 for _ in $(seq 1 30); do
     if curl -sS --max-time 2 --cacert certs/ca.pem \

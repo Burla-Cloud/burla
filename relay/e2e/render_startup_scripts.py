@@ -2,7 +2,9 @@
 checks them. Run by run_e2e.sh: `... node` in a main_service venv and
 `... head` in a client venv (their dependency pins conflict)."""
 
+import base64
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -55,9 +57,15 @@ elif PART == "head":
         "test-project",
         "test-token",
         "us-docker.pkg.dev/burla-prod/burla-main-service/burla-main-service:1.6.1",
-        "test-project.relay.burla.dev",
+        "head--test-project.relay.burla.dev",
     )
     assert "burla-head-frpc" in head_script
+    encoded_config = re.search(
+        r'echo "([^"]+)" \| base64 -d > /etc/burla/frpc.toml', head_script
+    ).group(1)
+    frpc_config = base64.b64decode(encoded_config).decode()
+    assert 'subdomain = "head--test-project"' in frpc_config
+    assert "chmod 600 /etc/burla/frpc.toml" in head_script
     assert 'BURLA_RELAY_HOST="relay.burla.dev"' in head_script
     assert "-p 80:80" not in head_script, "head must not publish public ports"
     bash_check("head_startup.sh", head_script)

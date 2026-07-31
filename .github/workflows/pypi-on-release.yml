@@ -18,6 +18,11 @@ jobs:
         with:
           python-version: "3.13"
           architecture: "x64"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: main_service/frontend/package-lock.json
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
@@ -70,7 +75,9 @@ jobs:
           test "$IMAGE_REVISION" = "$RELEASE_SHA"
 
       - name: Build dist
-        run: uv build --directory ./client
+        run: |
+          make -C main_service build-frontend
+          uv build --directory ./client
 
       - name: Publish to PyPI
         run: uv publish --directory ./client --check-url https://pypi.org/simple/burla/ --token "${{ secrets.PYPI_TOKEN }}"

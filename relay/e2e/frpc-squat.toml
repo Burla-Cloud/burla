@@ -1,13 +1,14 @@
-# Valid token but a subdomain owned by another project: NewProxy must be
-# rejected so clusters can't hijack each other's hostnames.
+# Valid token for `test-project`, but this is the deployed-head hostname for
+# project `victim--test-project`. A suffix-only ownership check would allow
+# the collision, so NewProxy must reject it.
 serverAddr = "frps"
 serverPort = 7000
 user = "test-project"
 metadatas.token = "good-token"
 
 [[proxies]]
-name = "victim--other-project"
+name = "head--victim--test-project"
 type = "https"
 localIP = "node"
 localPort = 8080
-subdomain = "victim--other-project"
+subdomain = "head--victim--test-project"

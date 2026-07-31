@@ -218,6 +218,9 @@ def ensure_user_authorized(
     if CONFIG_PATH.exists():
         auth_info = json.loads(CONFIG_PATH.read_text())
         if auth_info["project_id"] == project_id:
+            if auth_info.get("mode") != "client_hosted":
+                auth_info["mode"] = "client_hosted"
+                _write_auth_config(auth_info)
             return
 
     if cloud == "aws":

@@ -45,6 +45,7 @@ def _head_setup_commands(
     image: str,
     dashboard_hostname: str,
     cluster_id_token: str,
+    account_name: str,
 ) -> list[str]:
     node_source_ref = os.environ.get("BURLA_NODE_SOURCE_REF", __version__)
     relay_subdomain = f"head--{project_id}"
@@ -78,6 +79,7 @@ def _head_setup_commands(
             '-e CLUSTER_ID_TOKEN="$CLUSTER_ID_TOKEN" '
             "-e CLOUD_PROVIDER=aws "
             f'-e AWS_REGION="{region}" '
+            f'-e CLOUD_ACCOUNT_NAME="{account_name}" '
             "-e BIND_HOST=127.0.0.1 "
             "-e PORT=5001 "
             "-e INTERNAL_TLS_PORT=8443 "
@@ -222,6 +224,9 @@ def deploy_aws(spinner):
     )
     # Cluster id: what backend.burla.dev and the dashboard know this cluster as.
     project_id = f"aws-{account_id}"
+    from burla._local_head import _aws_account_name
+
+    account_name = _aws_account_name(account_id)
     spinner.text = f"Checking for aws CLI ... Using account {account_id} in {region}."
     spinner.ok("✓")
     log_telemetry("Installer has aws CLI and is logged in.", project_id=project_id)
@@ -233,7 +238,7 @@ def deploy_aws(spinner):
     cluster_id_token = _register_cluster_and_save_token(spinner, project_id, region)
     _ensure_node_ami(spinner, region, node_profile)
     dashboard_url = _deploy_head_instance(
-        spinner, project_id, region, head_sg_id, cluster_id_token
+        spinner, project_id, region, head_sg_id, cluster_id_token, account_name
     )
 
     headers = {"Authorization": f"Bearer {cluster_id_token}"}
@@ -656,7 +661,9 @@ def _run_head_update(region: str, instance_id: str, commands: list[str]):
         raise Exception(invocation["StandardErrorContent"])
 
 
-def _deploy_head_instance(spinner, project_id, region, head_sg_id, cluster_id_token) -> str:
+def _deploy_head_instance(
+    spinner, project_id, region, head_sg_id, cluster_id_token, account_name
+) -> str:
     spinner.text = "Deploying burla-main-service instance ... "
     spinner.start()
 
@@ -715,6 +722,7 @@ def _deploy_head_instance(spinner, project_id, region, head_sg_id, cluster_id_to
         image,
         urlparse(dashboard_url).hostname,
         cluster_id_token,
+        account_name,
     )
     if existing:
         head_id = existing["InstanceId"]

@@ -153,7 +153,7 @@ const SettingsPage = () => {
   const cloudLabel = isAws ? "AWS" : "GCP";
   const resourceLabel = isAws ? "Account" : "Project";
   const resourceId = isAws
-    ? (settings.googleCloudProjectId ?? "").replace(/^aws-/, "")
+    ? settings.cloudAccountName
     : settings.googleCloudProjectId;
 
   const content = (() => {

@@ -15,7 +15,11 @@ define UV_ZSH_ENV
 	ZDOTDIR=$$tmp_dir uv run --project $(PROJECT_ABS) --group $(2) zsh -i
 endef
 
-.PHONY: 3.11-dev 3.12-dev 3.13-dev 3.14-dev 3.11-jupyter 3.12-jupyter 3.13-jupyter 3.14-jupyter
+.PHONY: 3.11-dev 3.12-dev 3.13-dev 3.14-dev 3.11-jupyter 3.12-jupyter 3.13-jupyter 3.14-jupyter test-shell
+
+test-shell:
+	uv sync --project $(PROJECT_ABS) --group dev >/dev/null 2>&1
+	uv run --project $(PROJECT_ABS) --group dev burla test-shell
 
 3.11-dev:
 	$(call UV_ZSH_ENV,3.11,dev)

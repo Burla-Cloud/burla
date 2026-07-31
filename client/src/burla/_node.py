@@ -18,7 +18,6 @@ from burla._auth import get_auth_headers
 from burla._cluster_client import ClusterClient, _local_host_from
 from burla._reporting import RemoteParallelMapReporter, safe_print, safe_spinner_write
 
-
 NODE_SILENCE_TIMEOUT_SECONDS = 2 * 60
 RESULT_POLL_SILENCE_TIMEOUT_SECONDS = 10 * 60
 NODE_BOOT_DEADLINE_SEC = 10 * 60
@@ -41,7 +40,9 @@ class InputTooBig(Exception):
         message = f"\n\nInput at index {index} exceeds maximum size of 0.2GB.\n"
         message += "Please download large inputs from the internet once inside your function.\n"
         message += "We apologize for this temporary limitation! "
-        message += "If this is confusing or blocking you, please tell us! (jake@burla.dev)\n\n"
+        message += (
+            "If this is confusing or blocking you, please tell us! (jake@burla.dev)\n\n"
+        )
         super().__init__(message)
 
 
@@ -125,14 +126,18 @@ class JobStalled(Exception):
 class ClusterRestarted(Exception):
     def __init__(self):
         message = "\n\nThe cluster was restarted. "
-        message += "Your job was ended because the nodes it was running on were destroyed.\n"
+        message += (
+            "Your job was ended because the nodes it was running on were destroyed.\n"
+        )
         super().__init__(message)
 
 
 class ClusterShutdown(Exception):
     def __init__(self):
         message = "\n\nThe cluster was shut down. "
-        message += "Your job was ended because the nodes it was running on were destroyed.\n"
+        message += (
+            "Your job was ended because the nodes it was running on were destroyed.\n"
+        )
         super().__init__(message)
 
 
@@ -152,7 +157,9 @@ async def _post_with_retries(session, url, headers, data, max_retries=5):
             await asyncio.sleep(0.5)
 
 
-async def _run_network_request_with_retries(request_function, max_retries=NETWORK_RETRY_ATTEMPTS):
+async def _run_network_request_with_retries(
+    request_function, max_retries=NETWORK_RETRY_ATTEMPTS
+):
     last_error = None
     for attempt_index in range(max_retries):
         try:
@@ -167,7 +174,9 @@ async def _run_network_request_with_retries(request_function, max_retries=NETWOR
 async def _fetch_cluster_state(client: ClusterClient) -> dict:
     """One main_service call returns booting / running counts + ready-node docs."""
     try:
-        return await asyncio.wait_for(client.get_cluster_state(), timeout=LOGIN_TIMEOUT_SEC)
+        return await asyncio.wait_for(
+            client.get_cluster_state(), timeout=LOGIN_TIMEOUT_SEC
+        )
     except asyncio.TimeoutError:
         raise MainServiceTimeout()
 
@@ -198,6 +207,7 @@ async def wait_for_nodes_to_be_ready(
             if time_waiting > 4:
                 raise AllNodesBusy()
     elif n_booting_nodes != 0:
+        boot_started_at = time()
         while n_booting_nodes != 0:
             if spinner:
                 msg = f"{len(ready_nodes)} Nodes are ready, waiting for remaining {n_booting_nodes}"
@@ -206,10 +216,12 @@ async def wait_for_nodes_to_be_ready(
             state = await _fetch_cluster_state(client)
             n_booting_nodes = state["booting_count"]
             ready_nodes = state["ready_nodes"]
+            if time() - boot_started_at > NODE_BOOT_DEADLINE_SEC:
+                raise NoNodes("Timed out waiting for booting nodes to become ready.")
         if not ready_nodes:
             main_service_url = get_cluster_dashboard_url()
             msg = "\n\nZero nodes are ready after Booting. Did they fail to boot?\n"
-            msg += f"Check your clsuter dashboard at: {main_service_url}\n\n"
+            msg += f"Check your cluster dashboard at: {main_service_url}\n\n"
             raise NoNodes(msg)
 
     if n_booting_nodes == 0 and n_running_nodes == 0 and len(ready_nodes) == 0:
@@ -225,7 +237,9 @@ class Node:
 
     def __init__(self, init_token, spinner, client: ClusterClient, session):
         if init_token is not Node.__init_token:
-            raise RuntimeError("Use classmethods `from_ready` or `from_booting` to construct.")
+            raise RuntimeError(
+                "Use classmethods `from_ready` or `from_booting` to construct."
+            )
         self.client = client
         self.session = session
         self.job_id = None
@@ -240,8 +254,8 @@ class Node:
         self.started_booting_at = time()
         self.auth_headers = get_auth_headers()
         self.removed_reason = ""
-        self.spinner_compatible_print = (
-            lambda msg: safe_spinner_write(spinner, msg) if spinner else safe_print(msg)
+        self.spinner_compatible_print = lambda msg: (
+            safe_spinner_write(spinner, msg) if spinner else safe_print(msg)
         )
 
     def _seconds_since_last_reply(self):
@@ -360,7 +374,9 @@ class Node:
 
     async def _fail_and_delete(self, message: str):
         self.state = "FAILED"
-        self.spinner_compatible_print(f"Marking Node {self.instance_name} as FAILED: {message}")
+        self.spinner_compatible_print(
+            f"Marking Node {self.instance_name} as FAILED: {message}"
+        )
         try:
             await self.client.fail_node(self.instance_name, message)
         except Exception as error:
@@ -423,7 +439,9 @@ class Node:
                     return
                 elif response.status == 503:
                     self.state = "REMOVED"
-                    msg = f"Node {self.instance_name} is shutting down, removed from job."
+                    msg = (
+                        f"Node {self.instance_name} is shutting down, removed from job."
+                    )
                     self.spinner_compatible_print(msg)
                     return
                 else:
@@ -432,10 +450,14 @@ class Node:
 
         while True:
             try:
-                return await _run_network_request_with_retries(request_function, max_retries=2)
+                return await _run_network_request_with_retries(
+                    request_function, max_retries=2
+                )
             except NETWORK_ERROR_TYPES:
                 if self._node_silence_timeout_exceeded():
-                    await self._fail_and_delete(self._node_silence_timeout_message("assigning job"))
+                    await self._fail_and_delete(
+                        self._node_silence_timeout_message("assigning job")
+                    )
                     return
 
     async def _gather_results(self):
@@ -468,7 +490,9 @@ class Node:
                         "logs": [],
                     }
                 if response.status != 200:
-                    raise Exception(f"Result-check failed for node: {self.instance_name}")
+                    raise Exception(
+                        f"Result-check failed for node: {self.instance_name}"
+                    )
                 try:
                     node_results = pickle.loads(await response.content.read())
                     self.last_reply_timestamp = time()
@@ -570,9 +594,14 @@ class Node:
             return
 
         while True:
-            total_parallelism = sum(
-                node.target_parallelism for node in nodes if node.state in ("READY", "RUNNING")
-            ) or 1
+            total_parallelism = (
+                sum(
+                    node.target_parallelism
+                    for node in nodes
+                    if node.state in ("READY", "RUNNING")
+                )
+                or 1
+            )
             input_chunksize = max(
                 self.target_parallelism,
                 (n_inputs * self.target_parallelism) // total_parallelism,
@@ -584,7 +613,10 @@ class Node:
                 input_pkl = cloudpickle.dumps(input_)
                 if len(input_pkl) > MAX_INPUT_SIZE_BYTES:
                     raise InputTooBig(input_index)
-                if input_chunk and chunk_size_bytes + len(input_pkl) > MAX_CHUNK_SIZE_BYTES:
+                if (
+                    input_chunk
+                    and chunk_size_bytes + len(input_pkl) > MAX_CHUNK_SIZE_BYTES
+                ):
                     inputs_with_indicies.append((input_index, input_))
                     break
                 input_chunk.append((input_index, input_pkl))
@@ -611,7 +643,9 @@ class Node:
                         msg += f"while executing input index {input_index}:\n\n"
                         msg += error_info["traceback_str"]
                         raise NodeDisconnected(self, await self._failure_message(msg))
-                    traceback = Traceback.from_dict(error_info["traceback_dict"]).as_traceback()
+                    traceback = Traceback.from_dict(
+                        error_info["traceback_dict"]
+                    ).as_traceback()
                     self.udf_error_event.set()
                     log_error = RemoteParallelMapReporter.log_user_function_error_async
                     await log_error(self.job_id, self.session)

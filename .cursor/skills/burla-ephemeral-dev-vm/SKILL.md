@@ -13,7 +13,7 @@ Use Git worktrees for code isolation and VM scripts for cloud resources. Git wor
 - Always edit from the linked worktree, never from the primary checkout.
 - Pick the dev VM slot automatically — never ask the user which slot to use. See "Slot Selection" below.
 - Run `make -f makefile local-dev` or `make -f makefile remote-dev` in the VM shell after syncing code. Always pass `-f makefile`; the repo uses a lowercase makefile.
-- Run VM-local client smoke jobs with `BURLA_CLUSTER_DASHBOARD_URL=http://localhost:5001` so the client talks to the dev server.
+- Run VM-local client commands with `BURLA_CLUSTER_DASHBOARD_URL=http://localhost:5001` so the client talks to the dev server.
 - Use the script-reported `http://localhost:<port>` URL for browser work.
 - Stop the VM instead of deleting it so the next task can reuse the bootstrapped slot.
 - Keep the worktree and branch until explicit cleanup so work-in-progress is not lost.
@@ -31,7 +31,7 @@ Use Git worktrees for code isolation and VM scripts for cloud resources. Git wor
 5. Run `scripts/dev_vm_sync_repo.sh --slot <id> --source "$(pwd)"`.
 6. Run `scripts/dev_vm_shell.sh --slot <id>` and start Burla inside that TTY shell with `make -f makefile local-dev` or `make -f makefile remote-dev`. Do not start these targets through non-interactive SSH; Docker needs a real terminal.
 7. Run `scripts/dev_vm_tunnel.sh --slot <id>` when you need dashboard/browser access.
-8. For VM-local client smoke jobs, rely on ADC bootstrap and set `BURLA_CLUSTER_DASHBOARD_URL=http://localhost:5001`, for example: `BURLA_CLUSTER_DASHBOARD_URL=http://localhost:5001 uv run --project ./client --group dev python smoke.py`.
+8. For VM-local client commands, rely on ADC bootstrap and set `BURLA_CLUSTER_DASHBOARD_URL=http://localhost:5001`.
 9. Stop the VM with `scripts/dev_vm_stop.sh --slot <id>` when the slot should go idle.
 10. Remove the worktree later with `git worktree remove ../burla-worktrees/<task-slug>` only when you are done with that branch.
 
@@ -48,7 +48,7 @@ Caveats for `remote-dev`:
 
 - Uncommitted edits under `node_service/` or `worker_server.py` do NOT reach worker VMs. The node startup script does `git fetch --depth=1 origin "{CURRENT_BURLA_VERSION}"` against the public repo. To test node-side changes remotely you must bump `CURRENT_BURLA_VERSION` in the four pinned places and push a matching tag.
 - Nested `remote_parallel_map` inside a UDF fails: workers use the `cluster_dashboard_url` the client sent (e.g. `http://localhost:<tunnel_port>`), which is not reachable from a GCE VM. Top-level RPM works fine.
-- Set `BURLA_CLUSTER_DASHBOARD_URL=http://localhost:5001` for tests or smoke jobs that should hit the running dev server.
+- Set `BURLA_CLUSTER_DASHBOARD_URL=http://localhost:5001` for tests that should hit the running dev server.
 - `dev_vm_stop.sh` best-effort POSTs `/v1/cluster/shutdown` before stopping the VM so worker VMs get cleaned up.
 
 ## Guardrails

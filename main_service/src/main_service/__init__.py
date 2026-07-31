@@ -11,8 +11,9 @@ from time import time, sleep
 from typing import Callable
 from pathlib import Path
 from contextlib import asynccontextmanager
+from urllib.parse import urlparse
 
-from fastapi.responses import Response, FileResponse, RedirectResponse
+from fastapi.responses import Response, FileResponse, HTMLResponse, RedirectResponse
 from fastapi import FastAPI, Request, BackgroundTasks, Depends, status
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -20,8 +21,9 @@ from starlette.middleware.sessions import SessionMiddleware
 from starlette.datastructures import UploadFile
 from jinja2 import Environment, FileSystemLoader
 
-CURRENT_BURLA_VERSION = "1.6.0"
-MIN_COMPATIBLE_CLIENT_VERSION = "1.6.0"
+CURRENT_BURLA_VERSION = "1.6.1"
+MIN_COMPATIBLE_CLIENT_VERSION = "1.6.1"
+NODE_SOURCE_REF = os.environ.get("BURLA_NODE_SOURCE_REF", CURRENT_BURLA_VERSION)
 
 # In this mode EVERYTHING runs locally in docker containers.
 # possible modes: local-dev-mode (everything local), remote-dev-mode (only main-service local), prod
@@ -29,10 +31,29 @@ IN_LOCAL_DEV_MODE = os.environ.get("IN_LOCAL_DEV_MODE") == "True"
 # This is needed because remote-dev-mode is not local-dev-mode, and needs local redirect on login.
 REDIRECT_LOCALLY_ON_LOGIN = os.environ.get("REDIRECT_LOCALLY_ON_LOGIN") == "True"
 
+# The default way Burla runs: main_service lives inside the `burla` pip
+# package on the user's machine (started by `remote_parallel_map` or
+# `burla dashboard`), boots real cloud VMs with the user's own credentials,
+# and is reachable by nodes through the relay. No head VM, no service
+# accounts, no buckets - see client/src/burla/_local_head.py.
+IN_CLIENT_HOSTED_MODE = os.environ.get("IN_CLIENT_HOSTED_MODE") == "True"
+
 # "gcp" or "aws" - which cloud this cluster boots node VMs in.
 CLOUD_PROVIDER = os.environ.get("CLOUD_PROVIDER", "gcp")
 
-BURLA_BACKEND_URL = os.environ.get("BURLA_BACKEND_URL", "https://backend.burla.dev")
+BURLA_BACKEND_URL = os.environ.get(
+    "BURLA_BACKEND_URL", "https://backend.burla.dev"
+).rstrip("/")
+
+# Clients reach nodes and the dashboard through Burla's frp relay: nodes dial
+# out to it, so user projects need zero inbound firewall rules. Dev clusters
+# override this to a test relay (see Makefile).
+BURLA_RELAY_HOST = (
+    os.environ.get("BURLA_RELAY_HOST", "relay.burla.dev").strip().lower().rstrip(".")
+)
+BURLA_RELAY_SERVER_ADDR = os.environ.get("BURLA_RELAY_SERVER_ADDR") or BURLA_RELAY_HOST
+BURLA_RELAY_SERVER_PORT = int(os.environ.get("BURLA_RELAY_SERVER_PORT", 7000))
+FRP_VERSION = "0.70.1"
 print(f"Using Burla backend: {BURLA_BACKEND_URL}")
 
 
@@ -50,7 +71,17 @@ def _resolve_project_id() -> str:
 
 PROJECT_ID = _resolve_project_id()
 
-STATIC_FILES_ENV = Environment(loader=FileSystemLoader("src/main_service/static"))
+
+def relay_fqdn(instance_name: str) -> str:
+    """Hostname the relay routes to this node, e.g.
+    burla-node-1a2b3c4d--my-project.relay.burla.dev"""
+    return f"{instance_name}--{PROJECT_ID}.{BURLA_RELAY_HOST}"
+
+
+# Package-relative so the vendored copy inside the burla pip package finds
+# its static files no matter what the working directory is.
+STATIC_DIR = Path(__file__).parent / "static"
+STATIC_FILES_ENV = Environment(loader=FileSystemLoader(str(STATIC_DIR)))
 
 
 def _resolve_cluster_id_token() -> str:
@@ -68,6 +99,7 @@ CLUSTER_ID_TOKEN = _resolve_cluster_id_token()
 # the head VM, so this is the head's internal IP (or the docker network
 # hostname in local-dev). The public dashboard URL is separate.
 MAIN_SERVICE_PORT = int(os.environ.get("PORT", 5001))
+INTERNAL_TLS_PORT = int(os.environ.get("INTERNAL_TLS_PORT", 8443))
 
 
 def _resolve_self_url_for_nodes() -> str:
@@ -97,10 +129,28 @@ def _resolve_self_url_for_nodes() -> str:
             timeout=5,
         )
         internal_ip = ip_response.text.strip()
-    return f"http://{internal_ip}:{MAIN_SERVICE_PORT}"
+    return f"https://{internal_ip}:{INTERNAL_TLS_PORT}"
 
 
 MAIN_SERVICE_URL_FOR_NODES = _resolve_self_url_for_nodes()
+if not IN_LOCAL_DEV_MODE:
+    from main_service.transport_tls import ensure_cluster_tls
+
+    ensure_cluster_tls(urlparse(MAIN_SERVICE_URL_FOR_NODES).hostname)
+
+# Bucket FUSE-mounted at /workspace/shared in every container (GCS on GCP,
+# S3 on AWS). Empty/unset disables the shared filesystem entirely - the
+# default in client-hosted mode so users need zero storage permissions.
+# `burla deploy` passes the bucket it created; local-dev keeps the old name
+# because node containers bind-mount a local dir under the same config key.
+def _default_shared_workspace_bucket():
+    bucket = os.environ.get("SHARED_WORKSPACE_BUCKET")
+    if bucket:
+        return bucket
+    if IN_CLIENT_HOSTED_MODE:
+        return None
+    return f"{PROJECT_ID}-burla-shared-workspace"
+
 
 DEFAULT_CONFIG = {  # <- config used only when no config has ever been saved
     "Nodes": [
@@ -110,17 +160,21 @@ DEFAULT_CONFIG = {  # <- config used only when no config has ever been saved
                     "image": "python:3.12",
                 },
             ],
-            "machine_type": "n4-standard-4" if CLOUD_PROVIDER == "gcp" else "m7i.2xlarge",
+            "machine_type": (
+                "n4-standard-4" if CLOUD_PROVIDER == "gcp" else "m7i.2xlarge"
+            ),
             # Region nodes boot in. Field is named gcp_region for historical
             # reasons; on AWS it holds an AWS region (e.g. us-east-1).
-            "gcp_region": "us-central1" if CLOUD_PROVIDER == "gcp" else "us-east-1",
+            "gcp_region": (
+                "us-central1"
+                if CLOUD_PROVIDER == "gcp"
+                else os.environ.get("AWS_REGION", "us-east-1")
+            ),
             "quantity": 1,
             "inactivity_shutdown_time_sec": 60 * 10,
         }
     ],
-    # Bucket FUSE-mounted at /workspace/shared in every container.
-    # GCS bucket on GCP, S3 bucket on AWS - same name convention.
-    "gcs_bucket_name": f"{PROJECT_ID}-burla-shared-workspace",
+    "gcs_bucket_name": _default_shared_workspace_bucket(),
 }
 
 from main_service import history
@@ -182,7 +236,9 @@ def get_logger(request: Request):
 
 
 def get_auth_headers(request: Request):
-    authorization = request.session.get("Authorization") or request.headers.get("Authorization")
+    authorization = request.session.get("Authorization") or request.headers.get(
+        "Authorization"
+    )
     email = request.session.get("X-User-Email") or request.headers.get("X-User-Email")
     return {"Authorization": authorization, "X-User-Email": email}
 
@@ -205,15 +261,21 @@ def get_add_background_task_function(
 ):
     def add_logged_background_task(func: Callable, *a, **kw):
         tb_details = traceback.format_list(traceback.extract_stack()[:-1])
-        parent_traceback = "Traceback (most recent call last):\n" + format_traceback(tb_details)
+        parent_traceback = "Traceback (most recent call last):\n" + format_traceback(
+            tb_details
+        )
 
         def func_logged(*a, **kw):
             try:
                 return func(*a, **kw)
             except Exception as e:
                 exc_type, exc_value, exc_traceback = sys.exc_info()
-                tb_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
-                local_traceback_no_title = "\n".join(format_traceback(tb_details).split("\n")[1:])
+                tb_details = traceback.format_exception(
+                    exc_type, exc_value, exc_traceback
+                )
+                local_traceback_no_title = "\n".join(
+                    format_traceback(tb_details).split("\n")[1:]
+                )
                 traceback_str = parent_traceback + local_traceback_no_title
                 logger.log(message=str(e), severity="ERROR", traceback=traceback_str)
 
@@ -232,6 +294,28 @@ from main_service.endpoints.client import router as client_router
 from main_service.endpoints.nodes import router as nodes_router
 
 
+async def _dashboard_lease_loop():
+    headers = {"Authorization": f"Bearer {CLUSTER_ID_TOKEN}"}
+    url = f"{BURLA_BACKEND_URL}/v1/clusters/{PROJECT_ID}/dashboard/lease"
+    async with aiohttp.ClientSession() as session:
+        while True:
+            try:
+                async with session.post(url, headers=headers) as response:
+                    response.raise_for_status()
+            except Exception as error:
+                print(f"Dashboard DNS lease renewal failed: {error}")
+            await asyncio.sleep(6 * 60 * 60)
+
+
+async def _stopped_instance_reaper_loop():
+    from main_service.providers import get_provider
+
+    provider = get_provider()
+    while True:
+        await asyncio.to_thread(provider.delete_stopped_instances)
+        await asyncio.sleep(60)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
 
@@ -241,10 +325,14 @@ async def lifespan(app: FastAPI):
             if attempt == 3:
                 return False
             else:
-                frontend_built_at = float(Path(".frontend_last_built_at.txt").read_text().strip())
+                frontend_built_at = float(
+                    Path(".frontend_last_built_at.txt").read_text().strip()
+                )
                 frontend_rebuilt = time() - frontend_built_at < 4
                 if not frontend_rebuilt:
-                    sleep(2)  # wait a couple sec then try again (could still be building)
+                    sleep(
+                        2
+                    )  # wait a couple sec then try again (could still be building)
                     return frontend_built_successfully(attempt=attempt + 1)
                 return True
 
@@ -256,10 +344,42 @@ async def lifespan(app: FastAPI):
     cluster_state.set_event_loop(asyncio.get_running_loop())
     cluster_state.load_from_history()
     reaper_task = asyncio.create_task(cluster_state.job_reaper_loop(logger=Logger()))
+    # Client-hosted dashboards are localhost-only; there is no public DNS
+    # lease to renew.
+    run_lease_loop = not IN_LOCAL_DEV_MODE and not IN_CLIENT_HOSTED_MODE
+    dashboard_lease_task = (
+        asyncio.create_task(_dashboard_lease_loop()) if run_lease_loop else None
+    )
+
+    tls_proxy_server = None
+    if IN_CLIENT_HOSTED_MODE:
+        # Replaces the head VM's Caddy sidecar: terminates cluster-CA TLS for
+        # node traffic arriving through the relay tunnel.
+        from main_service.tls_proxy import start_tls_proxy
+
+        tls_proxy_server = await start_tls_proxy(
+            listen_port=INTERNAL_TLS_PORT, forward_port=MAIN_SERVICE_PORT
+        )
+
+    stopped_instance_reaper_task = None
+    if not IN_LOCAL_DEV_MODE:
+        # Credential-less nodes can only stop themselves (a stopped GCP VM
+        # still bills for its disk); actually deleting them requires cloud
+        # credentials, which live here.
+        stopped_instance_reaper_task = asyncio.create_task(
+            _stopped_instance_reaper_loop()
+        )
+
     try:
         yield
     finally:
         reaper_task.cancel()
+        if dashboard_lease_task is not None:
+            dashboard_lease_task.cancel()
+        if stopped_instance_reaper_task is not None:
+            stopped_instance_reaper_task.cancel()
+        if tls_proxy_server is not None:
+            tls_proxy_server.close()
 
 
 app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None)
@@ -328,6 +448,10 @@ def version():
     return {"version": CURRENT_BURLA_VERSION, "project": PROJECT_ID}
 
 
+# Injected at request time so the key never lives in the public repo's committed bundles.
+SYNCFUSION_LICENSE_KEY = os.environ.get("SYNCFUSION_LICENSE_KEY", "")
+
+
 # don't move this! must be declared before static files are mounted to the same path below.
 @app.get("/")
 @app.get("/jobs")
@@ -335,18 +459,23 @@ def version():
 @app.get("/settings")
 @app.get("/filesystem")
 def dashboard():
-    return FileResponse("src/main_service/static/index.html")
+    html = (STATIC_DIR / "index.html").read_text()
+    filesystem_enabled = bool((history.get_cluster_config() or {}).get("gcs_bucket_name"))
+    inject = f'<script>window.__SYNCFUSION_LICENSE_KEY__ = "{SYNCFUSION_LICENSE_KEY}";'
+    inject += f"window.__BURLA_FILESYSTEM_ENABLED__ = {json.dumps(filesystem_enabled)};</script>"
+    return HTMLResponse(html.replace("</head>", f"{inject}</head>"))
 
 
 @app.get("/favicon.png")
 def favicon():
     headers = {"Cache-Control": "no-store"}
-    path = "src/main_service/static/favicon.png"
-    return FileResponse(path, media_type="image/png", headers=headers)
+    return FileResponse(
+        STATIC_DIR / "favicon.png", media_type="image/png", headers=headers
+    )
 
 
 # must be mounted after the above endpoint (`/`) is declared, or this will overwrite that endpoint.
-app.mount("/", SafeStaticFiles(directory="src/main_service/static"), name="static")
+app.mount("/", SafeStaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
 @app.middleware("http")
@@ -458,16 +587,14 @@ async def validate_requests(request: Request, call_next):
 
     # Allow unauthenticated access for storage stub endpoints and resumable signing during development
     # These are non-privileged helpers used by the storage UI.
-    if request.url.path.startswith("/api/sf/") or request.url.path == "/signed-resumable":
+    if (
+        request.url.path.startswith("/api/sf/")
+        or request.url.path == "/signed-resumable"
+    ):
         return await call_next(request)
     if request.url.path in ["/v3/login/dashboard", "/v1/login/microsoft/dashboard"]:
         return await call_next(request)
 
-    # Allow Server-Sent Events to pass through without auth to prevent proxy/login HTML from breaking the stream
-    # These endpoints read in-memory state only and do not perform privileged actions.
-    accept_header = request.headers.get("accept", "")
-    if "text/event-stream" in accept_header:
-        return await call_next(request)
     # allow static asset requests (js/css/images) to pass through
     last_segment = request.url.path.rstrip("/").split("/")[-1]
     if "." in last_segment:
@@ -475,7 +602,9 @@ async def validate_requests(request: Request, call_next):
 
     client_id = request.query_params.get("client_id")
     email = request.session.get("X-User-Email") or request.headers.get("X-User-Email")
-    authorization = request.session.get("Authorization") or request.headers.get("Authorization")
+    authorization = request.session.get("Authorization") or request.headers.get(
+        "Authorization"
+    )
     auth_cookie_exists = email and authorization
 
     # Short-circuit the backend round-trip if we validated this same
@@ -493,7 +622,9 @@ async def validate_requests(request: Request, call_next):
                     request.session["Authorization"] = f"Bearer {data['token']}"
                     request.session["profile_pic"] = data["profile_pic"]
                     request.session["name"] = data["name"]
-                    base_url = f"{request.url.scheme}://{request.url.netloc}{request.url.path}"
+                    base_url = (
+                        f"{request.url.scheme}://{request.url.netloc}{request.url.path}"
+                    )
                     return RedirectResponse(url=base_url, status_code=303)
                 elif response.status == 403:
                     data = await response.json()
@@ -504,7 +635,9 @@ async def validate_requests(request: Request, call_next):
                         user_email=data["detail"]["email"],
                         first_name=first_name,
                     )
-                    return Response(content=rendered, status_code=403, media_type="text/html")
+                    return Response(
+                        content=rendered, status_code=403, media_type="text/html"
+                    )
         elif auth_cookie_exists:
             url = f"{BURLA_BACKEND_URL}/v1/clusters/{PROJECT_ID}/users:validate"
             headers = {"Authorization": authorization, "X-User-Email": email}
@@ -522,7 +655,9 @@ async def validate_requests(request: Request, call_next):
                         user_email=email,
                         first_name=first_name,
                     )
-                    return Response(content=rendered, status_code=200, media_type="text/html")
+                    return Response(
+                        content=rendered, status_code=200, media_type="text/html"
+                    )
 
         first_name = await get_welcome_name(session)
         rendered = STATIC_FILES_ENV.get_template("login.html.j2").render(
@@ -547,7 +682,9 @@ async def log_and_time_requests(request: Request, call_next):
             response.background = BackgroundTasks()
 
         logger = Logger(request)
-        add_background_task = get_add_background_task_function(response.background, logger=logger)
+        add_background_task = get_add_background_task_function(
+            response.background, logger=logger
+        )
         add_background_task(logger.log, f"Received {request.method} at {request.url}")
 
         status = response.status_code
@@ -566,4 +703,9 @@ async def set_timezone_middleware(request: Request, call_next):
     return await call_next(request)
 
 
-app.add_middleware(SessionMiddleware, secret_key=CLUSTER_ID_TOKEN, same_site="lax")
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=CLUSTER_ID_TOKEN,
+    same_site="lax",
+    https_only=not IN_LOCAL_DEV_MODE,
+)

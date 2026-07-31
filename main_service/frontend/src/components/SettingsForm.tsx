@@ -25,32 +25,48 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
         const { settings, setSettings } = useSettings();
         const users = settings.users ?? [];
         const [newUser, setNewUser] = useState("");
+        const isAws = settings.cloudProvider === "aws";
 
-        const cpuOptions = [
-            { label: "2vCPU / 8G RAM", value: "n4-standard-2" },
-            { label: "4vCPU / 16G RAM", value: "n4-standard-4" },
-            { label: "8vCPU / 32G RAM", value: "n4-standard-8" },
-            { label: "16vCPU / 64G RAM", value: "n4-standard-16" },
-            { label: "32vCPU / 128G RAM", value: "n4-standard-32" },
-            { label: "64vCPU / 256G RAM", value: "n4-standard-64" },
-            { label: "80vCPU / 320G RAM", value: "n4-standard-80" },
-        ];
+        // Machine lists mirror main_service/providers/catalog.py for each cloud.
+        const cpuOptions = isAws
+            ? [
+                  { label: "2vCPU / 8G RAM", value: "m7i.large" },
+                  { label: "4vCPU / 16G RAM", value: "m7i.xlarge" },
+                  { label: "8vCPU / 32G RAM", value: "m7i.2xlarge" },
+                  { label: "16vCPU / 64G RAM", value: "m7i.4xlarge" },
+                  { label: "32vCPU / 128G RAM", value: "m7i.8xlarge" },
+                  { label: "64vCPU / 256G RAM", value: "m7i.16xlarge" },
+              ]
+            : [
+                  { label: "2vCPU / 8G RAM", value: "n4-standard-2" },
+                  { label: "4vCPU / 16G RAM", value: "n4-standard-4" },
+                  { label: "8vCPU / 32G RAM", value: "n4-standard-8" },
+                  { label: "16vCPU / 64G RAM", value: "n4-standard-16" },
+                  { label: "32vCPU / 128G RAM", value: "n4-standard-32" },
+                  { label: "64vCPU / 256G RAM", value: "n4-standard-64" },
+                  { label: "80vCPU / 320G RAM", value: "n4-standard-80" },
+              ];
 
-        const gpuCpuMap = {
-            "1x A100 40G": { label: "12vCPU / 85G RAM", value: "a2-highgpu-1g" },
-            "2x A100 40G": { label: "24vCPU / 170G RAM", value: "a2-highgpu-2g" },
-            "4x A100 40G": { label: "48vCPU / 340G RAM", value: "a2-highgpu-4g" },
-            "8x A100 40G": { label: "96vCPU / 680G RAM", value: "a2-highgpu-8g" },
-            "1x A100 80G": { label: "12vCPU / 170G RAM", value: "a2-ultragpu-1g" },
-            "2x A100 80G": { label: "24vCPU / 340G RAM", value: "a2-ultragpu-2g" },
-            "4x A100 80G": { label: "48vCPU / 680G RAM", value: "a2-ultragpu-4g" },
-            "8x A100 80G": { label: "96vCPU / 1360G RAM", value: "a2-ultragpu-8g" },
-            "1x H100 80G": { label: "26vCPU / 234G RAM", value: "a3-highgpu-1g" },
-            "2x H100 80G": { label: "52vCPU / 468G RAM", value: "a3-highgpu-2g" },
-            "4x H100 80G": { label: "104vCPU / 936G RAM", value: "a3-highgpu-4g" },
-            "8x H100 80G": { label: "208vCPU / 1872G RAM", value: "a3-highgpu-8g" },
-            "8x H200 141G": { label: "224vCPU / 2952G RAM", value: "a3-ultragpu-8g" },
-        };
+        // No GPU machines are offered on AWS yet: providers/aws.py rejects GPU nodes
+        // until the burla node AMI ships with NVIDIA drivers. Temporary; the AWS
+        // shapes (p4d/p4de/p5) come back here once that lands.
+        const gpuCpuMap = isAws
+            ? {}
+            : {
+                  "1x A100 40G": { label: "12vCPU / 85G RAM", value: "a2-highgpu-1g" },
+                  "2x A100 40G": { label: "24vCPU / 170G RAM", value: "a2-highgpu-2g" },
+                  "4x A100 40G": { label: "48vCPU / 340G RAM", value: "a2-highgpu-4g" },
+                  "8x A100 40G": { label: "96vCPU / 680G RAM", value: "a2-highgpu-8g" },
+                  "1x A100 80G": { label: "12vCPU / 170G RAM", value: "a2-ultragpu-1g" },
+                  "2x A100 80G": { label: "24vCPU / 340G RAM", value: "a2-ultragpu-2g" },
+                  "4x A100 80G": { label: "48vCPU / 680G RAM", value: "a2-ultragpu-4g" },
+                  "8x A100 80G": { label: "96vCPU / 1360G RAM", value: "a2-ultragpu-8g" },
+                  "1x H100 80G": { label: "26vCPU / 234G RAM", value: "a3-highgpu-1g" },
+                  "2x H100 80G": { label: "52vCPU / 468G RAM", value: "a3-highgpu-2g" },
+                  "4x H100 80G": { label: "104vCPU / 936G RAM", value: "a3-highgpu-4g" },
+                  "8x H100 80G": { label: "208vCPU / 1872G RAM", value: "a3-highgpu-8g" },
+                  "8x H200 141G": { label: "224vCPU / 2952G RAM", value: "a3-ultragpu-8g" },
+              };
 
         // Build variant -> supported counts (e.g., "A100 40G" -> [1,2,4,8,16])
         const VARIANT_INFO: Record<string, number[]> = {};
@@ -149,7 +165,7 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
 
         // --- REGION LOGIC ---
         // Region lists for each GPU type
-        const REGION_OPTIONS = {
+        const GCP_REGION_OPTIONS = {
             "A100 40G": [
                 { value: "us-central1", label: "us‑central1" },
                 { value: "us-west3", label: "us‑west3" },
@@ -215,15 +231,71 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
             ],
         };
 
+        // AWS regions where each machine family is actually offered
+        // (CPU nodes are m7i.*, GPU mappings come from providers/catalog.py).
+        const AWS_REGION_OPTIONS = {
+            "A100 40G": [
+                // p4d.24xlarge
+                { value: "us-east-1", label: "us-east-1" },
+                { value: "us-east-2", label: "us-east-2" },
+                { value: "us-west-2", label: "us-west-2" },
+                { value: "eu-west-1", label: "eu-west-1" },
+                { value: "eu-west-2", label: "eu-west-2" },
+                { value: "eu-central-1", label: "eu-central-1" },
+                { value: "ap-northeast-1", label: "ap-northeast-1" },
+                { value: "ap-northeast-2", label: "ap-northeast-2" },
+                { value: "ap-south-1", label: "ap-south-1" },
+                { value: "ap-southeast-1", label: "ap-southeast-1" },
+            ],
+            "A100 80G": [
+                // p4de.24xlarge
+                { value: "us-east-1", label: "us-east-1" },
+                { value: "us-west-2", label: "us-west-2" },
+            ],
+            "H100 80G": [
+                // union of p5.4xlarge and p5.48xlarge availability
+                { value: "us-east-1", label: "us-east-1" },
+                { value: "us-east-2", label: "us-east-2" },
+                { value: "us-west-2", label: "us-west-2" },
+                { value: "eu-central-1", label: "eu-central-1" },
+                { value: "eu-north-1", label: "eu-north-1" },
+                { value: "eu-west-2", label: "eu-west-2" },
+                { value: "ap-south-1", label: "ap-south-1" },
+                { value: "ap-northeast-1", label: "ap-northeast-1" },
+                { value: "ap-southeast-2", label: "ap-southeast-2" },
+                { value: "ap-southeast-3", label: "ap-southeast-3" },
+                { value: "sa-east-1", label: "sa-east-1" },
+            ],
+            None: [
+                { value: "us-east-1", label: "us-east-1" },
+                { value: "us-east-2", label: "us-east-2" },
+                { value: "us-west-1", label: "us-west-1" },
+                { value: "us-west-2", label: "us-west-2" },
+                { value: "ca-central-1", label: "ca-central-1" },
+                { value: "sa-east-1", label: "sa-east-1" },
+                { value: "eu-west-1", label: "eu-west-1" },
+                { value: "eu-west-2", label: "eu-west-2" },
+                { value: "eu-west-3", label: "eu-west-3" },
+                { value: "eu-central-1", label: "eu-central-1" },
+                { value: "eu-north-1", label: "eu-north-1" },
+                { value: "ap-south-1", label: "ap-south-1" },
+                { value: "ap-northeast-1", label: "ap-northeast-1" },
+                { value: "ap-northeast-2", label: "ap-northeast-2" },
+                { value: "ap-southeast-1", label: "ap-southeast-1" },
+                { value: "ap-southeast-2", label: "ap-southeast-2" },
+            ],
+        };
+
         // Helper to determine which region list to use
         function getRegionOptionsForGpu(gpuVariant) {
-            if (gpuVariant === "None") return REGION_OPTIONS["None"];
-            if (gpuVariant.includes("A100 40G")) return REGION_OPTIONS["A100 40G"];
-            if (gpuVariant.includes("A100 80G")) return REGION_OPTIONS["A100 80G"];
-            if (gpuVariant.includes("H100 80G")) return REGION_OPTIONS["H100 80G"];
-            if (gpuVariant.includes("H200 141G")) return REGION_OPTIONS["H200 141G"];
+            const options = isAws ? AWS_REGION_OPTIONS : GCP_REGION_OPTIONS;
+            if (gpuVariant === "None") return options["None"];
+            if (gpuVariant.includes("A100 40G")) return options["A100 40G"];
+            if (gpuVariant.includes("A100 80G")) return options["A100 80G"];
+            if (gpuVariant.includes("H100 80G")) return options["H100 80G"];
+            if (gpuVariant.includes("H200 141G")) return options["H200 141G"] || options["None"];
             // fallback to None if unknown
-            return REGION_OPTIONS["None"];
+            return options["None"];
         }
 
         const regionOptions = getRegionOptionsForGpu(gpuVariant);
@@ -356,9 +428,28 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
 
                                 {/* GPU */}
                                 <div className="flex flex-col space-y-2">
-                                    <label className={labelClass}>GPU</label>
+                                    <div className="flex items-center gap-1">
+                                        <label className={labelClass}>GPU</label>
+                                        {isAws && (
+                                            <TooltipProvider>
+                                                <Tooltip>
+                                                    <TooltipTrigger asChild>
+                                                        <InfoIcon className="h-4 w-4 text-amber-500 hover:text-amber-600 cursor-help -mt-2" />
+                                                    </TooltipTrigger>
+                                                    <TooltipContent>
+                                                        <p>
+                                                            GPUs aren't available on AWS clusters
+                                                            yet, we're working on it!
+                                                            <br />
+                                                            (they work on GCP)
+                                                        </p>
+                                                    </TooltipContent>
+                                                </Tooltip>
+                                            </TooltipProvider>
+                                        )}
+                                    </div>
                                     <Select
-                                        disabled={!isEditing}
+                                        disabled={!isEditing || isAws}
                                         value={gpuVariant}
                                         onValueChange={(val) => {
                                             setGpuVariant(val);
@@ -387,26 +478,24 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
                                 <div className="flex flex-col space-y-2">
                                     <label className={labelClass}>GPUs per VM</label>
                                     <Select
-                                        disabled={!isEditing || gpuVariant === "None"}
-                                        value={gpuVariant === "None" ? "0" : gpusPerVm.toString()}
-                                        onValueChange={(val) => {
-                                            const count = parseInt(val, 10);
-                                            if (count === 0) {
-                                                setGpuVariant("None");
-                                            } else {
-                                                setGpusPerVm(count);
-                                            }
-                                        }}
+                                        disabled={
+                                            !isEditing ||
+                                            gpuVariant === "None" ||
+                                            // only one size sold (e.g. AWS A100s): nothing to choose
+                                            VARIANT_INFO[gpuVariant].length === 1
+                                        }
+                                        value={gpuVariant === "None" ? "-" : gpusPerVm.toString()}
+                                        onValueChange={(val) => setGpusPerVm(parseInt(val, 10))}
                                     >
                                         <SelectTrigger className="w-full h-9.5">
                                             <SelectValue>
-                                                {gpuVariant === "None" ? "0" : gpusPerVm.toString()}
+                                                {gpuVariant === "None" ? "-" : gpusPerVm.toString()}
                                             </SelectValue>
                                         </SelectTrigger>
                                         <SelectContent>
                                             {(gpuVariant === "None"
-                                                ? [0]
-                                                : [0, ...VARIANT_INFO[gpuVariant]]
+                                                ? []
+                                                : VARIANT_INFO[gpuVariant]
                                             ).map((n) => (
                                                 <SelectItem key={n} value={n.toString()}>
                                                     {n}
@@ -444,9 +533,11 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
                                     />
                                 </div>
 
-                                {/* GCP Region Dropdown */}
+                                {/* Region Dropdown */}
                                 <div className="flex flex-col space-y-2">
-                                    <label className={labelClass}>GCP Region</label>
+                                    <label className={labelClass}>
+                                        {isAws ? "AWS Region" : "GCP Region"}
+                                    </label>
                                     <Select
                                         disabled={!isEditing}
                                         value={settings.gcpRegion || ""}

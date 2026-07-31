@@ -36,13 +36,14 @@ _GPU_MACHINE_SPECS = {
     # AWS single-GPU-per-call machines
     "p4d.24xlarge": {"cpus": 96, "ram_gb": 1152, "gpus": 8},
     "p4de.24xlarge": {"cpus": 96, "ram_gb": 1152, "gpus": 8},
+    "p5.4xlarge": {"cpus": 16, "ram_gb": 256, "gpus": 1},
     "p5.48xlarge": {"cpus": 192, "ram_gb": 2048, "gpus": 8},
 }
 
 # Maps the `func_gpu` strings users pass to `remote_parallel_map` to the
-# smallest machine type with that GPU, per cloud. AWS has no single-GPU
-# A100/H100 instances, so those map to the 8-GPU p4/p5 machines (each GPU
-# still serves exactly one function call).
+# smallest machine type with that GPU, per cloud. AWS sells A100s only in
+# 8-GPU machines (each GPU still serves exactly one function call); H100s
+# are available as single-GPU p5.4xlarge.
 GPU_MACHINE_TYPES = {
     "gcp": {
         "A100": "a2-highgpu-1g",
@@ -55,8 +56,8 @@ GPU_MACHINE_TYPES = {
         "A100": "p4d.24xlarge",
         "A100_40G": "p4d.24xlarge",
         "A100_80G": "p4de.24xlarge",
-        "H100": "p5.48xlarge",
-        "H100_80G": "p5.48xlarge",
+        "H100": "p5.4xlarge",
+        "H100_80G": "p5.4xlarge",
     },
 }
 

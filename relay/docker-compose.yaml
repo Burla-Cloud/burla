@@ -1,0 +1,23 @@
+# Local/dev relay stack. Production runs the same two containers on a GCE VM
+# via deploy_relay.sh.
+services:
+  frps:
+    image: fatedier/frps:v0.70.1
+    command: ["-c", "/etc/frp/frps.toml"]
+    volumes:
+      - ./frps.toml:/etc/frp/frps.toml:ro
+    environment:
+      FRP_SUBDOMAIN_HOST: ${FRP_SUBDOMAIN_HOST:-relay.burla.dev}
+      FRP_AUTH_PLUGIN_ADDR: auth-plugin:9000
+    ports:
+      - "7000:7000"
+      - "443:443"
+    depends_on:
+      - auth-plugin
+    restart: unless-stopped
+
+  auth-plugin:
+    build: .
+    environment:
+      BURLA_BACKEND_URL: ${BURLA_BACKEND_URL:-https://backend.burla.dev}
+    restart: unless-stopped

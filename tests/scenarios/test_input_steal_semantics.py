@@ -11,6 +11,7 @@ job completes with all results even though we hijacked some inputs.
 from __future__ import annotations
 
 import pickle
+import ssl
 import threading
 import time
 
@@ -20,12 +21,12 @@ pytestmark = [pytest.mark.e2e, pytest.mark.slow]
 
 
 def _node_port(host: str) -> str:
-    # `http://node_xxx:8081` -> `8081`; `http://1.2.3.4:8081` -> `8081`.
+    # `http://node_xxx:8080` -> `8080`; `https://1.2.3.4:8080` -> `8080`.
     return host.rsplit(":", 1)[-1]
 
 
 def _local_url(host: str) -> str:
-    # local-dev node hosts are docker network names (`http://node_xxx:8081`),
+    # local-dev node hosts are docker network names (`http://node_xxx:8080`),
     # reachable from the VM at localhost:<port>. Remote nodes advertise a
     # public IP that is directly reachable.
     if "node_" not in host:
@@ -67,14 +68,14 @@ def test_input_steal_between_nodes(
 
     rpm_thread = threading.Thread(target=_run, daemon=True)
     rpm_thread.start()
+    node_client = None
 
     try:
         # Wait until two nodes are both RUNNING the same job (both got the POST /jobs/{id}).
         def _two_active_nodes():
             current = main_http_client.get("/v1/cluster/state").json()
             ready_and_running = [
-                n for n in current.get("ready_nodes", [])
-                if n.get("current_job")
+                n for n in current.get("ready_nodes", []) if n.get("current_job")
             ]
             if len(ready_and_running) >= 2:
                 return ready_and_running
@@ -82,19 +83,30 @@ def test_input_steal_between_nodes(
             # RUNNING show up in the full live-node list instead.
             all_nodes = main_http_client.get("/v1/cluster/nodes").json()["nodes"]
             running = [
-                n for n in all_nodes
+                n
+                for n in all_nodes
                 if n.get("status") == "RUNNING" and n.get("current_job")
             ]
             return running if len(running) >= 2 else None
 
         nodes = wait_for_fixture(_two_active_nodes, timeout=60)
         job_id = nodes[0]["current_job"]
-        assert all(n["current_job"] == job_id for n in nodes[:2]), (
-            "Expected both nodes on the same job, got mixed assignments"
-        )
+        assert all(
+            n["current_job"] == job_id for n in nodes[:2]
+        ), "Expected both nodes on the same job, got mixed assignments"
         node_a, node_b = nodes[0], nodes[1]
         url_a = _local_url(node_a["host"])
         url_b = _local_url(node_b["host"])
+        verify = (
+            ssl.create_default_context(cadata=state["cluster_ca"])
+            if url_a.startswith("https://")
+            else True
+        )
+        node_client = httpx.Client(
+            headers=burla_auth_headers,
+            timeout=10,
+            verify=verify,
+        )
 
         # Give both nodes a moment to upload inputs so A's queue is non-empty.
         time.sleep(5)
@@ -102,11 +114,9 @@ def test_input_steal_between_nodes(
         transfer_id = "test-steal-t1"
 
         # 1. Steal a batch from A.
-        resp_a1 = httpx.get(
+        resp_a1 = node_client.get(
             f"{url_a}/jobs/{job_id}/get_inputs",
             params={"transfer_id": transfer_id, "requester_queue_size": 0},
-            headers=burla_auth_headers,
-            timeout=10,
         )
         assert resp_a1.status_code == 200, resp_a1.text
         items = pickle.loads(resp_a1.content)
@@ -117,49 +127,45 @@ def test_input_steal_between_nodes(
             pytest.skip("node A's inputs_queue was empty at steal-time; race, retry")
 
         # 2. Idempotency: same transfer_id returns same batch.
-        resp_a2 = httpx.get(
+        resp_a2 = node_client.get(
             f"{url_a}/jobs/{job_id}/get_inputs",
             params={"transfer_id": transfer_id, "requester_queue_size": 0},
-            headers=burla_auth_headers,
-            timeout=10,
         )
         items2 = pickle.loads(resp_a2.content)
-        assert items == items2, "get_inputs with the same transfer_id must be idempotent"
+        assert (
+            items == items2
+        ), "get_inputs with the same transfer_id must be idempotent"
 
         # 3. Hand-carry to B via POST /jobs/{id}/inputs.
         payload = pickle.dumps(items)
-        resp_b = httpx.post(
+        resp_b = node_client.post(
             f"{url_b}/jobs/{job_id}/inputs",
             files={"inputs_pkl_with_idx": ("inputs", payload)},
-            headers=burla_auth_headers,
-            timeout=10,
         )
         assert resp_b.status_code == 200, resp_b.text
 
         # 4. Ack A with received=true so A discards the batch.
-        resp_ack = httpx.post(
+        resp_ack = node_client.post(
             f"{url_a}/jobs/{job_id}/ack_transfer",
             params={"transfer_id": transfer_id, "received": "true"},
-            headers=burla_auth_headers,
-            timeout=10,
         )
         assert resp_ack.status_code == 200
 
         # 5. Ack again — idempotent (pending_transfers already popped).
-        resp_ack2 = httpx.post(
+        resp_ack2 = node_client.post(
             f"{url_a}/jobs/{job_id}/ack_transfer",
             params={"transfer_id": transfer_id, "received": "true"},
-            headers=burla_auth_headers,
-            timeout=10,
         )
         assert resp_ack2.status_code == 200
     finally:
+        if node_client is not None:
+            node_client.close()
         rpm_thread.join(timeout=300)
 
     assert "result" in result_box, "rpm thread never stored a result"
     result = result_box["result"]
     assert result["ok"], result.get("traceback")
     assert len(result["outputs"]) == n_inputs
-    assert set(result["outputs"]) == set(range(n_inputs)), (
-        "Manual steal lost or duplicated an input"
-    )
+    assert set(result["outputs"]) == set(
+        range(n_inputs)
+    ), "Manual steal lost or duplicated an input"

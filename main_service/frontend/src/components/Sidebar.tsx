@@ -5,7 +5,16 @@ interface SidebarProps {
   disabled?: boolean;
 }
 
+// Injected by main_service's dashboard endpoint; false when the cluster has
+// no shared-workspace bucket (the client-hosted default).
+declare global {
+  interface Window {
+    __BURLA_FILESYSTEM_ENABLED__?: boolean;
+  }
+}
+
 const Sidebar = ({ disabled = false }: SidebarProps) => {
+  const filesystemEnabled = window.__BURLA_FILESYSTEM_ENABLED__ !== false;
   return (
     <div
       className={`w-60 min-h-screen bg-gray-100 border-r p-4 flex flex-col transition-opacity duration-200 ${
@@ -38,12 +47,14 @@ const Sidebar = ({ disabled = false }: SidebarProps) => {
         >
           <span>Jobs</span>
         </Link>
-                <Link
-                    to="/filesystem"
-                    className="flex items-center space-x-1 text-gray-700 hover:text-primary hover:bg-primary/10 p-2 rounded-md"
-                >
-                    <span>Filesystem</span>
-                </Link>
+        {filesystemEnabled && (
+          <Link
+            to="/filesystem"
+            className="flex items-center space-x-1 text-gray-700 hover:text-primary hover:bg-primary/10 p-2 rounded-md"
+          >
+            <span>Filesystem</span>
+          </Link>
+        )}
         <Link
           to="/settings"
           className="flex items-center space-x-1 text-gray-700 hover:text-primary hover:bg-primary/10 p-2 rounded-md"

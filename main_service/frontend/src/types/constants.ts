@@ -39,6 +39,19 @@ export const GCP_MACHINE_MAPPING: Record<string, VmType> = {
   "n4-standard-32": "CPU",
   "n4-standard-64": "CPU",
   "n4-standard-80": "CPU",
+
+  // AWS
+  "p4d.24xlarge": "A100",
+  "p4de.24xlarge": "A100",
+  "p5.4xlarge": "H100",
+  "p5.48xlarge": "H100",
+
+  "m7i.large": "CPU",
+  "m7i.xlarge": "CPU",
+  "m7i.2xlarge": "CPU",
+  "m7i.4xlarge": "CPU",
+  "m7i.8xlarge": "CPU",
+  "m7i.16xlarge": "CPU",
 };
 
 export const GCP_MACHINE_PRICING_MAPPING: Record<
@@ -69,15 +82,45 @@ export const GCP_MACHINE_PRICING_MAPPING: Record<
   "n4-standard-32": { type: "CPU", on_demand_price: 1.4512 },
   "n4-standard-64": { type: "CPU", on_demand_price: 2.9024 },
   "n4-standard-80": { type: "CPU", on_demand_price: 3.628 },
+
+  // AWS on-demand (us-east-1)
+  "p4d.24xlarge": { type: "A100", on_demand_price: 32.7726 },
+  "p4de.24xlarge": { type: "A100", on_demand_price: 40.9657 },
+  "p5.4xlarge": { type: "H100", on_demand_price: 6.88 },
+  "p5.48xlarge": { type: "H100", on_demand_price: 98.32 },
+
+  "m7i.large": { type: "CPU", on_demand_price: 0.1008 },
+  "m7i.xlarge": { type: "CPU", on_demand_price: 0.2016 },
+  "m7i.2xlarge": { type: "CPU", on_demand_price: 0.4032 },
+  "m7i.4xlarge": { type: "CPU", on_demand_price: 0.8064 },
+  "m7i.8xlarge": { type: "CPU", on_demand_price: 1.6128 },
+  "m7i.16xlarge": { type: "CPU", on_demand_price: 3.2256 },
 };
+
+// AWS machine specs for cluster-status displays (mirrors main_service/providers/catalog.py).
+export const AWS_MACHINE_SPECS: Record<string, { cpus: number; ram: string; gpu: string | null }> =
+  {
+    "m7i.large": { cpus: 2, ram: "8G", gpu: null },
+    "m7i.xlarge": { cpus: 4, ram: "16G", gpu: null },
+    "m7i.2xlarge": { cpus: 8, ram: "32G", gpu: null },
+    "m7i.4xlarge": { cpus: 16, ram: "64G", gpu: null },
+    "m7i.8xlarge": { cpus: 32, ram: "128G", gpu: null },
+    "m7i.12xlarge": { cpus: 48, ram: "192G", gpu: null },
+    "m7i.16xlarge": { cpus: 64, ram: "256G", gpu: null },
+    "m7i.24xlarge": { cpus: 96, ram: "384G", gpu: null },
+    "p4d.24xlarge": { cpus: 96, ram: "1152G", gpu: "8x A100 40G" },
+    "p4de.24xlarge": { cpus: 96, ram: "1152G", gpu: "8x A100 80G" },
+    "p5.4xlarge": { cpus: 16, ram: "256G", gpu: "1x H100 80G" },
+    "p5.48xlarge": { cpus: 192, ram: "2048G", gpu: "8x H100 80G" },
+  };
 
 export function getVmCategory(machineType: string): VmType | null {
   const mt = String(machineType || "");
   const mapped = GCP_MACHINE_MAPPING[mt];
   if (mapped) return mapped;
 
-  // fallback: any n4 is CPU
-  if (mt.startsWith("n4-")) return "CPU";
+  // fallback: any n4 (GCP) or m7i (AWS) is CPU
+  if (mt.startsWith("n4-") || mt.startsWith("m7i.")) return "CPU";
 
   return null;
 }

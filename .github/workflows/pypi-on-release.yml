@@ -7,37 +7,77 @@ on:
 jobs:
   release:
     runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
           architecture: "x64"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: main_service/frontend/package-lock.json
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
 
-      - name: Resolve main service image tag
+      - name: Validate release versions and ancestry
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
-          version=$(python - <<'PY'
+          python - <<'PY'
+          import ast
+          import os
           import tomllib
           from pathlib import Path
 
-          pyproject = tomllib.loads(Path("client/pyproject.toml").read_text())
-          print(pyproject["project"]["version"])
-          PY
-          )
-          echo "MAIN_SERVICE_IMAGE=us-docker.pkg.dev/burla-prod/burla-main-service/burla-main-service:${version}" >> "$GITHUB_ENV"
+          client_version = tomllib.loads(Path("client/pyproject.toml").read_text())["project"]["version"]
+          main_version = tomllib.loads(Path("main_service/pyproject.toml").read_text())["project"]["version"]
+          node_version = tomllib.loads(Path("node_service/pyproject.toml").read_text())["project"]["version"]
 
-      - name: Fail if main service image tag is missing
+          def assignment(path, name):
+              tree = ast.parse(Path(path).read_text())
+              for statement in tree.body:
+                  if isinstance(statement, ast.Assign):
+                      if any(isinstance(target, ast.Name) and target.id == name for target in statement.targets):
+                          return ast.literal_eval(statement.value)
+              raise AssertionError(f"{name} missing from {path}")
+
+          versions = {
+              client_version,
+              main_version,
+              node_version,
+              assignment("client/src/burla/__init__.py", "__version__"),
+              assignment("main_service/src/main_service/__init__.py", "CURRENT_BURLA_VERSION"),
+              assignment("main_service/src/main_service/__init__.py", "MIN_COMPATIBLE_CLIENT_VERSION"),
+              assignment("node_service/src/node_service/__init__.py", "__version__"),
+          }
+          assert versions == {os.environ["RELEASE_TAG"]}, versions
+          PY
+          RELEASE_SHA=$(git rev-list -n 1 "$RELEASE_TAG")
+          git fetch origin main
+          git merge-base --is-ancestor "$RELEASE_SHA" origin/main
+          echo "RELEASE_SHA=$RELEASE_SHA" >> "$GITHUB_ENV"
+          echo "MAIN_SERVICE_IMAGE=us-docker.pkg.dev/burla-prod/burla-main-service/burla-main-service:${RELEASE_TAG}" >> "$GITHUB_ENV"
+
+      - name: Verify tested main service image
         run: |
-          if ! docker manifest inspect "$MAIN_SERVICE_IMAGE" > /dev/null 2>&1; then
-            echo "Expected main service image tag is missing: $MAIN_SERVICE_IMAGE"
-            exit 1
-          fi
+          docker pull "$MAIN_SERVICE_IMAGE"
+          IMAGE_REVISION=$(docker inspect \
+            --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' \
+            "$MAIN_SERVICE_IMAGE")
+          test "$IMAGE_REVISION" = "$RELEASE_SHA"
 
       - name: Build dist
-        run: uv build --directory ./client
+        run: |
+          make -C main_service build-frontend
+          uv build --directory ./client
 
       - name: Publish to PyPI
-        run: uv publish --directory ./client --token "${{ secrets.PYPI_TOKEN }}"
+        run: uv publish --directory ./client --check-url https://pypi.org/simple/burla/ --token "${{ secrets.PYPI_TOKEN }}"

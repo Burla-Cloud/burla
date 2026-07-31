@@ -118,6 +118,7 @@ export interface Settings {
   gcpRegion?: string;
   burlaVersion?: string;
   googleCloudProjectId?: string;
+  cloudProvider?: string;
 }
 
 export interface ServiceAccount {

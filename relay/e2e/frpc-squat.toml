@@ -1,0 +1,14 @@
+# Valid token for `test-project`, but this is the deployed-head hostname for
+# project `victim--test-project`. A suffix-only ownership check would allow
+# the collision, so NewProxy must reject it.
+serverAddr = "frps"
+serverPort = 7000
+user = "test-project"
+metadatas.token = "good-token"
+
+[[proxies]]
+name = "head--victim--test-project"
+type = "https"
+localIP = "node"
+localPort = 8080
+subdomain = "head--victim--test-project"

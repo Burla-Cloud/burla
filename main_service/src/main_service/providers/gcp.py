@@ -41,7 +41,9 @@ class GCPProvider:
 
     def zones_supporting_machine_type(self, region_name: str, machine_type_name: str):
         name_filter = f"name={machine_type_name}"
-        request = AggregatedListMachineTypesRequest(project=PROJECT_ID, filter=name_filter)
+        request = AggregatedListMachineTypesRequest(
+            project=PROJECT_ID, filter=name_filter
+        )
         zone_generator = self.machine_types_client.aggregated_list(
             request=request, retry=GCE_TRANSIENT_RETRY
         )
@@ -61,9 +63,10 @@ class GCPProvider:
         startup_script: str,
         shutdown_script: str,
         on_log,
-    ) -> tuple[str, str]:
+        needs_cloud_credentials: bool = False,
+    ) -> tuple[str, str, str]:
         """Create the VM, iterating zones on capacity exhaustion.
-        Returns (external_ip, zone)."""
+        Returns (external_ip, internal_ip, zone)."""
         disk_params = AttachedDiskInitializeParams(
             source_image=self.disk_image(machine_type), disk_size_gb=disk_size
         )
@@ -71,7 +74,9 @@ class GCPProvider:
 
         network_name = "global/networks/default"
         access_config = AccessConfig(name="External NAT", type="ONE_TO_ONE_NAT")
-        network_interface = NetworkInterface(name=network_name, access_configs=[access_config])
+        network_interface = NetworkInterface(
+            name=network_name, access_configs=[access_config]
+        )
 
         can_live_migrate = (not spot) and num_gpus == 0
         if spot:
@@ -94,11 +99,18 @@ class GCPProvider:
                 automatic_restart=False,
             )
 
-        access_anything_scope = "https://www.googleapis.com/auth/cloud-platform"
-        service_account = ServiceAccount(
-            email=f"{_project_number()}-compute@developer.gserviceaccount.com",
-            scopes=[access_anything_scope],
-        )
+        # Nodes only need a service account for the shared-workspace bucket
+        # (gcsfuse). Without one the VM is credential-less, so whoever boots
+        # it needs zero IAM permissions (no actAs) - the client-hosted default.
+        service_accounts = []
+        if needs_cloud_credentials:
+            access_anything_scope = "https://www.googleapis.com/auth/cloud-platform"
+            service_accounts = [
+                ServiceAccount(
+                    email=f"{_project_number()}-compute@developer.gserviceaccount.com",
+                    scopes=[access_anything_scope],
+                )
+            ]
 
         metadata_items = [
             Items(key="startup-script", value=startup_script),
@@ -120,7 +132,7 @@ class GCPProvider:
                     machine_type=f"zones/{zone}/machineTypes/{machine_type}",
                     disks=[disk],
                     network_interfaces=[network_interface],
-                    service_accounts=[service_account],
+                    service_accounts=service_accounts,
                     metadata=Metadata(items=metadata_items),
                     tags=Tags(items=["burla-cluster-node"]),
                     scheduling=scheduling,
@@ -130,11 +142,15 @@ class GCPProvider:
                 operation.result(retry=GCE_TRANSIENT_RETRY)
                 instance_created = True
                 break
-            except ServiceUnavailable:  # not enough instances in this zone, try next zone.
+            except (
+                ServiceUnavailable
+            ):  # not enough instances in this zone, try next zone.
                 exhausted_zones.append(zone)
                 on_log(f"No available capacity for {machine_type} in zone: {zone}")
             except Conflict:
-                raise InstanceDeletedMidBoot(f"Node {instance_name} deleted while starting.")
+                raise InstanceDeletedMidBoot(
+                    f"Node {instance_name} deleted while starting."
+                )
 
         if not instance_created:
             msg = f"ZONE_RESOURCE_POOL_EXHAUSTED: {exhausted_zones} currently have no "
@@ -144,8 +160,11 @@ class GCPProvider:
         kw = dict(project=PROJECT_ID, zone=zone, instance=instance_name)
         instance_info = self.instance_client.get(**kw, retry=GCE_TRANSIENT_RETRY)
         external_ip = instance_info.network_interfaces[0].access_configs[0].nat_i_p
-        on_log(f"Successfully provisioned {machine_type} in zone: {zone}\nWaiting for startup script ...")
-        return external_ip, zone
+        internal_ip = instance_info.network_interfaces[0].network_i_p
+        on_log(
+            f"Successfully provisioned {machine_type} in zone: {zone}\nWaiting for startup script ..."
+        )
+        return external_ip, internal_ip, zone
 
     def delete_instance(self, instance_name: str, zone: str | None = None):
         if zone is None:
@@ -165,6 +184,20 @@ class GCPProvider:
                 if vm.name == instance_name:
                     return vm.zone.split("/")[-1]
         return None
+
+    def delete_stopped_instances(self):
+        """Credential-less nodes power themselves off (they can't call the
+        delete API); this reaps those TERMINATED VMs so only their disks were
+        ever billed after shutdown."""
+        response = self.instance_client.aggregated_list(project=PROJECT_ID)
+        for _, vms_in_zone in response:
+            for vm in getattr(vms_in_zone, "instances", []):
+                is_stopped_node = (
+                    vm.name.startswith("burla-node-") and vm.status == "TERMINATED"
+                )
+                if is_stopped_node:
+                    zone = vm.zone.split("/")[-1]
+                    self.delete_instance(vm.name, zone)
 
     def mount_shared_workspace_script(self, bucket_name: str) -> str:
         return f"""

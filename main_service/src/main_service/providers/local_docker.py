@@ -4,10 +4,10 @@ import json
 import docker
 
 from main_service import (
-    PROJECT_ID,
     BURLA_BACKEND_URL,
-    MAIN_SERVICE_URL_FOR_NODES,
     CLUSTER_ID_TOKEN,
+    MAIN_SERVICE_URL_FOR_NODES,
+    PROJECT_ID,
 )
 
 
@@ -26,7 +26,7 @@ class LocalDockerProvider:
         image = f"us-docker.pkg.dev/{PROJECT_ID}/burla-node-service/burla-node-service:latest"
         docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
         host_config = docker_client.create_host_config(
-            port_bindings={port: port},
+            port_bindings={port: ("127.0.0.1", port)},
             network_mode="local-burla-cluster",
             binds={
                 f"{os.environ['HOST_HOME_DIR']}/.config/gcloud": "/root/.config/gcloud",
@@ -49,7 +49,10 @@ class LocalDockerProvider:
 
                 credentials, _ = google.auth.default()
                 credentials.refresh(Request())
-                auth_config = {"username": "oauth2accesstoken", "password": credentials.token}
+                auth_config = {
+                    "username": "oauth2accesstoken",
+                    "password": credentials.token,
+                }
                 docker_client.pull(image, auth_config=auth_config)
             else:
                 raise
@@ -80,6 +83,7 @@ class LocalDockerProvider:
                 "NUM_GPUS": 0,
                 "MAIN_SERVICE_URL": MAIN_SERVICE_URL_FOR_NODES,
                 "CLUSTER_ID_TOKEN": CLUSTER_ID_TOKEN,
+                "BURLA_BACKEND_URL": BURLA_BACKEND_URL,
             },
             detach=True,
         )

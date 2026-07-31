@@ -14,6 +14,9 @@ from burla._helpers import run_command
 
 AUTH_TIMEOUT_SECONDS = 180
 IN_COLAB = os.getenv("COLAB_RELEASE_TAG") is not None
+CLUSTER_TOKEN_SECRET = os.environ.get(
+    "BURLA_CLUSTER_TOKEN_SECRET", "burla-cluster-id-token"
+)
 
 
 class AuthTimeoutException(Exception):
@@ -40,12 +43,13 @@ class ADCProjectException(Exception):
 class BurlaNotInstalledException(Exception):
     def __init__(self, project_id: str):
         super().__init__(
-            f"Burla is not installed in the active GCP project [{project_id}].\n\n"
+            f"No Burla cluster was found for the active GCP project [{project_id}].\n\n"
             "To use Burla, do one of these:\n"
-            f"- Run `burla install` while [{project_id}] is selected.\n"
-            "- Switch your Google Cloud project to one where Burla is already installed.\n"
-            "- Run `burla login` to authorize this machine against the Burla deployment you most "
-            "recently logged into in your browser."
+            "- Just call `remote_parallel_map` (or run `burla dashboard`) - Burla runs "
+            f"from this machine with no deployment needed.\n"
+            "- Run `burla login` to authorize this machine against a deployed Burla "
+            "cluster you have access to.\n"
+            f"- Run `burla deploy` while [{project_id}] is selected to deploy a shared cluster."
         )
 
 
@@ -58,7 +62,7 @@ class ADCSecretPermissionException(Exception):
         super().__init__(
             f"Burla found Google Application Default Credentials for [{project_id}], "
             "but they cannot read the Burla cluster token secret.\n\n"
-            "Grant this identity access to Secret Manager secret `burla-cluster-id-token`, "
+            f"Grant this identity access to Secret Manager secret `{CLUSTER_TOKEN_SECRET}`, "
             "or run `burla login`."
         )
 
@@ -76,7 +80,9 @@ def _get_adc_identity() -> tuple[str, str, str]:
     credentials, project_id = google.auth.default(
         scopes=["https://www.googleapis.com/auth/cloud-platform"]
     )
-    project_id = project_id or os.getenv("GOOGLE_CLOUD_PROJECT") or os.getenv("GCLOUD_PROJECT")
+    project_id = (
+        project_id or os.getenv("GOOGLE_CLOUD_PROJECT") or os.getenv("GCLOUD_PROJECT")
+    )
     if not project_id:
         raise ADCProjectException()
     credentials.refresh(Request())
@@ -101,9 +107,17 @@ def _get_adc_identity() -> tuple[str, str, str]:
 
 
 def _get_cluster_token(access_token: str, project_id: str) -> str:
+    # `burla deploy` and client-hosted mode save the token locally; only
+    # clusters installed before 1.7 still keep it in Secret Manager.
+    from burla._local_head import read_saved_cluster_token
+
+    saved_token = read_saved_cluster_token(project_id)
+    if saved_token:
+        return saved_token
+
     response = requests.get(
         "https://secretmanager.googleapis.com/v1/"
-        f"projects/{project_id}/secrets/burla-cluster-id-token/versions/latest:access",
+        f"projects/{project_id}/secrets/{CLUSTER_TOKEN_SECRET}/versions/latest:access",
         headers={"Authorization": f"Bearer {access_token}"},
         timeout=20,
     )
@@ -192,10 +206,14 @@ def _get_login_response(client_id, spinner, attempt=0):
 
 def login(no_browser: bool = False):
     # for dev: if main service is running locally, redirect to it instead of deployed cloud run
-    main_svc_image_name = "us-docker.pkg.dev/burla-test/burla-main-service/burla-main-service"
+    main_svc_image_name = (
+        "us-docker.pkg.dev/burla-test/burla-main-service/burla-main-service"
+    )
     cmd = f"docker container list --filter ancestor={main_svc_image_name}"
     result = run_command(cmd, raise_error=False)
-    redirect_locally = (result.returncode == 0) and (len(result.stdout.strip().splitlines()) > 1)
+    redirect_locally = (result.returncode == 0) and (
+        len(result.stdout.strip().splitlines()) > 1
+    )
 
     client_id = uuid4().hex
     login_url = f"{_BURLA_BACKEND_URL}/v2/login/client/{client_id}"
@@ -203,7 +221,9 @@ def login(no_browser: bool = False):
     if IN_COLAB or no_browser:
         print(f"Please navigate to the following URL to login:\n\n    {login_url}\n")
         if IN_COLAB:
-            print(f"(We are unable to automatically open this from a Google Colab notebook)")
+            print(
+                f"(We are unable to automatically open this from a Google Colab notebook)"
+            )
     else:
         print(f"Your browser has been opened to visit:\n\n    {login_url}\n")
         webbrowser.open(login_url)

@@ -91,7 +91,11 @@ def _connection() -> sqlite3.Connection:
 
 def get_cluster_config() -> dict | None:
     with _lock:
-        row = _connection().execute("SELECT data FROM cluster_config WHERE id = 1").fetchone()
+        row = (
+            _connection()
+            .execute("SELECT data FROM cluster_config WHERE id = 1")
+            .fetchone()
+        )
     return json.loads(row[0]) if row else None
 
 
@@ -109,39 +113,39 @@ def save_cluster_config(config: dict):
 # ---------------------------------------------------------------- jobs
 
 
-def upsert_job(job_id: str, job: dict):
+def _upsert_job(conn: sqlite3.Connection, job_id: str, job: dict):
     n_results = sum(
-        node.get("current_num_results", 0) for node in job.get("assigned_nodes", {}).values()
+        node.get("current_num_results", 0)
+        for node in job.get("assigned_nodes", {}).values()
     )
     data = {k: v for k, v in job.items() if k != "assigned_nodes"}
-    with _lock:
-        conn = _connection()
-        conn.execute(
-            "INSERT INTO jobs (job_id, started_at, status, user, function_name, n_inputs, "
-            "n_results, data) VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
-            "ON CONFLICT(job_id) DO UPDATE SET started_at = excluded.started_at, "
-            "status = excluded.status, user = excluded.user, "
-            "function_name = excluded.function_name, n_inputs = excluded.n_inputs, "
-            "n_results = MAX(jobs.n_results, excluded.n_results), data = excluded.data",
-            (
-                job_id,
-                job.get("started_at"),
-                job.get("status"),
-                job.get("user"),
-                job.get("function_name"),
-                job.get("n_inputs"),
-                n_results,
-                json.dumps(data),
-            ),
-        )
-        conn.commit()
+    conn.execute(
+        "INSERT INTO jobs (job_id, started_at, status, user, function_name, n_inputs, "
+        "n_results, data) VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT(job_id) DO UPDATE SET started_at = excluded.started_at, "
+        "status = excluded.status, user = excluded.user, "
+        "function_name = excluded.function_name, n_inputs = excluded.n_inputs, "
+        "n_results = MAX(jobs.n_results, excluded.n_results), data = excluded.data",
+        (
+            job_id,
+            job.get("started_at"),
+            job.get("status"),
+            job.get("user"),
+            job.get("function_name"),
+            job.get("n_inputs"),
+            n_results,
+            json.dumps(data),
+        ),
+    )
 
 
 def get_job(job_id: str) -> dict | None:
     with _lock:
-        row = _connection().execute(
-            "SELECT data, n_results FROM jobs WHERE job_id = ?", (job_id,)
-        ).fetchone()
+        row = (
+            _connection()
+            .execute("SELECT data, n_results FROM jobs WHERE job_id = ?", (job_id,))
+            .fetchone()
+        )
     if row is None:
         return None
     job = json.loads(row[0])
@@ -151,11 +155,15 @@ def get_job(job_id: str) -> dict | None:
 
 def list_jobs(offset: int, limit: int) -> list[dict]:
     with _lock:
-        rows = _connection().execute(
-            "SELECT job_id, data, n_results FROM jobs "
-            "ORDER BY started_at DESC LIMIT ? OFFSET ?",
-            (limit, offset),
-        ).fetchall()
+        rows = (
+            _connection()
+            .execute(
+                "SELECT job_id, data, n_results FROM jobs "
+                "ORDER BY started_at DESC LIMIT ? OFFSET ?",
+                (limit, offset),
+            )
+            .fetchall()
+        )
     jobs = []
     for job_id, data, n_results in rows:
         job = json.loads(data)
@@ -172,9 +180,11 @@ def count_jobs() -> int:
 
 def running_jobs() -> list[tuple[str, dict]]:
     with _lock:
-        rows = _connection().execute(
-            "SELECT job_id, data FROM jobs WHERE status = 'RUNNING'"
-        ).fetchall()
+        rows = (
+            _connection()
+            .execute("SELECT job_id, data FROM jobs WHERE status = 'RUNNING'")
+            .fetchall()
+        )
     return [(job_id, json.loads(data)) for job_id, data in rows]
 
 
@@ -208,20 +218,29 @@ def add_job_logs(job_id: str, documents: list[dict]):
 
 def job_error_count(job_id: str) -> int:
     with _lock:
-        row = _connection().execute(
-            "SELECT COUNT(*) FROM job_logs WHERE job_id = ? AND is_error = 1", (job_id,)
-        ).fetchone()
+        row = (
+            _connection()
+            .execute(
+                "SELECT COUNT(*) FROM job_logs WHERE job_id = ? AND is_error = 1",
+                (job_id,),
+            )
+            .fetchone()
+        )
     return row[0]
 
 
 def job_logged_input_indexes(job_id: str) -> tuple[list[int], list[int]]:
     """Returns (all indexes with logs, indexes with error logs)."""
     with _lock:
-        rows = _connection().execute(
-            "SELECT DISTINCT input_index, MAX(is_error) FROM job_logs "
-            "WHERE job_id = ? AND input_index IS NOT NULL GROUP BY input_index",
-            (job_id,),
-        ).fetchall()
+        rows = (
+            _connection()
+            .execute(
+                "SELECT DISTINCT input_index, MAX(is_error) FROM job_logs "
+                "WHERE job_id = ? AND input_index IS NOT NULL GROUP BY input_index",
+                (job_id,),
+            )
+            .fetchall()
+        )
     indexes = sorted(int(index) for index, _ in rows)
     failed = sorted(int(index) for index, is_error in rows if is_error)
     return indexes, failed
@@ -230,10 +249,14 @@ def job_logged_input_indexes(job_id: str) -> tuple[list[int], list[int]]:
 def job_logs_for_input(job_id: str, input_index: int) -> list[dict]:
     """Flattened log entries for one input index: {message, log_timestamp, is_error}."""
     with _lock:
-        rows = _connection().execute(
-            "SELECT logs, is_error FROM job_logs WHERE job_id = ? AND input_index = ?",
-            (job_id, input_index),
-        ).fetchall()
+        rows = (
+            _connection()
+            .execute(
+                "SELECT logs, is_error FROM job_logs WHERE job_id = ? AND input_index = ?",
+                (job_id, input_index),
+            )
+            .fetchall()
+        )
     entries = []
     for logs_json, doc_is_error in rows:
         for log in json.loads(logs_json):
@@ -253,43 +276,65 @@ def job_logs_for_input(job_id: str, input_index: int) -> list[dict]:
 # ---------------------------------------------------------------- nodes
 
 
+def _upsert_node(conn: sqlite3.Connection, instance_name: str, node: dict):
+    conn.execute(
+        "INSERT INTO nodes (instance_name, status, machine_type, gcp_region, spot, "
+        "started_booting_at, ended_at, data) VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT(instance_name) DO UPDATE SET status = excluded.status, "
+        "machine_type = excluded.machine_type, gcp_region = excluded.gcp_region, "
+        "spot = excluded.spot, started_booting_at = excluded.started_booting_at, "
+        "ended_at = excluded.ended_at, data = excluded.data",
+        (
+            instance_name,
+            node.get("status"),
+            node.get("machine_type"),
+            node.get("gcp_region"),
+            1 if node.get("spot") else 0,
+            node.get("started_booting_at"),
+            node.get("ended_at"),
+            json.dumps(node),
+        ),
+    )
+
+
 def upsert_node(instance_name: str, node: dict):
     with _lock:
         conn = _connection()
-        conn.execute(
-            "INSERT INTO nodes (instance_name, status, machine_type, gcp_region, spot, "
-            "started_booting_at, ended_at, data) VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
-            "ON CONFLICT(instance_name) DO UPDATE SET status = excluded.status, "
-            "machine_type = excluded.machine_type, gcp_region = excluded.gcp_region, "
-            "spot = excluded.spot, started_booting_at = excluded.started_booting_at, "
-            "ended_at = excluded.ended_at, data = excluded.data",
-            (
-                instance_name,
-                node.get("status"),
-                node.get("machine_type"),
-                node.get("gcp_region"),
-                1 if node.get("spot") else 0,
-                node.get("started_booting_at"),
-                node.get("ended_at"),
-                json.dumps(node),
-            ),
-        )
+        _upsert_node(conn, instance_name, node)
+        conn.commit()
+
+
+def upsert_job_and_nodes(job_id: str, job: dict, nodes: list[dict]):
+    with _lock:
+        conn = _connection()
+        _upsert_job(conn, job_id, job)
+        for node in nodes:
+            _upsert_node(conn, node["instance_name"], node)
         conn.commit()
 
 
 def active_nodes() -> list[dict]:
     with _lock:
-        rows = _connection().execute(
-            "SELECT data FROM nodes WHERE status IN ('BOOTING', 'READY', 'RUNNING', 'FAILED')"
-        ).fetchall()
+        rows = (
+            _connection()
+            .execute(
+                "SELECT data FROM nodes WHERE status IN ('BOOTING', 'READY', 'RUNNING', 'FAILED')"
+            )
+            .fetchall()
+        )
     return [json.loads(row[0]) for row in rows]
 
 
 def nodes_ended_after(cutoff_sec: float) -> list[dict]:
     with _lock:
-        rows = _connection().execute(
-            "SELECT data FROM nodes WHERE ended_at >= ? ORDER BY ended_at DESC", (cutoff_sec,)
-        ).fetchall()
+        rows = (
+            _connection()
+            .execute(
+                "SELECT data FROM nodes WHERE ended_at >= ? ORDER BY ended_at DESC",
+                (cutoff_sec,),
+            )
+            .fetchall()
+        )
     return [json.loads(row[0]) for row in rows]
 
 
@@ -321,18 +366,27 @@ def add_node_logs(instance_name: str, logs: list[dict]):
 def node_logs_after(instance_name: str, after_id: int) -> list[tuple[int, float, str]]:
     """Log rows with id > after_id, oldest first. Pass 0 for a full replay."""
     with _lock:
-        rows = _connection().execute(
-            "SELECT id, ts, msg FROM node_logs WHERE instance_name = ? AND id > ? ORDER BY id",
-            (instance_name, after_id),
-        ).fetchall()
+        rows = (
+            _connection()
+            .execute(
+                "SELECT id, ts, msg FROM node_logs WHERE instance_name = ? AND id > ? ORDER BY id",
+                (instance_name, after_id),
+            )
+            .fetchall()
+        )
     return rows
 
 
 def first_failure_log(instance_name: str, tokens: tuple[str, ...]) -> str | None:
     with _lock:
-        rows = _connection().execute(
-            "SELECT msg FROM node_logs WHERE instance_name = ? ORDER BY ts", (instance_name,)
-        ).fetchall()
+        rows = (
+            _connection()
+            .execute(
+                "SELECT msg FROM node_logs WHERE instance_name = ? ORDER BY ts",
+                (instance_name,),
+            )
+            .fetchall()
+        )
     for (msg,) in rows:
         msg = (msg or "").strip()
         if msg and any(token in msg for token in tokens):

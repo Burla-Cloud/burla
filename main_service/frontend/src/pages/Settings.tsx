@@ -276,7 +276,7 @@ const SettingsPage = () => {
                 ].join(" ")}
                 aria-pressed={section === "usage"}
               >
-                Billing
+                Usage
               </button>
             </nav>
           </div>

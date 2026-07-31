@@ -11,7 +11,6 @@ import time
 
 import pytest
 
-
 pytestmark = [pytest.mark.chaos, pytest.mark.slow]
 
 
@@ -43,7 +42,11 @@ def _seed_running_job(main_http_client, job_id: str) -> None:
 
 
 def test_restart_marks_running_jobs_cluster_restarted(
-    main_http_client, local_dev_cluster, isolated_job_id, cleanup_job, get_job,
+    main_http_client,
+    local_dev_cluster,
+    isolated_job_id,
+    cleanup_job,
+    get_job,
     wait_for_fixture,
 ):
     """Seed a RUNNING job, hit /restart, verify the flag gets set synchronously
@@ -61,13 +64,17 @@ def test_restart_marks_running_jobs_cluster_restarted(
 
 
 def test_shutdown_marks_running_jobs_cluster_shutdown(
-    main_http_client, local_dev_cluster, isolated_job_id, cleanup_job, get_job,
+    main_http_client,
+    local_dev_cluster,
+    isolated_job_id,
+    cleanup_job,
+    get_job,
     wait_for_fixture,
 ):
     job_id = cleanup_job(isolated_job_id())
     _seed_running_job(main_http_client, job_id)
 
-    resp = main_http_client.post("/v1/cluster/shutdown")
+    resp = main_http_client.post("/v1/cluster/shutdown", timeout=600)
     # Shutdown runs synchronously and may 500 if the cloud API returns errors
     # during VM teardown, but the `_mark_running_jobs_with_lifecycle_event`
     # write must have landed before the VM calls.

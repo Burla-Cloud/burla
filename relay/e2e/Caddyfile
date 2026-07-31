@@ -1,0 +1,4 @@
+:8080 {
+	tls /certs/node.pem /certs/node.key
+	respond "hello-from-node"
+}

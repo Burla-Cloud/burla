@@ -7,6 +7,10 @@ import requests
 from burla import CONFIG_PATH, _BURLA_BACKEND_URL
 
 
+def _in_notebook() -> bool:
+    return "ipykernel" in sys.modules
+
+
 def _safe_for_stream(message: str, stream) -> str:
     encoding = getattr(stream, "encoding", None) or "utf-8"
     return message.encode(encoding, errors="replace").decode(encoding, errors="replace")
@@ -174,8 +178,9 @@ class RemoteParallelMapReporter:
         )
         if booting_nodes > 0:
             message = message.rstrip(".")
-            message += f", booting {booting_nodes}."
-        if ram_per_function_call_gb is not None:
+            message += f", booting {booting_nodes} node{'s' if booting_nodes != 1 else ''}."
+        # notebook output cells are narrow; the RAM suffix just gets truncated there
+        if ram_per_function_call_gb is not None and not _in_notebook():
             message = message.rstrip(".")
             message += f", {ram_per_function_call_gb:.1f}G RAM per function call."
 

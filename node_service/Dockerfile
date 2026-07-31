@@ -80,7 +80,7 @@ WORKDIR /opt
 RUN git clone --depth 1 --branch main https://github.com/Burla-Cloud/burla.git --no-checkout
 WORKDIR burla
 RUN git sparse-checkout init --cone && \
-    git sparse-checkout set node_service && \
+    git sparse-checkout set node_service client && \
     git checkout main
 WORKDIR node_service
 RUN uv venv /opt/burla/.venv

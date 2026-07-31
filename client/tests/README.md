@@ -47,7 +47,7 @@ Run `make -f makefile local-dev` / `make -f makefile remote-dev` inside
 needs a real terminal.
 
 Open the tunneled dashboard in the GStack browser and click Start. Force
-VM-local tests and smoke jobs to hit the dev server:
+VM-local tests to hit the dev server:
 
 ```
 cd /srv/burla
@@ -78,7 +78,6 @@ scripts/dev_vm_stop.sh --slot <slot>
    `scripts/dev_vm_sync_repo.sh --slot <slot> --source <worktree>`.
 4. For now, tests that call `remote_parallel_map` should pass `grow=True` so the
    job boots nodes itself instead of relying on an already-started cluster.
-   Do this for smoke tests too.
 5. Run the tests on the VM with `scripts/dev_vm_shell.sh --slot <slot>`.
    Start the cluster with `make -f makefile local-dev`. The VM has `uv` at `/usr/local/bin/uv`;
    always invoke pytest via `uv run --project ./client --group dev pytest`.
@@ -114,5 +113,5 @@ uv run --project ./client --group dev pytest -m unit
   journeys: `test_full_job_lifecycle`, `test_cluster_restart_mid_job`,
   `test_grow_under_load`, `test_udf_error_propagation`,
   `test_detach_and_complete_async`.
-- Deleted the Playwright dashboard-UI tests — backend coverage catches
-  regressions that matter; UI smoke tests are out of scope.
+- Deleted the Playwright dashboard-UI tests because backend coverage catches
+  the regressions that matter.

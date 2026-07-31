@@ -4,6 +4,7 @@ from time import sleep
 import boto3
 from botocore.exceptions import ClientError
 
+from main_service import CURRENT_BURLA_VERSION
 from main_service.providers import NoCapacity
 
 # Capacity errors worth trying the next AZ for; anything else is a real error.
@@ -21,7 +22,9 @@ class AWSProvider:
     `burla-cluster-node`, in a security group opening the node port."""
 
     def __init__(self):
-        self.region = os.environ.get("AWS_REGION") or boto3.session.Session().region_name
+        self.region = (
+            os.environ.get("AWS_REGION") or boto3.session.Session().region_name
+        )
 
     def _ec2(self, region: str):
         return boto3.client("ec2", region_name=region)
@@ -34,13 +37,19 @@ class AWSProvider:
             return override
         response = ec2.describe_images(
             Owners=["self"],
-            Filters=[{"Name": "tag:burla-node-image", "Values": ["true"]}],
+            Filters=[
+                {"Name": "tag:burla-node-image", "Values": ["true"]},
+                {"Name": "tag:burla-version", "Values": [CURRENT_BURLA_VERSION]},
+                {"Name": "state", "Values": ["available"]},
+            ],
         )
-        images = sorted(response["Images"], key=lambda i: i["CreationDate"], reverse=True)
+        images = sorted(
+            response["Images"], key=lambda i: i["CreationDate"], reverse=True
+        )
         if not images:
             raise Exception(
                 "No burla node AMI found in this region. "
-                "Run `burla install --cloud aws` to build one, or set BURLA_NODE_AMI."
+                "Run `burla deploy --cloud aws` to build one, or set BURLA_NODE_AMI."
             )
         return images[0]["ImageId"]
 
@@ -62,9 +71,10 @@ class AWSProvider:
         startup_script: str,
         shutdown_script: str,
         on_log,
-    ) -> tuple[str, str]:
+        needs_cloud_credentials: bool = False,
+    ) -> tuple[str, str, str]:
         """Create the EC2 instance, iterating AZs on capacity exhaustion.
-        Returns (public_ip, availability_zone)."""
+        Returns (public_ip, private_ip, availability_zone)."""
         if num_gpus > 0:
             raise Exception(
                 "GPU nodes are not supported on AWS yet (the burla node AMI "
@@ -86,11 +96,14 @@ class AWSProvider:
             MinCount=1,
             MaxCount=1,
             UserData=startup_script,
-            IamInstanceProfile={"Name": "burla-node"},
             BlockDeviceMappings=[
                 {
                     "DeviceName": "/dev/sda1",
-                    "Ebs": {"VolumeSize": disk_size, "VolumeType": "gp3", "DeleteOnTermination": True},
+                    "Ebs": {
+                        "VolumeSize": disk_size,
+                        "VolumeType": "gp3",
+                        "DeleteOnTermination": True,
+                    },
                 }
             ],
             TagSpecifications=[
@@ -103,11 +116,22 @@ class AWSProvider:
                 }
             ],
         )
+        # The instance profile only grants shared-workspace S3 access; without
+        # it nodes are credential-less and whoever boots them needs no
+        # iam:PassRole (the client-hosted default).
+        if needs_cloud_credentials:
+            run_kwargs["IamInstanceProfile"] = {"Name": "burla-node"}
         if spot:
             run_kwargs["InstanceMarketOptions"] = {
                 "MarketType": "spot",
                 "SpotOptions": {"SpotInstanceType": "one-time"},
             }
+        else:
+            # An in-VM `poweroff` (inactivity shutdown, dead head) fully
+            # terminates the instance - no credentials needed to clean up.
+            # (One-time spot instances already terminate on shutdown, and
+            # the API rejects this parameter for them.)
+            run_kwargs["InstanceInitiatedShutdownBehavior"] = "terminate"
 
         exhausted_azs = []
         instance_id = None
@@ -163,20 +187,29 @@ class AWSProvider:
                 break
             sleep(2)
         if not public_ip:
-            raise Exception(f"Instance {instance_name} ({instance_id}) never got a public IP.")
+            raise Exception(
+                f"Instance {instance_name} ({instance_id}) never got a public IP."
+            )
+        private_ip = instance["PrivateIpAddress"]
 
-        on_log(f"Successfully provisioned {machine_type} in AZ: {zone}\nWaiting for startup script ...")
-        return public_ip, zone
+        on_log(
+            f"Successfully provisioned {machine_type} in AZ: {zone}\nWaiting for startup script ..."
+        )
+        return public_ip, private_ip, zone
 
     def delete_instance(self, instance_name: str, zone: str | None = None):
         cached = _instance_ids.pop(instance_name, None)
         if cached:
             instance_id, region = cached
+            ec2 = self._ec2(region)
             # A just-created id can be invisible for a few seconds (same
             # eventual consistency as describe_instances in create_instance).
             for attempt in range(5):
                 try:
-                    self._ec2(region).terminate_instances(InstanceIds=[instance_id])
+                    ec2.terminate_instances(InstanceIds=[instance_id])
+                    ec2.get_waiter("instance_terminated").wait(
+                        InstanceIds=[instance_id]
+                    )
                     return
                 except ClientError as error:
                     if error.response["Error"]["Code"] != "InvalidInstanceID.NotFound":
@@ -187,7 +220,29 @@ class AWSProvider:
         response = ec2.describe_instances(
             Filters=[
                 {"Name": "tag:Name", "Values": [instance_name]},
-                {"Name": "instance-state-name", "Values": ["pending", "running", "stopping", "stopped"]},
+                {
+                    "Name": "instance-state-name",
+                    "Values": ["pending", "running", "stopping", "stopped"],
+                },
+            ]
+        )
+        instance_ids = [
+            instance["InstanceId"]
+            for reservation in response["Reservations"]
+            for instance in reservation["Instances"]
+        ]
+        if instance_ids:
+            ec2.terminate_instances(InstanceIds=instance_ids)
+            ec2.get_waiter("instance_terminated").wait(InstanceIds=instance_ids)
+
+    def delete_stopped_instances(self):
+        """Nodes normally terminate themselves on shutdown; this reaps any
+        that were stopped some other way (e.g. through the AWS console)."""
+        ec2 = self._ec2(self.region)
+        response = ec2.describe_instances(
+            Filters=[
+                {"Name": "tag:burla-cluster-node", "Values": ["true"]},
+                {"Name": "instance-state-name", "Values": ["stopped"]},
             ]
         )
         instance_ids = [
@@ -218,7 +273,7 @@ def _security_group_id(ec2) -> str:
         groups = response["SecurityGroups"]
         if not groups:
             raise Exception(
-                "Security group `burla-cluster-node` not found. Run `burla install --cloud aws`."
+                "Security group `burla-cluster-node` not found. Run `burla deploy --cloud aws`."
             )
         _cached_sg_id = groups[0]["GroupId"]
     return _cached_sg_id

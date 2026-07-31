@@ -79,11 +79,11 @@ gcloud services enable \
 
 if ! main_service_account_exists "$PROJECT_ID"; then
   for attempt in 1 2 3; do
-    if DISABLE_BURLA_TELEMETRY=True CLOUDSDK_CORE_PROJECT="$PROJECT_ID" uv run --project "$CLIENT_PROJECT" burla install; then
+    if DISABLE_BURLA_TELEMETRY=True CLOUDSDK_CORE_PROJECT="$PROJECT_ID" uv run --project "$CLIENT_PROJECT" burla deploy; then
       break
     fi
     if [[ "$attempt" -eq 3 ]]; then
-      fail "burla install failed three times for project [$PROJECT_ID]."
+      fail "burla deploy failed three times for project [$PROJECT_ID]."
     fi
     sleep $((attempt * 5))
   done

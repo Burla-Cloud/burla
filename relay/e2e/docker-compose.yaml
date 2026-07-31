@@ -1,0 +1,58 @@
+services:
+  frps:
+    image: fatedier/frps:v0.70.1
+    command: ["-c", "/etc/frp/frps.toml"]
+    volumes:
+      - ../frps.toml:/etc/frp/frps.toml:ro
+    environment:
+      FRP_SUBDOMAIN_HOST: relay.test
+      FRP_AUTH_PLUGIN_ADDR: auth-plugin:9000
+    ports:
+      - "8443:443"
+    depends_on:
+      - auth-plugin
+
+  auth-plugin:
+    build: ..
+    environment:
+      BURLA_BACKEND_URL: http://fake-backend:9100
+    depends_on:
+      - fake-backend
+
+  fake-backend:
+    image: python:3.13-slim
+    volumes:
+      - ./fake_backend.py:/fake_backend.py:ro
+    command: ["python", "/fake_backend.py"]
+
+  # Stands in for a node: caddy serving TLS with a cluster-CA-signed cert,
+  # exactly like the real node startup script configures.
+  node:
+    image: caddy:2.10.2-alpine
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./certs:/certs:ro
+
+  frpc-good:
+    image: fatedier/frpc:v0.70.1
+    command: ["-c", "/etc/frp/frpc.toml"]
+    volumes:
+      - ./frpc-good.toml:/etc/frp/frpc.toml:ro
+    depends_on:
+      - frps
+      - node
+    restart: on-failure
+
+  frpc-bad:
+    profiles: ["manual"]
+    image: fatedier/frpc:v0.70.1
+    command: ["-c", "/etc/frp/frpc.toml"]
+    volumes:
+      - ./frpc-bad.toml:/etc/frp/frpc.toml:ro
+
+  frpc-squat:
+    profiles: ["manual"]
+    image: fatedier/frpc:v0.70.1
+    command: ["-c", "/etc/frp/frpc.toml"]
+    volumes:
+      - ./frpc-squat.toml:/etc/frp/frpc.toml:ro

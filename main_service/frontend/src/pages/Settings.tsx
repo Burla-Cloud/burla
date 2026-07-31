@@ -207,25 +207,6 @@ const SettingsPage = () => {
           <div className="flex items-center justify-between gap-6">
             <div className="min-w-0">
               <h1 className="text-2xl font-bold text-primary">Settings</h1>
-              {!loading && !error && (
-                <div className="mt-2 flex min-w-0 items-center gap-2 text-sm">
-                  <span
-                    className={[
-                      "inline-flex shrink-0 items-center rounded-md px-2 py-0.5",
-                      "font-semibold tracking-wide",
-                      isAws
-                        ? "bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-200"
-                        : "bg-blue-50 text-blue-700 ring-1 ring-inset ring-blue-200",
-                    ].join(" ")}
-                  >
-                    {cloudLabel}
-                  </span>
-                  <span className="shrink-0 text-gray-500">{resourceLabel}:</span>
-                  <code className="truncate font-mono text-gray-800" title={resourceId}>
-                    {resourceId}
-                  </code>
-                </div>
-              )}
             </div>
 
             <div className="min-w-[92px] flex justify-end">
@@ -258,7 +239,7 @@ const SettingsPage = () => {
             </div>
           </div>
 
-          <div className="mt-6">
+          <div className="mt-6 flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
             <nav
               className="relative inline-grid h-9 grid-cols-2 rounded-xl bg-gray-100/80 p-1"
               aria-label="Settings sections"
@@ -304,6 +285,19 @@ const SettingsPage = () => {
                 Usage
               </button>
             </nav>
+            {!loading && !error && (
+              <p
+                className="min-w-0 truncate text-xs text-gray-400"
+                aria-label={`${cloudLabel} ${resourceLabel} ${resourceId}`}
+              >
+                {cloudLabel}
+                <span className="mx-1.5">·</span>
+                {resourceLabel}{" "}
+                <code className="font-mono text-gray-500" title={resourceId}>
+                  {resourceId}
+                </code>
+              </p>
+            )}
           </div>
         </div>
 

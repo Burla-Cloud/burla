@@ -54,6 +54,7 @@ BURLA_RELAY_HOST = (
 BURLA_RELAY_SERVER_ADDR = os.environ.get("BURLA_RELAY_SERVER_ADDR") or BURLA_RELAY_HOST
 BURLA_RELAY_SERVER_PORT = int(os.environ.get("BURLA_RELAY_SERVER_PORT", 7000))
 FRP_VERSION = "0.70.1"
+print(f"Using Burla backend: {BURLA_BACKEND_URL}")
 
 
 def _resolve_project_id() -> str:

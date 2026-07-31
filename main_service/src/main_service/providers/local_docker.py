@@ -72,6 +72,7 @@ class LocalDockerProvider:
             host_config=host_config,
             environment={
                 "PROJECT_ID": PROJECT_ID,
+                "BURLA_BACKEND_URL": BURLA_BACKEND_URL,
                 "IN_LOCAL_DEV_MODE": "True",
                 "HOST_HOME_DIR": os.environ["HOST_HOME_DIR"],
                 "HOST_PWD": os.environ["HOST_PWD"],

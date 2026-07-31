@@ -16,7 +16,7 @@ from urllib.parse import urlparse
 
 import requests
 
-from burla import _BURLA_BACKEND_URL, __version__
+from burla import _BURLA_BACKEND_URL, _BURLA_NODE_SOURCE_REF, __version__
 from burla._helpers import run_command, VerboseCalledProcessError
 from burla._deploy import RELAY_HOST, RELAY_SERVER_ADDR, RELAY_SERVER_PORT, FRP_VERSION
 from burla._reporting import log_telemetry
@@ -47,7 +47,7 @@ def _head_setup_commands(
     cluster_id_token: str,
     account_name: str,
 ) -> list[str]:
-    node_source_ref = os.environ.get("BURLA_NODE_SOURCE_REF", __version__)
+    node_source_ref = _BURLA_NODE_SOURCE_REF
     relay_subdomain = f"head--{project_id}"
     registry = image.split("/", 1)[0]
     registry_login_commands = []

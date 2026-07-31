@@ -1,5 +1,9 @@
 import json
 import os
+import shlex
+import subprocess
+import sys
+import tempfile
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -8,11 +12,47 @@ from platformdirs import user_config_dir
 
 # needed so main_service can associate a client version with a request
 __version__ = "1.6.1"
-_BURLA_BACKEND_URL = os.environ.get(
-    "BURLA_BACKEND_URL", "https://backend.burla.dev"
-).rstrip("/")
 
-_appdata_dir = Path(user_config_dir(appname="burla", appauthor="burla"))
+_SOURCE_ROOT = Path(__file__).resolve().parents[3]
+_IN_SOURCE_CHECKOUT = (
+    (_SOURCE_ROOT / ".git").exists()
+    and (_SOURCE_ROOT / "client" / "pyproject.toml").exists()
+)
+_BURLA_ENVIRONMENT = os.environ.get("BURLA_ENVIRONMENT", "production").lower()
+if _BURLA_ENVIRONMENT not in {"production", "test"}:
+    raise ValueError("BURLA_ENVIRONMENT must be `production` or `test`.")
+if _BURLA_ENVIRONMENT == "test" and not _IN_SOURCE_CHECKOUT:
+    raise RuntimeError(
+        "Burla's internal test environment is only available from an editable "
+        "source checkout."
+    )
+
+_BURLA_APP_NAME = "burla-test" if _BURLA_ENVIRONMENT == "test" else "burla"
+_DEFAULT_BACKEND_URL = (
+    "https://test.backend.burla.dev"
+    if _BURLA_ENVIRONMENT == "test"
+    else "https://backend.burla.dev"
+)
+_DEFAULT_RELAY_HOST = (
+    "relay.test-clusters.burla.dev"
+    if _BURLA_ENVIRONMENT == "test"
+    else "relay.burla.dev"
+)
+_DEFAULT_NODE_SOURCE_REF = "dev" if _BURLA_ENVIRONMENT == "test" else __version__
+_BURLA_BACKEND_URL = os.environ.get(
+    "BURLA_BACKEND_URL", _DEFAULT_BACKEND_URL
+).rstrip("/")
+if _BURLA_BACKEND_URL != "https://backend.burla.dev" and not _IN_SOURCE_CHECKOUT:
+    raise RuntimeError(
+        "Non-production Burla backends are only available from an editable "
+        "source checkout."
+    )
+_BURLA_RELAY_HOST = os.environ.get("BURLA_RELAY_HOST", _DEFAULT_RELAY_HOST)
+_BURLA_NODE_SOURCE_REF = os.environ.get(
+    "BURLA_NODE_SOURCE_REF", _DEFAULT_NODE_SOURCE_REF
+)
+
+_appdata_dir = Path(user_config_dir(appname=_BURLA_APP_NAME, appauthor="burla"))
 CONFIG_PATH = _appdata_dir / Path("burla_credentials.json")
 SETTINGS_PATH = _appdata_dir / Path("config.json")
 
@@ -44,11 +84,15 @@ def set_config(key: str, value: str) -> str:
 
 
 def get_config(key: str = None):
-    config = {"cloud": get_cloud()}
+    config = {
+        "cloud": get_cloud(),
+        "environment": _BURLA_ENVIRONMENT,
+        "backend": _BURLA_BACKEND_URL,
+    }
     if key is None:
         return config
     if key not in config:
-        raise ValueError("The only supported config key is `cloud`.")
+        raise ValueError(f"Unknown config key: {key}")
     return config[key]
 
 
@@ -120,19 +164,112 @@ def version():
 
 
 def dashboard():
-    """Open the Burla dashboard, hosted on this machine.
+    """Run the Burla dashboard on this machine.
 
-    Starts the cluster head locally if it isn't already running - from there
-    you can boot nodes, watch jobs, and change settings. No deployment or
-    special cloud permissions needed (only permission to boot VMs).
+    Runs the cluster head in this terminal and opens it in your browser. From
+    there you can boot nodes, watch jobs, and change settings. Press Ctrl-C to
+    stop it.
     """
     import webbrowser
 
-    from burla._local_head import ensure_local_head
+    from burla._local_head import run_local_head_foreground
 
-    url = ensure_local_head()
-    print(f"Burla dashboard is running at {url}")
-    webbrowser.open(url)
+    def open_dashboard(url: str):
+        print(f"Burla dashboard is running at {url}")
+        print("Press Ctrl-C to stop it.")
+        webbrowser.open(url)
+
+    run_local_head_foreground(on_ready=open_dashboard)
+
+
+def _configure_test_shell_prompt(
+    shell: str, environment: dict[str, str], startup_dir: Path
+) -> list[str]:
+    """Give the child shell a visible test prompt without changing dotfiles."""
+    shell_name = Path(shell).name
+    burla_bin_dir = str(Path(sys.executable).parent)
+    burla_bin_dir_quoted = shlex.quote(burla_bin_dir)
+    environment["PATH"] = (
+        f"{burla_bin_dir}{os.pathsep}{environment.get('PATH', '')}"
+    )
+    if shell_name == "zsh":
+        original_zdotdir = Path(
+            environment.get("ZDOTDIR")
+            or environment.get("HOME")
+            or str(Path.home())
+        ).expanduser()
+        startup_dir_quoted = shlex.quote(str(startup_dir))
+        original_zdotdir_quoted = shlex.quote(str(original_zdotdir))
+
+        for filename in (".zshenv", ".zshrc"):
+            original_file = original_zdotdir / filename
+            source_original = ""
+            if original_file.exists():
+                source_original = (
+                    f"export ZDOTDIR={original_zdotdir_quoted}\n"
+                    f"source {shlex.quote(str(original_file))}\n"
+                    f"export ZDOTDIR={startup_dir_quoted}\n"
+                )
+            (startup_dir / filename).write_text(source_original)
+
+        with (startup_dir / ".zshrc").open("a") as zshrc:
+            zshrc.write(
+                f"\nexport PATH={burla_bin_dir_quoted}:$PATH\n"
+                "rehash\n"
+                "autoload -Uz add-zsh-hook\n"
+                "_burla_test_prompt() {\n"
+                '  if [[ "$PROMPT" != *"[burla test]"* ]]; then\n'
+                "    PROMPT='%F{yellow}%B[burla test]%b%f '$PROMPT\n"
+                "  fi\n"
+                "}\n"
+                "add-zsh-hook precmd _burla_test_prompt\n"
+                "_burla_test_prompt\n"
+            )
+        environment["ZDOTDIR"] = str(startup_dir)
+        return [shell, "-i"]
+
+    if shell_name == "bash":
+        original_bashrc = Path(environment.get("HOME") or str(Path.home())) / ".bashrc"
+        bashrc = startup_dir / "bashrc"
+        source_original = (
+            f"source {shlex.quote(str(original_bashrc))}\n"
+            if original_bashrc.exists()
+            else ""
+        )
+        bashrc.write_text(
+            source_original
+            + f"export PATH={burla_bin_dir_quoted}:$PATH\n"
+            + "PS1='\\[\\e[33;1m\\][burla test]\\[\\e[0m\\] '$PS1\n"
+        )
+        return [shell, "--rcfile", str(bashrc), "-i"]
+
+    environment["PS1"] = f"[burla test] {environment.get('PS1', '')}"
+    return [shell, "-i"]
+
+
+def test_shell():
+    """Enter Burla's isolated internal test environment. Type `exit` to leave."""
+    if not _IN_SOURCE_CHECKOUT:
+        raise RuntimeError("Test mode requires an editable Burla source checkout.")
+
+    environment = dict(os.environ)
+    environment["BURLA_ENVIRONMENT"] = "test"
+    for name in (
+        "BURLA_BACKEND_URL",
+        "BURLA_RELAY_HOST",
+        "BURLA_RELAY_SERVER_ADDR",
+        "BURLA_RELAY_SERVER_PORT",
+        "BURLA_NODE_SOURCE_REF",
+        "BURLA_CLUSTER_DASHBOARD_URL",
+    ):
+        environment.pop(name, None)
+
+    shell = environment.get("SHELL", "/bin/zsh")
+    with tempfile.TemporaryDirectory(prefix="burla-test-shell-") as temp_dir:
+        command = _configure_test_shell_prompt(shell, environment, Path(temp_dir))
+        result = subprocess.run(command, cwd=_SOURCE_ROOT, env=environment)
+    if result.returncode:
+        raise SystemExit(result.returncode)
 
 
 def install(cloud: str = "gcp"):
@@ -143,17 +280,18 @@ def install(cloud: str = "gcp"):
 
 
 def init_cli():
-    Fire(
-        {
-            "login": login,
-            "deploy": deploy,
-            "dashboard": dashboard,
-            "config": {
-                "set": set_config,
-                "get": get_config,
-            },
-            "install": install,
-            "--version": version,
-            "-v": version,
-        }
-    )
+    commands = {
+        "login": login,
+        "deploy": deploy,
+        "dashboard": dashboard,
+        "config": {
+            "set": set_config,
+            "get": get_config,
+        },
+        "install": install,
+        "--version": version,
+        "-v": version,
+    }
+    if _IN_SOURCE_CHECKOUT:
+        commands["test-shell"] = test_shell
+    Fire(commands)

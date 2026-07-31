@@ -12,7 +12,12 @@ from urllib.parse import urlparse
 
 from yaspin import yaspin
 
-from burla import _BURLA_BACKEND_URL, __version__
+from burla import (
+    _BURLA_BACKEND_URL,
+    _BURLA_NODE_SOURCE_REF,
+    _BURLA_RELAY_HOST,
+    __version__,
+)
 from burla._helpers import run_command, VerboseCalledProcessError
 from burla._reporting import log_telemetry
 
@@ -23,7 +28,7 @@ HEAD_ZONE = "us-central1-a"
 
 # All cluster traffic flows through Burla's frp relay: nodes + head dial out
 # to it, so no inbound firewall rules are ever needed in the user's project.
-RELAY_HOST = os.environ.get("BURLA_RELAY_HOST", "relay.burla.dev").strip().lower()
+RELAY_HOST = _BURLA_RELAY_HOST.strip().lower()
 RELAY_SERVER_ADDR = os.environ.get("BURLA_RELAY_SERVER_ADDR", RELAY_HOST)
 RELAY_SERVER_PORT = os.environ.get("BURLA_RELAY_SERVER_PORT", "7000")
 FRP_VERSION = "0.70.1"
@@ -119,7 +124,7 @@ def _head_startup_script(
     image: str,
     dashboard_hostname: str,
 ) -> str:
-    node_source_ref = os.environ.get("BURLA_NODE_SOURCE_REF", __version__)
+    node_source_ref = _BURLA_NODE_SOURCE_REF
     relay_subdomain = f"head--{project_id}"
     caddy_config = f"""{dashboard_hostname} {{
   reverse_proxy burla-main-service:5001

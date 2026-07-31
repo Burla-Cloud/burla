@@ -21,6 +21,25 @@ Four tiers:
 
 Nothing runs in GitHub Actions.
 
+#### Internal test environment on a laptop
+
+From a source checkout, enter the isolated test shell with:
+
+```
+make test-shell
+```
+
+Inside that shell, ordinary commands such as `burla dashboard` and notebook
+launches use the test backend, test relay, and the `dev` source ref. Test
+credentials and local-head data are stored separately from production. No
+separate `burla login` is required: Burla bootstraps the isolated profile from
+your cloud credentials. Type `exit` to leave the shell; the parent terminal
+remains in production mode.
+
+This source-only command is a developer convenience, not a security boundary.
+The test backend must independently restrict authentication to approved internal
+identities.
+
 #### Running on a dev VM (humans)
 
 Follow the ephemeral dev-VM workflow (see [`.cursor/skills/burla-ephemeral-dev-vm/SKILL.md`](../../.cursor/skills/burla-ephemeral-dev-vm/SKILL.md)):

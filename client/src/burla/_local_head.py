@@ -1,12 +1,13 @@
 """
 Client-hosted mode: runs main_service on this machine instead of a head VM.
 
-This is the default way Burla runs. `remote_parallel_map` (or `burla
-dashboard`) starts main_service as a detached subprocess using the code
-vendored inside this package, plus an frpc tunnel so node VMs can reach it
-through the relay. Node VMs are booted with the user's own cloud credentials
-and carry none of their own, so the only permissions needed are "can boot
-VMs". `burla deploy` remains the upgrade path to an always-on, shared head VM.
+This is the default way Burla runs. `remote_parallel_map` starts main_service
+as a detached subprocess using the code vendored inside this package. The
+explicit `burla dashboard` command runs that same service in the foreground.
+Both modes also start an frpc tunnel so node VMs can reach the head through the
+relay. Node VMs are booted with the user's own cloud credentials and carry none
+of their own, so the only permissions needed are "can boot VMs". `burla deploy`
+remains the upgrade path to an always-on, shared head VM.
 """
 
 import configparser
@@ -20,6 +21,7 @@ import sys
 import tarfile
 import tempfile
 import zipfile
+from collections.abc import Callable
 from pathlib import Path
 from time import sleep, time
 from uuid import uuid4
@@ -27,16 +29,24 @@ from uuid import uuid4
 import requests
 from platformdirs import user_data_dir
 
-from burla import _BURLA_BACKEND_URL, __version__
+from burla import (
+    _BURLA_APP_NAME,
+    _BURLA_BACKEND_URL,
+    _BURLA_NODE_SOURCE_REF,
+    _BURLA_RELAY_HOST,
+    __version__,
+)
 
-RELAY_HOST = os.environ.get("BURLA_RELAY_HOST", "relay.burla.dev").strip().lower()
+RELAY_HOST = _BURLA_RELAY_HOST.strip().lower()
 RELAY_SERVER_ADDR = os.environ.get("BURLA_RELAY_SERVER_ADDR", RELAY_HOST)
 RELAY_SERVER_PORT = os.environ.get("BURLA_RELAY_SERVER_PORT", "7000")
 FRP_VERSION = "0.70.1"
 
 PREFERRED_HEAD_PORT = 5001  # the browser login flow redirects to localhost:5001
 
-STATE_ROOT = Path(user_data_dir(appname="burla", appauthor="burla")) / "clusters"
+STATE_ROOT = (
+    Path(user_data_dir(appname=_BURLA_APP_NAME, appauthor="burla")) / "clusters"
+)
 
 
 class LocalHeadError(Exception):
@@ -434,7 +444,21 @@ def _prepare_aws(project_id: str, aws_region: str):
 
 
 def ensure_local_head() -> str:
-    """Starts (or reuses) the client-hosted main_service and returns its URL."""
+    """Starts (or reuses) a detached main_service and returns its URL."""
+    return _run_local_head(detached=True)
+
+
+def run_local_head_foreground(
+    on_ready: Callable[[str], None] | None = None,
+) -> None:
+    """Run main_service attached to this terminal until it exits or Ctrl-C."""
+    _run_local_head(detached=False, on_ready=on_ready)
+
+
+def _run_local_head(
+    detached: bool,
+    on_ready: Callable[[str], None] | None = None,
+) -> str:
     cloud, project_id, aws_region = detect_cloud()
 
     state_dir = _state_dir(project_id)
@@ -445,7 +469,12 @@ def ensure_local_head() -> str:
 
     url = head_state.get("url")
     saved_token = read_saved_cluster_token(project_id)
-    if url and saved_token and _head_matches(url, project_id, saved_token):
+    if (
+        detached
+        and url
+        and saved_token
+        and _head_matches(url, project_id, saved_token)
+    ):
         if not _pid_alive(head_state.get("frpc_pid")):
             _respawn_frpc(state_dir, head_state)
         return url
@@ -486,6 +515,7 @@ def ensure_local_head() -> str:
         "BURLA_RELAY_HOST": RELAY_HOST,
         "BURLA_RELAY_SERVER_ADDR": RELAY_SERVER_ADDR,
         "BURLA_RELAY_SERVER_PORT": str(RELAY_SERVER_PORT),
+        "BURLA_NODE_SOURCE_REF": _BURLA_NODE_SOURCE_REF,
         "MAIN_SERVICE_URL_FOR_NODES": f"https://{subdomain}.{RELAY_HOST}",
         "PORT": str(head_port),
         "INTERNAL_TLS_PORT": str(tls_port),
@@ -506,24 +536,11 @@ def ensure_local_head() -> str:
             f"{extra_pythonpath}{os.pathsep}{existing}" if existing else extra_pythonpath
         )
 
-    head_log = open(state_dir / "head.log", "ab")
-    head_process = subprocess.Popen(
-        [
-            sys.executable,
-            "-m",
-            "uvicorn",
-            "main_service:app",
-            "--host",
-            "127.0.0.1",
-            "--port",
-            str(head_port),
-            "--timeout-keep-alive",
-            "600",
-        ],
-        env=environment,
-        stdout=head_log,
-        stderr=head_log,
-        start_new_session=True,
+    head_process = _spawn_head(
+        state_dir=state_dir,
+        head_port=head_port,
+        environment=environment,
+        detached=detached,
     )
 
     # Written before the readiness wait so a failed boot never leaks the
@@ -538,24 +555,129 @@ def ensure_local_head() -> str:
     }
     head_state_path.write_text(json.dumps(head_state))
 
-    start = time()
-    while time() - start < 90:
-        if _head_matches(url, project_id, cluster_token):
-            break
-        if head_process.poll() is not None:
-            log_tail = (state_dir / "head.log").read_text()[-3000:]
-            raise LocalHeadError(f"Burla's local service failed to start:\n{log_tail}")
-        sleep(0.5)
-    else:
-        raise LocalHeadError(
-            f"Burla's local service never became ready (see {state_dir / 'head.log'})."
+    if detached:
+        _wait_for_head_ready(
+            head_process, url, project_id, cluster_token, state_dir, detached=True
         )
+        _respawn_frpc(state_dir, head_state, cluster_token=cluster_token)
+        return url
 
-    _respawn_frpc(state_dir, head_state, cluster_token=cluster_token)
+    frpc_process = None
+    try:
+        _wait_for_head_ready(
+            head_process, url, project_id, cluster_token, state_dir, detached=False
+        )
+        frpc_process = _respawn_frpc(
+            state_dir, head_state, cluster_token=cluster_token
+        )
+        if on_ready:
+            on_ready(url)
+        return_code = head_process.wait()
+        if return_code != 0:
+            raise LocalHeadError(
+                f"Burla's local service exited with status {return_code}."
+            )
+    except KeyboardInterrupt:
+        return url
+    finally:
+        _stop_process(head_process)
+        if frpc_process is not None:
+            _stop_process(frpc_process)
+        _clear_process_state(
+            head_state_path,
+            head_process.pid,
+            frpc_process.pid if frpc_process is not None else None,
+        )
     return url
 
 
-def _respawn_frpc(state_dir: Path, head_state: dict, cluster_token: str = None):
+def _wait_for_head_ready(
+    head_process: subprocess.Popen,
+    url: str,
+    project_id: str,
+    cluster_token: str,
+    state_dir: Path,
+    detached: bool,
+):
+    start = time()
+    while time() - start < 90:
+        if _head_matches(url, project_id, cluster_token):
+            return
+        if head_process.poll() is not None:
+            if detached:
+                log_tail = (state_dir / "head.log").read_text()[-3000:]
+                raise LocalHeadError(
+                    f"Burla's local service failed to start:\n{log_tail}"
+                )
+            raise LocalHeadError("Burla's local service failed to start.")
+        sleep(0.5)
+
+    message = "Burla's local service never became ready"
+    if detached:
+        message += f" (see {state_dir / 'head.log'})."
+    else:
+        message += "."
+    raise LocalHeadError(message)
+
+
+def _spawn_head(
+    state_dir: Path,
+    head_port: int,
+    environment: dict[str, str],
+    detached: bool,
+) -> subprocess.Popen:
+    command = [
+        sys.executable,
+        "-m",
+        "uvicorn",
+        "main_service:app",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        str(head_port),
+        "--timeout-keep-alive",
+        "600",
+    ]
+    if not detached:
+        return subprocess.Popen(command, env=environment)
+
+    with open(state_dir / "head.log", "ab") as head_log:
+        return subprocess.Popen(
+            command,
+            env=environment,
+            stdout=head_log,
+            stderr=head_log,
+            start_new_session=True,
+        )
+
+
+def _stop_process(process: subprocess.Popen):
+    if process.poll() is not None:
+        return
+    process.terminate()
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
+
+
+def _clear_process_state(
+    head_state_path: Path, head_pid: int, frpc_pid: int | None
+):
+    if not head_state_path.exists():
+        return
+    head_state = json.loads(head_state_path.read_text())
+    if head_state.get("head_pid") == head_pid:
+        head_state.pop("head_pid")
+    if frpc_pid is not None and head_state.get("frpc_pid") == frpc_pid:
+        head_state.pop("frpc_pid")
+    head_state_path.write_text(json.dumps(head_state))
+
+
+def _respawn_frpc(
+    state_dir: Path, head_state: dict, cluster_token: str = None
+) -> subprocess.Popen:
     cluster_token = cluster_token or read_saved_cluster_token(head_state["project_id"])
     frpc_binary = ensure_frpc_binary()
     config_path = _write_frpc_config(
@@ -574,3 +696,4 @@ def _respawn_frpc(state_dir: Path, head_state: dict, cluster_token: str = None):
     )
     head_state["frpc_pid"] = frpc_process.pid
     (state_dir / "head.json").write_text(json.dumps(head_state))
+    return frpc_process

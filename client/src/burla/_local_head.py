@@ -51,12 +51,17 @@ def _state_dir(project_id: str) -> Path:
 # ------------------------------------------------------------------ cloud
 
 
-def detect_cloud(cloud: str | None = None) -> tuple[str, str, str | None]:
-    """Returns (cloud, project_id, aws_region). Prefers GCP when both CLIs
-    are configured; the argument or BURLA_CLOUD=gcp|aws overrides."""
-    forced = cloud or os.environ.get("BURLA_CLOUD", "").lower() or None
+def detect_cloud() -> tuple[str, str, str | None]:
+    """Returns (cloud, project_id, aws_region) for the configured cloud."""
+    from burla import get_cloud
 
-    if forced in (None, "gcp") and shutil.which("gcloud"):
+    cloud = get_cloud()
+    if cloud == "gcp":
+        if not shutil.which("gcloud"):
+            raise LocalHeadError(
+                "GCP is selected, but gcloud is not installed. "
+                "Install it or run `burla config set cloud aws`."
+            )
         result = subprocess.run(
             ["gcloud", "config", "get-value", "project"],
             capture_output=True,
@@ -65,31 +70,36 @@ def detect_cloud(cloud: str | None = None) -> tuple[str, str, str | None]:
         gcp_project = result.stdout.strip()
         if gcp_project and gcp_project != "(unset)":
             return "gcp", gcp_project, None
-        if forced == "gcp":
-            raise LocalHeadError(
-                "No gcloud project is set. Run `gcloud config set project <id>`."
-            )
-
-    if forced in (None, "aws") and shutil.which("aws"):
-        result = subprocess.run(
-            ["aws", "sts", "get-caller-identity", "--query", "Account", "--output", "text"],
-            capture_output=True,
-            text=True,
+        raise LocalHeadError(
+            "GCP is selected, but no gcloud project is set. "
+            "Run `gcloud config set project <id>`."
         )
-        account_id = result.stdout.strip()
-        if result.returncode == 0 and account_id:
-            region_result = subprocess.run(
-                ["aws", "configure", "get", "region"], capture_output=True, text=True
-            )
-            region = region_result.stdout.strip() or "us-east-1"
-            return "aws", f"aws-{account_id}", region
 
-    raise LocalHeadError(
-        "Could not find working cloud credentials.\n"
-        "- For Google Cloud: install gcloud, then run `gcloud auth login` "
-        "and `gcloud auth application-default login`.\n"
-        "- For AWS: install the aws CLI and run `aws configure`."
+    if not shutil.which("aws"):
+        raise LocalHeadError(
+            "AWS is selected, but the AWS CLI is not installed. "
+            "Install it or run `burla config set cloud gcp`."
+        )
+    result = subprocess.run(
+        ["aws", "sts", "get-caller-identity", "--query", "Account", "--output", "text"],
+        capture_output=True,
+        text=True,
     )
+    if result.returncode != 0:
+        raise LocalHeadError(
+            "AWS is selected, but its credentials are not active. "
+            "Run `aws configure` or `aws sso login`, then retry."
+        )
+    region_result = subprocess.run(
+        ["aws", "configure", "get", "region"], capture_output=True, text=True
+    )
+    region = (
+        os.environ.get("AWS_REGION")
+        or os.environ.get("AWS_DEFAULT_REGION")
+        or region_result.stdout.strip()
+        or "us-east-1"
+    )
+    return "aws", f"aws-{result.stdout.strip()}", region
 
 
 def _gcp_ownership_payload() -> dict:
@@ -206,7 +216,9 @@ def ensure_user_authorized(
     from burla._auth import _write_auth_config
 
     if CONFIG_PATH.exists():
-        return
+        auth_info = json.loads(CONFIG_PATH.read_text())
+        if auth_info["project_id"] == project_id:
+            return
 
     if cloud == "aws":
         result = subprocess.run(
@@ -392,9 +404,9 @@ def _prepare_aws(project_id: str, aws_region: str):
     marker.write_text("done")
 
 
-def ensure_local_head(cloud: str = None) -> str:
+def ensure_local_head() -> str:
     """Starts (or reuses) the client-hosted main_service and returns its URL."""
-    cloud, project_id, aws_region = detect_cloud(cloud)
+    cloud, project_id, aws_region = detect_cloud()
 
     state_dir = _state_dir(project_id)
     head_state_path = state_dir / "head.json"

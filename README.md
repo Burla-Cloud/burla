@@ -56,13 +56,21 @@ This example runs `my_function` on 1,000 VMs in less than one second:
 
 ## Getting started
 
-You'll need Python 3.11+, a Google Cloud project with billing enabled, and the [gcloud CLI](https://cloud.google.com/sdk/docs/install) authenticated (`gcloud auth login` and `gcloud auth application-default login`).
+You'll need Python 3.11+ and permission to boot VMs. Burla defaults to the
+account and region selected by your AWS CLI.
 
 ```bash
 pip install burla
 ```
 
 That's the whole setup. If you can boot a VM in your cloud project, you can use Burla: no service accounts, buckets, firewall rules, or IAM changes are needed.
+
+To use GCP instead, select it once and Burla will use the active gcloud project:
+
+```bash
+burla config set cloud gcp
+gcloud config set project <project-id>
+```
 
 ```python
 from burla import remote_parallel_map
@@ -74,7 +82,10 @@ def my_function(x):
 results = remote_parallel_map(my_function, list(range(1000)))
 ```
 
-Burla runs its cluster coordinator on your machine and boots VMs in your project using your own credentials (the VMs carry no credentials at all, and shut themselves down when idle). Run `burla dashboard` to open the cluster dashboard locally, boot machines manually, watch jobs, or change machine types.
+The first `remote_parallel_map` call starts Burla's cluster coordinator on your
+machine automatically. The VMs carry no credentials and shut themselves down
+when idle. Run `burla dashboard` at any time to open that same local coordinator,
+boot machines manually, watch jobs, or change machine types.
 
 **Deploying for a team (optional):** `burla deploy` moves the coordinator and dashboard onto a small always-on VM so teammates can share one cluster. This is the only step that requires elevated permissions (service-account and IAM setup); the exact list is in the [CLI reference](https://docs.burla.dev/cli-reference). After deploying, teammates connect with `burla login`.
 

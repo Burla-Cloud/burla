@@ -14,6 +14,42 @@ _BURLA_BACKEND_URL = os.environ.get(
 
 _appdata_dir = Path(user_config_dir(appname="burla", appauthor="burla"))
 CONFIG_PATH = _appdata_dir / Path("burla_credentials.json")
+SETTINGS_PATH = _appdata_dir / Path("config.json")
+
+
+def get_cloud() -> str:
+    override = os.environ.get("BURLA_CLOUD")
+    if override:
+        return override.lower()
+    if SETTINGS_PATH.exists():
+        return json.loads(SETTINGS_PATH.read_text())["cloud"]
+    return "aws"
+
+
+def set_config(key: str, value: str) -> str:
+    if key != "cloud":
+        raise ValueError("The only supported config key is `cloud`.")
+    cloud = value.lower()
+    if cloud not in ("aws", "gcp"):
+        raise ValueError("cloud must be `aws` or `gcp`.")
+
+    SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    SETTINGS_PATH.write_text(json.dumps({"cloud": cloud}))
+
+    if CONFIG_PATH.exists():
+        credentials = json.loads(CONFIG_PATH.read_text())
+        credentials["mode"] = "client_hosted"
+        CONFIG_PATH.write_text(json.dumps(credentials))
+    return f"cloud = {cloud}"
+
+
+def get_config(key: str = None):
+    config = {"cloud": get_cloud()}
+    if key is None:
+        return config
+    if key not in config:
+        raise ValueError("The only supported config key is `cloud`.")
+    return config[key]
 
 
 def _local_dashboard_url(url: str) -> bool:
@@ -40,29 +76,9 @@ def get_cluster_dashboard_url() -> str:
         return override
 
     if not CONFIG_PATH.exists():
-        # A deployed cluster is used when one is reachable (via `burla login`
-        # or the ADC bootstrap); otherwise default to client-hosted mode.
-        from burla._auth import (
-            ADCBootstrapException,
-            ADCProjectException,
-            ADCSecretPermissionException,
-            BurlaNotInstalledException,
-            bootstrap_from_adc,
-        )
-        from google.auth.exceptions import DefaultCredentialsError
+        from burla._local_head import ensure_local_head
 
-        try:
-            bootstrap_from_adc()
-        except (
-            ADCBootstrapException,
-            ADCProjectException,
-            ADCSecretPermissionException,
-            BurlaNotInstalledException,
-            DefaultCredentialsError,
-        ):
-            from burla._local_head import ensure_local_head
-
-            return ensure_local_head()
+        return ensure_local_head()
 
     config = json.loads(CONFIG_PATH.read_text())
     if config.get("mode") == "client_hosted" or not config.get("cluster_dashboard_url"):
@@ -103,7 +119,7 @@ def version():
     print(__version__)
 
 
-def dashboard(cloud: str = None):
+def dashboard():
     """Open the Burla dashboard, hosted on this machine.
 
     Starts the cluster head locally if it isn't already running - from there
@@ -114,7 +130,7 @@ def dashboard(cloud: str = None):
 
     from burla._local_head import ensure_local_head
 
-    url = ensure_local_head(cloud=cloud)
+    url = ensure_local_head()
     print(f"Burla dashboard is running at {url}")
     webbrowser.open(url)
 
@@ -132,6 +148,10 @@ def init_cli():
             "login": login,
             "deploy": deploy,
             "dashboard": dashboard,
+            "config": {
+                "set": set_config,
+                "get": get_config,
+            },
             "install": install,
             "--version": version,
             "-v": version,

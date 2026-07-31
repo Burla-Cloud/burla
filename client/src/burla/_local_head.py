@@ -9,6 +9,7 @@ and carry none of their own, so the only permissions needed are "can boot
 VMs". `burla deploy` remains the upgrade path to an always-on, shared head VM.
 """
 
+import configparser
 import json
 import os
 import platform
@@ -100,6 +101,31 @@ def detect_cloud() -> tuple[str, str, str | None]:
         or "us-east-1"
     )
     return "aws", f"aws-{result.stdout.strip()}", region
+
+
+def _aws_account_name(account_id: str) -> str:
+    result = subprocess.run(
+        [
+            "aws",
+            "account",
+            "get-account-information",
+            "--query",
+            "AccountName",
+            "--output",
+            "text",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode == 0 and result.stdout.strip() not in ("", "None"):
+        return result.stdout.strip()
+
+    config = configparser.ConfigParser()
+    config.read(Path.home() / ".aws" / "config")
+    for section in config.sections():
+        if config[section].get("sso_account_id") == account_id:
+            return section.removeprefix("profile ")
+    return account_id
 
 
 def _gcp_ownership_payload() -> dict:
@@ -450,6 +476,11 @@ def ensure_local_head() -> str:
         "IN_CLIENT_HOSTED_MODE": "True",
         "PROJECT_ID": project_id,
         "CLOUD_PROVIDER": cloud,
+        "CLOUD_ACCOUNT_NAME": (
+            _aws_account_name(project_id.removeprefix("aws-"))
+            if cloud == "aws"
+            else project_id
+        ),
         "CLUSTER_ID_TOKEN": cluster_token,
         "BURLA_BACKEND_URL": _BURLA_BACKEND_URL,
         "BURLA_RELAY_HOST": RELAY_HOST,

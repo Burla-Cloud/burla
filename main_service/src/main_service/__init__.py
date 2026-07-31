@@ -77,6 +77,7 @@ def _resolve_project_id() -> str:
 
 
 PROJECT_ID = _resolve_project_id()
+CLOUD_ACCOUNT_NAME = os.environ.get("CLOUD_ACCOUNT_NAME", PROJECT_ID)
 
 
 def relay_fqdn(instance_name: str) -> str:

@@ -17,6 +17,7 @@ const defaultSettings: SettingsData = {
     users: [],
     burlaVersion: " :( ",
     googleCloudProjectId: " :) ",
+    cloudAccountName: " :) ",
     cloudProvider: "gcp",
 };
 

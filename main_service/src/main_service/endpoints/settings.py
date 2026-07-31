@@ -4,6 +4,7 @@ from fastapi import APIRouter, Request
 
 from main_service import (
     PROJECT_ID,
+    CLOUD_ACCOUNT_NAME,
     CLOUD_PROVIDER,
     CLUSTER_ID_TOKEN,
     CURRENT_BURLA_VERSION,
@@ -40,6 +41,7 @@ def get_settings(request: Request):
         "users": user_emails,
         "burlaVersion": CURRENT_BURLA_VERSION,
         "googleCloudProjectId": PROJECT_ID,
+        "cloudAccountName": CLOUD_ACCOUNT_NAME,
         "cloudProvider": CLOUD_PROVIDER,
         "filesystemEnabled": bool(config_dict.get("gcs_bucket_name")),
     }

@@ -84,9 +84,9 @@ results = remote_parallel_map(my_function, list(range(1000)))
 
 The first `remote_parallel_map` call starts Burla's cluster coordinator on your
 machine automatically. The VMs carry no credentials and shut themselves down
-when idle. Run `burla dashboard` at any time to run that local coordinator in
-the foreground, stream its server logs, and open the dashboard. Press Ctrl-C to
-stop it.
+when idle. Run `burla dashboard` to open that coordinator without restarting it.
+If none is running, the command starts one in the foreground and streams its
+logs until you press Ctrl-C.
 
 **Deploying for a team (optional):** `burla deploy` moves the coordinator and dashboard onto a small always-on VM so teammates can share one cluster. This is the only step that requires elevated permissions (service-account and IAM setup); the exact list is in the [CLI reference](https://docs.burla.dev/cli-reference). After deploying, teammates connect with `burla login`.
 

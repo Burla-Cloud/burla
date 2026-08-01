@@ -8,7 +8,7 @@ PYTHON_MODULE_NAME = main_service
 ARTIFACT_REPO_NAME := $(WEBSERVICE_NAME)
 ARTIFACT_PKG_NAME := $(WEBSERVICE_NAME)
 
-.PHONY: build-frontend dev-image promote-tested-image
+.PHONY: build-frontend ensure-frontend dev-image promote-tested-image
 build-frontend:
 	set -e; \
 	cd ./frontend; \
@@ -17,6 +17,12 @@ build-frontend:
 	rsync -a --delete --exclude='.*' --exclude='login.html.j2' dist/ ../src/main_service/static/; \
 	cd ..; \
 	printf "$$(date +%s)" > .frontend_last_built_at.txt
+
+ensure-frontend:
+	set -e; \
+	if ! python3 -c 'import re, sys; from pathlib import Path; static = Path("src/main_service/static"); html = (static / "index.html").read_text(); assets = re.findall(r"(?:src|href)=\"(/assets/[^\"]+)", html); sys.exit(not assets or any(not (static / path.lstrip("/")).exists() for path in assets))'; then \
+		$(MAKE) build-frontend; \
+	fi
 
 promote-tested-image:
 	set -e; \

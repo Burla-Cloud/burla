@@ -471,7 +471,10 @@ def dashboard():
     filesystem_enabled = bool((history.get_cluster_config() or {}).get("gcs_bucket_name"))
     inject = f'<script>window.__SYNCFUSION_LICENSE_KEY__ = "{SYNCFUSION_LICENSE_KEY}";'
     inject += f"window.__BURLA_FILESYSTEM_ENABLED__ = {json.dumps(filesystem_enabled)};</script>"
-    return HTMLResponse(html.replace("</head>", f"{inject}</head>"))
+    return HTMLResponse(
+        html.replace("</head>", f"{inject}</head>"),
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @app.get("/favicon.png")

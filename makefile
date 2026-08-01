@@ -18,6 +18,7 @@ endef
 .PHONY: 3.11-dev 3.12-dev 3.13-dev 3.14-dev 3.11-jupyter 3.12-jupyter 3.13-jupyter 3.14-jupyter test-shell
 
 test-shell:
+	$(MAKE) -C main_service ensure-frontend
 	uv run --project $(PROJECT_ABS) --group dev burla test-shell
 
 3.11-dev:

@@ -13,7 +13,7 @@ build-frontend:
 	set -e; \
 	cd ./frontend; \
 	npm ci; \
-	npm run build; \
+	VITE_SYNCFUSION_LICENSE_KEY= npm run build; \
 	rsync -a --delete --exclude='.*' --exclude='login.html.j2' dist/ ../src/main_service/static/; \
 	cd ..; \
 	printf "$$(date +%s)" > .frontend_last_built_at.txt

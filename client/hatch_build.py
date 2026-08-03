@@ -10,4 +10,8 @@ class CustomBuildHook(BuildHookInterface):
         if not source.exists():
             source = root / "main_service"
 
-        build_data["force_include"][str(source)] = "main_service"
+        # Absent when only `client/` is available, which is how local-dev workers
+        # install burla (they bind-mount the client dir alone and never run a
+        # head). Forcing a missing path makes hatchling fail the whole build.
+        if source.exists():
+            build_data["force_include"][str(source)] = "main_service"

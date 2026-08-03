@@ -8,7 +8,7 @@ description: Cut a Burla release, deploy the dev branch to the test account, or 
 Burla ships as one artifact: the `burla` wheel. The wheel vendors `main_service`
 (including the built dashboard, via `client/hatch_build.py`), so it is both the
 client and a complete cluster head. There is no head image: a `burla deploy`'d
-head VM runs a stock `python:3.13-slim` container that pip-installs `burla` and
+head VM runs a stock `python:3.13` container that pip-installs `burla` and
 runs `uvicorn main_service:app`. Node VMs `git fetch` their code from GitHub at
 a ref. So a release is just: get the code onto `main`, tag it, publish the wheel.
 

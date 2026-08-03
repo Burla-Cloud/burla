@@ -49,7 +49,7 @@ def _head_setup_commands(
         "systemctl enable --now snap.amazon-ssm-agent.amazon-ssm-agent.service || true",
         "systemctl disable --now burla-main-service.service || true",
         "mkdir -p /var/lib/burla/tls /var/lib/burla/caddy /etc/burla",
-        "docker pull python:3.13-slim",
+        "docker pull python:3.13",
         "docker pull caddy:2.10.2-alpine",
         f'CLUSTER_ID_TOKEN="{cluster_id_token}"',
         "docker rm -f burla-main-service burla-head-caddy burla-head-frpc || true",
@@ -71,7 +71,7 @@ def _head_setup_commands(
             f'-e BURLA_RELAY_SERVER_ADDR="{RELAY_SERVER_ADDR}" '
             f'-e BURLA_RELAY_SERVER_PORT="{RELAY_SERVER_PORT}" '
             f'-e BURLA_NODE_SOURCE_REF="{node_source_ref}" '
-            "python:3.13-slim "
+            "python:3.13 "
             f"sh -c 'pip install --no-cache-dir \"{install_spec}\" "
             "&& exec python -m uvicorn main_service:app "
             "--host 127.0.0.1 --port 5001 --workers 1 --timeout-keep-alive 60'"

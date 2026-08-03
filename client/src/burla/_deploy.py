@@ -154,7 +154,7 @@ subdomain = "{relay_subdomain}"
     script = f"""#!/bin/bash
     set -euo pipefail
     mkdir -p /var/lib/burla/tls /var/lib/burla/caddy /etc/burla
-    docker pull python:3.13-slim
+    docker pull python:3.13
     docker pull caddy:2.10.2-alpine
     docker network create burla-head || true
     old_containers=$(docker ps -aq --filter name=klt-)
@@ -175,7 +175,7 @@ subdomain = "{relay_subdomain}"
       -e BURLA_RELAY_SERVER_ADDR="{RELAY_SERVER_ADDR}" \\
       -e BURLA_RELAY_SERVER_PORT="{RELAY_SERVER_PORT}" \\
       -e BURLA_NODE_SOURCE_REF="{node_source_ref}" \\
-      python:3.13-slim \\
+      python:3.13 \\
       sh -c 'pip install --no-cache-dir "{install_spec}" && exec python -m uvicorn main_service:app --host 0.0.0.0 --port 5001 --workers 1 --timeout-keep-alive 60'
     until docker exec burla-main-service \\
       python -c 'import urllib.request; urllib.request.urlopen("http://127.0.0.1:5001/version")' \\

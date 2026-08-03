@@ -183,6 +183,9 @@ main_service/frontend/node_modules/
 # Build outputs
 main_service/frontend/dist/
 main_service/frontend/build/
+# main_service/src/main_service/static/ is deliberately NOT ignored: test deploys
+# install the head straight from a git ref, so the built dashboard has to be in
+# the repo or those heads serve a blank page.
 
 # Environment files
 main_service/frontend/.env*
@@ -200,7 +203,6 @@ main_service/.frontend_last_built_at.txt
 .temp_token.txt
 _worker_service_python_env/*
 _shared_workspace/*
-main_service/src/main_service/static/assets/*
 _python_version_marker/*
 _node_auth/*
 .gstack/

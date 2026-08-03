@@ -4,7 +4,6 @@ from time import sleep
 import boto3
 from botocore.exceptions import ClientError
 
-from main_service import CURRENT_BURLA_VERSION
 from main_service.providers import NoCapacity
 
 # Capacity errors worth trying the next AZ for; anything else is a real error.
@@ -30,8 +29,10 @@ class AWSProvider:
         return boto3.client("ec2", region_name=region)
 
     def _ami_id(self, ec2) -> str:
-        """The node AMI is looked up by tag so `burla install --cloud aws` can
-        publish new AMI versions without touching cluster config."""
+        """Newest burla node AMI in this region. Deliberately not filtered by burla
+        version: the AMI is just a warm base image, and nodes git-fetch the code
+        they run at boot, so one AMI serves every version until `burla deploy`
+        rebuilds it for a changed setup script."""
         override = os.environ.get("BURLA_NODE_AMI")
         if override:
             return override
@@ -39,7 +40,6 @@ class AWSProvider:
             Owners=["self"],
             Filters=[
                 {"Name": "tag:burla-node-image", "Values": ["true"]},
-                {"Name": "tag:burla-version", "Values": [CURRENT_BURLA_VERSION]},
                 {"Name": "state", "Values": ["available"]},
             ],
         )

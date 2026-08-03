@@ -6,6 +6,7 @@ bucket, a node AMI (the EC2 twin of the GCP disk image), and one small
 always-on head EC2 instance running main_service.
 """
 
+import hashlib
 import json
 import shutil
 import sys
@@ -176,6 +177,11 @@ systemctl enable burla-shutdown-hook
 # Powering off signals the installer that setup is complete.
 shutdown -h now
 """
+
+# The AMI only bakes docker, uv, and a warm node_service venv; nodes git-fetch the
+# code they actually run at boot. So it is keyed by this script's content rather
+# than by the burla version: releasing must never trigger a 10-minute rebuild.
+NODE_AMI_HASH = hashlib.sha256(_NODE_AMI_SETUP_SCRIPT.encode()).hexdigest()[:12]
 
 
 def _aws(cmd: str, parse_json: bool = True, raise_error: bool = True):
@@ -513,12 +519,13 @@ def _latest_ubuntu_ami(region) -> str:
 
 
 def _ensure_node_ami(spinner, region, node_profile) -> str:
-    """Build the burla node AMI (docker + git repo + uv + mount-s3) if this
-    region doesn't have one yet. Takes ~10 minutes the first time."""
+    """Build the burla node AMI (docker + git repo + uv + mount-s3) if this region
+    has no AMI matching the current setup script. Takes ~10 minutes, and only
+    happens when that script changes, not on every release."""
     existing = _aws(
         f"ec2 describe-images --region {region} --owners self "
         f"--filters Name=tag:burla-node-image,Values=true "
-        f"Name=tag:burla-version,Values={__version__} "
+        f"Name=tag:burla-node-image-hash,Values={NODE_AMI_HASH} "
         f"Name=state,Values=available "
         f'--query "sort_by(Images, &CreationDate)[-1].ImageId" --output json',
         raise_error=False,
@@ -528,7 +535,7 @@ def _ensure_node_ami(spinner, region, node_profile) -> str:
         spinner.ok("✓")
         return existing
 
-    spinner.text = "Building node AMI (takes ~10 minutes, one time only) ... "
+    spinner.text = "Building node AMI (takes ~10 minutes, only when the image changes) ... "
     spinner.start()
 
     base_ami = _latest_ubuntu_ami(region)
@@ -577,12 +584,14 @@ def _ensure_node_ami(spinner, region, node_profile) -> str:
 
         image = _aws(
             f"ec2 create-image --region {region} --instance-id {builder_id} "
-            f'--name "burla-node-nogpu-{__version__}" --output json'
+            f'--name "burla-node-nogpu-{NODE_AMI_HASH}-{int(time())}" --output json'
         )
         ami_id = image["ImageId"]
         run_command(
             f"aws ec2 create-tags --region {region} --resources {ami_id} "
-            f"--tags Key=burla-node-image,Value=true Key=burla-version,Value={__version__}"
+            f"--tags Key=burla-node-image,Value=true "
+            f"Key=burla-node-image-hash,Value={NODE_AMI_HASH} "
+            f"Key=burla-version,Value={__version__}"
         )
         run_command(
             f"aws ec2 wait image-available --region {region} --image-ids {ami_id}"

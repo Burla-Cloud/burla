@@ -42,11 +42,11 @@ Switching modes on a running VM: stop the foreground make command in the VM shel
 | Mode | Nodes | Hot-reload | GCP cost | When to use |
 |------|-------|-----------|----------|-------------|
 | `local-dev` | 2x `n4-standard-2` docker containers on the same VM | `main_service` + `node_service` + `worker_service` | VM only | Default. Fast loop, no cluster to babysit. |
-| `remote-dev` | Real GCE VMs in the agent's project, sized from the cluster config in the head's history db | `main_service` only (node/worker code is pinned to `CURRENT_BURLA_VERSION` on public GitHub) | VM + worker VMs | Reproducing bugs that only surface with real VM cold-starts, GPU images, multi-node grow/shrink, or real firewall/IAM paths. |
+| `remote-dev` | Real GCE VMs in the agent's project, sized from the cluster config in the head's history db | `main_service` only (node/worker code comes from the `dev` branch on public GitHub) | VM + worker VMs | Reproducing bugs that only surface with real VM cold-starts, GPU images, multi-node grow/shrink, or real firewall/IAM paths. |
 
 Caveats for `remote-dev`:
 
-- Uncommitted edits under `node_service/` or `worker_server.py` do NOT reach worker VMs. The node startup script does `git fetch --depth=1 origin "{CURRENT_BURLA_VERSION}"` against the public repo. To test node-side changes remotely you must bump `CURRENT_BURLA_VERSION` in the four pinned places and push a matching tag.
+- Uncommitted edits under `node_service/` or `worker_server.py` do NOT reach worker VMs. The node startup script does `git fetch --depth=1 origin dev` against the public repo (`make remote-dev` sets `BURLA_NODE_SOURCE_REF=dev`). To test node-side changes remotely, commit and push them to `dev` first.
 - Nested `remote_parallel_map` inside a UDF fails: workers use the `cluster_dashboard_url` the client sent (e.g. `http://localhost:<tunnel_port>`), which is not reachable from a GCE VM. Top-level RPM works fine.
 - Set `BURLA_CLUSTER_DASHBOARD_URL=http://localhost:5001` for tests that should hit the running dev server.
 - `dev_vm_stop.sh` best-effort POSTs `/v1/cluster/shutdown` before stopping the VM so worker VMs get cleaned up.

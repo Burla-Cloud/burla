@@ -63,16 +63,6 @@ jobs:
           RELEASE_SHA=$(git rev-list -n 1 "$RELEASE_TAG")
           git fetch origin main
           git merge-base --is-ancestor "$RELEASE_SHA" origin/main
-          echo "RELEASE_SHA=$RELEASE_SHA" >> "$GITHUB_ENV"
-          echo "MAIN_SERVICE_IMAGE=us-docker.pkg.dev/burla-prod/burla-main-service/burla-main-service:${RELEASE_TAG}" >> "$GITHUB_ENV"
-
-      - name: Verify tested main service image
-        run: |
-          docker pull "$MAIN_SERVICE_IMAGE"
-          IMAGE_REVISION=$(docker inspect \
-            --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' \
-            "$MAIN_SERVICE_IMAGE")
-          test "$IMAGE_REVISION" = "$RELEASE_SHA"
 
       - name: Build dist
         run: |

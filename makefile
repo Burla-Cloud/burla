@@ -120,6 +120,8 @@ local-dev:
 			--timeout-graceful-shutdown 0
 
 # Only the `main_service` is run locally, nodes are started as GCE VM's in the test cloud.
+# Node VMs cannot see this working tree, so they run the `dev` branch: commit and
+# push node_service changes before expecting them here.
 # Uses the cluster config stored in the head's history db (a fresh one is
 # seeded on first boot). CLUSTER_ID_TOKEN comes from Burla's local state dir
 # where `burla deploy` saves it (Secret Manager is the pre-1.7 fallback).
@@ -146,6 +148,7 @@ remote-dev:
 		-e CLUSTER_ID_TOKEN=$${CLUSTER_ID_TOKEN} \
 		-e BURLA_BACKEND_URL=$${BACKEND_URL} \
 		-e BURLA_RELAY_HOST=$${BURLA_RELAY_HOST:-relay.test-clusters.burla.dev} \
+		-e BURLA_NODE_SOURCE_REF=$${BURLA_NODE_SOURCE_REF:-dev} \
 		-e REDIRECT_LOCALLY_ON_LOGIN=True \
 		-p 127.0.0.1:5001:5001 \
 		--entrypoint python \
@@ -165,10 +168,6 @@ dev-images:
 	set -e; \
 	$(MAKE) -C ./main_service dev-image; \
 	$(MAKE) -C ./node_service dev-image
-
-promote-image:
-	set -e; \
-	$(MAKE) -C ./main_service promote-tested-image
 
 kill-kernels:
 	pkill -f ipykernel

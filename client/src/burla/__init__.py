@@ -293,8 +293,8 @@ def init_cli():
         "--version": version,
         "-v": version,
     }
+    commands["deploy"] = deploy
     if _BURLA_ENVIRONMENT == "production":
-        commands["deploy"] = deploy
         commands["install"] = install
     if _IN_SOURCE_CHECKOUT:
         commands["test-shell"] = test_shell

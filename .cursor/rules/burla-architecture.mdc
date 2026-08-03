@@ -43,7 +43,7 @@ Set via `IN_LOCAL_DEV_MODE` env var.
 
 - **local-dev-mode**: everything runs locally in Docker containers on one machine. `make local-dev`. Uses `LOCAL_DEV_CONFIG` hard-coded in `main_service/__init__.py` (2x n4-standard-2 nodes). Fully offline: no cloud credentials required by the services themselves.
 - **remote-dev-mode**: only `main_service` runs locally, node VMs are real GCP instances (nodes reach the head at the dev VM's internal IP, port 5001).
-- **prod**: `main_service` on a head VM (GCE `create-with-container` / EC2 + docker), nodes on Compute Engine or EC2.
+- **prod**: `main_service` on a head VM that runs the released `burla` wheel in a stock `python` container (GCE cos + startup script / EC2 + docker; the container `pip install burla==<version>` then runs `uvicorn main_service:app`, so there is no prebuilt head image), nodes on Compute Engine or EC2.
 
 ## Version compatibility
 

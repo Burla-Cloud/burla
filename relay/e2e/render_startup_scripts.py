@@ -56,10 +56,11 @@ elif PART == "head":
     head_script = _head_startup_script(
         "test-project",
         "test-token",
-        "us-docker.pkg.dev/burla-prod/burla-main-service/burla-main-service:1.6.1",
         "head--test-project.relay.burla.dev",
     )
     assert "burla-head-frpc" in head_script
+    assert "uvicorn main_service:app" in head_script
+    assert "pip install --no-cache-dir" in head_script
     encoded_config = re.search(
         r'echo "([^"]+)" \| base64 -d > /etc/burla/frpc.toml', head_script
     ).group(1)

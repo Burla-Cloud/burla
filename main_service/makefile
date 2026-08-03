@@ -8,7 +8,7 @@ PYTHON_MODULE_NAME = main_service
 ARTIFACT_REPO_NAME := $(WEBSERVICE_NAME)
 ARTIFACT_PKG_NAME := $(WEBSERVICE_NAME)
 
-.PHONY: build-frontend ensure-frontend dev-image promote-tested-image
+.PHONY: build-frontend ensure-frontend dev-image
 build-frontend:
 	set -e; \
 	cd ./frontend; \
@@ -23,23 +23,6 @@ ensure-frontend:
 	if ! python3 -c 'import re, sys; from pathlib import Path; static = Path("src/main_service/static"); html = (static / "index.html").read_text(); assets = re.findall(r"(?:src|href)=\"(/assets/[^\"]+)", html); sys.exit(not assets or any(not (static / path.lstrip("/")).exists() for path in assets))'; then \
 		$(MAKE) build-frontend; \
 	fi
-
-promote-tested-image:
-	set -e; \
-	if [ -z "$${TEST_IMAGE_NAME}" ]; then \
-		echo "TEST_IMAGE_NAME must name the verified image"; \
-		exit 1; \
-	fi; \
-	case "$${TEST_IMAGE_NAME}" in \
-		us-docker.pkg.dev/burla-test/*|us-docker.pkg.dev/burla-agent-[0-9][0-9]/*) ;; \
-		*) echo "Refusing to promote non-test image $${TEST_IMAGE_NAME}"; exit 1 ;; \
-	esac; \
-	PROD_IMAGE_BASE_NAME=$$( echo \
-		"us-docker.pkg.dev/burla-prod/$(ARTIFACT_REPO_NAME)/$(ARTIFACT_PKG_NAME)" \
-	); \
-	docker pull $${TEST_IMAGE_NAME}; \
-	docker tag $${TEST_IMAGE_NAME} $${PROD_IMAGE_BASE_NAME}:$(BURLA_VERSION); \
-	docker push $${PROD_IMAGE_BASE_NAME}:$(BURLA_VERSION)
 
 dev-image: build-frontend
 	set -e; \

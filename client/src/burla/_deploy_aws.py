@@ -7,7 +7,6 @@ always-on head EC2 instance running main_service.
 """
 
 import json
-import os
 import shutil
 import sys
 import tempfile
@@ -18,46 +17,29 @@ import requests
 
 from burla import _BURLA_BACKEND_URL, _BURLA_NODE_SOURCE_REF, __version__
 from burla._helpers import run_command, VerboseCalledProcessError
-from burla._deploy import RELAY_HOST, RELAY_SERVER_ADDR, RELAY_SERVER_PORT, FRP_VERSION
+from burla._deploy import (
+    RELAY_HOST,
+    RELAY_SERVER_ADDR,
+    RELAY_SERVER_PORT,
+    FRP_VERSION,
+    head_install_spec,
+)
 from burla._reporting import log_telemetry
 
 HEAD_INSTANCE_TYPE = "t3.small"
 AMI_BUILDER_INSTANCE_TYPE = "t3.large"
-MAIN_SERVICE_IMAGE = (
-    "us-docker.pkg.dev/burla-prod/burla-main-service/burla-main-service"
-)
-
-
-def _main_service_image() -> str:
-    override = os.environ.get("BURLA_MAIN_SERVICE_IMAGE")
-    if override:
-        if _BURLA_BACKEND_URL == "https://backend.burla.dev":
-            raise ValueError(
-                "BURLA_MAIN_SERVICE_IMAGE requires a non-production backend"
-            )
-        return override
-    return f"{MAIN_SERVICE_IMAGE}:{__version__}"
 
 
 def _head_setup_commands(
     project_id: str,
     region: str,
-    image: str,
     dashboard_hostname: str,
     cluster_id_token: str,
     account_name: str,
 ) -> list[str]:
     node_source_ref = _BURLA_NODE_SOURCE_REF
+    install_spec = head_install_spec()
     relay_subdomain = f"head--{project_id}"
-    registry = image.split("/", 1)[0]
-    registry_login_commands = []
-    if ".dkr.ecr." in registry and registry.endswith(".amazonaws.com"):
-        registry_login_commands = [
-            (
-                f"aws ecr get-login-password --region {region} "
-                f"| docker login --username AWS --password-stdin {registry}"
-            )
-        ]
     return [
         "set -eu",
         "export DEBIAN_FRONTEND=noninteractive",
@@ -67,8 +49,7 @@ def _head_setup_commands(
         "systemctl enable --now snap.amazon-ssm-agent.amazon-ssm-agent.service || true",
         "systemctl disable --now burla-main-service.service || true",
         "mkdir -p /var/lib/burla/tls /var/lib/burla/caddy /etc/burla",
-        *registry_login_commands,
-        f'docker pull "{image}"',
+        "docker pull python:3.13-slim",
         "docker pull caddy:2.10.2-alpine",
         f'CLUSTER_ID_TOKEN="{cluster_id_token}"',
         "docker rm -f burla-main-service burla-head-caddy burla-head-frpc || true",
@@ -90,7 +71,10 @@ def _head_setup_commands(
             f'-e BURLA_RELAY_SERVER_ADDR="{RELAY_SERVER_ADDR}" '
             f'-e BURLA_RELAY_SERVER_PORT="{RELAY_SERVER_PORT}" '
             f'-e BURLA_NODE_SOURCE_REF="{node_source_ref}" '
-            f'"{image}"'
+            "python:3.13-slim "
+            f"sh -c 'pip install --no-cache-dir \"{install_spec}\" "
+            "&& exec python -m uvicorn main_service:app "
+            "--host 127.0.0.1 --port 5001 --workers 1 --timeout-keep-alive 60'"
         ),
         (
             "until curl --fail --silent http://127.0.0.1:5001/version >/dev/null; "
@@ -715,11 +699,9 @@ def _deploy_head_instance(
         _aws_ownership_payload(region),
         dashboard_url,
     )
-    image = _main_service_image()
     commands = _head_setup_commands(
         project_id,
         region,
-        image,
         urlparse(dashboard_url).hostname,
         cluster_id_token,
         account_name,

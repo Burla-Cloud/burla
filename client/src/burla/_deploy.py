@@ -35,17 +35,15 @@ RELAY_SERVER_PORT = os.environ.get("BURLA_RELAY_SERVER_PORT", "7000")
 FRP_VERSION = "0.70.1"
 
 
-def _main_service_image(project_id: str) -> str:
-    override = os.environ.get("BURLA_MAIN_SERVICE_IMAGE")
-    if override:
-        if _BURLA_BACKEND_URL == "https://backend.burla.dev":
-            raise ValueError(
-                "BURLA_MAIN_SERVICE_IMAGE requires a non-production backend"
-            )
-        return override
+def head_install_spec() -> str:
+    """What the head VM pip-installs. Production heads install the published
+    release; test heads install the same ref the nodes run, so a test deploy is
+    exactly the dev branch (the built dashboard is committed, so this works)."""
+    if _BURLA_ENVIRONMENT == "production":
+        return f"burla=={__version__}"
     return (
-        "us-docker.pkg.dev/burla-prod/burla-main-service/"
-        f"burla-main-service:{__version__}"
+        "burla @ git+https://github.com/Burla-Cloud/burla.git"
+        f"@{_BURLA_NODE_SOURCE_REF}#subdirectory=client"
     )
 
 
@@ -122,10 +120,10 @@ def _shutdown_cluster_for_upgrade(
 def _head_startup_script(
     project_id: str,
     cluster_id_token: str,
-    image: str,
     dashboard_hostname: str,
 ) -> str:
     node_source_ref = _BURLA_NODE_SOURCE_REF
+    install_spec = head_install_spec()
     relay_subdomain = f"head--{project_id}"
     caddy_config = f"""{dashboard_hostname} {{
   reverse_proxy burla-main-service:5001
@@ -155,14 +153,8 @@ subdomain = "{relay_subdomain}"
 
     script = f"""#!/bin/bash
     set -euo pipefail
-    export DOCKER_CONFIG=/var/lib/burla/docker-config
-    mkdir -p "$DOCKER_CONFIG" /var/lib/burla/tls /var/lib/burla/caddy /etc/burla
-    ACCESS_TOKEN=$(curl -sS -H "Metadata-Flavor: Google" \\
-      http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token \\
-      | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')
-    echo "$ACCESS_TOKEN" | docker login -u oauth2accesstoken --password-stdin \\
-      https://us-docker.pkg.dev
-    docker pull "{image}"
+    mkdir -p /var/lib/burla/tls /var/lib/burla/caddy /etc/burla
+    docker pull python:3.13-slim
     docker pull caddy:2.10.2-alpine
     docker network create burla-head || true
     old_containers=$(docker ps -aq --filter name=klt-)
@@ -183,7 +175,8 @@ subdomain = "{relay_subdomain}"
       -e BURLA_RELAY_SERVER_ADDR="{RELAY_SERVER_ADDR}" \\
       -e BURLA_RELAY_SERVER_PORT="{RELAY_SERVER_PORT}" \\
       -e BURLA_NODE_SOURCE_REF="{node_source_ref}" \\
-      "{image}"
+      python:3.13-slim \\
+      sh -c 'pip install --no-cache-dir "{install_spec}" && exec python -m uvicorn main_service:app --host 0.0.0.0 --port 5001 --workers 1 --timeout-keep-alive 60'
     until docker exec burla-main-service \\
       python -c 'import urllib.request; urllib.request.urlopen("http://127.0.0.1:5001/version")' \\
       >/dev/null 2>&1; do
@@ -241,9 +234,6 @@ def deploy(cloud: str = "gcp"):
       Run: `gcloud config set project <new-project-id>` to change your default project.
     - `burla deploy --cloud=aws` deploys into your current default AWS account/region.
     """
-    if _BURLA_ENVIRONMENT != "production":
-        raise RuntimeError("Deployment is only available in production mode.")
-
     try:
         with yaspin() as spinner:
             if cloud == "aws":
@@ -377,11 +367,9 @@ def _deploy_head_vm(spinner, PROJECT_ID, main_svc_account_email, cluster_id_toke
         _gcp_ownership_payload(),
         dashboard_url,
     )
-    image_name = _main_service_image(PROJECT_ID)
     startup_script = _head_startup_script(
         PROJECT_ID,
         cluster_id_token,
-        image_name,
         urlparse(dashboard_url).hostname,
     )
     with tempfile.NamedTemporaryFile("w", suffix=".sh") as startup_file:

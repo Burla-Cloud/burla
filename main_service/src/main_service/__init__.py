@@ -31,6 +31,16 @@ IN_LOCAL_DEV_MODE = os.environ.get("IN_LOCAL_DEV_MODE") == "True"
 # This is needed because remote-dev-mode is not local-dev-mode, and needs local redirect on login.
 REDIRECT_LOCALLY_ON_LOGIN = os.environ.get("REDIRECT_LOCALLY_ON_LOGIN") == "True"
 
+# Which dev cluster this head is. Several run at once (one per checkout), so
+# anything they would otherwise share has to be namespaced by this: in local-dev
+# the docker network, container labels, published node ports, and the hostname
+# nodes use to reach the head; in remote-dev the EC2 tag that marks a node as
+# belonging to this cluster. "default" for a deployed head, which is a singleton.
+CLUSTER_NAME = os.environ.get("BURLA_CLUSTER_NAME", "default")
+LOCAL_DEV_NETWORK = os.environ.get("LOCAL_DEV_NETWORK", "local-burla-cluster")
+LOCAL_DEV_HEAD_HOST = os.environ.get("LOCAL_DEV_HEAD_HOST", "main_service")
+LOCAL_DEV_NODE_PORT_BASE = int(os.environ.get("LOCAL_DEV_NODE_PORT_BASE", 8080))
+
 # The default way Burla runs: main_service lives inside the `burla` pip
 # package on the user's machine (started by `remote_parallel_map` or
 # `burla dashboard`), boots real cloud VMs with the user's own credentials,
@@ -112,7 +122,7 @@ INTERNAL_TLS_PORT = int(os.environ.get("INTERNAL_TLS_PORT", 8443))
 
 def _resolve_self_url_for_nodes() -> str:
     if IN_LOCAL_DEV_MODE:
-        return f"http://main_service:{MAIN_SERVICE_PORT}"
+        return f"http://{LOCAL_DEV_HEAD_HOST}:{MAIN_SERVICE_PORT}"
     override = os.environ.get("MAIN_SERVICE_URL_FOR_NODES")
     if override:
         return override.rstrip("/")
@@ -194,7 +204,11 @@ LOCAL_DEV_CONFIG = None
 if IN_LOCAL_DEV_MODE:
     LOCAL_DEV_CONFIG = history.get_cluster_config()
     LOCAL_DEV_CONFIG["Nodes"][0]["machine_type"] = "n4-standard-2"
-    LOCAL_DEV_CONFIG["Nodes"][0]["quantity"] = 2
+    # One node by default: several of these clusters run side by side on one
+    # laptop, and each node is a container that spawns a worker per core.
+    LOCAL_DEV_CONFIG["Nodes"][0]["quantity"] = int(
+        os.environ.get("LOCAL_DEV_NODE_QUANTITY", 1)
+    )
 
 from main_service import cluster_state
 from main_service.helpers import (

@@ -1,121 +1,85 @@
 ### How to run the tests
 
-**All tiers except `test-unit` must run on a dev VM, not on your laptop.** The
-cluster tests need real Docker-in-Docker, real GCE-style
-networking, and scratch `_node_auth` / `_shared_workspace` directories that get
-wiped between runs — all of which work reliably only on a dev VM. Running
-`make -f makefile local-dev` on a laptop is unsupported and will break in ways that look
-like test bugs (port collisions, orphaned bind mounts, macOS Docker
-idiosyncrasies, laptop ADC credential expiry mid-run).
+Every tier except `test-unit` needs a dev cluster running for **this checkout**.
+One checkout gets one cluster, and several checkouts can run clusters at the same
+time on one machine without colliding, so tests must be pointed at the right one.
+The `make test*` targets handle that for you.
 
-Four tiers:
+Five tiers:
 
-- `make test-unit` — pure unit tests. No cluster, no GCP. Fast (~10s). **The
-  only tier safe to run on a laptop.**
-- `make test-service` — service-level tests. **Dev VM only.**
+- `make test-unit` — pure unit tests. No cluster, no cloud. Fast (~10s).
+- `make test-service` — service-level tests. Needs a cluster.
 - `make test-e2e` — full end-to-end tests, including the 5 scenario flows.
-  **Dev VM only.**
 - `make test-chaos` — destructive tests that restart / shut down / mutate the
-  cluster. Each test needs a cluster reset between runs. **Dev VM only.**
-- `make test` — all non-chaos tiers. **Dev VM only.**
+  cluster. Each test needs a cluster reset between runs.
+- `make test` — all non-chaos tiers.
 
 Nothing runs in GitHub Actions.
 
-#### Internal test environment on a laptop
+#### Start a cluster first
 
-From a source checkout, enter the isolated test shell with:
-
-```
-make test-shell
-```
-
-Inside that shell, ordinary commands such as `burla dashboard` and notebook
-launches use the test backend, test relay, and the `dev` source ref. Test
-credentials and local-head data are stored separately from production. No
-separate `burla login` is required: Burla bootstraps the isolated profile from
-your cloud credentials. Type `exit` to leave the shell; the parent terminal
-remains in production mode.
-
-This source-only command is a developer convenience, not a security boundary.
-The test backend must independently restrict authentication to approved internal
-identities.
-
-#### Running on a dev VM (humans)
-
-Follow the ephemeral dev-VM workflow (see [`.cursor/skills/burla-ephemeral-dev-vm/SKILL.md`](../../.cursor/skills/burla-ephemeral-dev-vm/SKILL.md)):
+In another terminal, from this checkout:
 
 ```
-# From the primary checkout
-git worktree add -b <task-branch> ../burla-worktrees/<task-slug> main
-cd ../burla-worktrees/<task-slug>
-
-scripts/dev_vm_create.sh
-scripts/dev_vm_sync_repo.sh --slot <slot> --source "$(pwd)"
-scripts/dev_vm_tunnel.sh --slot <slot>
+make local-dev      # whole cluster local: head, nodes, and workers as containers
+make remote-dev     # head local, nodes are real EC2 in the Burla test AWS account
 ```
 
-Then open a VM shell and run tests from there:
+`make cluster-info` prints this checkout's cluster name, dashboard URL, docker
+network, and node port base. The head is not on port 5001; it is on a port
+derived from the checkout name, so that several clusters coexist.
+
+Use `local-dev` for anything that can be exercised with light resources, and
+`remote-dev` when you need real scale or real-VM behavior, or when the machine
+cannot take another local cluster. See the `burla-parallel-dev` skill for the
+full decision guide.
+
+Tear down with `make stop` (this checkout only) or `make stop-all`.
+
+#### Running the tests
 
 ```
-scripts/dev_vm_shell.sh --slot <slot>
-make -f makefile local-dev
+make test-service
+make test-e2e
+make test-chaos
 ```
 
-Run `make -f makefile local-dev` / `make -f makefile remote-dev` inside
-`dev_vm_shell.sh`. Do not run those targets through non-interactive SSH; Docker
-needs a real terminal.
-
-Open the tunneled dashboard in the GStack browser and click Start. Force
-VM-local tests to hit the dev server:
+Each target defaults `BURLA_CLUSTER_DASHBOARD_URL` to this checkout's head port.
+To run pytest directly, set it yourself:
 
 ```
-cd /srv/burla
-export BURLA_CLUSTER_DASHBOARD_URL=http://localhost:5001
+export BURLA_CLUSTER_DASHBOARD_URL=$(make -s cluster-info | awk '/dashboard/{print $2}')
+uv run --project ./client --group dev pytest -m "service and not chaos"
 ```
 
-Then run tests from the VM:
+Readiness gate: the service / e2e / chaos tiers refuse to run unless the head is
+reachable and is a local dev cluster. They restart and mutate whatever they are
+aimed at, so they will never touch a deployed cluster. A failure caused by the
+cluster not being ready is not a test failure; start or reset the cluster and
+retry.
 
-```
-BURLA_TEST_PROJECT=burla-agent-<slot> \
-BURLA_CLUSTER_DASHBOARD_URL=http://localhost:5001 \
-  uv run --project ./client --group dev pytest -m "not chaos and not dashboard"
-```
+For now, tests that call `remote_parallel_map` should pass `grow=True` so the job
+boots nodes itself instead of relying on an already-started cluster.
 
-When done:
+All tests have a 120s default timeout. If output doesn't advance past
+`collected N items` within 10 seconds, stop and report blocked.
 
-```
-scripts/dev_vm_stop.sh --slot <slot>
-```
+#### Notes for agents
 
-#### Running on a dev VM (agents)
+1. Work in your own worktree and run your own cluster. Never reuse another
+   agent's cluster, and never `docker rm` containers by `node_*` / `worker_*`
+   name prefix; that destroys other agents' clusters. Use `make stop`.
+2. Prefer `local-dev` while iterating: node and worker code is bind-mounted, so
+   your edits apply on save. In `remote-dev`, node VMs run your branch from
+   GitHub, so `node_service` / `worker_server.py` changes need a push first.
+3. Keep local clusters small. They default to 1 node; raise with
+   `LOCAL_DEV_NODE_QUANTITY` only when a test needs multiple nodes.
 
-1. **Never run service / e2e / chaos tests on your laptop.** Provision a dev VM.
-   The whole suite is designed and verified against the dev-VM environment.
-2. Run `scripts/dev_vm_create.sh`. It picks an available slot, prepares the
-   project if needed, and starts or creates the VM.
-3. Sync the worktree explicitly with
-   `scripts/dev_vm_sync_repo.sh --slot <slot> --source <worktree>`.
-4. For now, tests that call `remote_parallel_map` should pass `grow=True` so the
-   job boots nodes itself instead of relying on an already-started cluster.
-5. Run the tests on the VM with `scripts/dev_vm_shell.sh --slot <slot>`.
-   Start the cluster with `make -f makefile local-dev`. The VM has `uv` at `/usr/local/bin/uv`;
-   always invoke pytest via `uv run --project ./client --group dev pytest`.
-6. Set `BURLA_CLUSTER_DASHBOARD_URL=http://localhost:5001` for VM-local
-   client/test commands so they hit the dev server.
-7. Set `BURLA_TEST_PROJECT=burla-agent-<slot>` so the readiness gate in
-   `conftest.py` matches the active project. On a laptop it defaults to
-   `burla-test`, which is wrong for agent dev VMs.
-8. Readiness gate: if the cluster isn't verifiably READY, stop and investigate.
-   A failure caused by cluster-not-ready is NOT a test failure — do not report
-   it as one.
-9. All tests have a 120s default timeout. If output doesn't advance past
-   `collected N items` within 10 seconds, stop and report blocked.
+#### Unit tier
 
-#### Unit tier on a laptop
-
-Only `make test-unit` is safe to run on a laptop. It imports real modules
-and runs real logic for version parsing, signal handlers, exception
-messages, package detection, and `_local_host_from` — no cluster needed:
+`make test-unit` imports real modules and runs real logic for version parsing,
+signal handlers, exception messages, package detection, and `_local_host_from`.
+No cluster needed:
 
 ```
 uv sync --project ./client --group dev

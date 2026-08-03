@@ -39,10 +39,14 @@ There is no database in the live path. Coordination state is head-centric:
 
 ## Dev modes
 
-Set via `IN_LOCAL_DEV_MODE` env var.
+Set via `IN_LOCAL_DEV_MODE` env var. Both dev modes run `main_service` on the
+developer's own machine against the working tree, and both are namespaced per
+checkout (`BURLA_CLUSTER_NAME`, defaulting to the worktree name) so many run at
+once on one machine. Dev happens in AWS; GCP is production-only. See the
+`burla-parallel-dev` skill.
 
-- **local-dev-mode**: everything runs locally in Docker containers on one machine. `make local-dev`. Uses `LOCAL_DEV_CONFIG` hard-coded in `main_service/__init__.py` (2x n4-standard-2 nodes). Fully offline: no cloud credentials required by the services themselves.
-- **remote-dev-mode**: only `main_service` runs locally, node VMs are real GCP instances (nodes reach the head at the dev VM's internal IP, port 5001).
+- **local-dev-mode**: everything runs locally in Docker containers on one machine. `make local-dev`. Uses `LOCAL_DEV_CONFIG` in `main_service/__init__.py` (1 node by default, `LOCAL_DEV_NODE_QUANTITY` to raise it). Fully offline: no cloud credentials required by the services themselves. The head, its docker network, its container labels, and the node host ports are all namespaced per checkout.
+- **remote-dev-mode**: `main_service` runs as a local subprocess (the client-hosted path in [client/src/burla/_local_head.py](../../client/src/burla/_local_head.py), started by `make remote-dev`), node VMs are real EC2 instances in the Burla test AWS account. Each head mints its own relay subdomain, and nodes reach it through the relay. Nodes run the checkout's current git branch, so node/worker changes must be pushed.
 - **prod**: `main_service` on a head VM that runs the released `burla` wheel in a stock `python` container (GCE cos + startup script / EC2 + docker; the container `pip install burla==<version>` then runs `uvicorn main_service:app`, so there is no prebuilt head image), nodes on Compute Engine or EC2.
 
 ## Version compatibility

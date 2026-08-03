@@ -7,7 +7,9 @@ from concurrent.futures import ThreadPoolExecutor
 
 from main_service import (
     IN_LOCAL_DEV_MODE,
+    CLUSTER_NAME,
     LOCAL_DEV_CONFIG,
+    LOCAL_DEV_NODE_PORT_BASE,
     get_logger,
     get_auth_headers,
     get_add_background_task_function,
@@ -32,15 +34,16 @@ def _remove_local_dev_cluster_containers():
         return
     import docker
 
+    # Filter on this cluster's member label: matching by `node_`/`worker` name
+    # prefix would delete every other local-dev cluster's containers, and
+    # matching `burla-cluster` would delete this head too (it carries that label
+    # so `make stop` gets it).
     docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
-    for container in docker_client.containers(all=True):
-        names = container["Names"]
-        is_cluster_container = any(
-            name.startswith("/node_") or name.startswith("/OLD--") or "worker" in name
-            for name in names
-        )
-        if is_cluster_container:
-            docker_client.remove_container(container["Id"], force=True)
+    containers = docker_client.containers(
+        all=True, filters={"label": f"burla-cluster-member={CLUSTER_NAME}"}
+    )
+    for container in containers:
+        docker_client.remove_container(container["Id"], force=True)
 
 
 def _shutdown_cluster(logger: Logger, auth_headers: dict):
@@ -69,7 +72,9 @@ def _shutdown_cluster(logger: Logger, auth_headers: dict):
 
 
 def _current_local_dev_max_node_port():
-    max_port = 8080
+    # Node ports are published on the host and the client reaches nodes at
+    # localhost:<port>, so each cluster needs its own non-overlapping block.
+    max_port = LOCAL_DEV_NODE_PORT_BASE
     active_statuses = ("READY", "BOOTING", "RUNNING")
     for node in cluster_state.list_nodes():
         if node.get("status") not in active_statuses:

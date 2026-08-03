@@ -183,6 +183,18 @@ def dashboard():
     run_local_head_for_dashboard(on_ready=open_dashboard)
 
 
+def remote_dev():
+    """Run this checkout's main_service here with real cloud nodes.
+
+    Started by `make remote-dev`. The head hot-reloads this working tree; node
+    VMs run this checkout's current branch, so push node_service changes before
+    expecting them on a node.
+    """
+    from burla._local_head import run_remote_dev_head
+
+    run_remote_dev_head()
+
+
 def _configure_test_shell_prompt(
     shell: str, environment: dict[str, str], startup_dir: Path
 ) -> list[str]:
@@ -298,4 +310,5 @@ def init_cli():
         commands["install"] = install
     if _IN_SOURCE_CHECKOUT:
         commands["test-shell"] = test_shell
+        commands["remote-dev"] = remote_dev
     Fire(commands)

@@ -6,14 +6,55 @@ import docker
 from main_service import (
     BURLA_BACKEND_URL,
     CLUSTER_ID_TOKEN,
+    CLUSTER_NAME,
+    LOCAL_DEV_NETWORK,
     MAIN_SERVICE_URL_FOR_NODES,
     PROJECT_ID,
 )
 
 
+def _ensure_node_image(docker_client, image: str):
+    """Make the node base image available, without requiring cloud credentials.
+
+    The default image lives in a GCP artifact registry, but local-dev is meant to
+    run offline: if the pull fails (no or stale registry auth) and the image is
+    already cached, that is fine. Set BURLA_NODE_IMAGE to skip registries.
+    """
+    try:
+        docker_client.pull(image)
+        return
+    except Exception as error:
+        failure = error
+
+    if "Unauthenticated request" in str(failure):
+        try:
+            import google.auth
+            from google.auth.transport.requests import Request
+
+            credentials, _ = google.auth.default()
+            credentials.refresh(Request())
+            docker_client.pull(
+                image,
+                auth_config={
+                    "username": "oauth2accesstoken",
+                    "password": credentials.token,
+                },
+            )
+            return
+        except Exception as error:
+            failure = error
+
+    try:
+        docker_client.inspect_image(image)
+    except Exception:
+        raise failure
+
+
 class LocalDockerProvider:
-    """local-dev: nodes are docker containers on the `local-burla-cluster`
-    network, mounted so node/worker code hot-reloads on save."""
+    """local-dev: nodes are docker containers on this cluster's own docker
+    network, mounted so node/worker code hot-reloads on save. Every container
+    carries a `burla-cluster` label so teardown never touches another
+    checkout's cluster running on the same docker daemon."""
 
     def create_node_container(
         self,
@@ -23,39 +64,26 @@ class LocalDockerProvider:
         inactivity_shutdown_time_sec,
         reserved_for_job,
     ) -> str:
-        image = f"us-docker.pkg.dev/{PROJECT_ID}/burla-node-service/burla-node-service:latest"
+        image = (
+            os.environ.get("BURLA_NODE_IMAGE")
+            or f"us-docker.pkg.dev/{PROJECT_ID}/burla-node-service/burla-node-service:latest"
+        )
         docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
         host_config = docker_client.create_host_config(
             port_bindings={port: ("127.0.0.1", port)},
-            network_mode="local-burla-cluster",
+            network_mode=LOCAL_DEV_NETWORK,
             binds={
                 f"{os.environ['HOST_HOME_DIR']}/.config/gcloud": "/root/.config/gcloud",
                 f"{os.environ['HOST_PWD']}/node_service": "/opt/burla/node_service",
                 f"{os.environ['HOST_PWD']}/_shared_workspace": "/workspace/shared",
                 f"{os.environ['HOST_PWD']}/_worker_service_python_env": "/worker_service_python_env",
-                f"{os.environ['HOST_PWD']}/_python_version_marker": "/python_version_marker",
                 # node_auth bind: see NODE_AUTH_DIR in node_service/__init__.py.
                 f"{os.environ['HOST_PWD']}/_node_auth": "/opt/burla/node_auth",
                 "/var/run/docker.sock": "/var/run/docker.sock",
             },
         )
 
-        try:
-            docker_client.pull(image)
-        except docker.errors.APIError as error:
-            if "Unauthenticated request" in str(error):
-                import google.auth
-                from google.auth.transport.requests import Request
-
-                credentials, _ = google.auth.default()
-                credentials.refresh(Request())
-                auth_config = {
-                    "username": "oauth2accesstoken",
-                    "password": credentials.token,
-                }
-                docker_client.pull(image, auth_config=auth_config)
-            else:
-                raise
+        _ensure_node_image(docker_client, image)
 
         cmd_script = f"""
             cd /opt/burla/node_service
@@ -70,10 +98,20 @@ class LocalDockerProvider:
             name=container_name,
             ports=[port],
             host_config=host_config,
+            # `burla-cluster` marks everything belonging to this cluster (what
+            # `make stop` removes). `burla-cluster-member` marks only the
+            # nodes/workers, so the head tearing the cluster down cannot delete
+            # itself.
+            labels={
+                "burla-cluster": CLUSTER_NAME,
+                "burla-cluster-member": CLUSTER_NAME,
+            },
             environment={
                 "PROJECT_ID": PROJECT_ID,
                 "BURLA_BACKEND_URL": BURLA_BACKEND_URL,
                 "IN_LOCAL_DEV_MODE": "True",
+                "BURLA_CLUSTER_NAME": CLUSTER_NAME,
+                "LOCAL_DEV_NETWORK": LOCAL_DEV_NETWORK,
                 "HOST_HOME_DIR": os.environ["HOST_HOME_DIR"],
                 "HOST_PWD": os.environ["HOST_PWD"],
                 "INSTANCE_NAME": instance_name,

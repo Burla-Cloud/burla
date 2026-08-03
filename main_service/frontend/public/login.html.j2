@@ -198,7 +198,8 @@
       project_id: projectId,
     });
     // Tell the backend exactly which origin to redirect back to. Needed when the
-    // dashboard is tunneled on a port other than 5001 (e.g. ephemeral dev VMs).
+    // dashboard is on a port other than 5001, which every dev cluster is (each
+    // checkout publishes the head on its own port).
     if (redirectLocally) {
       loginParams.set("redirect_to", window.location.origin);
     }

@@ -3,10 +3,11 @@ Repo-root conftest for the Burla test suite. All tiers (unit, service, e2e, chao
 share these helpers so the subprocess-isolation pattern and cluster-readiness gate
 live in one place.
 
-All service / e2e / chaos tests assume `make local-dev` is running against the
-`burla-test` GCP project. A readiness gate fixture verifies this before any test
-that uses it runs. All cluster state is read/written over the main_service HTTP
-API - there is no database to inspect.
+All service / e2e / chaos tests assume a dev cluster is running for this
+checkout (`make local-dev`, or `make remote-dev` for real cloud nodes). A
+readiness gate fixture verifies this before any test that uses it runs. All
+cluster state is read/written over the main_service HTTP API - there is no
+database to inspect.
 """
 
 from __future__ import annotations
@@ -33,8 +34,9 @@ import pytest
 # the test suite must never touch the production backend
 os.environ.setdefault("BURLA_BACKEND_URL", "https://test.backend.burla.dev")
 
+# `make test*` passes this checkout's head port so tests never reach another
+# checkout's cluster on the same machine.
 DASHBOARD_URL = os.environ.get("BURLA_CLUSTER_DASHBOARD_URL", "http://localhost:5001")
-EXPECTED_GCP_PROJECT = os.environ.get("BURLA_TEST_PROJECT", "burla-test")
 REQUIRE_CLUSTER = os.environ.get("BURLA_REQUIRE_CLUSTER") == "1"
 READINESS_TIMEOUT_SEC = 30
 # local-dev containers reset in ~20s; real VMs need minutes. Remote e2e runs
@@ -62,8 +64,8 @@ def _request_headers() -> dict[str, str]:
 
 
 def _main_service_reachable() -> bool:
-    # Honor the DASHBOARD_URL env override so dev-VM tunnels on non-5001
-    # ports (e.g. 15001 for agent 01) satisfy the readiness gate.
+    # Honor the DASHBOARD_URL env override: each checkout's cluster publishes
+    # the head on its own port, so 5001 is only a fallback.
     from urllib.parse import urlparse
 
     parsed = urlparse(DASHBOARD_URL)
@@ -72,23 +74,10 @@ def _main_service_reachable() -> bool:
     return _port_open(host, port)
 
 
-def _resolve_active_gcp_project() -> str | None:
-    project_from_env = os.environ.get("GOOGLE_CLOUD_PROJECT")
-    if project_from_env:
-        return project_from_env
-    try:
-        import subprocess
+def _local_dashboard(url: str) -> bool:
+    from urllib.parse import urlparse
 
-        result = subprocess.run(
-            ["gcloud", "config", "get-value", "project"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        value = result.stdout.strip()
-        return value or None
-    except Exception:
-        return None
+    return (urlparse(url).hostname or "") in {"localhost", "127.0.0.1"}
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -258,21 +247,20 @@ def local_dev_cluster(burla_auth_headers) -> dict[str, Any]:
     """
     if not _main_service_reachable():
         message = (
-            f"main_service is not reachable at {DASHBOARD_URL}. "
-            "These tests must run on a dev VM, not your laptop; see "
-            "client/tests/README.md. Start the cluster on the VM with "
-            "`scripts/dev_vm_shell.sh --slot <id>` then `make -f makefile local-dev`, run "
-            "`scripts/dev_vm_tunnel.sh --slot <id>`, and set "
-            "BURLA_CLUSTER_DASHBOARD_URL to the tunnel URL (or run tests "
-            "directly on the VM, which is recommended)."
+            f"main_service is not reachable at {DASHBOARD_URL}. Start this "
+            "checkout's dev cluster in another terminal with `make local-dev` "
+            "(or `make remote-dev` for real cloud nodes); see "
+            "client/tests/README.md."
         )
         pytest.fail(message) if REQUIRE_CLUSTER else pytest.skip(message)
 
-    project = _resolve_active_gcp_project()
-    if project != EXPECTED_GCP_PROJECT:
+    # These tiers restart and mutate the cluster, so refuse to run against
+    # anything but a dev cluster on this machine.
+    if not _local_dashboard(DASHBOARD_URL):
         message = (
-            f"Expected gcloud project `{EXPECTED_GCP_PROJECT}`, got `{project}`. "
-            f"Run `gcloud config set project {EXPECTED_GCP_PROJECT}` first."
+            f"{DASHBOARD_URL} is not a local dev cluster. service/e2e/chaos "
+            "tests restart and mutate the cluster and must never run against a "
+            "deployed one."
         )
         pytest.fail(message) if REQUIRE_CLUSTER else pytest.skip(message)
 
@@ -297,11 +285,6 @@ def local_dev_cluster(burla_auth_headers) -> dict[str, Any]:
 
     import burla
 
-    if version_info.get("project") != EXPECTED_GCP_PROJECT:
-        pytest.fail(
-            f"Expected head project `{EXPECTED_GCP_PROJECT}`, "
-            f"got `{version_info.get('project')}`"
-        )
     if version_info.get("version") != burla.__version__:
         pytest.fail(
             f"Expected head version `{burla.__version__}`, "
@@ -330,7 +313,7 @@ def local_dev_cluster(burla_auth_headers) -> dict[str, Any]:
 
     return {
         "url": DASHBOARD_URL,
-        "project_id": project,
+        "project_id": version_info.get("project"),
         "version": version_info.get("version"),
         "state": state,
     }
@@ -473,8 +456,8 @@ def burla_auth_headers() -> dict[str, str]:
 def node_http_client(main_http_client, burla_auth_headers):
     """
     Factory for per-node httpx clients. A node's `host` field is
-    `http://node_xxx:8080` on the local-burla-cluster Docker network. From
-    the host we reach nodes via `http://localhost:<port>` since each node
+    `http://node_xxx:<port>` on that cluster's own Docker network. From the
+    host we reach nodes via `http://localhost:<port>` since each node
     publishes its port. This fixture handles that rewriting and attaches
     the standard burla auth headers.
     """

@@ -1,0 +1,35 @@
+---
+description: Worktree-per-task isolation and how to pick/run a Burla dev cluster
+alwaysApply: true
+---
+
+# Burla Worktrees and Dev Clusters
+
+For Burla tasks, never edit the primary checkout. Create or reopen a linked
+worktree for the task and edit there.
+
+One worktree gets one dev cluster. Everything that would otherwise be shared
+(docker network, container labels, head port, node ports, head state, relay
+subdomain, EC2 node tags) is namespaced by the worktree name automatically, so
+several agents can run clusters side by side on one machine. Run
+`make cluster-info` to see a worktree's cluster name and dashboard URL; never
+assume the head is on port 5001.
+
+Start a cluster from its worktree with `make local-dev` (whole cluster local, for
+light work: frontend, dashboard, head/API behavior) or `make remote-dev` (head
+local, nodes are real EC2 in the Burla test AWS account, for real scale or
+real-VM behavior, or when this machine cannot take another local cluster).
+Development happens in AWS; GCP is production-only. Read the
+`burla-parallel-dev` skill before starting or stopping a cluster.
+
+Tear down with `make stop` (label-scoped to that worktree) or `make stop-all`.
+Never `docker rm` containers by `node_*` / `worker_*` name prefix: that destroys
+other agents' clusters.
+
+In remote-dev, node VMs run the worktree's current branch from GitHub, so
+`node_service` / `worker_server.py` changes must be committed and pushed before
+they reach a node. `main_service` changes are always live in both modes.
+
+When a task is done, push its branch and merge it into `dev`, then stop the
+cluster. Keep the worktree until it is no longer needed; if it is dirty, commit
+the work on its branch with a clear WIP message rather than discarding it.

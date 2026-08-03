@@ -15,6 +15,7 @@ import configparser
 import json
 import os
 import platform
+import re
 import shutil
 import socket
 import subprocess
@@ -57,6 +58,30 @@ class LocalHeadError(Exception):
 def _state_dir(project_id: str) -> Path:
     directory = STATE_ROOT / project_id
     directory.mkdir(parents=True, exist_ok=True)
+    return directory
+
+
+def cluster_namespace() -> str:
+    """Which dev cluster this process belongs to, or "" for normal use.
+
+    Several dev heads run against one cloud account (one per checkout), and they
+    must not share a head port, relay subdomain, or history db. `make remote-dev`
+    sets BURLA_CLUSTER_NAME to separate them. Unset, which is every real user,
+    keeps the original single-head layout.
+    """
+    name = os.environ.get("BURLA_CLUSTER_NAME", "").strip().lower()
+    return re.sub(r"[^a-z0-9-]+", "-", name).strip("-")
+
+
+def _head_state_dir(project_id: str) -> Path:
+    """Per-cluster head state: ports, relay subdomain, history db, TLS. The
+    cluster token lives in the project dir above this instead, because it is
+    account-wide and every head for the account shares it."""
+    directory = _state_dir(project_id)
+    namespace = cluster_namespace()
+    if namespace:
+        directory = directory / f"cluster-{namespace}"
+        directory.mkdir(parents=True, exist_ok=True)
     return directory
 
 
@@ -459,10 +484,12 @@ def run_local_head_for_dashboard(
 def _run_local_head(
     detached: bool,
     on_ready: Callable[[str, bool], None] | None = None,
+    node_source_ref: str | None = None,
+    reload_dir: str | None = None,
 ) -> str:
     cloud, project_id, aws_region = detect_cloud()
 
-    state_dir = _state_dir(project_id)
+    state_dir = _head_state_dir(project_id)
     head_state_path = state_dir / "head.json"
     head_state = {}
     if head_state_path.exists():
@@ -513,7 +540,7 @@ def _run_local_head(
         "BURLA_RELAY_HOST": RELAY_HOST,
         "BURLA_RELAY_SERVER_ADDR": RELAY_SERVER_ADDR,
         "BURLA_RELAY_SERVER_PORT": str(RELAY_SERVER_PORT),
-        "BURLA_NODE_SOURCE_REF": _BURLA_NODE_SOURCE_REF,
+        "BURLA_NODE_SOURCE_REF": node_source_ref or _BURLA_NODE_SOURCE_REF,
         "MAIN_SERVICE_URL_FOR_NODES": f"https://{subdomain}.{RELAY_HOST}",
         "PORT": str(head_port),
         "INTERNAL_TLS_PORT": str(tls_port),
@@ -539,6 +566,7 @@ def _run_local_head(
         head_port=head_port,
         environment=environment,
         detached=detached,
+        reload_dir=reload_dir,
     )
 
     # Written before the readiness wait so a failed boot never leaks the
@@ -589,6 +617,85 @@ def _run_local_head(
     return url
 
 
+def _current_branch(repo_root: Path) -> str:
+    result = subprocess.run(
+        ["git", "-C", str(repo_root), "branch", "--show-current"],
+        capture_output=True,
+        text=True,
+    )
+    branch = result.stdout.strip()
+    if not branch:
+        raise LocalHeadError(
+            "remote-dev needs a checked-out branch, but this repo is on a detached HEAD."
+        )
+    return branch
+
+
+def _warn_if_branch_unpushed(repo_root: Path, branch: str):
+    """Node VMs git-fetch this branch from GitHub, so anything not pushed (every
+    uncommitted edit included) never reaches them."""
+    on_origin = subprocess.run(
+        ["git", "-C", str(repo_root), "rev-parse", "--verify", f"origin/{branch}"],
+        capture_output=True,
+        text=True,
+    )
+    if on_origin.returncode != 0:
+        print(
+            f"WARNING: branch `{branch}` is not on origin yet, so nodes cannot "
+            f"fetch it. Push it before booting nodes.",
+            flush=True,
+        )
+        return
+    unpushed = subprocess.run(
+        [
+            *("git", "-C", str(repo_root)),
+            *("rev-list", "--count", f"origin/{branch}..{branch}"),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    count = unpushed.stdout.strip()
+    if count and count != "0":
+        print(
+            f"WARNING: {count} commit(s) on `{branch}` are not pushed. Nodes will "
+            f"run the pushed version, not your working tree.",
+            flush=True,
+        )
+
+
+def run_remote_dev_head() -> None:
+    """`make remote-dev`: run this checkout's main_service here, hot-reloading on
+    save, while nodes boot as real cloud VMs running this checkout's branch."""
+    from burla import _IN_SOURCE_CHECKOUT, _SOURCE_ROOT
+
+    if not _IN_SOURCE_CHECKOUT:
+        raise LocalHeadError("remote-dev requires an editable Burla source checkout.")
+
+    # Nodes git-fetch their code from GitHub, so the ref has to exist there.
+    # Defaults to this checkout's branch; override to pin nodes at an already
+    # pushed ref (e.g. `dev`) while iterating on head-only changes.
+    branch = os.environ.get("BURLA_NODE_SOURCE_REF") or _current_branch(_SOURCE_ROOT)
+    _warn_if_branch_unpushed(_SOURCE_ROOT, branch)
+    namespace = cluster_namespace() or "default"
+
+    def announce(url: str, is_foreground: bool):
+        lines = [
+            f"\nBurla remote-dev cluster [{namespace}]",
+            f"  dashboard: {url}",
+            f"  node code: branch `{branch}` on GitHub",
+        ]
+        if is_foreground:
+            lines.append("  Press Ctrl-C to stop it.\n")
+        print("\n".join(lines), flush=True)
+
+    _run_local_head(
+        detached=False,
+        on_ready=announce,
+        node_source_ref=branch,
+        reload_dir=str(_SOURCE_ROOT / "main_service" / "src"),
+    )
+
+
 def _wait_for_head_ready(
     head_process: subprocess.Popen,
     url: str,
@@ -623,6 +730,7 @@ def _spawn_head(
     head_port: int,
     environment: dict[str, str],
     detached: bool,
+    reload_dir: str | None = None,
 ) -> subprocess.Popen:
     command = [
         sys.executable,
@@ -636,6 +744,8 @@ def _spawn_head(
         "--timeout-keep-alive",
         "600",
     ]
+    if reload_dir:
+        command += ["--reload", "--reload-dir", reload_dir]
     if not detached:
         return subprocess.Popen(command, env=environment)
 

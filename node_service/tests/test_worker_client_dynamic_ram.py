@@ -61,6 +61,8 @@ def _load_worker_client_module(monkeypatch):
     fake_node_service.ASYNC_DB = object()
     fake_node_service.INSTANCE_NAME = "burla-node-test"
     fake_node_service.IN_LOCAL_DEV_MODE = True
+    fake_node_service.BURLA_CLUSTER_NAME = "test-cluster"
+    fake_node_service.LOCAL_DEV_NETWORK = "burla-test-cluster"
     fake_node_service.NUM_GPUS = 0
     fake_node_service.Logger = _NodeLogger
     fake_node_service.head_client = object()

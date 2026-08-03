@@ -36,6 +36,12 @@ CLUSTER_ID_TOKEN = os.environ["CLUSTER_ID_TOKEN"]
 
 NUM_GPUS = int(os.environ.get("NUM_GPUS"))
 INSTANCE_NAME = os.environ["INSTANCE_NAME"]
+
+# local-dev only: which cluster this node belongs to, and the docker network its
+# workers join. Several local-dev clusters share one docker daemon, so both are
+# namespaced per checkout by the head that booted this node.
+BURLA_CLUSTER_NAME = os.environ.get("BURLA_CLUSTER_NAME", "default")
+LOCAL_DEV_NETWORK = os.environ.get("LOCAL_DEV_NETWORK", "local-burla-cluster")
 _raw_inactivity = os.environ.get("INACTIVITY_SHUTDOWN_TIME_SEC")
 INACTIVITY_SHUTDOWN_TIME_SEC = (
     int(_raw_inactivity) if _raw_inactivity is not None else None

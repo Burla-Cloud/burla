@@ -1,19 +1,18 @@
 ### node_service tests
 
-**Run these on a dev VM, not your laptop.** See
-[`client/tests/README.md`](../../client/tests/README.md) for the full
-workflow. The tests drive real node containers over HTTP; reaching them
-from a laptop requires tunnel plumbing that doesn't exist, and the node
-bind-mounts assume `/srv/burla` on a dev VM host.
+These need a `make local-dev` cluster running for this checkout, because they
+drive real node containers directly. See
+[`client/tests/README.md`](../../client/tests/README.md) for the full workflow.
 
-All tests here are service-tier (marked `@pytest.mark.service`). They
-use the `node_http_client` fixture in the root `conftest.py`, which
-discovers nodes via `main_service`'s `/v1/cluster/state` and talks to
-them over the local docker network on the VM. From inside the dev VM:
+All tests here are service-tier (marked `@pytest.mark.service`). They use the
+`node_http_client` fixture in the root `conftest.py`, which discovers nodes via
+`main_service`'s `/v1/cluster/state` and reaches each one at the host port it
+publishes. From the repo root:
 
 ```
-cd /srv/burla
-BURLA_TEST_PROJECT=burla-agent-<slot> \
-BURLA_CLUSTER_DASHBOARD_URL=http://localhost:5001 \
+BURLA_CLUSTER_DASHBOARD_URL=$(make -s cluster-info | awk '/dashboard/{print $2}') \
   uv run --project ./client --group dev pytest node_service/tests -m "service and not chaos"
 ```
+
+`make test-service` does this for you, defaulting the dashboard URL to this
+checkout's head port.

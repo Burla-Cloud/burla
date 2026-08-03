@@ -4,6 +4,7 @@ from time import sleep
 import boto3
 from botocore.exceptions import ClientError
 
+from main_service import CLUSTER_NAME
 from main_service.providers import NoCapacity
 
 # Capacity errors worth trying the next AZ for; anything else is a real error.
@@ -112,6 +113,9 @@ class AWSProvider:
                     "Tags": [
                         {"Key": "Name", "Value": instance_name},
                         {"Key": "burla-cluster-node", "Value": "true"},
+                        # Several dev clusters boot nodes into one AWS account,
+                        # so every destructive lookup below filters on this.
+                        {"Key": "burla-cluster-id", "Value": CLUSTER_NAME},
                     ],
                 }
             ],
@@ -220,6 +224,7 @@ class AWSProvider:
         response = ec2.describe_instances(
             Filters=[
                 {"Name": "tag:Name", "Values": [instance_name]},
+                {"Name": "tag:burla-cluster-id", "Values": [CLUSTER_NAME]},
                 {
                     "Name": "instance-state-name",
                     "Values": ["pending", "running", "stopping", "stopped"],
@@ -237,11 +242,14 @@ class AWSProvider:
 
     def delete_stopped_instances(self):
         """Nodes normally terminate themselves on shutdown; this reaps any
-        that were stopped some other way (e.g. through the AWS console)."""
+        that were stopped some other way (e.g. through the AWS console).
+        Scoped to this cluster's own nodes so dev clusters sharing an AWS
+        account never reap each other's."""
         ec2 = self._ec2(self.region)
         response = ec2.describe_instances(
             Filters=[
                 {"Name": "tag:burla-cluster-node", "Values": ["true"]},
+                {"Name": "tag:burla-cluster-id", "Values": [CLUSTER_NAME]},
                 {"Name": "instance-state-name", "Values": ["stopped"]},
             ]
         )

@@ -15,8 +15,10 @@ from tblib import Traceback
 
 from node_service import (
     SELF,
+    BURLA_CLUSTER_NAME,
     INSTANCE_NAME,
     IN_LOCAL_DEV_MODE,
+    LOCAL_DEV_NETWORK,
     NUM_GPUS,
     Logger,
     __version__,
@@ -468,7 +470,7 @@ class WorkerClient:
             worker_python_environment_dir = (
                 f"{host_pwd}/_worker_service_python_env/{INSTANCE_NAME}"
             )
-            host_config["NetworkMode"] = "local-burla-cluster"
+            host_config["NetworkMode"] = LOCAL_DEV_NETWORK
             binds.extend(
                 [
                     f"{host_home_dir}/.config/gcloud:/root/.config/gcloud",
@@ -530,6 +532,14 @@ class WorkerClient:
             "WorkingDir": "/workspace",
             "ExposedPorts": {f"{WORKER_INTERNAL_PORT}/tcp": {}},
             "HostConfig": host_config,
+            # Lets local-dev teardown find this cluster's containers without
+            # touching another checkout's cluster on the same docker daemon.
+            # `burla-cluster-member` excludes the head, which must survive a
+            # cluster restart.
+            "Labels": {
+                "burla-cluster": BURLA_CLUSTER_NAME,
+                "burla-cluster-member": BURLA_CLUSTER_NAME,
+            },
         }
         if not IN_LOCAL_DEV_MODE:
             # The bundle is public CAs + the cluster CA, so pointing every

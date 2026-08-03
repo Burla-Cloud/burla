@@ -1,0 +1,103 @@
+---
+name: burla-parallel-dev
+description: How to run an isolated Burla dev cluster for a task, and when to use local-dev vs remote-dev. Use when changing, fixing, testing, or debugging anything in the burla repo, when several agents work in parallel worktrees, when starting or stopping a dev cluster, or when merging finished work into the dev branch.
+---
+
+# Burla Parallel Dev
+
+Many agents work on Burla at once on one machine. Each task gets its own git
+worktree and its own dev cluster, and clusters never touch each other.
+
+## Cluster identity
+
+One worktree = one cluster. The cluster name defaults to the worktree directory
+name and namespaces everything that would otherwise be shared: the docker
+network, container labels, the published head port, published node ports, the
+head's state directory, its relay subdomain, and the EC2 tag on its nodes.
+
+Run `make cluster-info` in a worktree to see that worktree's cluster name,
+dashboard URL, network, and node port base. Nothing needs to be passed by hand;
+override `BURLA_CLUSTER_NAME` only if two worktrees ever collide.
+
+## Choosing a mode
+
+Both modes run `main_service` locally and hot-reload the working tree. The
+difference is where nodes and workers run.
+
+Use **`make local-dev`** when the change can be exercised with very light
+resources: dashboard and frontend work, head/API behavior, anything where you
+need a cluster to exist and boot but not to do real work. Nodes and workers are
+docker containers on this machine bind-mounted to the working tree, so node and
+worker edits apply on save with no pushing. This is the fast loop, but every
+cluster costs containers on a laptop, so keep them small (1 node by default) and
+stop the ones you are not using.
+
+Use **`make remote-dev`** when local-dev is the wrong tool:
+
+- the machine is already saturated and cannot take another local cluster
+- the change needs real scale, real parallelism, or real processing work
+- the behavior only appears on real VMs: node boot and cold starts, disk images,
+  GPUs, multi-node grow/shrink, spot capacity, real network and IAM paths
+
+Nodes are real EC2 instances in the Burla test AWS account, and the head reaches
+them through the relay, so many remote-dev clusters coexist on one machine.
+
+Development happens in AWS. GCP is production-only.
+
+## Running a cluster
+
+From the task's worktree, in its own terminal:
+
+```bash
+make local-dev      # whole cluster local, containers on this machine
+make remote-dev     # head local, nodes are real EC2 in the test account
+```
+
+Then point clients and tests at that cluster. `make test`, `make test-service`,
+`make test-e2e`, and `make test-chaos` already default to this worktree's head
+port; for ad hoc client commands use the URL `make cluster-info` prints:
+
+```bash
+export BURLA_CLUSTER_DASHBOARD_URL=$(make -s cluster-info | awk '/dashboard/{print $2}')
+```
+
+Tear down with `make stop` (this worktree only) or `make stop-all` (every dev
+cluster on the machine). `make stop` is label-scoped, so it cannot disturb
+another agent's cluster.
+
+## The one thing remote-dev cannot see
+
+In local-dev the node and worker code is bind-mounted, so your edits are live.
+In remote-dev, node VMs `git fetch` their code from GitHub at **this worktree's
+current branch**, so:
+
+- `main_service` changes are live (the head runs your working tree)
+- `node_service` / `worker_server.py` changes reach nodes only after you commit
+  and push the branch
+
+`make remote-dev` warns when the branch is unpushed or missing from origin. Set
+`BURLA_NODE_SOURCE_REF` to pin nodes at an already pushed ref (e.g. `dev`) when
+you only care about head-side changes.
+
+## Finishing a task
+
+1. Commit the work on the worktree's branch and push it.
+2. Merge the branch into `dev`. `dev` is the integration branch: everything in
+   flight lives there, and it is what a release is cut from.
+3. Stop the cluster (`make stop`) and leave the worktree until it is no longer
+   needed.
+
+## Testing what is on dev
+
+To exercise the merged result rather than one task's branch, use a worktree
+checked out on `dev` and run either mode there, or deploy `dev` to the test
+account ("push this to test", see the `burla-release` skill).
+
+## Guardrails
+
+- Never edit the primary checkout for a task; always work in a linked worktree.
+- Never run `docker rm` by container-name prefix (`node_*`, `worker_*`); that
+  deletes other agents' clusters. Use `make stop`.
+- Never assume the head is on port 5001; ask `make cluster-info`.
+- Do not point a dev cluster's client at a deployed cluster: the service, e2e,
+  and chaos tiers restart and mutate whatever they are aimed at.

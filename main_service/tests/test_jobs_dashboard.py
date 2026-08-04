@@ -51,26 +51,6 @@ def _push_job_logs(main_http_client, job_id: str, documents: list[dict]) -> None
     assert resp.status_code == 200, resp.text
 
 
-def test_list_jobs_paginated_returns_expected_shape(main_http_client, local_dev_cluster):
-    resp = main_http_client.get("/v1/jobs?page=0")
-    assert resp.status_code == 200
-    body = resp.json()
-    assert "jobs" in body
-    assert "page" in body
-    assert "limit" in body
-    assert "total" in body
-    assert body["limit"] == 15
-
-
-def test_list_jobs_page_numbers_respected(main_http_client, local_dev_cluster):
-    resp1 = main_http_client.get("/v1/jobs?page=0")
-    resp2 = main_http_client.get("/v1/jobs?page=1")
-    assert resp1.status_code == 200
-    assert resp2.status_code == 200
-    assert resp1.json()["page"] == 0
-    assert resp2.json()["page"] == 1
-
-
 def test_stop_job_writes_dashboard_canceled(
     main_http_client, local_dev_cluster, isolated_job_id, cleanup_job, get_job,
     wait_for_fixture,

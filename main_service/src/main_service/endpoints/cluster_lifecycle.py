@@ -1,12 +1,17 @@
 import asyncio
+import hashlib
+import os
+import tempfile
 
 from time import time
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, Request
 from concurrent.futures import ThreadPoolExecutor
 
 from main_service import (
     IN_LOCAL_DEV_MODE,
+    CLOUD_PROVIDER,
+    CLUSTER_ID_TOKEN,
     CLUSTER_NAME,
     LOCAL_DEV_CONFIG,
     LOCAL_DEV_NODE_PORT_BASE,
@@ -235,3 +240,57 @@ async def shutdown_cluster(
 
     duration = time() - start
     logger.log(f"Shut down after {duration//60}m {duration%60}s")
+
+
+# ------------------------------------------------------------ deploy migration
+# A first `burla deploy` moves this machine's client-hosted history into the
+# new deployed cluster: deploy pauses this head, snapshots its history db,
+# and uploads the snapshot to the deployed head's import endpoint.
+
+
+@router.post("/v1/cluster/pause_job_admission")
+def pause_job_admission():
+    if not cluster_state.pause_job_admission_if_idle():
+        raise HTTPException(status_code=409, detail="A job is currently running.")
+
+
+@router.post("/v1/cluster/resume_job_admission")
+def resume_job_admission():
+    cluster_state.resume_job_admission()
+
+
+@router.post("/v1/cluster/import_history")
+async def import_history(request: Request):
+    # Cluster-token only: authorized dashboard users must not be able to
+    # inject arbitrary history rows.
+    if request.headers.get("Authorization") != f"Bearer {CLUSTER_ID_TOKEN}":
+        raise HTTPException(status_code=403, detail="cluster token required")
+
+    digest = hashlib.sha256()
+    descriptor, snapshot_path = tempfile.mkstemp(suffix=".db")
+    try:
+        with os.fdopen(descriptor, "wb") as snapshot_file:
+            async for chunk in request.stream():
+                digest.update(chunk)
+                snapshot_file.write(chunk)
+        imported = await asyncio.to_thread(
+            _import_history_snapshot, snapshot_path, digest.hexdigest()
+        )
+    finally:
+        os.remove(snapshot_path)
+    return {"imported": imported}
+
+
+def _import_history_snapshot(snapshot_path: str, digest: str) -> bool:
+    config = history.snapshot_cluster_config(snapshot_path)
+    if config is not None:
+        deployed_config = history.get_cluster_config()
+        # The snapshot's config has no shared-workspace bucket (client-hosted
+        # heads run without one), and on AWS its node region may be one this
+        # deployment never prepared (no node AMI / security groups there).
+        config["gcs_bucket_name"] = deployed_config.get("gcs_bucket_name")
+        if CLOUD_PROVIDER == "aws":
+            deployed_region = deployed_config["Nodes"][0]["gcp_region"]
+            for node_spec in config["Nodes"]:
+                node_spec["gcp_region"] = deployed_region
+    return history.import_snapshot(snapshot_path, digest, config)

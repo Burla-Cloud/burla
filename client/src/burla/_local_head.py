@@ -19,6 +19,7 @@ import re
 import shutil
 import signal
 import socket
+import sqlite3
 import subprocess
 import sys
 import tarfile
@@ -64,23 +65,22 @@ def _state_dir(project_id: str) -> Path:
 
 
 def cluster_namespace() -> str:
-    """Which dev cluster this process belongs to, or "" for normal use.
+    """Which explicit worktree dev cluster this process belongs to.
 
     Several dev heads run against one cloud account (one per checkout), and they
     must not share a head port, relay subdomain, or history db. `make remote-dev`
-    sets BURLA_CLUSTER_NAME to separate them. Unset, which is every real user,
-    keeps the original single-head layout.
+    passes this namespace to `_run_local_head`. Ad hoc client-hosted heads ignore
+    it so notebooks and shells reuse one account-wide head and history database.
     """
     name = os.environ.get("BURLA_CLUSTER_NAME", "").strip().lower()
     return re.sub(r"[^a-z0-9-]+", "-", name).strip("-")
 
 
-def _head_state_dir(project_id: str) -> Path:
+def _head_state_dir(project_id: str, namespace: str = "") -> Path:
     """Per-cluster head state: ports, relay subdomain, history db, TLS. The
     cluster token lives in the project dir above this instead, because it is
     account-wide and every head for the account shares it."""
     directory = _state_dir(project_id)
-    namespace = cluster_namespace()
     if namespace:
         directory = directory / f"cluster-{namespace}"
         directory.mkdir(parents=True, exist_ok=True)
@@ -320,10 +320,6 @@ def ensure_user_authorized(
     )
     response.raise_for_status()
     auth_info = response.json()
-    # No `mode` here: a local head is preferred by being *running*
-    # (`running_head_url`), not by a sticky flag. Only `burla login` writes
-    # `mode="deployed"`, and this path never runs while that is set because a
-    # deployed login is resolved before any local head would be started.
     _write_auth_config(auth_info)
 
 
@@ -441,14 +437,12 @@ def _main_service_pythonpath() -> str | None:
     )
 
 
-def _head_matches(url: str, project_id: str, cluster_token: str) -> bool:
+def _head_matches(
+    url: str, project_id: str, cluster_token: str, expected_namespace: str
+) -> bool:
     # /version sits behind the auth middleware like everything else;
     # unauthenticated requests get the login page instead of JSON.
     headers = {"Authorization": f"Bearer {cluster_token}"}
-    # Two checkouts can share one cloud account (same project + version), so
-    # also require the namespace to match. Otherwise a stale head.json URL
-    # pointing at another checkout's head (e.g. both on :5001) would be reused.
-    expected_namespace = cluster_namespace() or "default"
     try:
         response = requests.get(f"{url}/version", headers=headers, timeout=2)
         info = response.json()
@@ -483,11 +477,10 @@ def ensure_local_head() -> str:
 
 
 def running_head_url() -> str | None:
-    """URL of a head already serving THIS checkout's namespace, or None.
+    """URL of the account-wide ad hoc client head, or None.
 
-    Only returns a URL that is reachable and matches this build (version +
-    project + namespace); a stale `head.json` entry returns None. Never starts
-    anything, so callers can use it to prefer an already-running head.
+    Explicit worktree clusters are reached through BURLA_CLUSTER_DASHBOARD_URL
+    instead. A stale `head.json` entry returns None.
     """
     try:
         _, project_id, _ = detect_cloud()
@@ -500,7 +493,9 @@ def running_head_url() -> str | None:
     head_state = json.loads(head_state_path.read_text())
     url = head_state.get("url")
     saved_token = read_saved_cluster_token(project_id)
-    if url and saved_token and _head_matches(url, project_id, saved_token):
+    if url and saved_token and _head_matches(
+        url, project_id, saved_token, expected_namespace="default"
+    ):
         if not _pid_alive(head_state.get("frpc_pid")):
             _respawn_frpc(state_dir, head_state)
         return url
@@ -518,9 +513,9 @@ def acquire_head_for_job() -> HeadHandle:
     precedence. Reuses an env-pointed, already-running, or deployed cluster
     (owned=False); only when nothing is available does it start a head here,
     which the caller must stop with `release_head`."""
-    from burla import _env_dashboard_url, _deployed_dashboard_url
+    from burla import _existing_cluster_dashboard_url
 
-    url = _env_dashboard_url() or running_head_url() or _deployed_dashboard_url()
+    url = _existing_cluster_dashboard_url()
     if url:
         return HeadHandle(url=url, owned=False)
     return HeadHandle(url=ensure_local_head(), owned=True)
@@ -577,6 +572,87 @@ def _shutdown_cluster_via_head(url: str, project_id: str):
         pass
 
 
+# ------------------------------------------------------------------ deploy migration
+
+
+def prepare_history_migration(project_id: str) -> tuple[Path | None, str | None]:
+    """Quiesce the account-wide ad hoc head (if one is running) and snapshot
+    its history db for a first `burla deploy`.
+
+    Returns (snapshot_path, paused_head_url); snapshot_path is None when this
+    machine has no local history. Only the account-wide database migrates:
+    namespaced worktree dev clusters are never touched. The snapshot uses
+    sqlite's backup API so rows still sitting in the WAL are included.
+    """
+    cluster_token = read_saved_cluster_token(project_id)
+    state_dir = _head_state_dir(project_id)
+    head_state_path = state_dir / "head.json"
+    head_url = None
+    if head_state_path.exists() and cluster_token:
+        url = json.loads(head_state_path.read_text()).get("url")
+        if url and _head_matches(
+            url, project_id, cluster_token, expected_namespace="default"
+        ):
+            head_url = url
+
+    if head_url:
+        response = requests.post(
+            f"{head_url}/v1/cluster/pause_job_admission",
+            headers={"Authorization": f"Bearer {cluster_token}"},
+            timeout=30,
+        )
+        if response.status_code == 409:
+            raise LocalHeadError(
+                "A job is currently running on this machine's Burla cluster. "
+                "Wait for it to finish, then re-run `burla deploy`."
+            )
+        response.raise_for_status()
+        # Delete idle nodes now, while a head with cloud credentials is still
+        # up, so their DELETED records land in the snapshot.
+        _shutdown_cluster_via_head(head_url, project_id)
+
+    db_path = state_dir / "history.db"
+    if not db_path.exists():
+        return None, head_url
+
+    descriptor, snapshot_path = tempfile.mkstemp(suffix=".db")
+    os.close(descriptor)
+    source = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    snapshot = sqlite3.connect(snapshot_path)
+    with snapshot:
+        source.backup(snapshot)
+    snapshot.close()
+    source.close()
+    return Path(snapshot_path), head_url
+
+
+def resume_history_migration(project_id: str, head_url: str):
+    """Deploy failed: let the paused local head admit jobs again."""
+    cluster_token = read_saved_cluster_token(project_id)
+    try:
+        requests.post(
+            f"{head_url}/v1/cluster/resume_job_admission",
+            headers={"Authorization": f"Bearer {cluster_token}"},
+            timeout=10,
+        )
+    except requests.RequestException:
+        pass  # deploy is already failing; don't mask its error
+
+
+def finish_history_migration(project_id: str):
+    """The deployed cluster owns the history now: stop the local head so
+    nothing writes to the migrated database afterwards."""
+    head_state_path = _head_state_dir(project_id) / "head.json"
+    if not head_state_path.exists():
+        return
+    head_state = json.loads(head_state_path.read_text())
+    head_pid = head_state.get("head_pid")
+    frpc_pid = head_state.get("frpc_pid")
+    _terminate_pid(head_pid)
+    _terminate_pid(frpc_pid)
+    _clear_process_state(head_state_path, head_pid, frpc_pid)
+
+
 def _reap(pid: int):
     """Clear the zombie left behind when we kill a head we spawned ourselves.
     Until it is reaped the pid still exists, so `_pid_alive` keeps saying yes."""
@@ -615,10 +691,12 @@ def _run_local_head(
     on_ready: Callable[[str, bool], None] | None = None,
     node_source_ref: str | None = None,
     reload_dir: str | None = None,
+    namespace: str = "",
 ) -> str:
     cloud, project_id, aws_region = detect_cloud()
 
-    state_dir = _head_state_dir(project_id)
+    state_dir = _head_state_dir(project_id, namespace)
+    head_namespace = namespace or "default"
     head_state_path = state_dir / "head.json"
     head_state = {}
     if head_state_path.exists():
@@ -626,7 +704,9 @@ def _run_local_head(
 
     url = head_state.get("url")
     saved_token = read_saved_cluster_token(project_id)
-    if url and saved_token and _head_matches(url, project_id, saved_token):
+    if url and saved_token and _head_matches(
+        url, project_id, saved_token, expected_namespace=head_namespace
+    ):
         if not _pid_alive(head_state.get("frpc_pid")):
             _respawn_frpc(state_dir, head_state)
         if on_ready:
@@ -657,6 +737,7 @@ def _run_local_head(
     environment = {
         **os.environ,
         "IN_CLIENT_HOSTED_MODE": "True",
+        "BURLA_CLUSTER_NAME": head_namespace,
         "PROJECT_ID": project_id,
         "CLOUD_PROVIDER": cloud,
         "CLOUD_ACCOUNT_NAME": (
@@ -712,7 +793,13 @@ def _run_local_head(
 
     if detached:
         _wait_for_head_ready(
-            head_process, url, project_id, cluster_token, state_dir, detached=True
+            head_process,
+            url,
+            project_id,
+            cluster_token,
+            head_namespace,
+            state_dir,
+            detached=True,
         )
         _respawn_frpc(state_dir, head_state, cluster_token=cluster_token)
         return url
@@ -720,7 +807,13 @@ def _run_local_head(
     frpc_process = None
     try:
         _wait_for_head_ready(
-            head_process, url, project_id, cluster_token, state_dir, detached=False
+            head_process,
+            url,
+            project_id,
+            cluster_token,
+            head_namespace,
+            state_dir,
+            detached=False,
         )
         frpc_process = _respawn_frpc(
             state_dir, head_state, cluster_token=cluster_token
@@ -857,11 +950,11 @@ def run_remote_dev_head() -> None:
     # pushed ref (e.g. `dev`) while iterating on head-only changes.
     branch = os.environ.get("BURLA_NODE_SOURCE_REF") or _current_branch(_SOURCE_ROOT)
     _warn_if_branch_unpushed(_SOURCE_ROOT, branch)
-    namespace = cluster_namespace() or "default"
+    namespace = cluster_namespace()
 
     def announce(url: str, is_foreground: bool):
         lines = [
-            f"\nBurla remote-dev cluster [{namespace}]",
+            f"\nBurla remote-dev cluster [{namespace or 'default'}]",
             f"  dashboard: {url}",
             f"  node code: branch `{branch}` on GitHub",
         ]
@@ -874,6 +967,7 @@ def run_remote_dev_head() -> None:
         on_ready=announce,
         node_source_ref=branch,
         reload_dir=str(_SOURCE_ROOT / "main_service" / "src"),
+        namespace=namespace,
     )
 
 
@@ -882,12 +976,13 @@ def _wait_for_head_ready(
     url: str,
     project_id: str,
     cluster_token: str,
+    expected_namespace: str,
     state_dir: Path,
     detached: bool,
 ):
     start = time()
     while time() - start < 90:
-        if _head_matches(url, project_id, cluster_token):
+        if _head_matches(url, project_id, cluster_token, expected_namespace):
             return
         if head_process.poll() is not None:
             if detached:
@@ -952,10 +1047,10 @@ def _stop_process(process: subprocess.Popen):
 
 
 def _clear_process_state(
-    head_state_path: Path, head_pid: int, frpc_pid: int | None
+    head_state_path: Path, head_pid: int | None, frpc_pid: int | None
 ):
     head_state = json.loads(head_state_path.read_text())
-    if head_state.get("head_pid") == head_pid:
+    if head_pid is not None and head_state.get("head_pid") == head_pid:
         head_state.pop("head_pid")
     if frpc_pid is not None and head_state.get("frpc_pid") == frpc_pid:
         head_state.pop("frpc_pid")

@@ -43,7 +43,7 @@ SELF_DELETE_GUEST_ATTRIBUTE = "burla/self-delete-requested"
 # the docker network, container labels, and published node ports; in remote-dev
 # the EC2 tag that marks a node as belonging to this cluster. Also reported at
 # /version so the client can tell two dev heads on one cloud account apart.
-# "default" for a deployed head, which is a singleton.
+# "default" for deployed and account-wide ad hoc client heads.
 CLUSTER_NAME = os.environ.get("BURLA_CLUSTER_NAME", "default")
 LOCAL_DEV_NETWORK = os.environ.get("LOCAL_DEV_NETWORK", "local-burla-cluster")
 # The head runs on the docker host in local-dev, so node containers reach it at

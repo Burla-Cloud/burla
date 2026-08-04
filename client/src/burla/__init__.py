@@ -108,35 +108,44 @@ def _env_dashboard_url() -> str | None:
 
 
 def _deployed_dashboard_url() -> str | None:
-    """The deployed cluster from `burla login` (mode="deployed"), or None.
+    """The deployed cluster registered for the active cloud account, or None."""
+    import requests
 
-    A head you start locally wins over this while it is running; this is the
-    fallback once no local head is up.
-    """
-    if not CONFIG_PATH.exists():
+    from burla._local_head import (
+        LocalHeadError,
+        detect_cloud,
+        ensure_user_authorized,
+        get_or_register_cluster_token,
+    )
+
+    config = json.loads(CONFIG_PATH.read_text()) if CONFIG_PATH.exists() else {}
+    configured_url = (config.get("cluster_dashboard_url") or "").rstrip("/")
+    try:
+        cloud, project_id, aws_region = detect_cloud()
+    except LocalHeadError:
+        # Nested Burla calls run inside workers without cloud credentials. Their
+        # node writes the exact head URL into this config before invoking them.
+        return configured_url or None
+
+    cluster_token = get_or_register_cluster_token(cloud, project_id, aws_region)
+    response = requests.get(
+        f"{_BURLA_BACKEND_URL}/v1/clusters/{project_id}/dashboard_url",
+        headers={"Authorization": f"Bearer {cluster_token}"},
+        timeout=20,
+    )
+    if response.status_code == 409:
         return None
+    response.raise_for_status()
+
+    dashboard_url = response.json()["dashboard_url"].rstrip("/")
+    if not dashboard_url.startswith("https://"):
+        raise ValueError("Backend returned a non-HTTPS dashboard URL")
+
+    ensure_user_authorized(cloud, project_id, cluster_token)
     config = json.loads(CONFIG_PATH.read_text())
-    if config.get("mode") != "deployed" or not config.get("cluster_dashboard_url"):
-        return None
-
-    dashboard_url = config["cluster_dashboard_url"].rstrip("/")
-    if not dashboard_url.startswith("https://") and not _local_dashboard_url(
-        dashboard_url
-    ):
-        import requests
-        from burla._auth import get_auth_headers
-
-        response = requests.get(
-            f"{_BURLA_BACKEND_URL}/v1/clusters/{config['project_id']}/dashboard_url",
-            headers=get_auth_headers(),
-            timeout=20,
-        )
-        response.raise_for_status()
-        dashboard_url = response.json()["dashboard_url"].rstrip("/")
-        if not dashboard_url.startswith("https://"):
-            raise ValueError("Backend returned a non-HTTPS dashboard URL")
-        config["cluster_dashboard_url"] = dashboard_url
-        CONFIG_PATH.write_text(json.dumps(config))
+    config["cluster_dashboard_url"] = dashboard_url
+    config.pop("mode", None)
+    CONFIG_PATH.write_text(json.dumps(config))
     return dashboard_url
 
 
@@ -158,23 +167,28 @@ def _unpin_cluster_url():
     _pinned_cluster_url = None
 
 
-def get_cluster_dashboard_url() -> str:
-    """Resolve the main_service URL for the cluster this machine should use.
-
-    Precedence: a cluster a running job already committed to, then
-    `BURLA_CLUSTER_DASHBOARD_URL`, then a head already running for this
-    checkout's namespace, then a deployed cluster from `burla login`, then a
-    head started on this machine. See `burla._local_head`.
-    """
-    from burla._local_head import ensure_local_head, running_head_url
+def _existing_cluster_dashboard_url() -> str | None:
+    from burla._local_head import running_head_url
 
     return (
         _pinned_cluster_url
         or _env_dashboard_url()
-        or running_head_url()
         or _deployed_dashboard_url()
-        or ensure_local_head()
+        or running_head_url()
     )
+
+
+def get_cluster_dashboard_url() -> str:
+    """Resolve the main_service URL for the cluster this machine should use.
+
+    Precedence: a cluster a running job already committed to, then
+    `BURLA_CLUSTER_DASHBOARD_URL`, then the deployed cluster registered for the
+    active cloud account, then an account-wide ad hoc head already running, then
+    a head started on this machine. See `burla._local_head`.
+    """
+    from burla._local_head import ensure_local_head
+
+    return _existing_cluster_dashboard_url() or ensure_local_head()
 
 
 from burla._auth import login
@@ -190,11 +204,7 @@ def version():
 
 
 def dashboard():
-    """Open the Burla dashboard hosted on this machine.
-
-    Reuses a healthy cluster head without restarting it. If none is running,
-    starts one in this terminal until Ctrl-C.
-    """
+    """Open the dashboard for the cluster this machine uses."""
     import webbrowser
 
     from burla._local_head import run_local_head_for_dashboard
@@ -205,6 +215,10 @@ def dashboard():
             print("Press Ctrl-C to stop it.")
         webbrowser.open(url)
 
+    existing_url = _existing_cluster_dashboard_url()
+    if existing_url:
+        open_dashboard(existing_url, False)
+        return
     run_local_head_for_dashboard(on_ready=open_dashboard)
 
 

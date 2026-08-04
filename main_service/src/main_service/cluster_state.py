@@ -205,11 +205,39 @@ def add_node_logs(instance_name: str, logs: list[dict]):
 
 # ------------------------------------------------------------------ jobs
 
+# Set while `burla deploy` snapshots this head's history db for migration to a
+# new deployed cluster: a job admitted mid-snapshot would write history the
+# migration never sees.
+_job_admission_paused = False
+
+
+def pause_job_admission_if_idle() -> bool:
+    """Pause admission, refusing if any job is RUNNING. Shares the state lock
+    with `admit_job`, so after this returns True no job can slip in."""
+    global _job_admission_paused
+    with _lock:
+        if any(job.get("status") == "RUNNING" for job in JOBS.values()):
+            return False
+        _job_admission_paused = True
+        return True
+
+
+def resume_job_admission():
+    global _job_admission_paused
+    with _lock:
+        _job_admission_paused = False
+
+
+def job_admission_paused() -> bool:
+    return _job_admission_paused
+
 
 def admit_job(job_id: str, job: dict, selected_instance_names: list[str]) -> bool:
     job = dict(job)
     job["assigned_nodes"] = {}
     with _lock:
+        if _job_admission_paused:
+            return False
         selected = [NODES.get(name) for name in selected_instance_names]
         if any(
             node is None

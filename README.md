@@ -97,7 +97,7 @@ when idle. Run `burla dashboard` to open that coordinator without restarting it.
 If none is running, the command starts one in the foreground and streams its
 logs until you press Ctrl-C.
 
-**Deploying for a team (optional):** `burla deploy` moves the coordinator and dashboard onto a small always-on VM so teammates can share one cluster. This is the only step that requires elevated permissions (service-account and IAM setup); the exact list is in the [CLI reference](https://docs.burla.dev/cli-reference). After deploying, teammates connect with `burla login`.
+**Deploying for a team (optional):** `burla deploy` moves the coordinator and dashboard onto a small always-on VM so teammates can share one cluster. The job history and settings from your machine's coordinator move with it, so the deployed dashboard picks up where your local one left off. This is the only step that requires elevated permissions (service-account and IAM setup); the exact list is in the [CLI reference](https://docs.burla.dev/cli-reference). After deploying, teammates connect with `burla login`.
 
 See the [getting started guide](https://docs.burla.dev/get-started) for a full walkthrough.
 

@@ -16,6 +16,7 @@ import os
 import sqlite3
 import threading
 from pathlib import Path
+from time import time
 
 DB_PATH = os.environ.get("HISTORY_DB_PATH", "/var/lib/burla/history.db")
 
@@ -67,6 +68,11 @@ CREATE INDEX IF NOT EXISTS idx_node_logs_node ON node_logs(instance_name, ts);
 CREATE TABLE IF NOT EXISTS cluster_config (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     data TEXT
+);
+
+CREATE TABLE IF NOT EXISTS history_imports (
+    digest TEXT PRIMARY KEY,
+    imported_at REAL
 );
 """
 
@@ -392,3 +398,85 @@ def first_failure_log(instance_name: str, tokens: tuple[str, ...]) -> str | None
         if msg and any(token in msg for token in tokens):
             return msg
     return None
+
+
+# ---------------------------------------------------------------- deploy migration
+
+# Only ended rows migrate: RUNNING jobs and BOOTING/READY/RUNNING nodes in a
+# snapshot are another head's live state, and loading them here would make the
+# reaper "fail" jobs and show phantom nodes that never belonged to this head.
+_ENDED_JOB_STATUSES = ("COMPLETED", "FAILED", "CANCELED")
+_ENDED_NODE_STATUSES = ("DELETED", "FAILED")
+
+
+def snapshot_cluster_config(snapshot_path: str) -> dict | None:
+    conn = sqlite3.connect(f"file:{snapshot_path}?mode=ro", uri=True)
+    try:
+        row = conn.execute("SELECT data FROM cluster_config WHERE id = 1").fetchone()
+    finally:
+        conn.close()
+    return json.loads(row[0]) if row else None
+
+
+def import_snapshot(snapshot_path: str, digest: str, cluster_config: dict | None) -> bool:
+    """Merge a client-hosted head's history snapshot into this database
+    (first `burla deploy`). Existing rows always win; log rows are copied only
+    for jobs/nodes this import inserted, so two unrelated histories can't mix.
+    The digest row makes retrying the same upload a no-op. Returns False if
+    this snapshot was already imported."""
+    job_marks = ", ".join("?" for _ in _ENDED_JOB_STATUSES)
+    node_marks = ", ".join("?" for _ in _ENDED_NODE_STATUSES)
+    with _lock:
+        conn = _connection()
+        already = conn.execute(
+            "SELECT 1 FROM history_imports WHERE digest = ?", (digest,)
+        ).fetchone()
+        if already:
+            return False
+        conn.execute("ATTACH DATABASE ? AS snapshot", (snapshot_path,))
+        try:
+            conn.execute("CREATE TEMP TABLE old_jobs AS SELECT job_id FROM jobs")
+            conn.execute(
+                "CREATE TEMP TABLE old_nodes AS SELECT instance_name FROM nodes"
+            )
+            conn.execute(
+                f"INSERT OR IGNORE INTO jobs SELECT * FROM snapshot.jobs "
+                f"WHERE status IN ({job_marks})",
+                _ENDED_JOB_STATUSES,
+            )
+            conn.execute(
+                "INSERT INTO job_logs (job_id, input_index, is_error, timestamp, logs) "
+                "SELECT job_id, input_index, is_error, timestamp, logs "
+                "FROM snapshot.job_logs WHERE job_id IN (SELECT job_id FROM jobs) "
+                "AND job_id NOT IN (SELECT job_id FROM old_jobs)"
+            )
+            conn.execute(
+                f"INSERT OR IGNORE INTO nodes SELECT * FROM snapshot.nodes "
+                f"WHERE status IN ({node_marks})",
+                _ENDED_NODE_STATUSES,
+            )
+            conn.execute(
+                "INSERT INTO node_logs (instance_name, ts, msg) "
+                "SELECT instance_name, ts, msg FROM snapshot.node_logs "
+                "WHERE instance_name IN (SELECT instance_name FROM nodes) "
+                "AND instance_name NOT IN (SELECT instance_name FROM old_nodes)"
+            )
+            if cluster_config is not None:
+                conn.execute(
+                    "INSERT INTO cluster_config (id, data) VALUES (1, ?) "
+                    "ON CONFLICT(id) DO UPDATE SET data = excluded.data",
+                    (json.dumps(cluster_config),),
+                )
+            conn.execute(
+                "INSERT INTO history_imports (digest, imported_at) VALUES (?, ?)",
+                (digest, time()),
+            )
+            conn.commit()
+        except BaseException:
+            conn.rollback()
+            raise
+        finally:
+            conn.execute("DROP TABLE IF EXISTS old_jobs")
+            conn.execute("DROP TABLE IF EXISTS old_nodes")
+            conn.execute("DETACH DATABASE snapshot")
+    return True

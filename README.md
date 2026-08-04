@@ -25,7 +25,7 @@
 
 ---
 
-Burla is a distributed computing framework that runs plain Python functions across thousands of VMs in your own Google Cloud project. It has exactly one function:
+Burla is a distributed computing framework that runs plain Python functions across thousands of VMs in your own cloud account (AWS or Google Cloud). It has exactly one function:
 
 ```python
 from burla import remote_parallel_map
@@ -49,7 +49,7 @@ This example runs `my_function` on 1,000 VMs in less than one second:
 - **One function.** `results = remote_parallel_map(my_function, my_inputs)` is the entire API. No DAGs, no YAML, no cluster SDK to learn.
 - **Feels local.** Anything your function prints streams back to your terminal. Exceptions are re-raised locally with full tracebacks. Local packages and modules are cloned onto every machine automatically.
 - **Fast dispatch.** Code starts running in under a second, even with thousands of VMs or millions of inputs.
-- **Runs in your cloud.** Burla is self-hosted in your Google Cloud project. Your code, inputs, and results never leave it.
+- **Runs in your cloud.** Burla is self-hosted in your own AWS or Google Cloud account. Your code, inputs, and results never leave it.
 - **Any hardware, any image.** Request CPUs, RAM, or GPUs (A100, H100) per function call, and run inside any Docker image.
 - **High utilization.** Adaptive concurrency repacks work while the job runs, keeping CPU and RAM near 90% utilization and preventing out-of-memory errors.
 - **Built-in dashboard.** Live logs, node status, and background jobs, viewable from any device.
@@ -63,7 +63,7 @@ account and region selected by your AWS CLI.
 pip install burla
 ```
 
-That's the whole setup. If you can boot a VM in your cloud project, you can use Burla: no service accounts, buckets, firewall rules, or IAM changes are needed.
+That's the whole setup. If you can boot a VM in your cloud account, you can use Burla: no service accounts, buckets, firewall rules, or IAM changes are needed.
 
 To use GCP instead, select it once and Burla will use the active gcloud project:
 
@@ -163,10 +163,10 @@ Burla is three services, all in this repository:
 | Directory | Runs on | Purpose |
 | --- | --- | --- |
 | [`client/`](client) | Your machine | The `burla` PyPI package. Pickles your function, uploads inputs, streams back logs and results. |
-| [`main_service/`](main_service) | Cloud Run | Control plane. Boots and deletes VMs, hosts the dashboard, handles auth. |
+| [`main_service/`](main_service) | Your machine, or a small always-on VM after `burla deploy` | Control plane. Boots and deletes VMs, hosts the dashboard, handles auth. |
 | [`node_service/`](node_service) | Each VM | Per-node orchestrator. Queues inputs, runs your function inside workers in your Docker image. |
 
-When you call `remote_parallel_map`, the client sends your function and inputs directly to the nodes, which fan them out to one worker per CPU. Results, logs, and exceptions stream straight back to your machine. Cluster state lives in a Firestore database inside your project, and nodes rebalance queued inputs between themselves mid-job so the cluster stays busy.
+When you call `remote_parallel_map`, the client sends your function and inputs directly to the nodes, which fan them out to one worker per CPU. Results, logs, and exceptions stream straight back to your machine. Cluster state lives in memory on the control plane, and nodes rebalance queued inputs between themselves mid-job so the cluster stays busy.
 
 ## FAQ
 
@@ -174,10 +174,10 @@ When you call `remote_parallel_map`, the client sends your function and inputs d
 Ray and Dask are general-purpose frameworks with APIs for tasks, actors, and distributed data structures. Burla deliberately covers one case, fanning a Python function out over many machines, and optimizes it hard: sub-second starts, adaptive concurrency, and nothing to learn beyond `remote_parallel_map`.
 
 **Where does my code run?**
-Entirely inside your own Google Cloud project, on VMs Burla boots and deletes for you. Your client talks directly to those VMs; your code, inputs, and results are never routed through anyone else's servers.
+Entirely inside your own cloud account, on VMs Burla boots and deletes for you. Your client talks directly to those VMs; your code, inputs, and results are never routed through anyone else's servers.
 
 **Which clouds are supported?**
-Google Cloud today. If you want to run Burla on AWS or Azure, email jake@burla.dev.
+AWS and Google Cloud, with identical behavior on both. If you want to run Burla on Azure, email jake@burla.dev.
 
 ## Contributing
 

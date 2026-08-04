@@ -16,6 +16,9 @@ Five tiers:
 
 Nothing runs in GitHub Actions.
 
+`make 3.11-dev` through `make 3.14-dev` drop you into a shell on that
+interpreter with `BURLA_ENVIRONMENT=test` set, for running these by hand.
+
 #### Start a cluster first
 
 In another terminal, from this checkout:
@@ -28,6 +31,11 @@ make remote-dev     # head local, nodes are real EC2 in the Burla test AWS accou
 `make cluster-info` prints this checkout's cluster name, dashboard URL, docker
 network, and node port base. The head is not on port 5001; it is on a port
 derived from the checkout name, so that several clusters coexist.
+
+`local-dev` needs two base images (head and node). They are built from the
+service Dockerfiles on first run, so it needs no registry and no cloud
+credentials. Rebuild them with `make local-images` after changing a Dockerfile
+or a `uv.lock`; service code is bind-mounted, so ordinary edits need no rebuild.
 
 Use `local-dev` for anything that can be exercised with light resources, and
 `remote-dev` when you need real scale or real-VM behavior, or when the machine

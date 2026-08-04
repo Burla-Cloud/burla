@@ -203,7 +203,11 @@ if history.get_cluster_config() is None:
 LOCAL_DEV_CONFIG = None
 if IN_LOCAL_DEV_MODE:
     LOCAL_DEV_CONFIG = history.get_cluster_config()
-    LOCAL_DEV_CONFIG["Nodes"][0]["machine_type"] = "n4-standard-2"
+    # Cosmetic here (nodes are containers), but it should match CLOUD_PROVIDER so
+    # the dashboard doesn't show a machine type from the wrong cloud.
+    LOCAL_DEV_CONFIG["Nodes"][0]["machine_type"] = (
+        "n4-standard-2" if CLOUD_PROVIDER == "gcp" else "m7i.large"
+    )
     # One node by default: several of these clusters run side by side on one
     # laptop, and each node is a container that spawns a worker per core.
     LOCAL_DEV_CONFIG["Nodes"][0]["quantity"] = int(

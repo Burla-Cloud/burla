@@ -72,7 +72,9 @@ dev = [
     "pytest>=8.4.2",
     "pytest-asyncio>=0.24.0",
     "pytest-timeout>=2.3.1",
-    "ray>=2.53.0",
+    # Some of the heavier dev deps have no 3.14 wheels yet; skip them there so a
+    # 3.14 shell still works for testing the client itself.
+    "ray>=2.53.0; python_version < '3.14'",
     "scikit-learn>=1.7.2",
     "xgboost>=3.1.1",
 ]

@@ -205,11 +205,8 @@ def _get_login_response(client_id, spinner, attempt=0):
 
 
 def login(no_browser: bool = False):
-    # for dev: if main service is running locally, redirect to it instead of deployed cloud run
-    main_svc_image_name = (
-        "us-docker.pkg.dev/burla-test/burla-main-service/burla-main-service"
-    )
-    cmd = f"docker container list --filter ancestor={main_svc_image_name}"
+    # for dev: if main service is running locally, redirect to it instead of the backend
+    cmd = "docker container list --filter name=main_service-"
     result = run_command(cmd, raise_error=False)
     redirect_locally = (result.returncode == 0) and (
         len(result.stdout.strip().splitlines()) > 1

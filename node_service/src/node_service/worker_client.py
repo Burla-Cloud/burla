@@ -466,14 +466,12 @@ class WorkerClient:
         # node_auth bind: see NODE_AUTH_DIR in node_service/__init__.py.
         if IN_LOCAL_DEV_MODE:
             host_pwd = os.environ["HOST_PWD"]
-            host_home_dir = os.environ["HOST_HOME_DIR"]
             worker_python_environment_dir = (
                 f"{host_pwd}/_worker_service_python_env/{INSTANCE_NAME}"
             )
             host_config["NetworkMode"] = LOCAL_DEV_NETWORK
             binds.extend(
                 [
-                    f"{host_home_dir}/.config/gcloud:/root/.config/gcloud",
                     f"{host_pwd}/_shared_workspace:/workspace/shared",
                     f"{worker_python_environment_dir}:/worker_service_python_env",
                     f"{host_pwd}/_node_auth:/root/.config/burla",

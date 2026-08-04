@@ -196,7 +196,7 @@ def remote_dev():
 
 
 def _configure_test_shell_prompt(
-    shell: str, environment: dict[str, str], startup_dir: Path
+    shell: str, environment: dict[str, str], startup_dir: Path, label: str
 ) -> list[str]:
     """Give the child shell a visible test prompt without changing dotfiles."""
     shell_name = Path(shell).name
@@ -231,8 +231,8 @@ def _configure_test_shell_prompt(
                 "rehash\n"
                 "autoload -Uz add-zsh-hook\n"
                 "_burla_test_prompt() {\n"
-                '  if [[ "$PROMPT" != *"[burla test]"* ]]; then\n'
-                "    PROMPT='%F{yellow}%B[burla test]%b%f '$PROMPT\n"
+                f'  if [[ "$PROMPT" != *"[{label}]"* ]]; then\n'
+                f"    PROMPT='%F{{yellow}}%B[{label}]%b%f '$PROMPT\n"
                 "  fi\n"
                 "}\n"
                 "add-zsh-hook precmd _burla_test_prompt\n"
@@ -252,16 +252,19 @@ def _configure_test_shell_prompt(
         bashrc.write_text(
             source_original
             + f"export PATH={burla_bin_dir_quoted}:$PATH\n"
-            + "PS1='\\[\\e[33;1m\\][burla test]\\[\\e[0m\\] '$PS1\n"
+            + f"PS1='\\[\\e[33;1m\\][{label}]\\[\\e[0m\\] '$PS1\n"
         )
         return [shell, "--rcfile", str(bashrc), "-i"]
 
-    environment["PS1"] = f"[burla test] {environment.get('PS1', '')}"
+    environment["PS1"] = f"[{label}] {environment.get('PS1', '')}"
     return [shell, "-i"]
 
 
 def test_shell():
-    """Enter Burla's isolated internal test environment. Type `exit` to leave."""
+    """Enter Burla's isolated internal test environment. Type `exit` to leave.
+
+    Started by `make <python-version>-dev`, which picks the interpreter.
+    """
     if not _IN_SOURCE_CHECKOUT:
         raise RuntimeError("Test mode requires an editable Burla source checkout.")
 
@@ -280,8 +283,11 @@ def test_shell():
     shell = environment.get("SHELL") or shutil.which("zsh") or shutil.which("bash")
     if shell is None:
         raise RuntimeError("Test shell requires zsh or bash when SHELL is unset.")
+    # `make <version>-dev` runs several of these at once, so the prompt names the
+    # interpreter this shell is actually using.
+    label = f"burla test {sys.version_info.major}.{sys.version_info.minor}"
     with tempfile.TemporaryDirectory(prefix="burla-test-shell-") as temp_dir:
-        command = _configure_test_shell_prompt(shell, environment, Path(temp_dir))
+        command = _configure_test_shell_prompt(shell, environment, Path(temp_dir), label)
         result = subprocess.run(command, cwd=_SOURCE_ROOT, env=environment)
     if result.returncode:
         raise SystemExit(result.returncode)

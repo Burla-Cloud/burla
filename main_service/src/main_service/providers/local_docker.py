@@ -14,40 +14,13 @@ from main_service import (
 
 
 def _ensure_node_image(docker_client, image: str):
-    """Make the node base image available, without requiring cloud credentials.
-
-    The default image lives in a GCP artifact registry, but local-dev is meant to
-    run offline: if the pull fails (no or stale registry auth) and the image is
-    already cached, that is fine. Set BURLA_NODE_IMAGE to skip registries.
-    """
-    try:
-        docker_client.pull(image)
-        return
-    except Exception as error:
-        failure = error
-
-    if "Unauthenticated request" in str(failure):
-        try:
-            import google.auth
-            from google.auth.transport.requests import Request
-
-            credentials, _ = google.auth.default()
-            credentials.refresh(Request())
-            docker_client.pull(
-                image,
-                auth_config={
-                    "username": "oauth2accesstoken",
-                    "password": credentials.token,
-                },
-            )
-            return
-        except Exception as error:
-            failure = error
-
+    """`make local-dev` builds this image locally, so it is normally already here.
+    Only reach for a registry when it isn't, which is how a custom
+    BURLA_NODE_IMAGE pointing at a real registry keeps working."""
     try:
         docker_client.inspect_image(image)
-    except Exception:
-        raise failure
+    except docker.errors.ImageNotFound:
+        docker_client.pull(image)
 
 
 class LocalDockerProvider:
@@ -64,16 +37,12 @@ class LocalDockerProvider:
         inactivity_shutdown_time_sec,
         reserved_for_job,
     ) -> str:
-        image = (
-            os.environ.get("BURLA_NODE_IMAGE")
-            or f"us-docker.pkg.dev/{PROJECT_ID}/burla-node-service/burla-node-service:latest"
-        )
+        image = os.environ.get("BURLA_NODE_IMAGE", "burla-node-service:local-dev")
         docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
         host_config = docker_client.create_host_config(
             port_bindings={port: ("127.0.0.1", port)},
             network_mode=LOCAL_DEV_NETWORK,
             binds={
-                f"{os.environ['HOST_HOME_DIR']}/.config/gcloud": "/root/.config/gcloud",
                 f"{os.environ['HOST_PWD']}/node_service": "/opt/burla/node_service",
                 f"{os.environ['HOST_PWD']}/_shared_workspace": "/workspace/shared",
                 f"{os.environ['HOST_PWD']}/_worker_service_python_env": "/worker_service_python_env",
@@ -112,7 +81,6 @@ class LocalDockerProvider:
                 "IN_LOCAL_DEV_MODE": "True",
                 "BURLA_CLUSTER_NAME": CLUSTER_NAME,
                 "LOCAL_DEV_NETWORK": LOCAL_DEV_NETWORK,
-                "HOST_HOME_DIR": os.environ["HOST_HOME_DIR"],
                 "HOST_PWD": os.environ["HOST_PWD"],
                 "INSTANCE_NAME": instance_name,
                 "CONTAINERS": json.dumps(containers),

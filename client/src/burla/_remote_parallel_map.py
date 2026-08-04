@@ -212,6 +212,15 @@ async def _execute_job(
     session_stack: AsyncExitStack,
     reporter: RemoteParallelMapReporter,
 ):
+    # Resolve (and, only if nothing is already running, start) the cluster head
+    # for this job. A head we start here is stopped when the job's context
+    # unwinds; an env-pointed / already-running / deployed cluster is left
+    # alone. Done before ClusterClient so its own URL lookup finds this head.
+    from burla._local_head import acquire_head_for_job, release_head
+
+    head = acquire_head_for_job()
+    session_stack.callback(release_head, head)
+
     client = ClusterClient(session)
 
     if background:

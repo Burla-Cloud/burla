@@ -86,12 +86,12 @@ def delete_node(
     request: Request,
     logger: Logger = Depends(get_logger),
 ):
-    auth_headers = _require_auth(request)
+    _require_auth(request)
 
     node_dict = cluster_state.get_node(node_id)
     if node_dict is None:
         raise HTTPException(status_code=404, detail="node not found")
-    node = Node.from_state(logger, node_dict, auth_headers)
+    node = Node.from_state(logger, node_dict)
     # Threaded (not a BackgroundTask) so slow VM deletion can't delay the response.
     import threading
 

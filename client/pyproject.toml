@@ -53,6 +53,10 @@ dev = [
     "daft>=0.6.13",
     "delta-spark>=4.0.0",
     "diceware>=1.0.1",
+    # `make local-dev` runs main_service in this venv and it boots node
+    # containers via the docker SDK; watchfiles gives uvicorn --reload proper
+    # include/exclude handling instead of falling back to stat-polling.
+    "docker>=7.1.0",
     "duckdb>=1.4.1",
     "fastparquet>=2024.11.0",
     "freezegun>=1.5.1",
@@ -76,6 +80,7 @@ dev = [
     # 3.14 shell still works for testing the client itself.
     "ray>=2.53.0; python_version < '3.14'",
     "scikit-learn>=1.7.2",
+    "watchfiles>=1.0.4",
     "xgboost>=3.1.1",
 ]
 

@@ -174,7 +174,6 @@ def _grow_if_needed(
     func_gpu: Optional[str],
     job_id: str,
     logger: Logger,
-    auth_headers: dict,
     add_background_task,
 ) -> list[dict]:
     """Schedules `_start_nodes` in the background and returns one
@@ -251,7 +250,6 @@ def _grow_if_needed(
     add_background_task(
         _start_nodes,
         logger,
-        auth_headers,
         config,
         len(node_instance_names),
         node_instance_names,
@@ -421,7 +419,6 @@ async def start_job(
             func_gpu=func_gpu,
             job_id=job_id,
             logger=logger,
-            auth_headers=auth_headers,
             add_background_task=add_background_task,
         )
 
@@ -535,7 +532,6 @@ async def get_node_fail_reason(node_id: str):
 async def fail_cluster_node(
     node_id: str,
     request: Request,
-    auth_headers: dict = Depends(get_auth_headers),
     add_background_task=Depends(get_add_background_task_function),
     logger: Logger = Depends(get_logger),
 ):
@@ -553,5 +549,5 @@ async def fail_cluster_node(
     if reason:
         cluster_state.add_node_log(node_id, reason)
 
-    node = Node.from_state(logger, node_dict, auth_headers)
+    node = Node.from_state(logger, node_dict)
     add_background_task(node.delete)

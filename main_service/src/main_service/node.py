@@ -60,7 +60,6 @@ class Node:
         cls,
         logger: Logger,
         node_dict: dict,
-        auth_headers: dict,
         provider=None,
     ):
         self = cls.__new__(cls)
@@ -81,7 +80,6 @@ class Node:
         self.zone = node_dict.get("zone")
         self.current_job = node_dict.get("current_job")
         self.is_booting = node_dict.get("status") == "BOOTING"
-        self.auth_headers = auth_headers
         self.provider = provider or get_provider()
         return self
 
@@ -92,7 +90,6 @@ class Node:
         machine_type: str,
         region: str,
         containers: list[Container],
-        auth_headers: dict,
         spot: bool = False,
         service_port: int = 8080,  # <- this needs to be open in your cloud firewall!
         sync_bucket_name: Optional[str] = None,  # <- not a uri, just the name
@@ -107,7 +104,6 @@ class Node:
         self.region = region
         self.machine_type = machine_type
         self.containers = containers
-        self.auth_headers = auth_headers
         self.spot = spot
         self.port = service_port
         self.sync_bucket_name = sync_bucket_name
@@ -255,13 +251,19 @@ class Node:
         else:
             poll_host = self.peer_host or self.host
 
+        # In local-dev the head runs on the docker host, not on the cluster
+        # network, so it can't resolve a node's container name. Node ports are
+        # published on 127.0.0.1, so poll there instead.
+        if IN_LOCAL_DEV_MODE and poll_host:
+            poll_host = f"http://127.0.0.1:{poll_host.rsplit(':', 1)[-1]}"
+
         if poll_host is not None:
             try:
                 verify = str(CA_CERT_PATH) if poll_host.startswith("https://") else True
                 response = requests.get(
                     f"{poll_host}/",
                     timeout=2,
-                    headers=self.auth_headers,
+                    headers={"Authorization": f"Bearer {CLUSTER_ID_TOKEN}"},
                     verify=verify,
                 )
                 response.raise_for_status()

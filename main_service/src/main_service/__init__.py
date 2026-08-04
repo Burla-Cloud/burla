@@ -33,12 +33,15 @@ REDIRECT_LOCALLY_ON_LOGIN = os.environ.get("REDIRECT_LOCALLY_ON_LOGIN") == "True
 
 # Which dev cluster this head is. Several run at once (one per checkout), so
 # anything they would otherwise share has to be namespaced by this: in local-dev
-# the docker network, container labels, published node ports, and the hostname
-# nodes use to reach the head; in remote-dev the EC2 tag that marks a node as
-# belonging to this cluster. "default" for a deployed head, which is a singleton.
+# the docker network, container labels, and published node ports; in remote-dev
+# the EC2 tag that marks a node as belonging to this cluster. Also reported at
+# /version so the client can tell two dev heads on one cloud account apart.
+# "default" for a deployed head, which is a singleton.
 CLUSTER_NAME = os.environ.get("BURLA_CLUSTER_NAME", "default")
 LOCAL_DEV_NETWORK = os.environ.get("LOCAL_DEV_NETWORK", "local-burla-cluster")
-LOCAL_DEV_HEAD_HOST = os.environ.get("LOCAL_DEV_HEAD_HOST", "main_service")
+# The head runs on the docker host in local-dev, so node containers reach it at
+# host.docker.internal (set by `make local-dev`).
+LOCAL_DEV_HEAD_HOST = os.environ.get("LOCAL_DEV_HEAD_HOST", "host.docker.internal")
 LOCAL_DEV_NODE_PORT_BASE = int(os.environ.get("LOCAL_DEV_NODE_PORT_BASE", 8080))
 
 # The default way Burla runs: main_service lives inside the `burla` pip
@@ -49,9 +52,10 @@ LOCAL_DEV_NODE_PORT_BASE = int(os.environ.get("LOCAL_DEV_NODE_PORT_BASE", 8080))
 IN_CLIENT_HOSTED_MODE = os.environ.get("IN_CLIENT_HOSTED_MODE") == "True"
 
 # The owner's real backend credentials (from burla_credentials.json). Local
-# requests to a client-hosted head are stamped with these instead of being
-# sent through the login flow - they must be real because head -> node calls
-# replay them, and nodes validate them against the backend's user list.
+# dashboard/browser requests to a client-hosted head are stamped with these
+# instead of being sent through the login flow. Head -> node calls use the
+# cluster token, so these only need to be a real authorized user for the
+# dashboard to read job/user info from the backend.
 LOCAL_USER_EMAIL = os.environ.get("BURLA_LOCAL_USER_EMAIL", "")
 LOCAL_USER_TOKEN = os.environ.get("BURLA_LOCAL_USER_TOKEN", "")
 
@@ -471,7 +475,14 @@ def redirect_microsoft_login(request: Request):
 
 @app.get("/version")
 def version():
-    return {"version": CURRENT_BURLA_VERSION, "project": PROJECT_ID}
+    # `namespace` lets the client tell two dev heads that share one cloud
+    # account apart, so a stale head.json URL from another checkout can't be
+    # mistaken for this checkout's head (see client `_head_matches`).
+    return {
+        "version": CURRENT_BURLA_VERSION,
+        "project": PROJECT_ID,
+        "namespace": CLUSTER_NAME,
+    }
 
 
 # Injected at request time so the key never lives in the public repo's committed bundles.

@@ -15,11 +15,11 @@ BURLA_HEAD_PORT ?= $(shell python3 -c 'import hashlib,sys;print(5100+int(hashlib
 BURLA_NODE_PORT_BASE ?= $(shell python3 -c 'import hashlib,sys;print(9000+(int(hashlib.sha256(sys.argv[1].encode()).hexdigest(),16)%250)*20)' '$(BURLA_CLUSTER_NAME)')
 BURLA_DASHBOARD_URL := http://localhost:$(BURLA_HEAD_PORT)
 
-# local-dev's two base images, built here from the service Dockerfiles rather
-# than pulled, so local-dev needs no registry and no cloud credentials at all.
-# Service code is bind-mounted at runtime, so these only ever need rebuilding
-# when a Dockerfile or a service's locked dependencies change.
-LOCAL_HEAD_IMAGE := burla-main-service:local-dev
+# local-dev's node base image, built here from the Dockerfile rather than
+# pulled, so local-dev needs no image registry at all. Node code is
+# bind-mounted at runtime, so it only needs rebuilding when the node Dockerfile
+# or node_service's locked dependencies change. (The head has no image: it runs
+# as a host subprocess straight from this checkout, like remote-dev.)
 LOCAL_NODE_IMAGE := burla-node-service:local-dev
 
 # A test shell on a chosen interpreter. `--python` is passed per-run instead of
@@ -99,69 +99,76 @@ stop-all:
 	echo "Removed every burla dev cluster on this machine."
 
 
-# Rebuild local-dev's base images. `local-dev` does this for you when an image
-# is missing; run it by hand after changing a Dockerfile or a uv.lock.
+# Rebuild local-dev's node base image. `local-dev` does this for you when it's
+# missing; run it by hand after changing the node Dockerfile or a uv.lock.
 local-images:
 	set -e; \
-	$(MAKE) -C main_service ensure-frontend; \
-	docker build -t $(LOCAL_HEAD_IMAGE) ./main_service; \
 	docker build -t $(LOCAL_NODE_IMAGE) ./node_service; \
-	echo "Built $(LOCAL_HEAD_IMAGE) and $(LOCAL_NODE_IMAGE)."
+	echo "Built $(LOCAL_NODE_IMAGE)."
 
-# The whole cluster (head, nodes, workers) runs locally as docker containers on
-# this checkout's own network, all bind-mounted so every service hot-reloads on
-# save. Uses `LOCAL_DEV_CONFIG` in `main_service.__init__.py` (1 node by
-# default; raise with LOCAL_DEV_NODE_QUANTITY). Needs no cloud credentials: the
-# AWS identity below only names the cluster, and is optional.
+# The whole cluster runs on this machine: the head as a host subprocess
+# hot-reloading this checkout (like remote-dev), nodes and workers as docker
+# containers on this checkout's own network. Uses `LOCAL_DEV_CONFIG` in
+# `main_service.__init__.py` (1 node by default; raise with
+# LOCAL_DEV_NODE_QUANTITY). Needs a working AWS identity + saved cluster token:
+# nodes authorize callers against the backend's user list for this cluster id,
+# so a bogus id makes every node fail to boot.
 local-dev:
 	set -e; \
-	IMAGE_NAME=$${BURLA_MAIN_SERVICE_IMAGE:-$(LOCAL_HEAD_IMAGE)}; \
 	NODE_IMAGE=$${BURLA_NODE_IMAGE:-$(LOCAL_NODE_IMAGE)}; \
-	if ! docker image inspect $${IMAGE_NAME} $${NODE_IMAGE} >/dev/null 2>&1; then \
+	if ! docker image inspect $${NODE_IMAGE} >/dev/null 2>&1; then \
 		$(MAKE) local-images; \
-	else \
-		$(MAKE) -C main_service ensure-frontend; \
 	fi; \
+	$(MAKE) -C main_service ensure-frontend; \
 	BACKEND_URL=$${BURLA_BACKEND_URL:-https://test.backend.burla.dev}; \
-	PROJECT_ID=$${BURLA_DEV_PROJECT:-aws-$$(aws sts get-caller-identity --query Account --output text 2>/dev/null || echo local)}; \
+	AWS_ACCOUNT=$$(aws sts get-caller-identity --query Account --output text 2>/dev/null || true); \
+	if [ -z "$${AWS_ACCOUNT}" ] && [ -z "$${BURLA_DEV_PROJECT}" ]; then \
+		echo ""; \
+		echo "ERROR: no usable AWS identity, so this cluster has no real cluster id"; \
+		echo "       and its nodes cannot authorize themselves (they would fail to"; \
+		echo "       boot with a 401)."; \
+		echo ""; \
+		echo "  Fix: aws sso login"; \
+		echo ""; \
+		exit 1; \
+	fi; \
+	PROJECT_ID=$${BURLA_DEV_PROJECT:-aws-$${AWS_ACCOUNT}}; \
 	TOKEN_FILE=$${XDG_DATA_HOME:-$$HOME/.local/share}/burla-test/clusters/$${PROJECT_ID}/cluster_token; \
 	[ -f "$$TOKEN_FILE" ] || TOKEN_FILE=$$HOME/Library/Application\ Support/burla-test/clusters/$${PROJECT_ID}/cluster_token; \
-	CLUSTER_ID_TOKEN=$${BURLA_CLUSTER_ID_TOKEN:-$$(cat "$$TOKEN_FILE" 2>/dev/null || echo local-dev-token)}; \
+	CLUSTER_ID_TOKEN=$${BURLA_CLUSTER_ID_TOKEN:-$$(cat "$$TOKEN_FILE" 2>/dev/null || true)}; \
+	if [ -z "$${CLUSTER_ID_TOKEN}" ]; then \
+		echo ""; \
+		echo "ERROR: no cluster token saved for [$${PROJECT_ID}], so this cluster's"; \
+		echo "       nodes cannot authorize themselves (they would fail to boot with"; \
+		echo "       a 401)."; \
+		echo ""; \
+		echo "  Fix: burla login   (registers this cluster and saves its token)"; \
+		echo ""; \
+		exit 1; \
+	fi; \
 	echo "Starting cluster [$(BURLA_CLUSTER_NAME)] at $(BURLA_DASHBOARD_URL) (cluster id $${PROJECT_ID})"; \
 	ids=$$(docker ps -aq --filter label=burla-cluster=$(BURLA_CLUSTER_NAME)); \
 	if [ -n "$$ids" ]; then docker rm -f $$ids >/dev/null; fi; \
-	for scratch in _worker_service_python_env _shared_workspace _node_auth; do \
+	for scratch in _worker_service_python_env _shared_workspace _node_auth _local_dev_state; do \
 		rm -rf ./$$scratch; mkdir -p ./$$scratch; chmod 777 ./$$scratch; \
 	done; \
 	docker network create $(BURLA_CLUSTER_NETWORK) 2>/dev/null || true; \
-	tty_flag=$$( [ -t 0 ] && echo --tty || true ); \
-	docker run --rm --interactive $$tty_flag \
-		--name main_service-$(BURLA_CLUSTER_NAME) \
-		--label burla-cluster=$(BURLA_CLUSTER_NAME) \
-		--network $(BURLA_CLUSTER_NETWORK) \
-		-v $(PWD)/main_service:/burla/main_service \
-		-v /var/run/docker.sock:/var/run/docker.sock \
-		-e PROJECT_ID=$${PROJECT_ID} \
-		-e IN_LOCAL_DEV_MODE=True \
-		-e CLOUD_PROVIDER=$${BURLA_CLOUD:-aws} \
-		-e CLUSTER_ID_TOKEN=$${CLUSTER_ID_TOKEN} \
-		-e BURLA_CLUSTER_NAME=$(BURLA_CLUSTER_NAME) \
-		-e LOCAL_DEV_NETWORK=$(BURLA_CLUSTER_NETWORK) \
-		-e LOCAL_DEV_HEAD_HOST=main_service-$(BURLA_CLUSTER_NAME) \
-		-e LOCAL_DEV_NODE_PORT_BASE=$(BURLA_NODE_PORT_BASE) \
-		-e LOCAL_DEV_NODE_QUANTITY=$${LOCAL_DEV_NODE_QUANTITY:-1} \
-		-e BURLA_NODE_IMAGE=$${NODE_IMAGE} \
-		-e BURLA_BACKEND_URL=$${BACKEND_URL} \
-		-e REDIRECT_LOCALLY_ON_LOGIN=True \
-		-e HOST_PWD=$(PWD) \
-		-p 127.0.0.1:$(BURLA_HEAD_PORT):5001 \
-		--entrypoint python \
-		$${IMAGE_NAME} -m uvicorn main_service:app \
-			--host 0.0.0.0 \
-			--port 5001 \
-			--reload --reload-exclude main_service/frontend/node_modules/ \
-			--timeout-keep-alive 600 \
-			--timeout-graceful-shutdown 0
+	PROJECT_ID=$${PROJECT_ID} \
+	IN_LOCAL_DEV_MODE=True \
+	CLOUD_PROVIDER=$${BURLA_CLOUD:-aws} \
+	CLUSTER_ID_TOKEN=$${CLUSTER_ID_TOKEN} \
+	BURLA_CLUSTER_NAME=$(BURLA_CLUSTER_NAME) \
+	LOCAL_DEV_NETWORK=$(BURLA_CLUSTER_NETWORK) \
+	LOCAL_DEV_HEAD_HOST=host.docker.internal \
+	LOCAL_DEV_NODE_PORT_BASE=$(BURLA_NODE_PORT_BASE) \
+	LOCAL_DEV_NODE_QUANTITY=$${LOCAL_DEV_NODE_QUANTITY:-1} \
+	BURLA_NODE_IMAGE=$${NODE_IMAGE} \
+	BURLA_BACKEND_URL=$${BACKEND_URL} \
+	REDIRECT_LOCALLY_ON_LOGIN=True \
+	HOST_PWD=$(PWD) \
+	PORT=$(BURLA_HEAD_PORT) \
+	HISTORY_DB_PATH=$(PWD)/_local_dev_state/history.db \
+	uv run --project $(PROJECT_ABS) --group dev python -m burla._local_dev
 
 # `main_service` runs here as a local subprocess hot-reloading this checkout;
 # nodes are real EC2 instances in the Burla test AWS account. Nodes reach this

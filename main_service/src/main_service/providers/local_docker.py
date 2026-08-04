@@ -42,6 +42,10 @@ class LocalDockerProvider:
         host_config = docker_client.create_host_config(
             port_bindings={port: ("127.0.0.1", port)},
             network_mode=LOCAL_DEV_NETWORK,
+            # The head runs on the docker host, so nodes reach it (MAIN_SERVICE_URL
+            # below) at host.docker.internal. Explicit mapping so this also works
+            # on Linux, where Docker Desktop's automatic alias is absent.
+            extra_hosts={"host.docker.internal": "host-gateway"},
             binds={
                 f"{os.environ['HOST_PWD']}/node_service": "/opt/burla/node_service",
                 f"{os.environ['HOST_PWD']}/_shared_workspace": "/workspace/shared",

@@ -11,7 +11,6 @@ from main_service import (
     LOCAL_DEV_CONFIG,
     LOCAL_DEV_NODE_PORT_BASE,
     get_logger,
-    get_auth_headers,
     get_add_background_task_function,
 )
 from main_service import cluster_state, history
@@ -46,7 +45,7 @@ def _remove_local_dev_cluster_containers():
         docker_client.remove_container(container["Id"], force=True)
 
 
-def _shutdown_cluster(logger: Logger, auth_headers: dict):
+def _shutdown_cluster(logger: Logger):
     futures = []
     executor = ThreadPoolExecutor(max_workers=32)
     provider = get_provider()
@@ -56,7 +55,7 @@ def _shutdown_cluster(logger: Logger, auth_headers: dict):
         n for n in cluster_state.list_nodes() if n.get("status") in active_statuses
     ]
     for node_dict in active_nodes:
-        node = Node.from_state(logger, node_dict, auth_headers, provider)
+        node = Node.from_state(logger, node_dict, provider)
         futures.append(executor.submit(node.delete))
     [future.result() for future in futures]
     executor.shutdown(wait=True)
@@ -96,7 +95,6 @@ def _get_cluster_config():
 
 def _start_nodes(
     logger: Logger,
-    auth_headers: dict,
     config: dict,
     n_nodes_to_add: int = None,
     node_instance_names: list[str] = None,
@@ -137,7 +135,6 @@ def _start_nodes(
                 machine_type=machine_type,
                 region=node_spec["gcp_region"],
                 containers=[Container.from_dict(c) for c in spec_containers],
-                auth_headers=auth_headers,
                 provider=provider,
                 service_port=node_service_port,
                 sync_bucket_name=config["gcs_bucket_name"],
@@ -197,17 +194,17 @@ def _mark_running_jobs_with_lifecycle_event(event: str, message: str):
         cluster_state.update_job(job_id, {"status": "CANCELED", **extra})
 
 
-def _restart_cluster(logger: Logger, auth_headers: dict):
+def _restart_cluster(logger: Logger):
     start = time()
 
-    _shutdown_cluster(logger, auth_headers)
+    _shutdown_cluster(logger)
     _remove_local_dev_cluster_containers()
 
     config = _get_cluster_config()
     msg = f"Booting {config['Nodes'][0]['quantity']} {config['Nodes'][0]['machine_type']} nodes"
     log_telemetry(msg, severity="INFO")
 
-    _start_nodes(logger, auth_headers, config)
+    _start_nodes(logger, config)
 
     duration = time() - start
     logger.log(f"Restarted after {duration//60}m {duration%60}s")
@@ -216,19 +213,17 @@ def _restart_cluster(logger: Logger, auth_headers: dict):
 @router.post("/v1/cluster/restart")
 def restart_cluster(
     logger: Logger = Depends(get_logger),
-    auth_headers: dict = Depends(get_auth_headers),
     add_background_task=Depends(get_add_background_task_function),
 ):
     _mark_running_jobs_with_lifecycle_event(
         "cluster_restarted", "The cluster was restarted."
     )
-    add_background_task(_restart_cluster, logger, auth_headers)
+    add_background_task(_restart_cluster, logger)
 
 
 @router.post("/v1/cluster/shutdown")
 async def shutdown_cluster(
     logger: Logger = Depends(get_logger),
-    auth_headers: dict = Depends(get_auth_headers),
 ):
     start = time()
 
@@ -236,7 +231,7 @@ async def shutdown_cluster(
         "cluster_shutdown", "The cluster was shut down."
     )
     log_telemetry("Cluster turned off.", severity="INFO")
-    await asyncio.to_thread(_shutdown_cluster, logger, auth_headers)
+    await asyncio.to_thread(_shutdown_cluster, logger)
 
     duration = time() - start
     logger.log(f"Shut down after {duration//60}m {duration%60}s")

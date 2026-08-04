@@ -71,11 +71,6 @@ def set_config(key: str, value: str) -> str:
 
     SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
     SETTINGS_PATH.write_text(json.dumps({"cloud": cloud}))
-
-    if CONFIG_PATH.exists():
-        credentials = json.loads(CONFIG_PATH.read_text())
-        credentials["mode"] = "client_hosted"
-        CONFIG_PATH.write_text(json.dumps(credentials))
     return f"cloud = {cloud}"
 
 
@@ -99,32 +94,30 @@ def _local_dashboard_url(url: str) -> bool:
     )
 
 
-def get_cluster_dashboard_url() -> str:
-    """
-    Resolve the main_service URL. `BURLA_CLUSTER_DASHBOARD_URL` wins if set -
-    this is how `make local-dev` / `make remote-dev` point the client at the
-    in-shell dev server without mutating the user's credentials file.
-
-    With no deployed cluster (the default), Burla runs the cluster head on
-    this machine: see `burla._local_head`.
-    """
+def _env_dashboard_url() -> str | None:
+    """`BURLA_CLUSTER_DASHBOARD_URL`, how `make local-dev` / `make remote-dev`
+    point the client at the in-shell dev server without touching the creds
+    file. Highest precedence."""
     override = os.environ.get("BURLA_CLUSTER_DASHBOARD_URL")
-    if override:
-        override = override.rstrip("/")
-        if not override.startswith("https://") and not _local_dashboard_url(override):
-            raise ValueError("BURLA_CLUSTER_DASHBOARD_URL must use HTTPS")
-        return override
+    if not override:
+        return None
+    override = override.rstrip("/")
+    if not override.startswith("https://") and not _local_dashboard_url(override):
+        raise ValueError("BURLA_CLUSTER_DASHBOARD_URL must use HTTPS")
+    return override
 
+
+def _deployed_dashboard_url() -> str | None:
+    """The deployed cluster from `burla login` (mode="deployed"), or None.
+
+    A head you start locally wins over this while it is running; this is the
+    fallback once no local head is up.
+    """
     if not CONFIG_PATH.exists():
-        from burla._local_head import ensure_local_head
-
-        return ensure_local_head()
-
+        return None
     config = json.loads(CONFIG_PATH.read_text())
-    if config.get("mode") == "client_hosted" or not config.get("cluster_dashboard_url"):
-        from burla._local_head import ensure_local_head
-
-        return ensure_local_head()
+    if config.get("mode") != "deployed" or not config.get("cluster_dashboard_url"):
+        return None
 
     dashboard_url = config["cluster_dashboard_url"].rstrip("/")
     if not dashboard_url.startswith("https://") and not _local_dashboard_url(
@@ -145,6 +138,23 @@ def get_cluster_dashboard_url() -> str:
         config["cluster_dashboard_url"] = dashboard_url
         CONFIG_PATH.write_text(json.dumps(config))
     return dashboard_url
+
+
+def get_cluster_dashboard_url() -> str:
+    """Resolve the main_service URL for the cluster this machine should use.
+
+    Precedence: `BURLA_CLUSTER_DASHBOARD_URL`, then a head already running for
+    this checkout's namespace, then a deployed cluster from `burla login`,
+    then a head started on this machine. See `burla._local_head`.
+    """
+    from burla._local_head import ensure_local_head, running_head_url
+
+    return (
+        _env_dashboard_url()
+        or running_head_url()
+        or _deployed_dashboard_url()
+        or ensure_local_head()
+    )
 
 
 from burla._auth import login

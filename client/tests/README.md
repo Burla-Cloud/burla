@@ -32,10 +32,17 @@ make remote-dev     # head local, nodes are real EC2 in the Burla test AWS accou
 network, and node port base. The head is not on port 5001; it is on a port
 derived from the checkout name, so that several clusters coexist.
 
-`local-dev` needs two base images (head and node). They are built from the
-service Dockerfiles on first run, so it needs no registry and no cloud
-credentials. Rebuild them with `make local-images` after changing a Dockerfile
-or a `uv.lock`; service code is bind-mounted, so ordinary edits need no rebuild.
+In `local-dev` the head runs as a host subprocess straight from this checkout
+(like `remote-dev`); only the nodes/workers are containers. That needs one node
+base image, built from `node_service/Dockerfile` on first run, so no image
+registry is involved. Rebuild it with `make local-images` after changing the
+node Dockerfile or a `uv.lock`; service code is bind-mounted, so ordinary edits
+need no rebuild.
+
+Both dev modes need a working AWS identity and a saved cluster token, because
+nodes authorize callers against the backend's user list for this cluster id.
+`make local-dev` fails fast telling you to run `aws sso login` or `burla login`
+if either is missing.
 
 Use `local-dev` for anything that can be exercised with light resources, and
 `remote-dev` when you need real scale or real-VM behavior, or when the machine

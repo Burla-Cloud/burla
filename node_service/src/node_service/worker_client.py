@@ -470,6 +470,9 @@ class WorkerClient:
                 f"{host_pwd}/_worker_service_python_env/{INSTANCE_NAME}"
             )
             host_config["NetworkMode"] = LOCAL_DEV_NETWORK
+            # The head runs on the docker host in local-dev; a nested rpm from
+            # user code reaches it at host.docker.internal.
+            host_config["ExtraHosts"] = ["host.docker.internal:host-gateway"]
             binds.extend(
                 [
                     f"{host_pwd}/_shared_workspace:/workspace/shared",

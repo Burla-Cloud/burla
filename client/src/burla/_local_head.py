@@ -17,6 +17,7 @@ import os
 import platform
 import re
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -24,6 +25,7 @@ import tarfile
 import tempfile
 import zipfile
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from time import sleep, time
 from uuid import uuid4
@@ -280,9 +282,6 @@ def ensure_user_authorized(
     if CONFIG_PATH.exists():
         auth_info = json.loads(CONFIG_PATH.read_text())
         if auth_info["project_id"] == project_id:
-            if auth_info.get("mode") != "client_hosted":
-                auth_info["mode"] = "client_hosted"
-                _write_auth_config(auth_info)
             return
 
     if cloud == "aws":
@@ -321,9 +320,10 @@ def ensure_user_authorized(
     )
     response.raise_for_status()
     auth_info = response.json()
-    # Marks this machine as running its own cluster head, so
-    # `get_cluster_dashboard_url` keeps resolving to it.
-    auth_info["mode"] = "client_hosted"
+    # No `mode` here: a local head is preferred by being *running*
+    # (`running_head_url`), not by a sticky flag. Only `burla login` writes
+    # `mode="deployed"`, and this path never runs while that is set because a
+    # deployed login is resolved before any local head would be started.
     _write_auth_config(auth_info)
 
 
@@ -445,10 +445,18 @@ def _head_matches(url: str, project_id: str, cluster_token: str) -> bool:
     # /version sits behind the auth middleware like everything else;
     # unauthenticated requests get the login page instead of JSON.
     headers = {"Authorization": f"Bearer {cluster_token}"}
+    # Two checkouts can share one cloud account (same project + version), so
+    # also require the namespace to match. Otherwise a stale head.json URL
+    # pointing at another checkout's head (e.g. both on :5001) would be reused.
+    expected_namespace = cluster_namespace() or "default"
     try:
         response = requests.get(f"{url}/version", headers=headers, timeout=2)
         info = response.json()
-        return info["version"] == __version__ and info["project"] == project_id
+        return (
+            info["version"] == __version__
+            and info["project"] == project_id
+            and info.get("namespace", "default") == expected_namespace
+        )
     except Exception:
         return False
 
@@ -472,6 +480,100 @@ def _prepare_aws(project_id: str, aws_region: str):
 def ensure_local_head() -> str:
     """Starts (or reuses) a detached main_service and returns its URL."""
     return _run_local_head(detached=True)
+
+
+def running_head_url() -> str | None:
+    """URL of a head already serving THIS checkout's namespace, or None.
+
+    Only returns a URL that is reachable and matches this build (version +
+    project + namespace); a stale `head.json` entry returns None. Never starts
+    anything, so callers can use it to prefer an already-running head.
+    """
+    try:
+        _, project_id, _ = detect_cloud()
+    except Exception:
+        return None
+    state_dir = _head_state_dir(project_id)
+    head_state_path = state_dir / "head.json"
+    if not head_state_path.exists():
+        return None
+    head_state = json.loads(head_state_path.read_text())
+    url = head_state.get("url")
+    saved_token = read_saved_cluster_token(project_id)
+    if url and saved_token and _head_matches(url, project_id, saved_token):
+        if not _pid_alive(head_state.get("frpc_pid")):
+            _respawn_frpc(state_dir, head_state)
+        return url
+    return None
+
+
+@dataclass
+class HeadHandle:
+    url: str
+    owned: bool  # True only for a head this process started (and must stop).
+
+
+def acquire_head_for_job() -> HeadHandle:
+    """Resolve the cluster for one job, matching `get_cluster_dashboard_url`'s
+    precedence. Reuses an env-pointed, already-running, or deployed cluster
+    (owned=False); only when nothing is available does it start a head here,
+    which the caller must stop with `release_head`."""
+    from burla import _env_dashboard_url, _deployed_dashboard_url
+
+    url = _env_dashboard_url() or running_head_url() or _deployed_dashboard_url()
+    if url:
+        return HeadHandle(url=url, owned=False)
+    return HeadHandle(url=ensure_local_head(), owned=True)
+
+
+def release_head(handle: HeadHandle):
+    """Stop a head started by `acquire_head_for_job` (no-op if not owned).
+
+    History persists on disk so `burla dashboard` can still show the job
+    later, and the cluster's nodes tolerate the head being gone (they reattach
+    to the next head that starts).
+    """
+    if not handle.owned:
+        return
+    try:
+        _, project_id, _ = detect_cloud()
+    except Exception:
+        return
+    head_state_path = _head_state_dir(project_id) / "head.json"
+    if not head_state_path.exists():
+        return
+    head_state = json.loads(head_state_path.read_text())
+    head_pid = head_state.get("head_pid")
+    frpc_pid = head_state.get("frpc_pid")
+    _terminate_pid(head_pid)
+    _terminate_pid(frpc_pid)
+    _clear_process_state(head_state_path, head_pid, frpc_pid)
+
+
+def _reap(pid: int):
+    """Clear the zombie left behind when we kill a head we spawned ourselves.
+    Until it is reaped the pid still exists, so `_pid_alive` keeps saying yes."""
+    try:
+        os.waitpid(pid, os.WNOHANG)
+    except (ChildProcessError, OSError):
+        pass  # not our child (a head some earlier process started)
+
+
+def _terminate_pid(pid: int | None):
+    if not _pid_alive(pid):
+        return
+    os.kill(pid, signal.SIGTERM)
+    for _ in range(50):  # up to ~5s for a graceful uvicorn shutdown
+        _reap(pid)
+        if not _pid_alive(pid):
+            return
+        sleep(0.1)
+    os.kill(pid, signal.SIGKILL)
+    for _ in range(20):
+        _reap(pid)
+        if not _pid_alive(pid):
+            return
+        sleep(0.1)
 
 
 def run_local_head_for_dashboard(
@@ -661,6 +763,58 @@ def _warn_if_branch_unpushed(repo_root: Path, branch: str):
             f"run the pushed version, not your working tree.",
             flush=True,
         )
+
+
+def run_local_dev_head() -> None:
+    """`make local-dev`: run this checkout's main_service on the docker host in
+    local-dev mode, hot-reloading on save. Nodes and workers are still
+    containers; the head reaches them on their published 127.0.0.1 ports and
+    they reach the head at host.docker.internal. Foreground until Ctrl-C.
+
+    Unlike remote-dev this does not use the relay/frpc/TLS stack: nodes are on
+    this machine. All cluster settings come from the env the makefile sets
+    (PROJECT_ID, CLUSTER_ID_TOKEN, LOCAL_DEV_*, PORT, HOST_PWD, ...).
+    """
+    from burla import _IN_SOURCE_CHECKOUT, _SOURCE_ROOT
+
+    if not _IN_SOURCE_CHECKOUT:
+        raise LocalHeadError("local-dev requires an editable Burla source checkout.")
+
+    environment = dict(os.environ)
+    extra_pythonpath = _main_service_pythonpath()
+    if extra_pythonpath:
+        existing = environment.get("PYTHONPATH")
+        environment["PYTHONPATH"] = (
+            f"{extra_pythonpath}{os.pathsep}{existing}" if existing else extra_pythonpath
+        )
+
+    head_port = os.environ.get("PORT", str(PREFERRED_HEAD_PORT))
+    main_service_dir = _SOURCE_ROOT / "main_service"
+    command = [
+        sys.executable,
+        "-m",
+        "uvicorn",
+        "main_service:app",
+        # 0.0.0.0 (not 127.0.0.1) so node containers can reach the head via
+        # host.docker.internal; local-dev is dev-only and single-machine.
+        "--host",
+        "0.0.0.0",
+        "--port",
+        str(head_port),
+        "--reload",
+        "--reload-dir",
+        str(main_service_dir / "src"),
+        # Relative to cwd (main_service); uvicorn rejects absolute exclude globs.
+        "--reload-exclude",
+        "frontend/node_modules/*",
+        "--timeout-keep-alive",
+        "600",
+    ]
+    # cwd matches the container's old WORKDIR so the head's cwd-relative reads
+    # (e.g. .frontend_last_built_at.txt) resolve.
+    result = subprocess.run(command, cwd=str(main_service_dir), env=environment)
+    if result.returncode:
+        raise SystemExit(result.returncode)
 
 
 def run_remote_dev_head() -> None:

@@ -115,10 +115,12 @@ The dashboard's `/v1/cluster/deleted_recent_paginated` reads `DELETED` and `FAIL
 ## Local-dev specifics
 
 - `main_service/__init__.py` seeds the cluster config with `DEFAULT_CONFIG` at import time if none was ever saved: it lives in the SQLite history db (`cluster_config` table), not in any external service. `LOCAL_DEV_CONFIG` is initialized from that config **and then** forced to `n4-standard-2 × 2` regardless of what's stored (`settings.py` re-enforces `n4-standard-2` + single node when saving cluster config in local-dev).
-- Nodes are Docker containers, not VMs (`LocalDockerProvider`). Ports auto-increment starting from 8080 (`_current_local_dev_max_node_port`, computed by scanning the `host` fields of active nodes in `cluster_state`).
+- Nodes are Docker containers, not VMs (`LocalDockerProvider`). Ports auto-increment starting from `LOCAL_DEV_NODE_PORT_BASE` (`_current_local_dev_max_node_port`, computed by scanning the `host` fields of active nodes in `cluster_state`).
+- The head is **not** a container: `make local-dev` runs it as a host subprocess (`python -m burla._local_dev`) so it uses this checkout's code directly. Nodes therefore reach it at `host.docker.internal:<head port>`, and the head reaches nodes at `127.0.0.1:<published node port>` rather than by container name.
 - `gcsfuse` is stubbed out: `/workspace/shared` inside containers is just a bind-mount from `_shared_workspace/`, not a real bucket mount.
-- `make local-dev` nukes `_worker_service_python_env/`, `_shared_workspace/`, and `_node_auth/` on startup for a clean slate.
-- Coordination is fully offline: the history db lives inside the main_service container (at `/var/lib/burla/history.db`) and dies with it. `make stop` therefore just `docker rm -f`s the `node_*` / `worker_*` / `OLD--*` containers; there is no external state to clean up (`make/cluster_dashboard_dev_state.py` was deleted).
+- `make local-dev` nukes `_worker_service_python_env/`, `_shared_workspace/`, `_node_auth/`, and `_local_dev_state/` on startup for a clean slate.
+- The head's SQLite history db lives on the host at `_local_dev_state/history.db` (via `HISTORY_DB_PATH`), so it is reset on each `make local-dev`. `make stop` just `docker rm -f`s this cluster's labeled `node_*` / `worker_*` containers; there is no external state to clean up.
+- It is not offline: nodes fetch this cluster's authorized users from the backend at boot, so `make local-dev` requires a working AWS identity plus a saved cluster token and fails fast without them.
 - The inactivity watchdog does not run in local-dev, so nothing auto-stops containers; rely on `make stop` or `POST /v1/cluster/shutdown`.
 
 ## Cluster config shape (summary)

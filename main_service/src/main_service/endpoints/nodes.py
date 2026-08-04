@@ -94,7 +94,7 @@ async def self_delete_node(
     node_dict = cluster_state.get_node(instance_name) or {
         "instance_name": instance_name
     }
-    node = Node.from_state(logger, node_dict, auth_headers={}, provider=get_provider())
+    node = Node.from_state(logger, node_dict, provider=get_provider())
 
     def _delete_vm_only():
         # The node already pushed its terminal status (DELETED or FAILED);

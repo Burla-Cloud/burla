@@ -236,6 +236,11 @@ def deploy_aws(spinner):
     response = requests.put(url, json={"version": __version__}, headers=headers)
     response.raise_for_status()
 
+    # Point this machine's client at the freshly deployed cluster.
+    from burla._auth import save_deployed_cluster_config
+
+    save_deployed_cluster_config("aws", project_id, cluster_id_token, dashboard_url)
+
     msg = f"\nSuccessfully deployed Burla v{__version__} on AWS!\n"
     msg += f"Quickstart:\n"
     msg += f"  1. Open your new cluster dashboard: {dashboard_url}\n"

@@ -529,6 +529,13 @@ async def validate_requests(request: Request, call_next):
                 "Shutdown endpoint can only be called from localhost", status_code=403
             )
 
+    # local-dev has no login flow, so the head stamps a fake session
+    # (`local-dev@burla.dev`) and polls nodes with it. That user is not in
+    # `authorized_users`, so validating it here 401s every head request,
+    # including the boot poll that decides whether a node came up.
+    if IN_LOCAL_DEV_MODE:
+        return await call_next(request)
+
     # validate all other requests:
     invalid_headers = True
     email = request.headers.get("X-User-Email")

@@ -140,17 +140,37 @@ def _deployed_dashboard_url() -> str | None:
     return dashboard_url
 
 
+# The cluster a job has already committed to. Set for the duration of a
+# `remote_parallel_map` call: without it a later lookup whose health probe times
+# out would fall through to starting a *new* head, killing the one the job is
+# running against (observed mid-job: "Shutting down" then a second head on a
+# different port). Process-wide, like the resolution it short-circuits.
+_pinned_cluster_url: str | None = None
+
+
+def _pin_cluster_url(url: str):
+    global _pinned_cluster_url
+    _pinned_cluster_url = url
+
+
+def _unpin_cluster_url():
+    global _pinned_cluster_url
+    _pinned_cluster_url = None
+
+
 def get_cluster_dashboard_url() -> str:
     """Resolve the main_service URL for the cluster this machine should use.
 
-    Precedence: `BURLA_CLUSTER_DASHBOARD_URL`, then a head already running for
-    this checkout's namespace, then a deployed cluster from `burla login`,
-    then a head started on this machine. See `burla._local_head`.
+    Precedence: a cluster a running job already committed to, then
+    `BURLA_CLUSTER_DASHBOARD_URL`, then a head already running for this
+    checkout's namespace, then a deployed cluster from `burla login`, then a
+    head started on this machine. See `burla._local_head`.
     """
     from burla._local_head import ensure_local_head, running_head_url
 
     return (
-        _env_dashboard_url()
+        _pinned_cluster_url
+        or _env_dashboard_url()
         or running_head_url()
         or _deployed_dashboard_url()
         or ensure_local_head()

@@ -25,7 +25,7 @@
 
 ---
 
-Burla is a distributed computing framework that runs plain Python functions across thousands of VMs in your own cloud account on Google Cloud, AWS, or Microsoft Azure. It has exactly one function:
+Burla is a distributed computing framework that runs plain Python functions across thousands of VMs in your own cloud account. It has exactly one function:
 
 ```python
 from burla import remote_parallel_map
@@ -49,15 +49,15 @@ This example runs `my_function` on 1,000 VMs in less than one second:
 - **One function.** `results = remote_parallel_map(my_function, my_inputs)` is the entire API. No DAGs, no YAML, no cluster SDK to learn.
 - **Feels local.** Anything your function prints streams back to your terminal. Exceptions are re-raised locally with full tracebacks. Local packages and modules are cloned onto every machine automatically.
 - **Fast dispatch.** Code starts running in under a second, even with thousands of VMs or millions of inputs.
-- **Runs in your cloud.** Burla is self-hosted in your own cloud account on Google Cloud, AWS, or Microsoft Azure. Your code, inputs, and results never leave it.
+- **Runs in your cloud.** Burla is self-hosted in your own cloud account. Your code, inputs, and results never leave it.
 - **Any hardware, any image.** Request CPUs, RAM, or GPUs (A100, H100) per function call, and run inside any Docker image.
 - **High utilization.** Adaptive concurrency repacks work while the job runs, keeping CPU and RAM near 90% utilization and preventing out-of-memory errors.
 - **Built-in dashboard.** Live logs, node status, and background jobs, viewable from any device.
 
 ## Getting started
 
-You'll need Python 3.11+, permission to boot VMs, and the CLI for your cloud.
-Burla defaults to the account and region selected by your AWS CLI.
+You'll need Python 3.11+ and permission to boot VMs. Burla defaults to the
+account and region selected by your AWS CLI.
 
 ```bash
 pip install burla

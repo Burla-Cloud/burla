@@ -31,7 +31,10 @@ from typing import Any, Callable, Iterable
 
 import pytest
 
-# the test suite must never touch the production backend
+# The test suite must never touch the production backend.
+if os.environ.get("BURLA_BACKEND_URL") == "https://backend.burla.dev":
+    raise RuntimeError("The test suite cannot use the production Burla backend.")
+os.environ["BURLA_ENVIRONMENT"] = "test"
 os.environ.setdefault("BURLA_BACKEND_URL", "https://test.backend.burla.dev")
 
 # `make test*` passes this checkout's head port so tests never reach another

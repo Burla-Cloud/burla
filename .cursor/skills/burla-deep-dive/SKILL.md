@@ -47,7 +47,7 @@ When a question mentions any of these, go straight to the file below instead of 
 - Client per-node driver: [client/src/burla/_node.py](../../../client/src/burla/_node.py)
 - Client ↔ main_service HTTP wrapper: [client/src/burla/_cluster_client.py](../../../client/src/burla/_cluster_client.py)
 - Client heartbeat subprocess (direct node pings only): [client/src/burla/_heartbeat.py](../../../client/src/burla/_heartbeat.py)
-- Cluster install (head VM creation, GCP / AWS): [client/src/burla/_install.py](../../../client/src/burla/_install.py), [client/src/burla/_install_aws.py](../../../client/src/burla/_install_aws.py)
+- Cluster deployment (head VM creation, GCP / AWS): [client/src/burla/_deploy.py](../../../client/src/burla/_deploy.py), [client/src/burla/_deploy_aws.py](../../../client/src/burla/_deploy_aws.py)
 - Main-service endpoints for the pypi client (start_job, get/patch job, cluster state): [main_service/src/main_service/endpoints/client.py](../../../main_service/src/main_service/endpoints/client.py)
 - Main-service endpoints for nodes (state push, logs, self_delete, peers): [main_service/src/main_service/endpoints/nodes.py](../../../main_service/src/main_service/endpoints/nodes.py)
 - Main-service cluster lifecycle (restart, shutdown, `_start_nodes`): [main_service/src/main_service/endpoints/cluster_lifecycle.py](../../../main_service/src/main_service/endpoints/cluster_lifecycle.py)

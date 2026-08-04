@@ -153,6 +153,7 @@ local-dev:
 		rm -rf ./$$scratch; mkdir -p ./$$scratch; chmod 777 ./$$scratch; \
 	done; \
 	docker network create $(BURLA_CLUSTER_NETWORK) 2>/dev/null || true; \
+	BURLA_ENVIRONMENT=test \
 	PROJECT_ID=$${PROJECT_ID} \
 	IN_LOCAL_DEV_MODE=True \
 	CLOUD_PROVIDER=$${BURLA_CLOUD:-aws} \

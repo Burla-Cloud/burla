@@ -208,17 +208,11 @@ def dashboard():
     run_local_head_for_dashboard(on_ready=open_dashboard)
 
 
-def install(cloud: str = "gcp"):
-    """Deprecated: use `burla deploy` (or nothing at all - `remote_parallel_map`
-    and `burla dashboard` now work with zero deployment)."""
-    print("`burla install` is now `burla deploy`, deploying ...")
-    deploy(cloud=cloud)
-
-
 def init_cli():
     commands = {
         "login": login,
         "dashboard": dashboard,
+        "deploy": deploy,
         "config": {
             "set": set_config,
             "get": get_config,
@@ -226,7 +220,4 @@ def init_cli():
         "--version": version,
         "-v": version,
     }
-    commands["deploy"] = deploy
-    if _BURLA_ENVIRONMENT == "production":
-        commands["install"] = install
     Fire(commands)

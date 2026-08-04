@@ -31,6 +31,13 @@ IN_LOCAL_DEV_MODE = os.environ.get("IN_LOCAL_DEV_MODE") == "True"
 # This is needed because remote-dev-mode is not local-dev-mode, and needs local redirect on login.
 REDIRECT_LOCALLY_ON_LOGIN = os.environ.get("REDIRECT_LOCALLY_ON_LOGIN") == "True"
 
+# Written by a node that wanted to be deleted but could only stop itself (GCP
+# VMs have no credentials to delete themselves), and read by the GCP reaper in
+# `providers/gcp.py` so it never deletes a VM someone stopped on purpose.
+# Guest attributes are the only thing a credential-less VM can write.
+# Keep in sync with `node_service.SELF_DELETE_GUEST_ATTRIBUTE`.
+SELF_DELETE_GUEST_ATTRIBUTE = "burla/self-delete-requested"
+
 # Which dev cluster this head is. Several run at once (one per checkout), so
 # anything they would otherwise share has to be namespaced by this: in local-dev
 # the docker network, container labels, and published node ports; in remote-dev

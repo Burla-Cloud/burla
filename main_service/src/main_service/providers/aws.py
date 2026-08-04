@@ -241,25 +241,15 @@ class AWSProvider:
             ec2.get_waiter("instance_terminated").wait(InstanceIds=instance_ids)
 
     def delete_stopped_instances(self):
-        """Nodes normally terminate themselves on shutdown; this reaps any
-        that were stopped some other way (e.g. through the AWS console).
-        Scoped to this cluster's own nodes so dev clusters sharing an AWS
-        account never reap each other's."""
-        ec2 = self._ec2(self.region)
-        response = ec2.describe_instances(
-            Filters=[
-                {"Name": "tag:burla-cluster-node", "Values": ["true"]},
-                {"Name": "tag:burla-cluster-id", "Values": [CLUSTER_NAME]},
-                {"Name": "instance-state-name", "Values": ["stopped"]},
-            ]
-        )
-        instance_ids = [
-            instance["InstanceId"]
-            for reservation in response["Reservations"]
-            for instance in reservation["Instances"]
-        ]
-        if instance_ids:
-            ec2.terminate_instances(InstanceIds=instance_ids)
+        """Nothing to reap on AWS.
+
+        A node that wants to be gone powers off, and
+        `InstanceInitiatedShutdownBehavior=terminate` turns that into a full
+        termination, so a *stopped* AWS node was never a self-delete attempt:
+        someone stopped it deliberately (console, CLI). This used to terminate
+        those, which destroyed a user's node behind their back.
+        """
+        return
 
     def mount_shared_workspace_script(self, bucket_name: str) -> str:
         return f"""

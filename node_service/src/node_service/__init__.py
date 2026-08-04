@@ -110,6 +110,9 @@ def REINIT_SELF(SELF):
     SELF["client_contact_last_1s"] = True
     SELF["job_view"] = None
     SELF["host"] = None
+    # How long the head has been unreachable, per the state-push loop. Drives
+    # orphan self-deletion (see ORPHANED_SHUTDOWN_TIME_SEC).
+    SELF["head_unreachable_sec"] = 0
 
 
 SELF = {}
@@ -199,21 +202,116 @@ def _poweroff_self():
     subprocess.Popen(["systemctl", "poweroff"])
 
 
-# If the head stays unreachable this long with no client activity (e.g. the
-# laptop hosting it was closed), the node assumes it's orphaned and powers
-# itself off so it can't run up a bill forever.
-ORPHANED_SHUTDOWN_TIME_SEC = 15 * 60
+_GCP_METADATA = "http://metadata.google.internal/computeMetadata/v1"
+_GCP_METADATA_HEADERS = {"Metadata-Flavor": "Google"}
+# Set by a node that wanted to be deleted but could only stop itself, and read
+# by the head's GCP reaper (`delete_stopped_instances`) to tell that apart from
+# a VM someone stopped on purpose. Keep in sync with providers/gcp.py.
+SELF_DELETE_GUEST_ATTRIBUTE = "burla/self-delete-requested"
+
+
+async def _gcp_metadata(path: str) -> str | None:
+    """A value from the GCP metadata server, or None when this isn't a GCP VM."""
+    try:
+        timeout = aiohttp.ClientTimeout(total=3)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            url = f"{_GCP_METADATA}/{path}"
+            async with session.get(url, headers=_GCP_METADATA_HEADERS) as response:
+                return await response.text() if response.status == 200 else None
+    except Exception:
+        return None
+
+
+async def _mark_self_delete_requested():
+    """Leave a marker saying Burla wanted this VM gone.
+
+    Guest attributes are the one thing a credential-less GCP VM can write, and
+    they outlive the stop, so a future head can finish deleting this VM without
+    touching one a person stopped deliberately. Needs
+    `enable-guest-attributes` on the instance (set by the head). No-op off GCP.
+    """
+    try:
+        timeout = aiohttp.ClientTimeout(total=3)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            url = f"{_GCP_METADATA}/instance/guest-attributes/{SELF_DELETE_GUEST_ATTRIBUTE}"
+            async with session.put(
+                url, headers=_GCP_METADATA_HEADERS, data="true"
+            ) as response:
+                await response.read()
+    except Exception:
+        pass
+
+
+async def _delete_self_via_cloud_api() -> bool:
+    """Delete this instance outright, for GCP VMs that do have a service
+    account (shared-filesystem clusters). Uses the metadata server's token, so
+    it needs no SDK and no static credentials."""
+    token_json = await _gcp_metadata("instance/service-accounts/default/token")
+    zone_path = await _gcp_metadata("instance/zone")
+    if not token_json or not zone_path:
+        return False
+    try:
+        access_token = json.loads(token_json)["access_token"]
+    except Exception:
+        return False
+
+    zone = zone_path.rsplit("/", 1)[-1]
+    url = (
+        f"https://compute.googleapis.com/compute/v1/projects/{PROJECT_ID}"
+        f"/zones/{zone}/instances/{INSTANCE_NAME}"
+    )
+    try:
+        timeout = aiohttp.ClientTimeout(total=15)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            headers = {"Authorization": f"Bearer {access_token}"}
+            async with session.delete(url, headers=headers) as response:
+                return response.status < 300
+    except Exception:
+        return False
+
+
+async def _shutdown_self():
+    """Get this VM fully deleted, escalating through whatever is reachable.
+
+    The head owns the cloud APIs, so ask it first. If it's gone, delete
+    ourselves when this VM happens to carry credentials. Failing both, record
+    the intent and power off: that terminates the instance on AWS, but only
+    stops it on GCP, where the marker is what lets a later head finish up.
+    """
+    try:
+        await head_client.request_self_delete()
+    except Exception:
+        await _delete_self_via_cloud_api()
+    finally:
+        await _mark_self_delete_requested()
+        _poweroff_self()
+
+
+# If the head stays unreachable this long, the node assumes it's orphaned (the
+# laptop hosting the head was closed, the head crashed) and deletes itself so it
+# can't run up a bill forever. Long enough to sit through a head restart or
+# redeploy, which nodes are expected to survive.
+ORPHANED_SHUTDOWN_TIME_SEC = 3 * 60
+
+
+def _head_is_gone() -> bool:
+    """True once the head has been unreachable long enough to call this node
+    orphaned. Job state is only meaningful while the head is around to update
+    it, so callers use this to stop trusting a stale `current_job`."""
+    return SELF["head_unreachable_sec"] >= ORPHANED_SHUTDOWN_TIME_SEC
 
 
 async def shutdown_if_idle_for_too_long(logger: Logger):
     """WARNING: Errors from this function are completely hidden!"""
 
     time_since_last_activity = 0
+    # A job that never got finalized (the head vanished mid-completion) would
+    # otherwise hold this node open forever, so stale job state stops counting
+    # once the head is gone.
     while (
         time_since_last_activity <= INACTIVITY_SHUTDOWN_TIME_SEC
         or SELF["active_client_request_count"] > 0
-        or SELF["current_job"]
-        or SELF["reserved_for_job"]
+        or (not _head_is_gone() and (SELF["current_job"] or SELF["reserved_for_job"]))
         or SELF["BOOTING"]
     ):
         await asyncio.sleep(5)
@@ -229,13 +327,8 @@ async def shutdown_if_idle_for_too_long(logger: Logger):
         msg = f"Node has been idle for {INACTIVITY_SHUTDOWN_TIME_SEC // 60} minutes.\n"
         msg += f"SHUTTING DOWN NODE {INSTANCE_NAME} DUE TO INACTIVITY."
         await logger.log(msg, severity="WARNING")
-
-        # The head owns cloud APIs; it deletes this VM.
-        await head_client.request_self_delete()
     finally:
-        # If the head is gone (client-hosted head whose laptop closed), the
-        # requests above fail - power off so the VM never idles forever.
-        _poweroff_self()
+        await _shutdown_self()
 
 
 async def _state_push_loop(logger: Logger):
@@ -257,6 +350,7 @@ async def _state_push_loop(logger: Logger):
                 include_job_progress=watcher_active,
             )
             consecutive_failures = 0
+            SELF["head_unreachable_sec"] = 0
             SELF["host"] = view.get("host")
             reservation = view.get("reserved_for_job")
             if not SELF["current_job"] and reservation != SELF["reserved_for_job"]:
@@ -278,10 +372,7 @@ async def _state_push_loop(logger: Logger):
                 SELF["job_watcher_stop_event"].set()
                 print("Head reports this node as DELETED; requesting VM deletion.")
                 if not IN_LOCAL_DEV_MODE:
-                    try:
-                        await head_client.request_self_delete()
-                    finally:
-                        _poweroff_self()
+                    await _shutdown_self()
                 continue
             if SELF["current_job"]:
                 head_client.apply_job_signals(view.get("job"))
@@ -292,15 +383,13 @@ async def _state_push_loop(logger: Logger):
             if consecutive_failures in (1, 10, 60):
                 print(f"state push to head failed ({consecutive_failures}x): {e}")
             head_gone_sec = consecutive_failures * STATE_PUSH_INTERVAL_SEC
-            client_idle_sec = time() - SELF["last_client_activity_timestamp"]
-            orphaned = (
-                head_gone_sec >= ORPHANED_SHUTDOWN_TIME_SEC
-                and client_idle_sec >= ORPHANED_SHUTDOWN_TIME_SEC
-            )
-            if orphaned and not IN_LOCAL_DEV_MODE:
+            SELF["head_unreachable_sec"] = head_gone_sec
+            # No head means nobody is coming to collect results or delete this
+            # VM, so being mid-job is not a reason to stay alive.
+            if _head_is_gone() and not IN_LOCAL_DEV_MODE:
                 SELF["SHUTTING_DOWN"] = True
-                print(f"Head unreachable for {head_gone_sec}s; powering off.")
-                _poweroff_self()
+                print(f"Head unreachable for {head_gone_sec}s; deleting self.")
+                await _shutdown_self()
 
 
 @asynccontextmanager

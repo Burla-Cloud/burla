@@ -16,7 +16,7 @@ from google.cloud.compute_v1 import (
     AggregatedListMachineTypesRequest,
 )
 
-from main_service import PROJECT_ID
+from main_service import PROJECT_ID, SELF_DELETE_GUEST_ATTRIBUTE
 from main_service.providers import NoCapacity, InstanceDeletedMidBoot
 
 # Retries GCE API calls (unary RPCs and polling done by ExtendedOperation.result()) on
@@ -115,6 +115,10 @@ class GCPProvider:
         metadata_items = [
             Items(key="startup-script", value=startup_script),
             Items(key="shutdown-script", value=shutdown_script),
+            # Lets a credential-less node write the self-delete marker that
+            # `delete_stopped_instances` reads (guest attributes are the only
+            # thing it can write without a service account).
+            Items(key="enable-guest-attributes", value="TRUE"),
         ]
 
         zones = list(self.zones_supporting_machine_type(region, machine_type))
@@ -185,19 +189,51 @@ class GCPProvider:
                     return vm.zone.split("/")[-1]
         return None
 
+    def _self_delete_was_requested(self, instance_name: str, zone: str) -> bool:
+        """Did this VM stop itself because Burla wanted it gone?
+
+        A credential-less node can't delete itself, so it records the intent in
+        a guest attribute before powering off. Without that marker we can't tell
+        it apart from a VM someone stopped deliberately, and deleting those
+        would destroy a user's node behind their back.
+        """
+        try:
+            attributes = self.instance_client.get_guest_attributes(
+                project=PROJECT_ID,
+                zone=zone,
+                instance=instance_name,
+                query_path=SELF_DELETE_GUEST_ATTRIBUTE,
+            )
+        except NotFound:
+            return False
+        except Exception:
+            # Never delete on an inconclusive read.
+            return False
+        items = getattr(getattr(attributes, "query_value", None), "items", [])
+        return any(item.value == "true" for item in items)
+
     def delete_stopped_instances(self):
         """Credential-less nodes power themselves off (they can't call the
-        delete API); this reaps those TERMINATED VMs so only their disks were
-        ever billed after shutdown."""
+        delete API); this finishes the job by deleting those TERMINATED VMs, so
+        their disks stop billing.
+
+        Only touches nodes that asked to be deleted (see
+        `_self_delete_was_requested`), so a VM a person stopped on purpose is
+        left alone. Deliberately not scoped to this cluster: a marked node wants
+        to be gone no matter which head notices, and scoping would strand it
+        whenever its own head never comes back.
+        """
         response = self.instance_client.aggregated_list(project=PROJECT_ID)
         for _, vms_in_zone in response:
             for vm in getattr(vms_in_zone, "instances", []):
-                is_stopped_node = (
-                    vm.name.startswith("burla-node-") and vm.status == "TERMINATED"
-                )
-                if is_stopped_node:
-                    zone = vm.zone.split("/")[-1]
-                    self.delete_instance(vm.name, zone)
+                if not vm.name.startswith("burla-node-"):
+                    continue
+                if vm.status != "TERMINATED":
+                    continue
+                zone = vm.zone.split("/")[-1]
+                if not self._self_delete_was_requested(vm.name, zone):
+                    continue
+                self.delete_instance(vm.name, zone)
 
     def mount_shared_workspace_script(self, bucket_name: str) -> str:
         return f"""

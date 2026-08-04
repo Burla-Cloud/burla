@@ -19,6 +19,7 @@ from main_service import (
     NODE_SOURCE_REF,
     MAIN_SERVICE_URL_FOR_NODES,
     CLUSTER_ID_TOKEN,
+    SELF_DELETE_GUEST_ATTRIBUTE,
     BURLA_RELAY_SERVER_ADDR,
     BURLA_RELAY_SERVER_PORT,
     FRP_VERSION,
@@ -504,9 +505,17 @@ class Node:
         return textwrap.dedent(script).strip() + "\n"
 
     def __get_shutdown_script(self):
+        # GCP only (AWS ignores shutdown_script and terminates on poweroff
+        # instead). The guest attribute records that Burla wanted this VM gone,
+        # so `delete_stopped_instances` can finish deleting it without touching
+        # a VM someone stopped on purpose. Written here as well as in the node
+        # service, so it is set even when the stop wasn't node-initiated.
         script = f"""
         #! /bin/bash
         # Tell the node_service this VM is being shutdown so it can reassign inputs and stuff.
         curl -X POST "http://localhost:8081/shutdown"
+        curl -X PUT --data "true" -H "Metadata-Flavor: Google" \\
+            "http://metadata.google.internal/computeMetadata/v1/instance/guest-attributes/{SELF_DELETE_GUEST_ATTRIBUTE}" \\
+            || true
         """
         return textwrap.dedent(script).strip() + "\n"

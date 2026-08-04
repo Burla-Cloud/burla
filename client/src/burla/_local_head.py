@@ -526,12 +526,20 @@ def acquire_head_for_job() -> HeadHandle:
     return HeadHandle(url=ensure_local_head(), owned=True)
 
 
+# How long to wait for the head to delete this cluster's nodes before killing
+# it anyway. Deleting is just one terminate/delete API call per node, so this
+# only needs to cover a slow control plane, and it bounds how long a finished
+# `remote_parallel_map` can sit in teardown.
+CLUSTER_SHUTDOWN_TIMEOUT_SEC = 30
+
+
 def release_head(handle: HeadHandle):
     """Stop a head started by `acquire_head_for_job` (no-op if not owned).
 
-    History persists on disk so `burla dashboard` can still show the job
-    later, and the cluster's nodes tolerate the head being gone (they reattach
-    to the next head that starts).
+    Deletes this cluster's nodes first, while the head still holds the cloud
+    credentials to do it: otherwise the nodes outlive the job and only clean
+    themselves up once their own timers fire. History persists on disk, so
+    `burla dashboard` can still show the job afterwards.
     """
     if not handle.owned:
         return
@@ -539,6 +547,9 @@ def release_head(handle: HeadHandle):
         _, project_id, _ = detect_cloud()
     except Exception:
         return
+
+    _shutdown_cluster_via_head(handle.url, project_id)
+
     head_state_path = _head_state_dir(project_id) / "head.json"
     if not head_state_path.exists():
         return
@@ -548,6 +559,22 @@ def release_head(handle: HeadHandle):
     _terminate_pid(head_pid)
     _terminate_pid(frpc_pid)
     _clear_process_state(head_state_path, head_pid, frpc_pid)
+
+
+def _shutdown_cluster_via_head(url: str, project_id: str):
+    """Ask the head to delete every node it booted. Best-effort: the head is
+    about to be killed either way, and nodes still self-delete on their own
+    timers if this never lands."""
+    cluster_token = read_saved_cluster_token(project_id)
+    headers = {"Authorization": f"Bearer {cluster_token}"} if cluster_token else {}
+    try:
+        requests.post(
+            f"{url}/v1/cluster/shutdown",
+            headers=headers,
+            timeout=CLUSTER_SHUTDOWN_TIMEOUT_SEC,
+        )
+    except Exception:
+        pass
 
 
 def _reap(pid: int):

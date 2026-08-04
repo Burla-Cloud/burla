@@ -31,7 +31,8 @@ define TEST_SHELL
 	uv python install $(1) >/dev/null 2>&1
 	$(MAKE) -C main_service ensure-frontend
 	UV_PROJECT_ENVIRONMENT=$(PROJECT_ABS)/.venv-$(1) \
-		uv run --project $(PROJECT_ABS) --group dev --python $(1) burla test-shell
+		uv run --project $(PROJECT_ABS) --group dev --python $(1) \
+			python -m burla._test_shell
 endef
 
 .PHONY: 3.11-dev 3.12-dev 3.13-dev 3.14-dev local-dev remote-dev local-images \
@@ -173,7 +174,7 @@ remote-dev:
 	BURLA_ENVIRONMENT=test \
 	BURLA_CLOUD=aws \
 	BURLA_CLUSTER_NAME=$(BURLA_CLUSTER_NAME) \
-	uv run --project $(PROJECT_ABS) --group dev burla remote-dev
+	uv run --project $(PROJECT_ABS) --group dev python -m burla._remote_dev
 
 kill-kernels:
 	pkill -f ipykernel

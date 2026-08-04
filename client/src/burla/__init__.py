@@ -1,10 +1,5 @@
 import json
 import os
-import shlex
-import shutil
-import subprocess
-import sys
-import tempfile
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -183,116 +178,6 @@ def dashboard():
     run_local_head_for_dashboard(on_ready=open_dashboard)
 
 
-def remote_dev():
-    """Run this checkout's main_service here with real cloud nodes.
-
-    Started by `make remote-dev`. The head hot-reloads this working tree; node
-    VMs run this checkout's current branch, so push node_service changes before
-    expecting them on a node.
-    """
-    from burla._local_head import run_remote_dev_head
-
-    run_remote_dev_head()
-
-
-def _configure_test_shell_prompt(
-    shell: str, environment: dict[str, str], startup_dir: Path, label: str
-) -> list[str]:
-    """Give the child shell a visible test prompt without changing dotfiles."""
-    shell_name = Path(shell).name
-    burla_bin_dir = str(Path(sys.executable).parent)
-    burla_bin_dir_quoted = shlex.quote(burla_bin_dir)
-    environment["PATH"] = (
-        f"{burla_bin_dir}{os.pathsep}{environment.get('PATH', '')}"
-    )
-    if shell_name == "zsh":
-        original_zdotdir = Path(
-            environment.get("ZDOTDIR")
-            or environment.get("HOME")
-            or str(Path.home())
-        ).expanduser()
-        startup_dir_quoted = shlex.quote(str(startup_dir))
-        original_zdotdir_quoted = shlex.quote(str(original_zdotdir))
-
-        for filename in (".zshenv", ".zshrc"):
-            original_file = original_zdotdir / filename
-            source_original = ""
-            if original_file.exists():
-                source_original = (
-                    f"export ZDOTDIR={original_zdotdir_quoted}\n"
-                    f"source {shlex.quote(str(original_file))}\n"
-                    f"export ZDOTDIR={startup_dir_quoted}\n"
-                )
-            (startup_dir / filename).write_text(source_original)
-
-        with (startup_dir / ".zshrc").open("a") as zshrc:
-            zshrc.write(
-                f"\nexport PATH={burla_bin_dir_quoted}:$PATH\n"
-                "rehash\n"
-                "autoload -Uz add-zsh-hook\n"
-                "_burla_test_prompt() {\n"
-                f'  if [[ "$PROMPT" != *"[{label}]"* ]]; then\n'
-                f"    PROMPT='%F{{yellow}}%B[{label}]%b%f '$PROMPT\n"
-                "  fi\n"
-                "}\n"
-                "add-zsh-hook precmd _burla_test_prompt\n"
-                "_burla_test_prompt\n"
-            )
-        environment["ZDOTDIR"] = str(startup_dir)
-        return [shell, "-i"]
-
-    if shell_name == "bash":
-        original_bashrc = Path(environment.get("HOME") or str(Path.home())) / ".bashrc"
-        bashrc = startup_dir / "bashrc"
-        source_original = (
-            f"source {shlex.quote(str(original_bashrc))}\n"
-            if original_bashrc.exists()
-            else ""
-        )
-        bashrc.write_text(
-            source_original
-            + f"export PATH={burla_bin_dir_quoted}:$PATH\n"
-            + f"PS1='\\[\\e[33;1m\\][{label}]\\[\\e[0m\\] '$PS1\n"
-        )
-        return [shell, "--rcfile", str(bashrc), "-i"]
-
-    environment["PS1"] = f"[{label}] {environment.get('PS1', '')}"
-    return [shell, "-i"]
-
-
-def test_shell():
-    """Enter Burla's isolated internal test environment. Type `exit` to leave.
-
-    Started by `make <python-version>-dev`, which picks the interpreter.
-    """
-    if not _IN_SOURCE_CHECKOUT:
-        raise RuntimeError("Test mode requires an editable Burla source checkout.")
-
-    environment = dict(os.environ)
-    environment["BURLA_ENVIRONMENT"] = "test"
-    for name in (
-        "BURLA_BACKEND_URL",
-        "BURLA_RELAY_HOST",
-        "BURLA_RELAY_SERVER_ADDR",
-        "BURLA_RELAY_SERVER_PORT",
-        "BURLA_NODE_SOURCE_REF",
-        "BURLA_CLUSTER_DASHBOARD_URL",
-    ):
-        environment.pop(name, None)
-
-    shell = environment.get("SHELL") or shutil.which("zsh") or shutil.which("bash")
-    if shell is None:
-        raise RuntimeError("Test shell requires zsh or bash when SHELL is unset.")
-    # `make <version>-dev` runs several of these at once, so the prompt names the
-    # interpreter this shell is actually using.
-    label = f"burla test {sys.version_info.major}.{sys.version_info.minor}"
-    with tempfile.TemporaryDirectory(prefix="burla-test-shell-") as temp_dir:
-        command = _configure_test_shell_prompt(shell, environment, Path(temp_dir), label)
-        result = subprocess.run(command, cwd=_SOURCE_ROOT, env=environment)
-    if result.returncode:
-        raise SystemExit(result.returncode)
-
-
 def install(cloud: str = "gcp"):
     """Deprecated: use `burla deploy` (or nothing at all - `remote_parallel_map`
     and `burla dashboard` now work with zero deployment)."""
@@ -314,7 +199,4 @@ def init_cli():
     commands["deploy"] = deploy
     if _BURLA_ENVIRONMENT == "production":
         commands["install"] = install
-    if _IN_SOURCE_CHECKOUT:
-        commands["test-shell"] = test_shell
-        commands["remote-dev"] = remote_dev
     Fire(commands)

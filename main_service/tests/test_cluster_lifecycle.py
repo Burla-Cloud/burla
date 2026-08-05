@@ -1,8 +1,8 @@
 """
 Section 18 of the test plan: POST /v1/cluster/restart and /v1/cluster/shutdown.
 
-These mutate the cluster, so run them only when you're OK with the cluster
-being reset. Gated on the `chaos` marker.
+These mutate the cluster; the shared readiness gate restores clean state before
+the next test.
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ import time
 
 import pytest
 
-pytestmark = [pytest.mark.chaos, pytest.mark.slow]
+pytestmark = [pytest.mark.service, pytest.mark.slow]
 
 
 def _seed_running_job(main_http_client, job_id: str) -> None:

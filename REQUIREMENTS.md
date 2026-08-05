@@ -58,10 +58,14 @@ open `burla dashboard` again. Same pid and port throughout, still running at the
 
 `burla deploy` creates at most one always-on cluster per cloud account, and after
 `burla login` the client sends jobs to that cluster instead of running a head locally.
-Deploying again updates the existing cluster rather than creating a second one.
+A first deploy carries this machine's client-hosted job history and settings into the
+deployed cluster, refusing to start while a local job is running. Deploying again
+updates the existing cluster rather than creating a second one, and preserves the
+deployed history instead of re-importing local data.
 
-Verify: `burla deploy`, `burla login`, run an `rpm` job and confirm it appears on the
-deployed dashboard. Run `burla deploy` again and confirm the account still has one head.
+Verify: run a local `rpm` job, then `burla deploy` and `burla login`; the deployed
+dashboard lists the local job, and a new `rpm` job appears there too. Run
+`burla deploy` again and confirm the account still has one head with its history intact.
 
 ## R6. Isolation
 

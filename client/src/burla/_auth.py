@@ -193,17 +193,15 @@ def save_deployed_cluster_config(
     cloud: str, project_id: str, cluster_token: str, dashboard_url: str
 ):
     """After `burla deploy`, point this machine at the deployed cluster so
-    `remote_parallel_map` uses it without a separate `burla login`. Mints
-    client credentials from the local cloud identity, then pins mode=deployed.
-    Best-effort: deploy has already succeeded, and the deploy message still
-    tells the user they can `burla login`."""
+    `remote_parallel_map` uses it without a separate `burla login`. Best-effort:
+    deploy has already succeeded, and the deploy message still tells the user
+    they can `burla login`."""
     from burla._local_head import ensure_user_authorized
 
     try:
         ensure_user_authorized(cloud, project_id, cluster_token)
         config = json.loads(CONFIG_PATH.read_text())
         config["cluster_dashboard_url"] = dashboard_url.rstrip("/")
-        config["mode"] = "deployed"
         _write_auth_config(config)
     except Exception:
         pass
@@ -273,14 +271,10 @@ def login(no_browser: bool = False):
 
     print(f"\nYou are now logged in to [{project_id}] as [{email}].")
     print("Please email jake@burla.dev with any questions!\n")
-    # `mode="deployed"` pins remote_parallel_map to this deployed cluster.
-    # A head you start locally (burla dashboard / local-dev / remote-dev)
-    # still wins while it is running; stopping it falls back here.
     config = {
         "auth_token": auth_token,
         "email": email,
         "project_id": project_id,
         "cluster_dashboard_url": cluster_dashboard_url,
-        "mode": "deployed",
     }
     _write_auth_config(config)

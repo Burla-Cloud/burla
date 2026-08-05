@@ -1,9 +1,9 @@
 """
-Repo-root conftest for the Burla test suite. All tiers (unit, service, e2e, chaos)
+Repo-root conftest for the Burla test suite. Both tiers (service and e2e)
 share these helpers so the subprocess-isolation pattern and cluster-readiness gate
 live in one place.
 
-All service / e2e / chaos tests assume a dev cluster is running for this
+All service and e2e tests assume a dev cluster is running for this
 checkout (`make local-dev`, or `make remote-dev` for real cloud nodes). A
 readiness gate fixture verifies this before any test that uses it runs. All
 cluster state is read/written over the main_service HTTP API - there is no
@@ -45,6 +45,9 @@ READINESS_TIMEOUT_SEC = 30
 # local-dev containers reset in ~20s; real VMs need minutes. Remote e2e runs
 # (BURLA_CLUSTER_DASHBOARD_URL pointed at a live cluster) should raise this.
 CLEAN_CLUSTER_TIMEOUT_SEC = int(os.environ.get("BURLA_CLEAN_CLUSTER_TIMEOUT_SEC", 120))
+# How long the readiness gate lets post-job dirt (cancel propagation, worker
+# reboots) settle on its own before paying for a full cluster restart.
+SETTLE_TIMEOUT_SEC = 30
 
 
 def _port_open(host: str, port: int) -> bool:
@@ -84,15 +87,11 @@ def _local_dashboard(url: str) -> bool:
 
 
 def pytest_configure(config: pytest.Config) -> None:
-    config.addinivalue_line("markers", "unit: pure unit test, no cluster needed")
     config.addinivalue_line(
         "markers", "service: service-level test, requires make local-dev"
     )
     config.addinivalue_line(
         "markers", "e2e: full end-to-end test, requires make local-dev"
-    )
-    config.addinivalue_line(
-        "markers", "chaos: failure-injection test, requires make local-dev"
     )
     config.addinivalue_line("markers", "slow: slow test (>30s)")
     config.addinivalue_line(
@@ -242,7 +241,7 @@ def _wait_for_replacement_nodes(old_active_names: set[str], timeout: float) -> N
 @pytest.fixture
 def local_dev_cluster(burla_auth_headers) -> dict[str, Any]:
     """
-    Readiness gate for service / e2e / chaos tiers.
+    Readiness gate for service and e2e tiers.
 
     Fails fast with an actionable message when `make local-dev` isn't running,
     and resets the cluster only when the previous test left dirty state behind.
@@ -261,7 +260,7 @@ def local_dev_cluster(burla_auth_headers) -> dict[str, Any]:
     # anything but a dev cluster on this machine.
     if not _local_dashboard(DASHBOARD_URL):
         message = (
-            f"{DASHBOARD_URL} is not a local dev cluster. service/e2e/chaos "
+            f"{DASHBOARD_URL} is not a local dev cluster. service/e2e "
             "tests restart and mutate the cluster and must never run against a "
             "deployed one."
         )
@@ -295,17 +294,15 @@ def local_dev_cluster(burla_auth_headers) -> dict[str, Any]:
         )
 
     expected_ready_nodes = _expected_ready_node_count(burla_auth_headers)
-    state = _cluster_state_via_http()
-    active_nodes = _active_node_docs()
-    if (
-        _cluster_dirty_reason(
-            state,
-            active_nodes,
+    # A restart costs a whole node boot, so it is the last resort: dirt left
+    # by the previous test usually settles on its own within seconds.
+    try:
+        state = _wait_for_clean_cluster(
             burla_auth_headers,
             expected_ready_nodes,
+            SETTLE_TIMEOUT_SEC,
         )
-        is not None
-    ):
+    except AssertionError:
         old_active_names = _restart_cluster(burla_auth_headers)
         _wait_for_replacement_nodes(old_active_names, CLEAN_CLUSTER_TIMEOUT_SEC)
         state = _wait_for_clean_cluster(
@@ -324,9 +321,14 @@ def local_dev_cluster(burla_auth_headers) -> dict[str, Any]:
 
 @pytest.fixture(autouse=True)
 def clean_local_dev_cluster_before_cluster_tests(request):
-    cluster_markers = ("service", "e2e", "chaos")
+    cluster_markers = ("service", "e2e", "dashboard")
     if any(request.node.get_closest_marker(marker) for marker in cluster_markers):
         request.getfixturevalue("local_dev_cluster")
+
+
+@pytest.fixture(scope="session")
+def dashboard_url() -> str:
+    return DASHBOARD_URL
 
 
 def _cluster_state_via_http() -> dict[str, Any]:
@@ -377,14 +379,44 @@ def get_job():
 
 @pytest.fixture
 def cleanup_job():
-    """History lives inside the main_service container and dies with it; test
-    jobs need no explicit cleanup anymore. Kept so tests can still register
-    ids without caring."""
+    """Cancel every job the test admitted, then wait for its node
+    reservations to clear. An admitted job stays RUNNING and reserves its
+    nodes until canceled (or reaped after 300s), and a leaked reservation
+    forces the next test's readiness gate into a full cluster restart."""
+    import requests
+
+    job_ids: list[str] = []
 
     def _register(job_id: str) -> str:
+        job_ids.append(job_id)
         return job_id
 
     yield _register
+
+    if not job_ids:
+        return
+    try:
+        for job_id in job_ids:
+            job = get_job_via_http(job_id)
+            if job and job.get("status") == "RUNNING":
+                requests.post(
+                    f"{DASHBOARD_URL}/v1/jobs/{job_id}/stop",
+                    headers=_request_headers(),
+                    timeout=10,
+                )
+        deadline = time.time() + 30
+        while time.time() < deadline:
+            reserved = [
+                node
+                for node in _active_node_docs()
+                if node.get("reserved_for_job") in job_ids
+                or node.get("current_job") in job_ids
+            ]
+            if not reserved:
+                return
+            time.sleep(0.5)
+    except requests.RequestException:
+        pass  # head unreachable mid-teardown; the gate recovers
 
 
 @pytest.fixture
@@ -597,7 +629,7 @@ def rpm_subprocess():
 @pytest.fixture
 def ctrl_c_after():
     """
-    Helper for chaos tests that need to send SIGINT after N seconds. Usage:
+    Helper for e2e tests that need to send SIGINT after N seconds. Usage:
         result = ctrl_c_after(source, inputs, delay_s=2, **kwargs)
     """
 
@@ -664,15 +696,14 @@ def burla_version_current() -> str:
 
 
 # ---------------------------------------------------------------------------
-# Auto-skip service/e2e/chaos tests if the local-dev cluster isn't running.
-# Unit tests never require it.
+# Auto-skip tests if the local-dev cluster isn't running.
 # ---------------------------------------------------------------------------
 
 
 def pytest_collection_modifyitems(
     config: pytest.Config, items: list[pytest.Item]
 ) -> None:
-    requires_cluster = {"service", "e2e", "chaos"}
+    requires_cluster = {"service", "e2e", "dashboard"}
     cluster_up = _main_service_reachable()
     if REQUIRE_CLUSTER and not cluster_up:
         raise pytest.UsageError(f"local-dev cluster not running at {DASHBOARD_URL}")

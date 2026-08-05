@@ -222,6 +222,40 @@ class AuthError(Exception):
         super().__init__(message)
 
 
+# A first deploy carries this machine's client-hosted job history and settings
+# into the new deployed cluster. Redeploys never re-import: the head VM keeps
+# its database on disk, and that database is authoritative from then on.
+
+
+def _snapshot_local_history(spinner, project_id):
+    """Pause the local head (refusing if a job is running) and snapshot its
+    account-wide history db. Returns (snapshot_path, paused_head_url)."""
+    from burla._local_head import prepare_history_migration
+
+    spinner.text = "Snapshotting local job history ... "
+    spinner.start()
+    snapshot_path, paused_head_url = prepare_history_migration(project_id)
+    suffix = "Done." if snapshot_path else "No local history found."
+    spinner.text = f"Snapshotting local job history ... {suffix}"
+    spinner.ok("✓")
+    return snapshot_path, paused_head_url
+
+
+def _upload_local_history(spinner, dashboard_url, cluster_id_token, snapshot_path):
+    spinner.text = "Copying local job history to the deployed cluster ... "
+    spinner.start()
+    with open(snapshot_path, "rb") as snapshot:
+        response = requests.post(
+            f"{dashboard_url}/v1/cluster/import_history",
+            headers={"Authorization": f"Bearer {cluster_id_token}"},
+            data=snapshot,
+            timeout=120,
+        )
+    response.raise_for_status()
+    spinner.text = "Copying local job history to the deployed cluster ... Done."
+    spinner.ok("✓")
+
+
 def deploy(cloud: str = None):
     """Deploy (or update) an always-on, shared Burla cluster with a head VM.
 
@@ -304,9 +338,36 @@ def _deploy_gcp(spinner):
 
     cluster_id_token = _register_cluster_and_save_cluster_id_token(spinner, PROJECT_ID)
 
-    dashboard_url = _deploy_head_vm(
-        spinner, PROJECT_ID, main_svc_account_email, cluster_id_token
+    describe_cmd = (
+        f"gcloud compute instances describe {HEAD_VM_NAME} "
+        f"--zone={HEAD_ZONE} --format='value(status)'"
     )
+    first_deploy = run_command(describe_cmd, raise_error=False).returncode != 0
+    snapshot_path, paused_head_url = (None, None)
+    if first_deploy:
+        snapshot_path, paused_head_url = _snapshot_local_history(spinner, PROJECT_ID)
+
+    try:
+        dashboard_url = _deploy_head_vm(
+            spinner, PROJECT_ID, main_svc_account_email, cluster_id_token
+        )
+        if snapshot_path:
+            _upload_local_history(
+                spinner, dashboard_url, cluster_id_token, snapshot_path
+            )
+        if first_deploy:
+            from burla._local_head import finish_history_migration
+
+            finish_history_migration(PROJECT_ID)
+    except BaseException:
+        if paused_head_url:
+            from burla._local_head import resume_history_migration
+
+            resume_history_migration(PROJECT_ID, paused_head_url)
+        raise
+    finally:
+        if snapshot_path:
+            os.remove(snapshot_path)
 
     # remove the old Cloud Run deployment if upgrading from a pre-1.6 cluster.
     cmd = "gcloud run services delete burla-main-service --region=us-central1 --quiet"
@@ -364,7 +425,6 @@ def _deploy_head_vm(spinner, PROJECT_ID, main_svc_account_email, cluster_id_toke
             run_command(
                 f"gcloud compute instances start {HEAD_VM_NAME} " f"--zone={HEAD_ZONE}"
             )
-            existing_status = "RUNNING"
         _shutdown_cluster_for_upgrade(
             PROJECT_ID,
             cluster_id_token,
@@ -387,11 +447,10 @@ def _deploy_head_vm(spinner, PROJECT_ID, main_svc_account_email, cluster_id_toke
         startup_file.write(startup_script)
         startup_file.flush()
         if existing.returncode == 0:
-            if existing_status == "RUNNING":
-                run_command(
-                    f"gcloud compute instances stop {HEAD_VM_NAME} "
-                    f"--zone={HEAD_ZONE} --quiet"
-                )
+            run_command(
+                f"gcloud compute instances stop {HEAD_VM_NAME} "
+                f"--zone={HEAD_ZONE} --quiet"
+            )
             run_command(
                 f"gcloud compute instances remove-metadata {HEAD_VM_NAME} "
                 f"--zone={HEAD_ZONE} --keys=gce-container-declaration",
@@ -432,8 +491,9 @@ def _deploy_head_vm(spinner, PROJECT_ID, main_svc_account_email, cluster_id_toke
                 headers={"Authorization": f"Bearer {cluster_id_token}"},
                 timeout=3,
             )
-            expected = {"version": __version__, "project": PROJECT_ID}
-            if response.status_code == 200 and response.json() == expected:
+            # Subset match: /version also reports fields like `namespace`.
+            info = response.json() if response.status_code == 200 else {}
+            if info.get("version") == __version__ and info.get("project") == PROJECT_ID:
                 break
         except requests.RequestException:
             pass

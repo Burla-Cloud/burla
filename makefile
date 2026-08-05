@@ -36,7 +36,7 @@ define TEST_SHELL
 endef
 
 .PHONY: 3.11-dev 3.12-dev 3.13-dev 3.14-dev local-dev remote-dev local-images \
-	stop stop-all cluster-info test test-unit test-service test-e2e test-chaos \
+	stop stop-all cluster-info test test-service test-e2e test-dashboard \
 	kill-kernels
 
 3.11-dev:
@@ -48,33 +48,29 @@ endef
 3.14-dev:
 	$(call TEST_SHELL,3.14)
 
-# Every tier except `test-unit` needs a cluster running for THIS checkout:
-# `make local-dev` (or `make remote-dev`) in another terminal. Tests reach it at
+# Every tier needs a cluster running for THIS checkout: `make local-dev` (or
+# `make remote-dev`) in another terminal. Tests reach it at
 # BURLA_CLUSTER_DASHBOARD_URL, defaulted here to this checkout's head port so
 # they never talk to another checkout's cluster.
 test:
 	BURLA_CLUSTER_DASHBOARD_URL=$${BURLA_CLUSTER_DASHBOARD_URL:-$(BURLA_DASHBOARD_URL)} \
-	BURLA_REQUIRE_CLUSTER=1 uv run --project ./client --group dev pytest -m "not chaos" -s --disable-warnings
-
-# Pure unit tests — the only tier that needs no cluster at all.
-test-unit:
-	uv run --project ./client --group dev pytest -m unit -s --disable-warnings
+	BURLA_REQUIRE_CLUSTER=1 uv run --project ./client --group dev pytest -s --disable-warnings
 
 # Service-level tests. Requires a cluster for this checkout.
 test-service:
 	BURLA_CLUSTER_DASHBOARD_URL=$${BURLA_CLUSTER_DASHBOARD_URL:-$(BURLA_DASHBOARD_URL)} \
-	BURLA_REQUIRE_CLUSTER=1 uv run --project ./client --group dev pytest -m "service and not chaos" -s --disable-warnings
+	BURLA_REQUIRE_CLUSTER=1 uv run --project ./client --group dev pytest -m service -s --disable-warnings
 
 # End-to-end tests. Requires a cluster for this checkout.
 test-e2e:
 	BURLA_CLUSTER_DASHBOARD_URL=$${BURLA_CLUSTER_DASHBOARD_URL:-$(BURLA_DASHBOARD_URL)} \
-	BURLA_REQUIRE_CLUSTER=1 uv run --project ./client --group dev pytest -m "e2e and not chaos" -s --disable-warnings
+	BURLA_REQUIRE_CLUSTER=1 uv run --project ./client --group dev pytest -m e2e -s --disable-warnings
 
-# Chaos (destructive) tests. Run tests one at a time with a cluster reset
-# between; they shut down / restart / mutate the cluster.
-test-chaos:
+# Dashboard-UI tests, driven through real Chromium. Requires a cluster.
+test-dashboard:
+	uv run --project ./client --group dev playwright install chromium; \
 	BURLA_CLUSTER_DASHBOARD_URL=$${BURLA_CLUSTER_DASHBOARD_URL:-$(BURLA_DASHBOARD_URL)} \
-	BURLA_REQUIRE_CLUSTER=1 uv run --project ./client --group dev pytest -m chaos -s --disable-warnings
+	BURLA_REQUIRE_CLUSTER=1 uv run --project ./client --group dev pytest -m dashboard -s --disable-warnings
 
 cluster-info:
 	echo "cluster:        $(BURLA_CLUSTER_NAME)"; \

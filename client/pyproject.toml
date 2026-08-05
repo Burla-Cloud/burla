@@ -70,6 +70,9 @@ dev = [
     "matplotlib>=3.10.7",
     "nltk>=3.9.3",
     "pandas>=2.3.3",
+    # Dashboard-UI tier (tests/dashboard/); browsers install via
+    # `playwright install chromium`, which `make test-dashboard` runs.
+    "playwright>=1.49.0",
     "psutil>=6.0.0",
     "pyarrow>=22.0.0",
     "pyspark>=4.0.1",

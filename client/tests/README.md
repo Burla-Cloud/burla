@@ -1,18 +1,29 @@
 ### How to run the tests
 
-Every tier except `test-unit` needs a dev cluster running for **this checkout**.
-One checkout gets one cluster, and several checkouts can run clusters at the same
-time on one machine without colliding, so tests must be pointed at the right one.
-The `make test*` targets handle that for you.
+Every tier needs a dev cluster running for **this checkout**. One checkout gets
+one cluster, and several checkouts can run clusters at the same time on one
+machine without colliding, so tests must be pointed at the right one. The
+`make test*` targets handle that for you.
 
-Five tiers:
+Four targets:
 
-- `make test-unit` — pure unit tests. No cluster, no cloud. Fast (~10s).
-- `make test-service` — service-level tests. Needs a cluster.
-- `make test-e2e` — full end-to-end tests, including the 5 scenario flows.
-- `make test-chaos` — destructive tests that restart / shut down / mutate the
-  cluster. Each test needs a cluster reset between runs.
-- `make test` — all non-chaos tiers.
+- `make test-e2e` — end-to-end tests through `remote_parallel_map`, including
+  the scenario flows in `tests/scenarios/`.
+- `make test-dashboard` — dashboard-UI tests through real Chromium
+  (`tests/dashboard/`); installs the browser on first run.
+- `make test-service` — direct HTTP contract tests.
+- `make test` — everything.
+
+Which tier a behavior belongs in:
+
+- User-visible client behavior (results, errors, messages) is tested through
+  `remote_parallel_map`, asserting what the user actually sees.
+- Dashboard behavior is tested through the browser: the page, its data
+  fetches, and the rendered result.
+- The service tier keeps only contracts neither user surface can reach or
+  pin down deterministically: node/head protocol invariants, boundary
+  validation a correct client can't produce (malformed versions, bad months),
+  auth bypasses, and precisely seeded state transitions.
 
 Nothing runs in GitHub Actions.
 
@@ -56,7 +67,7 @@ Tear down with `make stop` (this checkout only) or `make stop-all`.
 ```
 make test-service
 make test-e2e
-make test-chaos
+make test-dashboard
 ```
 
 Each target defaults `BURLA_CLUSTER_DASHBOARD_URL` to this checkout's head port.
@@ -64,14 +75,13 @@ To run pytest directly, set it yourself:
 
 ```
 export BURLA_CLUSTER_DASHBOARD_URL=$(make -s cluster-info | awk '/dashboard/{print $2}')
-uv run --project ./client --group dev pytest -m "service and not chaos"
+uv run --project ./client --group dev pytest -m service
 ```
 
-Readiness gate: the service / e2e / chaos tiers refuse to run unless the head is
-reachable and is a local dev cluster. They restart and mutate whatever they are
-aimed at, so they will never touch a deployed cluster. A failure caused by the
-cluster not being ready is not a test failure; start or reset the cluster and
-retry.
+Readiness gate: all tiers refuse to run unless the head is reachable and is a
+local dev cluster. They restart and mutate whatever they are aimed at, so they
+will never touch a deployed cluster. A failure caused by the cluster not being
+ready is not a test failure; start or reset the cluster and retry.
 
 For now, tests that call `remote_parallel_map` should pass `grow=True` so the job
 boots nodes itself instead of relying on an already-started cluster.
@@ -90,26 +100,14 @@ All tests have a 120s default timeout. If output doesn't advance past
 3. Keep local clusters small. They default to 1 node; raise with
    `LOCAL_DEV_NODE_QUANTITY` only when a test needs multiple nodes.
 
-#### Unit tier
-
-`make test-unit` imports real modules and runs real logic for version parsing,
-signal handlers, exception messages, package detection, and `_local_host_from`.
-No cluster needed:
-
-```
-uv sync --project ./client --group dev
-uv run --project ./client --group dev pytest -m unit
-```
-
 #### What changed vs. earlier revisions
 
 - Removed ~130 source-text grep assertions that passed regardless of whether
   the code they claimed to cover was correct. The remaining suite either
-  imports and exercises the code under test, or drives it over HTTP against
-  the live cluster.
-- Added 5 end-to-end scenarios in `tests/scenarios/` that cover full user
-  journeys: `test_full_job_lifecycle`, `test_cluster_restart_mid_job`,
-  `test_grow_under_load`, `test_udf_error_propagation`,
-  `test_detach_and_complete_async`.
-- Deleted the Playwright dashboard-UI tests because backend coverage catches
-  the regressions that matter.
+  exercises real behavior over HTTP or drives the product surfaces directly.
+- Moved user-visible client behavior (version mismatch, image mismatch) from
+  endpoint assertions to `remote_parallel_map` tests that assert the message
+  the user reads, and moved dashboard happy paths into browser tests in
+  `tests/dashboard/`.
+- Deleted service tests that were shape-only, accepted several outcomes at
+  once, or duplicated an e2e journey.

@@ -9,7 +9,7 @@ live main_service over HTTP via `httpx`. Start a cluster in another terminal wit
 
 ```
 BURLA_CLUSTER_DASHBOARD_URL=$(make -s cluster-info | awk '/dashboard/{print $2}') \
-  uv run --project ./client --group dev pytest main_service/tests -m "service and not chaos"
+  uv run --project ./client --group dev pytest main_service/tests -m service
 ```
 
 `make test-service` does this for you, defaulting the dashboard URL to this

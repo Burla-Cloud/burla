@@ -44,8 +44,9 @@ def test_signed_resumable_returns_url(main_http_client, local_dev_cluster):
     )
     assert resp.status_code == 200
     body = resp.json()
-    assert "url" in body
-    assert body["url"].startswith("http")
+    # GCS returns a signed absolute URL; AWS returns the head's own S3
+    # resumable-upload proxy path (see endpoints/storage.py).
+    assert body["url"].startswith(("http", "/storage/s3-upload-session"))
 
 
 def test_signed_download_404_on_missing(main_http_client, local_dev_cluster):

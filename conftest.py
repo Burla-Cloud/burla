@@ -45,6 +45,9 @@ READINESS_TIMEOUT_SEC = 30
 # local-dev containers reset in ~20s; real VMs need minutes. Remote e2e runs
 # (BURLA_CLUSTER_DASHBOARD_URL pointed at a live cluster) should raise this.
 CLEAN_CLUSTER_TIMEOUT_SEC = int(os.environ.get("BURLA_CLEAN_CLUSTER_TIMEOUT_SEC", 120))
+# How long the readiness gate lets post-job dirt (cancel propagation, worker
+# reboots) settle on its own before paying for a full cluster restart.
+SETTLE_TIMEOUT_SEC = 30
 
 
 def _port_open(host: str, port: int) -> bool:
@@ -295,17 +298,15 @@ def local_dev_cluster(burla_auth_headers) -> dict[str, Any]:
         )
 
     expected_ready_nodes = _expected_ready_node_count(burla_auth_headers)
-    state = _cluster_state_via_http()
-    active_nodes = _active_node_docs()
-    if (
-        _cluster_dirty_reason(
-            state,
-            active_nodes,
+    # A restart costs a whole node boot, so it is the last resort: dirt left
+    # by the previous test usually settles on its own within seconds.
+    try:
+        state = _wait_for_clean_cluster(
             burla_auth_headers,
             expected_ready_nodes,
+            SETTLE_TIMEOUT_SEC,
         )
-        is not None
-    ):
+    except AssertionError:
         old_active_names = _restart_cluster(burla_auth_headers)
         _wait_for_replacement_nodes(old_active_names, CLEAN_CLUSTER_TIMEOUT_SEC)
         state = _wait_for_clean_cluster(
@@ -377,14 +378,44 @@ def get_job():
 
 @pytest.fixture
 def cleanup_job():
-    """History lives inside the main_service container and dies with it; test
-    jobs need no explicit cleanup anymore. Kept so tests can still register
-    ids without caring."""
+    """Cancel every job the test admitted, then wait for its node
+    reservations to clear. An admitted job stays RUNNING and reserves its
+    nodes until canceled (or reaped after 300s), and a leaked reservation
+    forces the next test's readiness gate into a full cluster restart."""
+    import requests
+
+    job_ids: list[str] = []
 
     def _register(job_id: str) -> str:
+        job_ids.append(job_id)
         return job_id
 
     yield _register
+
+    if not job_ids:
+        return
+    try:
+        for job_id in job_ids:
+            job = get_job_via_http(job_id)
+            if job and job.get("status") == "RUNNING":
+                requests.post(
+                    f"{DASHBOARD_URL}/v1/jobs/{job_id}/stop",
+                    headers=_request_headers(),
+                    timeout=10,
+                )
+        deadline = time.time() + 30
+        while time.time() < deadline:
+            reserved = [
+                node
+                for node in _active_node_docs()
+                if node.get("reserved_for_job") in job_ids
+                or node.get("current_job") in job_ids
+            ]
+            if not reserved:
+                return
+            time.sleep(0.5)
+    except requests.RequestException:
+        pass  # head unreachable mid-teardown (chaos runs); the gate recovers
 
 
 @pytest.fixture

@@ -356,15 +356,17 @@ async def _stopped_instance_reaper_loop():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
 
-    if IN_LOCAL_DEV_MODE:
+    # The marker only exists once `make build-frontend` has run; without it
+    # (fresh worktree) the head serves the committed static assets and there
+    # is no rebuild to report.
+    frontend_marker = Path(".frontend_last_built_at.txt")
+    if IN_LOCAL_DEV_MODE and frontend_marker.exists():
 
         def frontend_built_successfully(attempt=1):
             if attempt == 3:
                 return False
             else:
-                frontend_built_at = float(
-                    Path(".frontend_last_built_at.txt").read_text().strip()
-                )
+                frontend_built_at = float(frontend_marker.read_text().strip())
                 frontend_rebuilt = time() - frontend_built_at < 4
                 if not frontend_rebuilt:
                     sleep(

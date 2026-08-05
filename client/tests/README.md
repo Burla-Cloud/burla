@@ -1,13 +1,12 @@
 ### How to run the tests
 
-Every tier except `test-unit` needs a dev cluster running for **this checkout**.
-One checkout gets one cluster, and several checkouts can run clusters at the same
-time on one machine without colliding, so tests must be pointed at the right one.
-The `make test*` targets handle that for you.
+Every tier needs a dev cluster running for **this checkout**. One checkout gets
+one cluster, and several checkouts can run clusters at the same time on one
+machine without colliding, so tests must be pointed at the right one. The
+`make test*` targets handle that for you.
 
-Five tiers:
+Four targets:
 
-- `make test-unit` — pure unit tests. No cluster, no cloud. Fast (~10s).
 - `make test-service` — service-level tests. Needs a cluster.
 - `make test-e2e` — full end-to-end tests, including the 5 scenario flows.
 - `make test-chaos` — destructive tests that restart / shut down / mutate the
@@ -89,17 +88,6 @@ All tests have a 120s default timeout. If output doesn't advance past
    GitHub, so `node_service` / `worker_server.py` changes need a push first.
 3. Keep local clusters small. They default to 1 node; raise with
    `LOCAL_DEV_NODE_QUANTITY` only when a test needs multiple nodes.
-
-#### Unit tier
-
-`make test-unit` imports real modules and runs real logic for version parsing,
-signal handlers, exception messages, package detection, and `_local_host_from`.
-No cluster needed:
-
-```
-uv sync --project ./client --group dev
-uv run --project ./client --group dev pytest -m unit
-```
 
 #### What changed vs. earlier revisions
 

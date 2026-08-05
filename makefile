@@ -36,7 +36,7 @@ define TEST_SHELL
 endef
 
 .PHONY: 3.11-dev 3.12-dev 3.13-dev 3.14-dev local-dev remote-dev local-images \
-	stop stop-all cluster-info test test-unit test-service test-e2e test-chaos \
+	stop stop-all cluster-info test test-service test-e2e test-chaos \
 	kill-kernels
 
 3.11-dev:
@@ -48,17 +48,13 @@ endef
 3.14-dev:
 	$(call TEST_SHELL,3.14)
 
-# Every tier except `test-unit` needs a cluster running for THIS checkout:
-# `make local-dev` (or `make remote-dev`) in another terminal. Tests reach it at
+# Every tier needs a cluster running for THIS checkout: `make local-dev` (or
+# `make remote-dev`) in another terminal. Tests reach it at
 # BURLA_CLUSTER_DASHBOARD_URL, defaulted here to this checkout's head port so
 # they never talk to another checkout's cluster.
 test:
 	BURLA_CLUSTER_DASHBOARD_URL=$${BURLA_CLUSTER_DASHBOARD_URL:-$(BURLA_DASHBOARD_URL)} \
 	BURLA_REQUIRE_CLUSTER=1 uv run --project ./client --group dev pytest -m "not chaos" -s --disable-warnings
-
-# Pure unit tests — the only tier that needs no cluster at all.
-test-unit:
-	uv run --project ./client --group dev pytest -m unit -s --disable-warnings
 
 # Service-level tests. Requires a cluster for this checkout.
 test-service:

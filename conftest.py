@@ -1,5 +1,5 @@
 """
-Repo-root conftest for the Burla test suite. All tiers (unit, service, e2e, chaos)
+Repo-root conftest for the Burla test suite. All tiers (service, e2e, chaos)
 share these helpers so the subprocess-isolation pattern and cluster-readiness gate
 live in one place.
 
@@ -87,7 +87,6 @@ def _local_dashboard(url: str) -> bool:
 
 
 def pytest_configure(config: pytest.Config) -> None:
-    config.addinivalue_line("markers", "unit: pure unit test, no cluster needed")
     config.addinivalue_line(
         "markers", "service: service-level test, requires make local-dev"
     )
@@ -695,8 +694,7 @@ def burla_version_current() -> str:
 
 
 # ---------------------------------------------------------------------------
-# Auto-skip service/e2e/chaos tests if the local-dev cluster isn't running.
-# Unit tests never require it.
+# Auto-skip tests if the local-dev cluster isn't running.
 # ---------------------------------------------------------------------------
 
 

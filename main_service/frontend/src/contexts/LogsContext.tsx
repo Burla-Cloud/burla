@@ -20,22 +20,17 @@ type InputLogsResponse = {
 };
 
 type NextFailedInputResponse = {
-    next_failed_input_index?: number | null;
     failed_input_indexes?: number[];
 };
 
 type LoggedInputIndexesResponse = {
     indexes_with_logs?: number[];
-    failed_indexes?: number[];
-    non_failed_indexes_with_logs?: number[];
 };
 
 interface LogsContextType {
     getLogs: (jobId: string, index: number) => LogEntry[];
-    getFailedInputsCount: (jobId: string) => number;
     getHasMoreOlderLogs: (jobId: string, index: number) => boolean;
     getOldestLoadedLogDocumentTimestamp: (jobId: string, index: number) => number | undefined;
-    getNextFailedInputIndex: (jobId: string, index: number) => Promise<number | null>;
     getFailedInputIndexes: (jobId: string) => Promise<number[]>;
     getIndexesWithLogs: (jobId: string) => Promise<number[]>;
     loadInputLogs: (jobId: string, index: number, oldestLogTimestamp?: number) => Promise<void>;
@@ -45,10 +40,8 @@ interface LogsContextType {
 const LogsContext = createContext<LogsContextType>({
     logsByJobId: {},
     getLogs: () => [],
-    getFailedInputsCount: () => 0,
     getHasMoreOlderLogs: () => false,
     getOldestLoadedLogDocumentTimestamp: () => undefined,
-    getNextFailedInputIndex: async () => null,
     getFailedInputIndexes: async () => [],
     getIndexesWithLogs: async () => [],
     loadInputLogs: async () => {},
@@ -84,13 +77,6 @@ export const LogsProvider = ({ children }: { children: React.ReactNode }) => {
         [logsByJobId],
     );
 
-    const getFailedInputsCount = useCallback(
-        (jobId: string) => {
-            return logsByJobId[jobId]?.failedInputsCount || 0;
-        },
-        [logsByJobId],
-    );
-
     const getHasMoreOlderLogs = useCallback(
         (jobId: string, index: number) => {
             const state = logsByJobId[jobId];
@@ -108,16 +94,6 @@ export const LogsProvider = ({ children }: { children: React.ReactNode }) => {
         },
         [logsByJobId],
     );
-
-    const getNextFailedInputIndex = useCallback(async (jobId: string, index: number) => {
-        const queryString = new URLSearchParams({ index: String(index) });
-        const response = await fetch(
-            `/v1/jobs/${jobId}/next-failed-input?${queryString.toString()}`,
-        );
-        if (!response.ok) return null;
-        const payload = (await response.json()) as NextFailedInputResponse;
-        return payload.next_failed_input_index ?? null;
-    }, []);
 
     const getFailedInputIndexes = useCallback(async (jobId: string) => {
         const queryString = new URLSearchParams({ index: "-1" });
@@ -217,10 +193,8 @@ export const LogsProvider = ({ children }: { children: React.ReactNode }) => {
         () => ({
             logsByJobId,
             getLogs,
-            getFailedInputsCount,
             getHasMoreOlderLogs,
             getOldestLoadedLogDocumentTimestamp,
-            getNextFailedInputIndex,
             getFailedInputIndexes,
             getIndexesWithLogs,
             loadInputLogs,
@@ -228,10 +202,8 @@ export const LogsProvider = ({ children }: { children: React.ReactNode }) => {
         [
             logsByJobId,
             getLogs,
-            getFailedInputsCount,
             getHasMoreOlderLogs,
             getOldestLoadedLogDocumentTimestamp,
-            getNextFailedInputIndex,
             getFailedInputIndexes,
             getIndexesWithLogs,
             loadInputLogs,

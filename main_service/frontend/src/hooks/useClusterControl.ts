@@ -3,7 +3,7 @@ import { useCluster } from "@/contexts/ClusterContext";
 
 export const useClusterControl = () => {
     const { toast } = useToast();
-    const { clusterStatus, setClusterStatus } = useCluster();
+    const { setClusterStatus } = useCluster();
 
     // There is no difference between starting and rebooting.
     // the backend will realise there is nothing to stop/turn off, then start the cluster.

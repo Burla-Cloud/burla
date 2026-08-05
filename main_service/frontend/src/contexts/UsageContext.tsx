@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
 
-export type DailyGroup = {
+type DailyGroup = {
   machine_type: string;
   gcp_region: string;
   spot: boolean;
@@ -9,7 +9,7 @@ export type DailyGroup = {
   total_compute_hours: number; // compute-hours (usage)
 };
 
-export type DailyHoursResponse = {
+type DailyHoursResponse = {
   month: string;
 
   total_node_hours: number;
@@ -31,14 +31,14 @@ export type DailyHoursResponse = {
   };
 };
 
-export type MonthNodesCursor =
+type MonthNodesCursor =
   | {
       ended_at: number; // seconds
       id: string;
     }
   | null;
 
-export type MonthNodesResponse = {
+type MonthNodesResponse = {
   month: string; // YYYY-MM
   nodes: Array<{
     id: string;
@@ -64,8 +64,6 @@ type UsageContextValue = {
 
   selectedMonth: string; // YYYY-MM
   setSelectedMonth: (m: string) => void;
-
-  refresh: (monthOverride?: string) => Promise<void>;
 };
 
 const UsageContext = createContext<UsageContextValue | null>(null);
@@ -116,9 +114,8 @@ export function UsageProvider({ children }: { children: React.ReactNode }) {
 
   const [selectedMonth, setSelectedMonth] = useState<string>(() => currentMonthKeyUtc());
 
-  const refresh = async (monthOverride?: string) => {
-    const month = monthOverride ?? selectedMonth;
-
+  const refresh = async () => {
+    const month = selectedMonth;
     setLoading(true);
     setError(null);
 
@@ -167,7 +164,7 @@ export function UsageProvider({ children }: { children: React.ReactNode }) {
   };
 
   useEffect(() => {
-    refresh(selectedMonth);
+    refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedMonth]);
 
@@ -179,7 +176,6 @@ export function UsageProvider({ children }: { children: React.ReactNode }) {
       nodes,
       selectedMonth,
       setSelectedMonth,
-      refresh,
     }),
     [loading, error, daily, nodes, selectedMonth]
   );

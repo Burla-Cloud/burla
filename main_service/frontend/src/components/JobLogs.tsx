@@ -2,18 +2,13 @@ import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import { useLogsContext } from "@/contexts/LogsContext";
 import { VariableSizeList as List } from "react-window";
 import { Switch } from "@/components/ui/switch";
-import { Button } from "@/components/ui/button";
-import { PowerOff } from "lucide-react";
 import { LogEntry } from "@/types/coreTypes";
 
 interface JobLogsProps {
   jobId: string;
-  jobStatus?: string | null;
-  nInputs?: number;
-  failedCount?: number;
-  onStopJob?: () => void;
-  isStopDisabled?: boolean;
-  onFailedCountChange?: (failedCount: number) => void;
+  jobStatus: string | null;
+  nInputs: number;
+  failedCount: number;
 }
 
 type RowItem =
@@ -29,13 +24,9 @@ const JobLogs = ({
   jobStatus,
   nInputs,
   failedCount,
-  onStopJob,
-  isStopDisabled,
-  onFailedCountChange,
 }: JobLogsProps) => {
   const {
     getLogs,
-    getFailedInputsCount,
     getFailedInputIndexes,
     getIndexesWithLogs,
     getHasMoreOlderLogs,
@@ -126,29 +117,7 @@ const JobLogs = ({
       .sort((a, b) => a - b);
   }, [jobId, logsByJobId]);
 
-  const indexesWithLogs = useMemo(() => {
-    const state = logsByJobId[jobId];
-    if (!state) return [];
-    return Object.entries(state.byIndex || {})
-      .filter(([, entries]) => (entries || []).length > 0)
-      .map(([k]) => Number(k))
-      .filter((v) => Number.isFinite(v))
-      .sort((a, b) => a - b);
-  }, [jobId, logsByJobId]);
-
-  const hasAnyKnownIndexes = indexesWithLogs.length > 0;
-  const failedInputsCount = getFailedInputsCount(jobId);
-  const effectiveFailedCount = Math.max(
-    0,
-    typeof failedCount === "number" ? failedCount : failedInputsCount
-  );
-  const hasLoadedFailedCount =
-    typeof failedCount === "number" || Boolean(logsByJobId[jobId]);
-
-  useEffect(() => {
-    if (!onFailedCountChange) return;
-    onFailedCountChange(effectiveFailedCount);
-  }, [effectiveFailedCount, onFailedCountChange]);
+  const effectiveFailedCount = Math.max(0, failedCount);
 
   const allIndexList = useMemo(() => {
     if (totalInputs > 0) return Array.from({ length: totalInputs }, (_, i) => i);
@@ -156,9 +125,7 @@ const JobLogs = ({
     return [];
   }, [totalInputs, fetchedIndexesFromLogs]);
 
-  const activeFailedIndexes = useMemo(() => {
-    return failedIndexes;
-  }, [failedIndexes]);
+  const activeFailedIndexes = failedIndexes;
 
   const navigationIndexList = useMemo(() => {
     if (showFailedOnly) return activeFailedIndexes;
@@ -519,14 +486,16 @@ const JobLogs = ({
     topAnchorLogIdRef.current = null;
   }, [items, isLoadingOlderLogs]);
 
-  const totalLabel = useMemo(() => {
-    const total = totalInputs || (maxKnownIndex >= 0 ? maxKnownIndex + 1 : 0);
-    return total.toLocaleString();
-  }, [totalInputs, maxKnownIndex]);
-  const totalIndexesCountDigits = useMemo(() => {
-    const totalIndexesCount = Math.max(0, totalInputs || (maxKnownIndex >= 0 ? maxKnownIndex + 1 : 0));
-    return String(totalIndexesCount).length;
-  }, [totalInputs, maxKnownIndex]);
+  const totalIndexesCount = Math.max(
+    0,
+    totalInputs || (maxKnownIndex >= 0 ? maxKnownIndex + 1 : 0)
+  );
+  const totalLabel = totalIndexesCount.toLocaleString();
+  const totalIndexesCountDigits = String(totalIndexesCount).length;
+
+  useEffect(() => {
+    setIndexInputValue(String(selectedIndex));
+  }, [selectedIndex]);
 
   if (windowWidth <= 1000) {
     return (
@@ -545,40 +514,19 @@ const JobLogs = ({
     disabled
       ? "h-8 w-8 grid place-items-center rounded-md border border-gray-200 bg-white opacity-50 cursor-default"
       : "h-8 w-8 grid place-items-center rounded-md border border-gray-200 bg-white hover:bg-gray-50 active:bg-gray-100";
-  const failedPosition = useMemo(() => {
-    if (!showFailedOnly) return 0;
-    const pos = activeFailedIndexes.indexOf(selectedIndex);
-    return pos >= 0 ? pos : 0;
-  }, [showFailedOnly, activeFailedIndexes, selectedIndex]);
-
-  const failedProgressLabel = useMemo(() => {
-    if (!hasLoadedFailedCount) return "…";
-    if (effectiveFailedCount === 0) return "0";
-    if (!showFailedOnly) return effectiveFailedCount.toLocaleString();
-    if (!failedIndexesReady) return "…";
-    if (activeFailedIndexes.length === 0) return "…";
-    return `${(failedPosition + 1).toLocaleString()} of ${activeFailedIndexes.length.toLocaleString()}`;
-  }, [
-    hasLoadedFailedCount,
-    effectiveFailedCount,
-    showFailedOnly,
-    failedIndexesReady,
-    failedPosition,
-    activeFailedIndexes.length,
-  ]);
+  const failedPosition = Math.max(0, activeFailedIndexes.indexOf(selectedIndex));
+  let failedProgressLabel = effectiveFailedCount.toLocaleString();
+  if (effectiveFailedCount === 0) failedProgressLabel = "0";
+  if (showFailedOnly && !failedIndexesReady) failedProgressLabel = "…";
+  if (showFailedOnly && activeFailedIndexes.length === 0) failedProgressLabel = "…";
+  if (showFailedOnly && failedIndexesReady && activeFailedIndexes.length > 0) {
+    failedProgressLabel = `${(failedPosition + 1).toLocaleString()} of ${activeFailedIndexes.length.toLocaleString()}`;
+  }
   const failedPillClass =
-    !hasLoadedFailedCount
+    effectiveFailedCount === 0
       ? "border-gray-200 bg-white text-gray-800"
-      : effectiveFailedCount === 0
-      ? "border-gray-200 bg-white text-gray-800"
-      : stepperDisabled
-      ? "border-red-200 bg-red-50 text-gray-800"
       : "border-red-200 bg-red-50 text-gray-800";
   const isHasLogsLoading = showIndexesWithLogsOnly && stepperDisabled;
-
-  useEffect(() => {
-    setIndexInputValue(String(selectedIndex));
-  }, [selectedIndex]);
 
   return (
     <div className="mt-0 mb-0 flex flex-col flex-1 min-h-0 text-[14.5px] font-normal text-gray-800">
@@ -677,7 +625,7 @@ const JobLogs = ({
                     setFailedIndexesReady(false);
                   }
                 }}
-                disabled={!hasLoadedFailedCount || effectiveFailedCount === 0 || showIndexesWithLogsOnly}
+                disabled={effectiveFailedCount === 0 || showIndexesWithLogsOnly}
                 className="scale-75 origin-left disabled:cursor-default"
               />
               <span className="whitespace-nowrap">Failed only</span>
@@ -690,18 +638,6 @@ const JobLogs = ({
 
           </div>
         </div>
-        {onStopJob && (
-          <Button
-            variant="destructive"
-            size="lg"
-            className="h-11 rounded-lg"
-            onClick={onStopJob}
-            disabled={Boolean(isStopDisabled)}
-          >
-            <PowerOff className="mr-2 h-4 w-4" />
-            Stop
-          </Button>
-        )}
 
       <div className="flex-1 min-h-0 relative font-mono text-[13px] font-normal text-gray-800 bg-white">
         {isHasLogsLoading && !isPageLoading && (

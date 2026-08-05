@@ -151,7 +151,7 @@ const Dashboard = () => {
         return "-";
     };
 
-    const { gpuSummary, gpuTotalCount } = useMemo(() => {
+    const gpuTotalCount = useMemo(() => {
         const gpuCount: Record<string, number> = {};
 
         countedNodes.forEach((node) => {
@@ -166,13 +166,7 @@ const Dashboard = () => {
             }
         });
 
-        return {
-            gpuSummary:
-                Object.entries(gpuCount)
-                    .map(([k, v]) => `${v} ${k}`)
-                    .join(", ") || "-",
-            gpuTotalCount: Object.values(gpuCount).reduce((a, b) => a + b, 0),
-        };
+        return Object.values(gpuCount).reduce((a, b) => a + b, 0);
     }, [countedNodes]);
 
     const handleReboot = async () => {
@@ -212,7 +206,6 @@ const Dashboard = () => {
                                     status={clusterStatus}
                                     parallelism={parallelism}
                                     totalRam={totalRam}
-                                    gpuSummary={gpuSummary}
                                     gpuCount={gpuTotalCount}
                                     hasResources={countedNodes.length > 0}
                                 />
@@ -295,7 +288,6 @@ const Dashboard = () => {
                             </CardContent>
                         </Card>
                     ) : (
-                        // ******** FIXED BLOCK ********
                         <div className="mt-1">
                             <NodesList
                                 nodes={nodes}
@@ -303,7 +295,6 @@ const Dashboard = () => {
                                 onShowDeletedChange={setShowDeleted}
                             />
                         </div>
-                        // ******** END FIXED BLOCK ********
                     )}
                 </div>
 

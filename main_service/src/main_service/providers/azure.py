@@ -131,14 +131,17 @@ class AzureProvider:
         image_id = self._image_id(region)
         on_log(f"Attempting to provision {machine_type} in region: {region}")
 
+        # All request bodies are raw ARM JSON (camelCase + properties
+        # envelope): the SDK passes dicts through to the wire unconverted.
+        tags = {"burla-cluster-node": "true", "burla-cluster-id": CLUSTER_NAME}
         public_ip_poller = self.network.public_ip_addresses.begin_create_or_update(
             RESOURCE_GROUP,
             f"{instance_name}-pip",
             {
                 "location": region,
                 "sku": {"name": "Standard"},
-                "public_ip_allocation_method": "Static",
-                "tags": {"burla-cluster-node": "true", "burla-cluster-id": CLUSTER_NAME},
+                "properties": {"publicIPAllocationMethod": "Static"},
+                "tags": tags,
             },
         )
         public_ip = public_ip_poller.result()
@@ -148,77 +151,84 @@ class AzureProvider:
             f"{instance_name}-nic",
             {
                 "location": region,
-                "ip_configurations": [
-                    {
-                        "name": "primary",
-                        "subnet": {"id": subnet.id},
-                        "public_ip_address": {
-                            "id": public_ip.id,
-                            # Deleting the NIC takes the public IP with it.
-                            "properties": {"delete_option": "Delete"},
-                        },
-                    }
-                ],
-                "tags": {"burla-cluster-node": "true", "burla-cluster-id": CLUSTER_NAME},
+                "tags": tags,
+                "properties": {
+                    "ipConfigurations": [
+                        {
+                            "name": "primary",
+                            "properties": {
+                                "subnet": {"id": subnet.id},
+                                "publicIPAddress": {
+                                    "id": public_ip.id,
+                                    # Deleting the NIC takes the IP with it.
+                                    "properties": {"deleteOption": "Delete"},
+                                },
+                            },
+                        }
+                    ]
+                },
             },
         )
         nic = nic_poller.result()
 
-        vm_parameters = {
-            "location": region,
-            "tags": {
-                "burla-cluster-node": "true",
-                # Several dev clusters boot nodes into one subscription, so
-                # every destructive lookup filters on this.
-                "burla-cluster-id": CLUSTER_NAME,
-            },
-            "hardware_profile": {"vm_size": machine_type},
-            "storage_profile": {
-                "image_reference": {"id": image_id},
-                "os_disk": {
-                    "create_option": "FromImage",
-                    "disk_size_gb": disk_size,
-                    "managed_disk": {"storage_account_type": "StandardSSD_LRS"},
-                    "delete_option": "Delete",
+        vm_properties = {
+            "hardwareProfile": {"vmSize": machine_type},
+            "storageProfile": {
+                "imageReference": {"id": image_id},
+                "osDisk": {
+                    "createOption": "FromImage",
+                    # The Ubuntu 22.04 base image has a 30 GB OS disk and
+                    # Azure refuses to shrink below the image's size.
+                    "diskSizeGB": max(disk_size, 30),
+                    "managedDisk": {"storageAccountType": "StandardSSD_LRS"},
+                    "deleteOption": "Delete",
                 },
             },
-            "os_profile": {
-                "computer_name": instance_name,
-                "admin_username": "burla",
-                "linux_configuration": {
-                    "disable_password_authentication": True,
+            "osProfile": {
+                "computerName": instance_name,
+                "adminUsername": "burla",
+                "linuxConfiguration": {
+                    "disablePasswordAuthentication": True,
                     "ssh": {
-                        "public_keys": [
+                        "publicKeys": [
                             {
                                 "path": "/home/burla/.ssh/authorized_keys",
-                                "key_data": _ssh_public_key(),
+                                "keyData": _ssh_public_key(),
                             }
                         ]
                     },
                 },
-                "custom_data": base64.b64encode(startup_script.encode()).decode(),
+                "customData": base64.b64encode(startup_script.encode()).decode(),
             },
-            "network_profile": {
-                "network_interfaces": [
-                    {"id": nic.id, "properties": {"delete_option": "Delete"}}
+            "networkProfile": {
+                "networkInterfaces": [
+                    {"id": nic.id, "properties": {"deleteOption": "Delete"}}
                 ]
             },
+        }
+        if spot:
+            vm_properties["priority"] = "Spot"
+            vm_properties["evictionPolicy"] = "Delete"
+            vm_properties["billingProfile"] = {"maxPrice": -1}
+
+        vm_parameters = {
+            "location": region,
+            # Several dev clusters boot nodes into one subscription, so every
+            # destructive lookup filters on the cluster tag.
+            "tags": tags,
             # Self-deletion identity (see class docstring). The same identity
             # carries the shared-workspace storage role, so unlike AWS/GCP it
             # is attached whether or not the filesystem is enabled.
             "identity": {
                 "type": "UserAssigned",
-                "user_assigned_identities": {
+                "userAssignedIdentities": {
                     self._resource_id(
                         "Microsoft.ManagedIdentity", "userAssignedIdentities", "burla-node"
                     ): {}
                 },
             },
+            "properties": vm_properties,
         }
-        if spot:
-            vm_parameters["priority"] = "Spot"
-            vm_parameters["eviction_policy"] = "Delete"
-            vm_parameters["billing_profile"] = {"max_price": -1}
 
         try:
             vm_poller = self.compute.virtual_machines.begin_create_or_update(

@@ -118,7 +118,11 @@ def register_resource_providers():
 
 
 def ensure_resource_group(region: str):
-    run_command(f"az group create --name {RESOURCE_GROUP} --location {region}")
+    # The group's location is only metadata (resources inside it can live in
+    # any region), and re-creating with a different location is an error.
+    exists = _az(f"group exists --name {RESOURCE_GROUP}", parse_json=True)
+    if not exists:
+        run_command(f"az group create --name {RESOURCE_GROUP} --location {region}")
 
 
 def ensure_network(region: str):
@@ -340,7 +344,9 @@ def ensure_node_image(spinner, region: str) -> str:
         )
 
     try:
-        deadline = time() + 3600
+        # Azure's apt mirror has been observed serving packages at ~50 KB/s;
+        # two hours comfortably covers even that.
+        deadline = time() + 7200
         power_state = None
         while time() < deadline:
             power_state = _az(
@@ -369,6 +375,9 @@ def ensure_node_image(spinner, region: str) -> str:
         image_name = f"burla-node-nogpu-{NODE_IMAGE_HASH}-{int(time())}"
         image = _az(
             f"image create --resource-group {RESOURCE_GROUP} --name {image_name} "
+            # Explicit location: without it the image lands in the resource
+            # group's home region, which fails when nodes run elsewhere.
+            f"--location {region} "
             f"--source {builder_name} --hyper-v-generation V2 "
             f"--tags burla-node-image=true burla-node-image-hash={NODE_IMAGE_HASH} "
             f"burla-version={__version__}"

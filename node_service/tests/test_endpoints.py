@@ -130,10 +130,9 @@ def test_shutdown_requires_localhost(any_ready_node, main_http_client):
         pytest.skip("Unintended shutdown succeeded; subsequent tests may fail")
 
 
-@pytest.mark.chaos
 def test_reboot_starts_booting_then_returns(node_http_client, any_ready_node):
     """POST /reboot is disruptive; we just verify the endpoint responds and
-    the node returns to READY eventually. This is slow and chaos-adjacent."""
+    the node returns to READY eventually."""
     client = node_http_client(any_ready_node["instance_name"])
     try:
         resp = client.post("/reboot", timeout=120)

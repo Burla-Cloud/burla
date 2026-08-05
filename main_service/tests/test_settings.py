@@ -29,7 +29,6 @@ def test_get_settings_returns_shape(main_http_client, local_dev_cluster):
         assert key in body
 
 
-@pytest.mark.chaos
 def test_post_settings_local_dev_forces_n4_standard_2(
     main_http_client, local_dev_cluster
 ):

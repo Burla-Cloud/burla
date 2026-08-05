@@ -112,7 +112,6 @@ def test_get_node_fail_reason_returns_first_matching_error(
     assert "Traceback" in resp.json()["reason"] or "wrong" in resp.json()["reason"]
 
 
-@pytest.mark.chaos
 @pytest.mark.skip(
     reason="needs rework: firestore removed, cannot seed state directly. A fake "
     "node marked FAILED can never be removed from live state (DELETED does not "

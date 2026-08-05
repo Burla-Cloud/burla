@@ -5,13 +5,11 @@ one cluster, and several checkouts can run clusters at the same time on one
 machine without colliding, so tests must be pointed at the right one. The
 `make test*` targets handle that for you.
 
-Four targets:
+Three targets:
 
 - `make test-service` — service-level tests. Needs a cluster.
 - `make test-e2e` — full end-to-end tests, including the 5 scenario flows.
-- `make test-chaos` — destructive tests that restart / shut down / mutate the
-  cluster. Each test needs a cluster reset between runs.
-- `make test` — all non-chaos tiers.
+- `make test` — both tiers.
 
 Nothing runs in GitHub Actions.
 
@@ -55,7 +53,6 @@ Tear down with `make stop` (this checkout only) or `make stop-all`.
 ```
 make test-service
 make test-e2e
-make test-chaos
 ```
 
 Each target defaults `BURLA_CLUSTER_DASHBOARD_URL` to this checkout's head port.
@@ -63,10 +60,10 @@ To run pytest directly, set it yourself:
 
 ```
 export BURLA_CLUSTER_DASHBOARD_URL=$(make -s cluster-info | awk '/dashboard/{print $2}')
-uv run --project ./client --group dev pytest -m "service and not chaos"
+uv run --project ./client --group dev pytest -m service
 ```
 
-Readiness gate: the service / e2e / chaos tiers refuse to run unless the head is
+Readiness gate: the service and e2e tiers refuse to run unless the head is
 reachable and is a local dev cluster. They restart and mutate whatever they are
 aimed at, so they will never touch a deployed cluster. A failure caused by the
 cluster not being ready is not a test failure; start or reset the cluster and

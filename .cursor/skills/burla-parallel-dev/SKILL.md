@@ -54,8 +54,8 @@ make remote-dev     # head local, nodes are real EC2 in the test account
 ```
 
 Then point clients and tests at that cluster. `make test`, `make test-service`,
-`make test-e2e`, and `make test-chaos` already default to this worktree's head
-port; for ad hoc client commands use the URL `make cluster-info` prints:
+and `make test-e2e` already default to this worktree's head port; for ad hoc
+client commands use the URL `make cluster-info` prints:
 
 ```bash
 export BURLA_CLUSTER_DASHBOARD_URL=$(make -s cluster-info | awk '/dashboard/{print $2}')
@@ -99,5 +99,5 @@ account ("push this to test", see the `burla-release` skill).
 - Never run `docker rm` by container-name prefix (`node_*`, `worker_*`); that
   deletes other agents' clusters. Use `make stop`.
 - Never assume the head is on port 5001; ask `make cluster-info`.
-- Do not point a dev cluster's client at a deployed cluster: the service, e2e,
-  and chaos tiers restart and mutate whatever they are aimed at.
+- Do not point a dev cluster's client at a deployed cluster: the service and
+  e2e tiers restart and mutate whatever they are aimed at.

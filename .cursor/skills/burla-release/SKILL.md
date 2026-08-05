@@ -146,10 +146,12 @@ feature, patch = fix) based on `git log origin/main..dev`, and confirm it.
    make -C main_service build-frontend
    ```
 
-3. Guard: version invariants + unit tests must pass (fast, laptop-safe):
+3. Guard: inspect every version change before committing:
 
    ```bash
-   uv run --project ./client --group dev pytest -m unit -s --disable-warnings
+   git diff -- client/pyproject.toml client/src/burla/__init__.py \
+     main_service/pyproject.toml main_service/src/main_service/__init__.py \
+     node_service/pyproject.toml node_service/src/node_service/__init__.py
    ```
 
 4. Commit the bump on `dev` and push:

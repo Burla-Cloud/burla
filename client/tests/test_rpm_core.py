@@ -131,6 +131,8 @@ def test_func_ram_too_high_raises_NoCompatibleNodes_or_grows(
 
 
 def test_image_mismatch_raises_NoCompatibleNodes(rpm_subprocess, local_dev_cluster):
+    # The readiness gate guarantees a READY python:3.12 node, so the outcome
+    # is deterministic and the error must name what IS available.
     source = "def test_function(x):\n    return x\n"
     result = rpm_subprocess(
         source,
@@ -140,7 +142,10 @@ def test_image_mismatch_raises_NoCompatibleNodes(rpm_subprocess, local_dev_clust
         grow=False,
     )
     assert not result["ok"]
-    assert result["exception_type"] in ("NoCompatibleNodes", "NoNodes")
+    assert result["exception_type"] == "NoCompatibleNodes"
+    assert "some/bogus-image-that-no-node-has:tag" in result["exception_message"]
+    assert "python:3.12" in result["exception_message"]
+    assert "grow=True" in result["exception_message"]
 
 
 # -------------------------------------------------------------------- section 3 (parallelism)

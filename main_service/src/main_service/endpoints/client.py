@@ -307,6 +307,15 @@ async def start_job(
                                                                 running; client should retry
         404 {"detail": "no_nodes"}                            - empty cluster, grow=False
     """
+    if cluster_state.job_admission_paused():
+        # `admit_job` also refuses under the state lock; this check exists to
+        # give the clearer error.
+        raise HTTPException(
+            status_code=409,
+            detail="`burla deploy` is migrating this cluster's history to a "
+            "deployed cluster; retry once it finishes.",
+        )
+
     body = await request.json()
     func_cpu = int(body["func_cpu"])
     func_ram = body["func_ram"]

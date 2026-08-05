@@ -14,7 +14,7 @@ import time
 
 import pytest
 
-pytestmark = [pytest.mark.chaos, pytest.mark.slow]
+pytestmark = [pytest.mark.e2e, pytest.mark.slow]
 
 
 def test_cluster_restart_mid_job(

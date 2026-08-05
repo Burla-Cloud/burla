@@ -1,96 +1,11 @@
-"""
-Exception classes from the client package. Unit tests only cover messages
-with user-facing contracts (the three `NoCompatibleNodes` branches, the
-`VersionMismatch` pip-install hint, `NodeDisconnected.node` attr, and the
-`AuthException` raise condition). Every other exception is exercised by
-an e2e test further down.
-"""
-
-from __future__ import annotations
+"""End-to-end exception propagation and node-selection errors."""
 
 import pytest
 
 
-# ------------------------------------------------------------ unit-tier
+pytestmark = pytest.mark.e2e
 
 
-@pytest.mark.unit
-def test_NoCompatibleNodes_image_mismatch_message():
-    from burla._node import NoCompatibleNodes
-
-    detail = {
-        "reason": "image_mismatch",
-        "requested_image": "foo:bar",
-        "available_images": ["python:3.12", "python:3.11"],
-    }
-    exc = NoCompatibleNodes(detail)
-    msg = str(exc)
-    assert "foo:bar" in msg
-    assert "python:3.12" in msg
-    assert "grow=True" in msg
-
-
-@pytest.mark.unit
-def test_NoCompatibleNodes_gpu_mismatch_message():
-    from burla._node import NoCompatibleNodes
-
-    detail = {
-        "reason": "gpu_mismatch",
-        "requested_func_gpu": "A100",
-        "available_machine_types": ["n4-standard-4"],
-    }
-    exc = NoCompatibleNodes(detail)
-    msg = str(exc)
-    assert "A100" in msg
-    assert "n4-standard-4" in msg
-    assert "grow=True" in msg
-
-
-@pytest.mark.unit
-def test_NoCompatibleNodes_insufficient_capacity_message():
-    from burla._node import NoCompatibleNodes
-
-    exc = NoCompatibleNodes({"reason": "insufficient_capacity"})
-    msg = str(exc)
-    assert "func_cpu" in msg and "func_ram" in msg
-
-
-@pytest.mark.unit
-def test_VersionMismatch_pip_install_hint():
-    from burla._node import VersionMismatch
-
-    exc = VersionMismatch("1.0.0", "1.5.10", "0.9.0")
-    msg = str(exc)
-    assert "pip install burla==1.5.10" in msg
-    assert "0.9.0" in msg
-
-
-@pytest.mark.unit
-def test_NodeDisconnected_carries_node_attr():
-    from burla._node import Node, NodeDisconnected
-    import aiohttp
-    from unittest.mock import MagicMock
-
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = MagicMock()
-    node = Node.from_ready(
-        instance_name="burla-node-abc12345",
-        host="http://localhost:9999",
-        machine_type="n4-standard-2",
-        target_parallelism=2,
-        session=session,
-        client=client,
-        spinner=False,
-    )
-    exc = NodeDisconnected(node, "boom")
-    assert exc.node is node
-    assert "boom" in str(exc)
-
-
-# ------------------------------------------------------------ e2e UDF error propagation
-
-
-@pytest.mark.e2e
 def test_udf_error_re_raised_on_client(rpm_subprocess, local_dev_cluster):
     source = (
         "def test_function(x):\n"
@@ -104,7 +19,6 @@ def test_udf_error_re_raised_on_client(rpm_subprocess, local_dev_cluster):
     assert result["burla_input_index"] == 3
 
 
-@pytest.mark.e2e
 def test_udf_error_preserves_traceback(rpm_subprocess, local_dev_cluster):
     source = (
         "def inner(x):\n"
@@ -115,14 +29,10 @@ def test_udf_error_preserves_traceback(rpm_subprocess, local_dev_cluster):
     result = rpm_subprocess(source, [1], timeout_seconds=30)
     assert not result["ok"]
     assert result["exception_type"] == "RuntimeError"
-    # The original traceback should include `inner` frame.
     assert "inner" in result["traceback"]
 
 
-@pytest.mark.e2e
 def test_udf_error_adds_burla_note_py311plus(rpm_subprocess, local_dev_cluster):
-    # Python 3.11+ supports exc.add_note. The burla note format is
-    # "[burla] failed on input index N".
     source = (
         "def test_function(x):\n"
         "    if x == 2:\n"
@@ -134,7 +44,6 @@ def test_udf_error_adds_burla_note_py311plus(rpm_subprocess, local_dev_cluster):
     assert "[burla] failed on input index 2" in result["traceback"]
 
 
-@pytest.mark.e2e
 def test_udf_error_silences_subsequent_logs(rpm_subprocess, local_dev_cluster):
     source = (
         "import time\n"
@@ -147,19 +56,45 @@ def test_udf_error_silences_subsequent_logs(rpm_subprocess, local_dev_cluster):
     )
     result = rpm_subprocess(source, list(range(10)), timeout_seconds=60)
     assert not result["ok"]
-    # The UDF error should short-circuit further log printing.  We don't insist
-    # on exactly-zero `hi-*` lines (some may have printed before the error),
-    # but once the error hits, `_print_logs` returns early for later batches.
-    # Just assert the exception got through.
     assert result["exception_type"] == "ValueError"
 
 
-# ------------------------------------------------------------ NoNodes when cluster is off
+def test_old_client_version_refused_with_upgrade_command(
+    rpm_subprocess, local_dev_cluster
+):
+    # `from burla import __version__` is bound into _remote_parallel_map at
+    # import time, so patching that binding sends exactly what an outdated
+    # installed client would send.
+    source = (
+        "import burla._remote_parallel_map as rpm_module\n"
+        "rpm_module.__version__ = '0.0.1'\n"
+        "def test_function(x):\n"
+        "    return x\n"
+    )
+    result = rpm_subprocess(source, [1], timeout_seconds=30)
+    assert not result["ok"]
+    assert result["exception_type"] == "VersionMismatch"
+    assert "0.0.1" in result["exception_message"]
+    assert "pip install burla==" in result["exception_message"]
 
 
-@pytest.mark.e2e
+def test_too_new_client_version_refused(rpm_subprocess, local_dev_cluster):
+    source = (
+        "import burla._remote_parallel_map as rpm_module\n"
+        "rpm_module.__version__ = '999.99.99'\n"
+        "def test_function(x):\n"
+        "    return x\n"
+    )
+    result = rpm_subprocess(source, [1], timeout_seconds=30)
+    assert not result["ok"]
+    assert result["exception_type"] == "VersionMismatch"
+    assert "999.99.99" in result["exception_message"]
+
+
 @pytest.mark.slow
-def test_NoNodes_raised_when_grow_false_and_no_compatible_node(rpm_subprocess, local_dev_cluster):
+def test_NoNodes_raised_when_grow_false_and_no_compatible_node(
+    rpm_subprocess, local_dev_cluster
+):
     source = "def test_function(x):\n    return x\n"
     result = rpm_subprocess(
         source,

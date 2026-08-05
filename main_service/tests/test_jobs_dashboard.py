@@ -1,12 +1,8 @@
 """
-Section 19 of the test plan: job-related dashboard endpoints.
-
-- GET  /v1/jobs  (list, pagination, SSE)
-- POST /v1/jobs/{id}/stop
-- GET  /v1/jobs/{id}/result-stats
-- GET  /v1/jobs/{id}/logged-input-indexes
-- GET  /v1/jobs/{id}/next-failed-input
-- GET  /v1/jobs/{id}/logs
+Job-endpoint contracts that need precisely seeded state: the dashboard-stop
+cancellation signal the client reacts to, log-index semantics, and the 404
+boundary the client's pollers depend on. Happy-path rendering of the jobs
+pages is covered by the browser tier in tests/dashboard/.
 """
 
 from __future__ import annotations
@@ -51,26 +47,6 @@ def _push_job_logs(main_http_client, job_id: str, documents: list[dict]) -> None
     assert resp.status_code == 200, resp.text
 
 
-def test_list_jobs_paginated_returns_expected_shape(main_http_client, local_dev_cluster):
-    resp = main_http_client.get("/v1/jobs?page=0")
-    assert resp.status_code == 200
-    body = resp.json()
-    assert "jobs" in body
-    assert "page" in body
-    assert "limit" in body
-    assert "total" in body
-    assert body["limit"] == 15
-
-
-def test_list_jobs_page_numbers_respected(main_http_client, local_dev_cluster):
-    resp1 = main_http_client.get("/v1/jobs?page=0")
-    resp2 = main_http_client.get("/v1/jobs?page=1")
-    assert resp1.status_code == 200
-    assert resp2.status_code == 200
-    assert resp1.json()["page"] == 0
-    assert resp2.json()["page"] == 1
-
-
 def test_stop_job_writes_dashboard_canceled(
     main_http_client, local_dev_cluster, isolated_job_id, cleanup_job, get_job,
     wait_for_fixture,
@@ -111,20 +87,6 @@ def test_result_stats_404_when_missing(main_http_client, local_dev_cluster):
     assert resp.status_code == 404
 
 
-def test_result_stats_returns_counters(
-    main_http_client, local_dev_cluster, isolated_job_id, cleanup_job
-):
-    job_id = cleanup_job(isolated_job_id())
-    _seed_running_job(main_http_client, job_id, n_inputs=5)
-
-    resp = main_http_client.get(f"/v1/jobs/{job_id}/result-stats")
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["n_inputs"] == 5
-    assert "n_results" in body
-    assert "n_failed" in body
-
-
 def test_logged_input_indexes_returns_sorted_unique(
     main_http_client, local_dev_cluster, isolated_job_id, cleanup_job
 ):
@@ -146,11 +108,6 @@ def test_logged_input_indexes_returns_sorted_unique(
     body = resp.json()
     assert sorted(body["indexes_with_logs"]) == body["indexes_with_logs"]
     assert 5 in body["failed_indexes"]
-
-
-def test_job_logs_404_when_job_missing(main_http_client, local_dev_cluster):
-    resp = main_http_client.get(f"/v1/jobs/nomatch-{int(time.time())}/logs?index=0")
-    assert resp.status_code in (200, 404)  # may return {logs: []}
 
 
 def test_job_logs_returns_logs_for_index(

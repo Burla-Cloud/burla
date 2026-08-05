@@ -43,7 +43,7 @@ SELF_DELETE_GUEST_ATTRIBUTE = "burla/self-delete-requested"
 # the docker network, container labels, and published node ports; in remote-dev
 # the EC2 tag that marks a node as belonging to this cluster. Also reported at
 # /version so the client can tell two dev heads on one cloud account apart.
-# "default" for a deployed head, which is a singleton.
+# "default" for deployed and account-wide ad hoc client heads.
 CLUSTER_NAME = os.environ.get("BURLA_CLUSTER_NAME", "default")
 LOCAL_DEV_NETWORK = os.environ.get("LOCAL_DEV_NETWORK", "local-burla-cluster")
 # The head runs on the docker host in local-dev, so node containers reach it at
@@ -375,15 +375,17 @@ async def _stopped_instance_reaper_loop():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
 
-    if IN_LOCAL_DEV_MODE:
+    # The marker only exists once `make build-frontend` has run; without it
+    # (fresh worktree) the head serves the committed static assets and there
+    # is no rebuild to report.
+    frontend_marker = Path(".frontend_last_built_at.txt")
+    if IN_LOCAL_DEV_MODE and frontend_marker.exists():
 
         def frontend_built_successfully(attempt=1):
             if attempt == 3:
                 return False
             else:
-                frontend_built_at = float(
-                    Path(".frontend_last_built_at.txt").read_text().strip()
-                )
+                frontend_built_at = float(frontend_marker.read_text().strip())
                 frontend_rebuilt = time() - frontend_built_at < 4
                 if not frontend_rebuilt:
                     sleep(

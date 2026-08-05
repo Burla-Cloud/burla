@@ -8,6 +8,7 @@ always-on head EC2 instance running main_service.
 
 import hashlib
 import json
+import os
 import shutil
 import sys
 import tempfile
@@ -227,9 +228,35 @@ def deploy_aws(spinner):
     _, head_sg_id = _create_security_groups(spinner, region)
     cluster_id_token = _register_cluster_and_save_token(spinner, project_id, region)
     _ensure_node_ami(spinner, region, node_profile)
-    dashboard_url = _deploy_head_instance(
-        spinner, project_id, region, head_sg_id, cluster_id_token, account_name
-    )
+
+    from burla._deploy import _snapshot_local_history, _upload_local_history
+
+    first_deploy = _existing_head_instance(region) is None
+    snapshot_path, paused_head_url = (None, None)
+    if first_deploy:
+        snapshot_path, paused_head_url = _snapshot_local_history(spinner, project_id)
+
+    try:
+        dashboard_url = _deploy_head_instance(
+            spinner, project_id, region, head_sg_id, cluster_id_token, account_name
+        )
+        if snapshot_path:
+            _upload_local_history(
+                spinner, dashboard_url, cluster_id_token, snapshot_path
+            )
+        if first_deploy:
+            from burla._local_head import finish_history_migration
+
+            finish_history_migration(project_id)
+    except BaseException:
+        if paused_head_url:
+            from burla._local_head import resume_history_migration
+
+            resume_history_migration(project_id, paused_head_url)
+        raise
+    finally:
+        if snapshot_path:
+            os.remove(snapshot_path)
 
     headers = {"Authorization": f"Bearer {cluster_id_token}"}
     url = f"{_BURLA_BACKEND_URL}/v1/clusters/{project_id}/version"
@@ -659,19 +686,23 @@ def _run_head_update(region: str, instance_id: str, commands: list[str]):
         raise Exception(invocation["StandardErrorContent"])
 
 
-def _deploy_head_instance(
-    spinner, project_id, region, head_sg_id, cluster_id_token, account_name
-) -> str:
-    spinner.text = "Deploying burla-main-service instance ... "
-    spinner.start()
-
-    existing = _aws(
+def _existing_head_instance(region) -> dict | None:
+    return _aws(
         f"ec2 describe-instances --region {region} "
         f"--filters Name=tag:Name,Values=burla-main-service "
         f"Name=instance-state-name,Values=pending,running,stopping,stopped "
         f'--query "Reservations[0].Instances[0]" --output json',
         raise_error=False,
     )
+
+
+def _deploy_head_instance(
+    spinner, project_id, region, head_sg_id, cluster_id_token, account_name
+) -> str:
+    spinner.text = "Deploying burla-main-service instance ... "
+    spinner.start()
+
+    existing = _existing_head_instance(region)
     allocation = _aws(
         f"ec2 describe-addresses --region {region} "
         f"--filters Name=tag:Name,Values=burla-main-service "
@@ -722,13 +753,6 @@ def _deploy_head_instance(
     )
     if existing:
         head_id = existing["InstanceId"]
-        if existing["State"]["Name"] != "running":
-            run_command(
-                f"aws ec2 start-instances --region {region} --instance-ids {head_id}"
-            )
-            run_command(
-                f"aws ec2 wait instance-running --region {region} --instance-ids {head_id}"
-            )
         _run_head_update(region, head_id, commands)
     else:
         user_data = "#!/bin/bash\n" + "\n".join(commands) + "\n"
@@ -771,8 +795,9 @@ def _deploy_head_instance(
                 headers={"Authorization": f"Bearer {cluster_id_token}"},
                 timeout=3,
             )
-            expected = {"version": __version__, "project": project_id}
-            if response.status_code == 200 and response.json() == expected:
+            # Subset match: /version also reports fields like `namespace`.
+            info = response.json() if response.status_code == 200 else {}
+            if info.get("version") == __version__ and info.get("project") == project_id:
                 break
         except requests.RequestException:
             pass

@@ -80,8 +80,10 @@ class LocalDockerProvider:
                 "burla-cluster-member": CLUSTER_NAME,
             },
             environment={
+                # Without this python buffers stdout, so `docker logs node_*`
+                # lags far behind the node and looks stuck mid-boot.
+                "PYTHONUNBUFFERED": "1",
                 "PROJECT_ID": PROJECT_ID,
-                "BURLA_BACKEND_URL": BURLA_BACKEND_URL,
                 "IN_LOCAL_DEV_MODE": "True",
                 "BURLA_CLUSTER_NAME": CLUSTER_NAME,
                 "LOCAL_DEV_NETWORK": LOCAL_DEV_NETWORK,

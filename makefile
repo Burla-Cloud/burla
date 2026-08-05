@@ -36,7 +36,7 @@ define TEST_SHELL
 endef
 
 .PHONY: 3.11-dev 3.12-dev 3.13-dev 3.14-dev local-dev remote-dev local-images \
-	stop stop-all cluster-info test test-service test-e2e test-dashboard \
+	stop stop-all cluster-info node-logs test test-service test-e2e test-dashboard \
 	kill-kernels
 
 3.11-dev:
@@ -78,11 +78,23 @@ cluster-info:
 	echo "docker network: $(BURLA_CLUSTER_NETWORK)"; \
 	echo "node ports:     $(BURLA_NODE_PORT_BASE)+"
 
+# Node logs as the head recorded them, oldest last. Unlike `docker logs node_*`
+# these cover remote-dev's EC2 nodes and survive the container being replaced
+# between jobs. Usage: make node-logs [NODE=<id substring>] [JOB=<job id>] [N=<lines>]
+node-logs:
+	BURLA_ENVIRONMENT=$${BURLA_ENVIRONMENT:-test} \
+	uv run --project $(PROJECT_ABS) --group dev python -m burla._node_logs \
+		--node "$(NODE)" --job "$(JOB)" --lines "$${N:-200}" \
+		--namespace "$(BURLA_CLUSTER_NAME)" \
+		--local-dev-db "$(PWD)/_local_dev_state/history.db"
+
 # Remove this checkout's cluster containers. Filtered by label so other
 # checkouts' clusters on the same docker daemon are left alone. Cluster state
 # lives inside the main_service process, so there is nothing else to clean up.
 stop:
 	set -e; \
+	pids=$$(lsof -ti tcp:$(BURLA_HEAD_PORT) -sTCP:LISTEN 2>/dev/null || true); \
+	if [ -n "$$pids" ]; then kill $$pids 2>/dev/null || true; fi; \
 	ids=$$(docker ps -aq --filter label=burla-cluster=$(BURLA_CLUSTER_NAME)); \
 	if [ -n "$$ids" ]; then docker rm -f $$ids >/dev/null; fi; \
 	docker network rm $(BURLA_CLUSTER_NETWORK) >/dev/null 2>&1 || true; \
@@ -111,6 +123,16 @@ local-images:
 # so a bogus id makes every node fail to boot.
 local-dev:
 	set -e; \
+	if nc -z localhost $(BURLA_HEAD_PORT) 2>/dev/null; then \
+		echo ""; \
+		echo "ERROR: something is already listening on port $(BURLA_HEAD_PORT), probably this"; \
+		echo "       checkout's cluster. Starting another would wipe its live state"; \
+		echo "       (_local_dev_state) out from under it."; \
+		echo ""; \
+		echo "  Fix: make stop   (then re-run make local-dev)"; \
+		echo ""; \
+		exit 1; \
+	fi; \
 	NODE_IMAGE=$${BURLA_NODE_IMAGE:-$(LOCAL_NODE_IMAGE)}; \
 	if ! docker image inspect $${NODE_IMAGE} >/dev/null 2>&1; then \
 		$(MAKE) local-images; \

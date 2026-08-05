@@ -36,8 +36,8 @@ define TEST_SHELL
 endef
 
 .PHONY: 3.11-dev 3.12-dev 3.13-dev 3.14-dev local-dev remote-dev local-images \
-	stop stop-all cluster-info node-logs test test-service test-e2e test-dashboard \
-	kill-kernels
+	image-seed stop stop-all cluster-info node-logs test test-service test-e2e \
+	test-dashboard kill-kernels
 
 3.11-dev:
 	$(call TEST_SHELL,3.11)
@@ -91,19 +91,21 @@ node-logs:
 # Remove this checkout's cluster containers. Filtered by label so other
 # checkouts' clusters on the same docker daemon are left alone. Cluster state
 # lives inside the main_service process, so there is nothing else to clean up.
+# `-v` also removes each node's anonymous /var/lib/docker volume (the inner
+# docker daemon's image store, ~1GB per node), which would otherwise strand.
 stop:
 	set -e; \
 	pids=$$(lsof -ti tcp:$(BURLA_HEAD_PORT) -sTCP:LISTEN 2>/dev/null || true); \
 	if [ -n "$$pids" ]; then kill $$pids 2>/dev/null || true; fi; \
 	ids=$$(docker ps -aq --filter label=burla-cluster=$(BURLA_CLUSTER_NAME)); \
-	if [ -n "$$ids" ]; then docker rm -f $$ids >/dev/null; fi; \
+	if [ -n "$$ids" ]; then docker rm -f -v $$ids >/dev/null; fi; \
 	docker network rm $(BURLA_CLUSTER_NETWORK) >/dev/null 2>&1 || true; \
 	echo "Removed cluster [$(BURLA_CLUSTER_NAME)]."
 
 stop-all:
 	set -e; \
 	ids=$$(docker ps -aq --filter label=burla-cluster); \
-	if [ -n "$$ids" ]; then docker rm -f $$ids >/dev/null; fi; \
+	if [ -n "$$ids" ]; then docker rm -f -v $$ids >/dev/null; fi; \
 	echo "Removed every burla dev cluster on this machine."
 
 
@@ -114,13 +116,31 @@ local-images:
 	docker build -t $(LOCAL_NODE_IMAGE) ./node_service; \
 	echo "Built $(LOCAL_NODE_IMAGE)."
 
+# Each node runs its own docker daemon, so without this tarball every node
+# would download the default worker image from the registry at boot. Kept
+# current with the registry (when online) because nodes always `docker pull`,
+# and a stale seed would make that pull a full re-download instead of a no-op.
+image-seed:
+	set -e; \
+	mkdir -p _image_seed; \
+	docker pull -q python:3.12 >/dev/null 2>&1 || true; \
+	docker image inspect python:3.12 >/dev/null 2>&1 || docker pull python:3.12; \
+	current=$$(docker image inspect -f '{{.Id}}' python:3.12); \
+	saved=$$(cat _image_seed/python-3.12.id 2>/dev/null || true); \
+	if [ "$$current" != "$$saved" ]; then \
+		docker save python:3.12 -o _image_seed/python-3.12.tar; \
+		echo "$$current" > _image_seed/python-3.12.id; \
+		echo "Saved python:3.12 seed for node-local docker daemons."; \
+	fi
+
 # The whole cluster runs on this machine: the head as a host subprocess
-# hot-reloading this checkout (like remote-dev), nodes and workers as docker
-# containers on this checkout's own network. Uses `LOCAL_DEV_CONFIG` in
-# `main_service.__init__.py` (1 node by default; raise with
-# LOCAL_DEV_NODE_QUANTITY). Needs a working AWS identity + saved cluster token:
-# nodes authorize callers against the backend's user list for this cluster id,
-# so a bogus id makes every node fail to boot.
+# hot-reloading this checkout (like remote-dev), nodes as privileged "fake VM"
+# containers on this checkout's own network, each running its own docker
+# daemon with its workers inside it (exactly the prod topology). Uses
+# `LOCAL_DEV_CONFIG` in `main_service.__init__.py` (1 node by default; raise
+# with LOCAL_DEV_NODE_QUANTITY). Needs a working AWS identity + saved cluster
+# token: nodes authorize callers against the backend's user list for this
+# cluster id, so a bogus id makes every node fail to boot.
 local-dev:
 	set -e; \
 	if nc -z localhost $(BURLA_HEAD_PORT) 2>/dev/null; then \
@@ -137,6 +157,7 @@ local-dev:
 	if ! docker image inspect $${NODE_IMAGE} >/dev/null 2>&1; then \
 		$(MAKE) local-images; \
 	fi; \
+	$(MAKE) image-seed; \
 	$(MAKE) -C main_service ensure-frontend; \
 	BACKEND_URL=$${BURLA_BACKEND_URL:-https://test.backend.burla.dev}; \
 	AWS_ACCOUNT=$$(aws sts get-caller-identity --query Account --output text 2>/dev/null || true); \
@@ -167,7 +188,7 @@ local-dev:
 	echo "Starting cluster [$(BURLA_CLUSTER_NAME)] at $(BURLA_DASHBOARD_URL) (cluster id $${PROJECT_ID})"; \
 	ids=$$(docker ps -aq --filter label=burla-cluster=$(BURLA_CLUSTER_NAME)); \
 	if [ -n "$$ids" ]; then docker rm -f $$ids >/dev/null; fi; \
-	for scratch in _worker_service_python_env _shared_workspace _node_auth _local_dev_state; do \
+	for scratch in _shared_workspace _node_auth _local_dev_state; do \
 		rm -rf ./$$scratch; mkdir -p ./$$scratch; chmod 777 ./$$scratch; \
 	done; \
 	docker network create $(BURLA_CLUSTER_NETWORK) 2>/dev/null || true; \

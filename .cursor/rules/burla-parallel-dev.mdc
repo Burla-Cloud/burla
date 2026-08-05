@@ -23,8 +23,10 @@ Development happens in AWS; GCP is production-only. Read the
 `burla-parallel-dev` skill before starting or stopping a cluster.
 
 Tear down with `make stop` (label-scoped to that worktree) or `make stop-all`.
-Never `docker rm` containers by `node_*` / `worker_*` name prefix: that destroys
-other agents' clusters.
+Never `docker rm` containers by `node_*` name prefix: that destroys other
+agents' clusters. Workers are containers *inside* their node's own docker
+daemon (each local node is a privileged fake VM running dockerd), so they die
+with the node; inspect them with `docker exec node_<id> docker ps`.
 
 In remote-dev, node VMs run the worktree's current branch from GitHub, so
 `node_service` / `worker_server.py` changes must be committed and pushed before

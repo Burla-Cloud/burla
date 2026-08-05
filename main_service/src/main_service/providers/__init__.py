@@ -31,6 +31,10 @@ def get_provider():
         from main_service.providers.aws import AWSProvider
 
         return AWSProvider()
+    if CLOUD_PROVIDER == "azure":
+        from main_service.providers.azure import AzureProvider
+
+        return AzureProvider()
     from main_service.providers.gcp import GCPProvider
 
     return GCPProvider()

@@ -66,8 +66,8 @@ def set_config(key: str, value: str) -> str:
     if key != "cloud":
         raise ValueError("The only supported config key is `cloud`.")
     cloud = value.lower()
-    if cloud not in ("aws", "gcp"):
-        raise ValueError("cloud must be `aws` or `gcp`.")
+    if cloud not in ("aws", "gcp", "azure"):
+        raise ValueError("cloud must be `aws`, `gcp`, or `azure`.")
 
     SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
     SETTINGS_PATH.write_text(json.dumps({"cloud": cloud}))

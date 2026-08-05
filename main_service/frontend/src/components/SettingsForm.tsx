@@ -23,31 +23,43 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
         const users = settings.users ?? [];
         const [newUser, setNewUser] = useState("");
         const isAws = settings.cloudProvider === "aws";
+        const isAzure = settings.cloudProvider === "azure";
 
         // Machine lists mirror main_service/providers/catalog.py for each cloud.
+        const AWS_CPU_OPTIONS = [
+            { label: "2vCPU / 8G RAM", value: "m7i.large" },
+            { label: "4vCPU / 16G RAM", value: "m7i.xlarge" },
+            { label: "8vCPU / 32G RAM", value: "m7i.2xlarge" },
+            { label: "16vCPU / 64G RAM", value: "m7i.4xlarge" },
+            { label: "32vCPU / 128G RAM", value: "m7i.8xlarge" },
+            { label: "64vCPU / 256G RAM", value: "m7i.16xlarge" },
+        ];
+        const AZURE_CPU_OPTIONS = [
+            { label: "2vCPU / 8G RAM", value: "Standard_D2s_v5" },
+            { label: "4vCPU / 16G RAM", value: "Standard_D4s_v5" },
+            { label: "8vCPU / 32G RAM", value: "Standard_D8s_v5" },
+            { label: "16vCPU / 64G RAM", value: "Standard_D16s_v5" },
+            { label: "32vCPU / 128G RAM", value: "Standard_D32s_v5" },
+            { label: "64vCPU / 256G RAM", value: "Standard_D64s_v5" },
+        ];
+        const GCP_CPU_OPTIONS = [
+            { label: "2vCPU / 8G RAM", value: "n4-standard-2" },
+            { label: "4vCPU / 16G RAM", value: "n4-standard-4" },
+            { label: "8vCPU / 32G RAM", value: "n4-standard-8" },
+            { label: "16vCPU / 64G RAM", value: "n4-standard-16" },
+            { label: "32vCPU / 128G RAM", value: "n4-standard-32" },
+            { label: "64vCPU / 256G RAM", value: "n4-standard-64" },
+            { label: "80vCPU / 320G RAM", value: "n4-standard-80" },
+        ];
         const cpuOptions = isAws
-            ? [
-                  { label: "2vCPU / 8G RAM", value: "m7i.large" },
-                  { label: "4vCPU / 16G RAM", value: "m7i.xlarge" },
-                  { label: "8vCPU / 32G RAM", value: "m7i.2xlarge" },
-                  { label: "16vCPU / 64G RAM", value: "m7i.4xlarge" },
-                  { label: "32vCPU / 128G RAM", value: "m7i.8xlarge" },
-                  { label: "64vCPU / 256G RAM", value: "m7i.16xlarge" },
-              ]
-            : [
-                  { label: "2vCPU / 8G RAM", value: "n4-standard-2" },
-                  { label: "4vCPU / 16G RAM", value: "n4-standard-4" },
-                  { label: "8vCPU / 32G RAM", value: "n4-standard-8" },
-                  { label: "16vCPU / 64G RAM", value: "n4-standard-16" },
-                  { label: "32vCPU / 128G RAM", value: "n4-standard-32" },
-                  { label: "64vCPU / 256G RAM", value: "n4-standard-64" },
-                  { label: "80vCPU / 320G RAM", value: "n4-standard-80" },
-              ];
+            ? AWS_CPU_OPTIONS
+            : isAzure
+            ? AZURE_CPU_OPTIONS
+            : GCP_CPU_OPTIONS;
 
-        // No GPU machines are offered on AWS yet: providers/aws.py rejects GPU nodes
-        // until the burla node AMI ships with NVIDIA drivers. Temporary; the AWS
-        // shapes (p4d/p4de/p5) come back here once that lands.
-        const gpuCpuMap = isAws
+        // No GPU machines are offered on AWS/Azure yet: their providers reject
+        // GPU nodes until the burla node images ship with NVIDIA drivers.
+        const gpuCpuMap = isAws || isAzure
             ? {}
             : {
                   "1x A100 40G": { label: "12vCPU / 85G RAM", value: "a2-highgpu-1g" },
@@ -249,9 +261,36 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
             ],
         };
 
+        // Azure regions where Dsv5 CPU nodes are widely available.
+        const AZURE_REGION_OPTIONS = {
+            None: [
+                { value: "eastus", label: "eastus" },
+                { value: "eastus2", label: "eastus2" },
+                { value: "centralus", label: "centralus" },
+                { value: "southcentralus", label: "southcentralus" },
+                { value: "westus2", label: "westus2" },
+                { value: "westus3", label: "westus3" },
+                { value: "canadacentral", label: "canadacentral" },
+                { value: "brazilsouth", label: "brazilsouth" },
+                { value: "northeurope", label: "northeurope" },
+                { value: "westeurope", label: "westeurope" },
+                { value: "uksouth", label: "uksouth" },
+                { value: "francecentral", label: "francecentral" },
+                { value: "germanywestcentral", label: "germanywestcentral" },
+                { value: "swedencentral", label: "swedencentral" },
+                { value: "centralindia", label: "centralindia" },
+                { value: "southeastasia", label: "southeastasia" },
+                { value: "eastasia", label: "eastasia" },
+                { value: "japaneast", label: "japaneast" },
+                { value: "koreacentral", label: "koreacentral" },
+                { value: "australiaeast", label: "australiaeast" },
+            ],
+        };
+
         // Helper to determine which region list to use
         function getRegionOptionsForGpu(gpuVariant) {
             if (isAws) return AWS_REGION_OPTIONS.None;
+            if (isAzure) return AZURE_REGION_OPTIONS.None;
             if (gpuVariant === "None") return GCP_REGION_OPTIONS.None;
             if (gpuVariant.includes("A100 40G")) return GCP_REGION_OPTIONS["A100 40G"];
             if (gpuVariant.includes("A100 80G")) return GCP_REGION_OPTIONS["A100 80G"];
@@ -378,7 +417,7 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
                                 <div className="flex flex-col space-y-2">
                                     <div className="flex items-center gap-1">
                                         <label className={labelClass}>GPU</label>
-                                        {isAws && (
+                                        {(isAws || isAzure) && (
                                             <TooltipProvider>
                                                 <Tooltip>
                                                     <TooltipTrigger asChild>
@@ -386,8 +425,9 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
                                                     </TooltipTrigger>
                                                     <TooltipContent>
                                                         <p>
-                                                            GPUs aren't available on AWS clusters
-                                                            yet, we're working on it!
+                                                            GPUs aren't available on{" "}
+                                                            {isAws ? "AWS" : "Azure"} clusters yet,
+                                                            we're working on it!
                                                             <br />
                                                             (they work on GCP)
                                                         </p>
@@ -397,7 +437,7 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
                                         )}
                                     </div>
                                     <Select
-                                        disabled={isAws}
+                                        disabled={isAws || isAzure}
                                         value={gpuVariant}
                                         onValueChange={(val) => {
                                             setGpuVariant(val);
@@ -482,7 +522,11 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
                                 {/* Region Dropdown */}
                                 <div className="flex flex-col space-y-2">
                                     <label className={labelClass}>
-                                        {isAws ? "AWS Region" : "GCP Region"}
+                                        {isAws
+                                            ? "AWS Region"
+                                            : isAzure
+                                            ? "Azure Region"
+                                            : "GCP Region"}
                                     </label>
                                     <Select
                                         value={settings.gcpRegion || ""}

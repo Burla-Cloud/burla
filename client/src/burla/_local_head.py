@@ -91,10 +91,34 @@ def _head_state_dir(project_id: str) -> Path:
 
 
 def detect_cloud() -> tuple[str, str, str | None]:
-    """Returns (cloud, project_id, aws_region) for the configured cloud."""
+    """Returns (cloud, project_id, region) for the configured cloud.
+    region is None on GCP (nodes' region comes from cluster config there)."""
     from burla import get_cloud
 
     cloud = get_cloud()
+    if cloud == "azure":
+        if not shutil.which("az"):
+            raise LocalHeadError(
+                "Azure is selected, but the az CLI is not installed. "
+                "Install it or run `burla config set cloud aws`."
+            )
+        result = subprocess.run(
+            ["az", "account", "show", "--query", "id", "--output", "tsv"],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0 or not result.stdout.strip():
+            raise LocalHeadError(
+                "Azure is selected, but its credentials are not active. "
+                "Run `az login`, then retry."
+            )
+        subscription_id = result.stdout.strip()
+        from burla._deploy_azure import _azure_region
+
+        # Keeps the GUID's dashes: the longest relay label this produces is
+        # exactly the 63-char DNS limit (see _deploy_azure.deploy_azure).
+        return "azure", f"azure-{subscription_id}", _azure_region()
+
     if cloud == "gcp":
         if not shutil.which("gcloud"):
             raise LocalHeadError(
@@ -139,6 +163,21 @@ def detect_cloud() -> tuple[str, str, str | None]:
         or "us-east-1"
     )
     return "aws", f"aws-{result.stdout.strip()}", region
+
+
+def _cloud_account_name(cloud: str, project_id: str) -> str:
+    """Human-readable account label for the dashboard's settings page."""
+    if cloud == "aws":
+        return _aws_account_name(project_id.removeprefix("aws-"))
+    if cloud == "azure":
+        result = subprocess.run(
+            ["az", "account", "show", "--query", "name", "--output", "tsv"],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+    return project_id
 
 
 def _aws_account_name(account_id: str) -> str:
@@ -187,11 +226,15 @@ def _gcp_ownership_payload() -> dict:
     return {"cloud": "gcp", "access_token": access_token}
 
 
-def _ownership_payload(cloud: str, aws_region: str | None) -> dict:
+def _ownership_payload(cloud: str, region: str | None) -> dict:
     if cloud == "aws":
         from burla._deploy_aws import _aws_ownership_payload
 
-        return _aws_ownership_payload(aws_region)
+        return _aws_ownership_payload(region)
+    if cloud == "azure":
+        from burla._deploy_azure import _azure_ownership_payload
+
+        return _azure_ownership_payload()
     return _gcp_ownership_payload()
 
 
@@ -228,23 +271,26 @@ def get_or_register_cluster_token(cloud: str, project_id: str, aws_region: str |
 
     # Cluster already registered by an old `burla install`, which stored its
     # token in Secret Manager (GCP) / SSM (AWS) - read it from there so
-    # upgrades stay seamless.
+    # upgrades stay seamless. No Azure equivalent: Azure support postdates
+    # the move to backend-held tokens.
     if response.status_code in (403, 409):
+        command = None
         if cloud == "gcp":
             secret = os.environ.get("BURLA_CLUSTER_TOKEN_SECRET", "burla-cluster-id-token")
             command = ["gcloud", "secrets", "versions", "access", "latest", f"--secret={secret}"]
-        else:
+        elif cloud == "aws":
             parameter = os.environ.get("BURLA_CLUSTER_TOKEN_PARAMETER", "/burla/cluster-id-token")
             command = [
                 *("aws", "ssm", "get-parameter", "--region", aws_region),
                 *("--name", parameter, "--with-decryption"),
                 *("--query", "Parameter.Value", "--output", "text"),
             ]
-        result = subprocess.run(command, capture_output=True, text=True)
-        if result.returncode == 0 and result.stdout.strip():
-            token = result.stdout.strip()
-            save_cluster_token(project_id, token)
-            return token
+        if command:
+            result = subprocess.run(command, capture_output=True, text=True)
+            if result.returncode == 0 and result.stdout.strip():
+                token = result.stdout.strip()
+                save_cluster_token(project_id, token)
+                return token
 
         # Authorized users (e.g. this user's other laptop) may fetch the
         # token from the backend after a browser `burla login`.
@@ -292,6 +338,14 @@ def ensure_user_authorized(
             check=True,
         )
         identity = result.stdout.strip().rsplit("/", 1)[-1]
+    elif cloud == "azure":
+        result = subprocess.run(
+            ["az", "account", "show", "--query", "user.name", "--output", "tsv"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        identity = result.stdout.strip()
     else:
         import google.auth
         from google.auth.transport.requests import Request
@@ -477,6 +531,39 @@ def _prepare_aws(project_id: str, aws_region: str):
     marker.write_text("done")
 
 
+def _prepare_azure(project_id: str, region: str):
+    """First-run Azure prep a laptop head needs before booting nodes:
+    resource providers, the burla resource group + network, the burla-node
+    identity (nodes must be able to delete themselves on Azure), and the node
+    image. Creating the identity's role needs Owner on the subscription once;
+    afterwards Contributor is enough to run clusters."""
+    from yaspin import yaspin
+
+    from burla._deploy_azure import (
+        ensure_network,
+        ensure_node_identity,
+        ensure_node_image,
+        ensure_resource_group,
+        register_resource_providers,
+    )
+
+    marker = _state_dir(project_id) / f"azure_prepped_{__version__}"
+    if marker.exists():
+        return
+    subscription_id = project_id.removeprefix("azure-")
+    with yaspin() as spinner:
+        spinner.text = "Preparing Azure subscription ... "
+        spinner.start()
+        register_resource_providers()
+        ensure_resource_group(region)
+        ensure_network(region)
+        ensure_node_identity(subscription_id)
+        spinner.text = "Preparing Azure subscription ... Done."
+        spinner.ok("✓")
+        ensure_node_image(spinner, region)
+    marker.write_text("done")
+
+
 def ensure_local_head() -> str:
     """Starts (or reuses) a detached main_service and returns its URL."""
     return _run_local_head(detached=True)
@@ -637,6 +724,8 @@ def _run_local_head(
     ensure_user_authorized(cloud, project_id, cluster_token)
     if cloud == "aws":
         _prepare_aws(project_id, aws_region)
+    if cloud == "azure":
+        _prepare_azure(project_id, aws_region)
 
     from burla import CONFIG_PATH
 
@@ -659,11 +748,7 @@ def _run_local_head(
         "IN_CLIENT_HOSTED_MODE": "True",
         "PROJECT_ID": project_id,
         "CLOUD_PROVIDER": cloud,
-        "CLOUD_ACCOUNT_NAME": (
-            _aws_account_name(project_id.removeprefix("aws-"))
-            if cloud == "aws"
-            else project_id
-        ),
+        "CLOUD_ACCOUNT_NAME": _cloud_account_name(cloud, project_id),
         "CLUSTER_ID_TOKEN": cluster_token,
         "BURLA_BACKEND_URL": _BURLA_BACKEND_URL,
         "BURLA_RELAY_HOST": RELAY_HOST,
@@ -681,8 +766,12 @@ def _run_local_head(
         "BURLA_LOCAL_USER_EMAIL": auth_info["email"],
         "BURLA_LOCAL_USER_TOKEN": auth_info["auth_token"],
     }
-    if aws_region:
+    if cloud == "aws" and aws_region:
         environment["AWS_REGION"] = aws_region
+    if cloud == "azure":
+        environment["AZURE_SUBSCRIPTION_ID"] = project_id.removeprefix("azure-")
+        environment["AZURE_REGION"] = aws_region
+        environment["AZURE_RESOURCE_GROUP"] = "burla"
     extra_pythonpath = _main_service_pythonpath()
     if extra_pythonpath:
         existing = environment.get("PYTHONPATH")

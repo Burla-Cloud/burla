@@ -66,7 +66,7 @@ IN_CLIENT_HOSTED_MODE = os.environ.get("IN_CLIENT_HOSTED_MODE") == "True"
 LOCAL_USER_EMAIL = os.environ.get("BURLA_LOCAL_USER_EMAIL", "")
 LOCAL_USER_TOKEN = os.environ.get("BURLA_LOCAL_USER_TOKEN", "")
 
-# "gcp" or "aws" - which cloud this cluster boots node VMs in.
+# "gcp", "aws", or "azure" - which cloud this cluster boots node VMs in.
 CLOUD_PROVIDER = os.environ.get("CLOUD_PROVIDER", "gcp")
 
 BURLA_BACKEND_URL = os.environ.get(
@@ -151,6 +151,14 @@ def _resolve_self_url_for_nodes() -> str:
             timeout=5,
         )
         internal_ip = ip_response.text.strip()
+    elif CLOUD_PROVIDER == "azure":
+        ip_response = _requests.get(
+            "http://169.254.169.254/metadata/instance/network/interface/0/ipv4"
+            "/ipAddress/0/privateIpAddress?api-version=2021-02-01&format=text",
+            headers={"Metadata": "true"},
+            timeout=5,
+        )
+        internal_ip = ip_response.text.strip()
     else:
         ip_response = _requests.get(
             "http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/ip",
@@ -181,6 +189,23 @@ def _default_shared_workspace_bucket():
     return f"{PROJECT_ID}-burla-shared-workspace"
 
 
+_DEFAULT_MACHINE_TYPES = {
+    "gcp": "n4-standard-4",
+    "aws": "m7i.2xlarge",
+    "azure": "Standard_D8s_v5",
+}
+
+
+def _default_region() -> str:
+    # Field is named gcp_region for historical reasons; on AWS/Azure it holds
+    # that cloud's region (e.g. us-east-1 / eastus).
+    if CLOUD_PROVIDER == "aws":
+        return os.environ.get("AWS_REGION", "us-east-1")
+    if CLOUD_PROVIDER == "azure":
+        return os.environ.get("AZURE_REGION", "eastus")
+    return "us-central1"
+
+
 DEFAULT_CONFIG = {  # <- config used only when no config has ever been saved
     "Nodes": [
         {
@@ -189,16 +214,8 @@ DEFAULT_CONFIG = {  # <- config used only when no config has ever been saved
                     "image": "python:3.12",
                 },
             ],
-            "machine_type": (
-                "n4-standard-4" if CLOUD_PROVIDER == "gcp" else "m7i.2xlarge"
-            ),
-            # Region nodes boot in. Field is named gcp_region for historical
-            # reasons; on AWS it holds an AWS region (e.g. us-east-1).
-            "gcp_region": (
-                "us-central1"
-                if CLOUD_PROVIDER == "gcp"
-                else os.environ.get("AWS_REGION", "us-east-1")
-            ),
+            "machine_type": _DEFAULT_MACHINE_TYPES[CLOUD_PROVIDER],
+            "gcp_region": _default_region(),
             "quantity": 1,
             "inactivity_shutdown_time_sec": 60 * 10,
         }
@@ -216,9 +233,11 @@ if IN_LOCAL_DEV_MODE:
     LOCAL_DEV_CONFIG = history.get_cluster_config()
     # Cosmetic here (nodes are containers), but it should match CLOUD_PROVIDER so
     # the dashboard doesn't show a machine type from the wrong cloud.
-    LOCAL_DEV_CONFIG["Nodes"][0]["machine_type"] = (
-        "n4-standard-2" if CLOUD_PROVIDER == "gcp" else "m7i.large"
-    )
+    LOCAL_DEV_CONFIG["Nodes"][0]["machine_type"] = {
+        "gcp": "n4-standard-2",
+        "aws": "m7i.large",
+        "azure": "Standard_D2s_v5",
+    }[CLOUD_PROVIDER]
     # One node by default: several of these clusters run side by side on one
     # laptop, and each node is a container that spawns a worker per core.
     LOCAL_DEV_CONFIG["Nodes"][0]["quantity"] = int(

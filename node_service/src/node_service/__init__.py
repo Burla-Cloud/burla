@@ -196,7 +196,9 @@ def _poweroff_self():
     """Last-resort shutdown that needs zero cloud credentials: on AWS the
     instance terminates itself (InstanceInitiatedShutdownBehavior=terminate);
     on GCP it stops, billing only its disk until a head reaps it
-    (delete_stopped_instances)."""
+    (delete_stopped_instances). On Azure a stopped VM still bills for compute,
+    so this is only the fallback behind `_delete_self_via_azure` - the Azure
+    reaper deletes whatever ends up merely stopped."""
     import subprocess
 
     subprocess.Popen(["systemctl", "poweroff"])
@@ -243,9 +245,18 @@ async def _mark_self_delete_requested():
 
 
 async def _delete_self_via_cloud_api() -> bool:
-    """Delete this instance outright, for GCP VMs that do have a service
-    account (shared-filesystem clusters). Uses the metadata server's token, so
-    it needs no SDK and no static credentials."""
+    """Delete this instance outright, using whatever instance credentials
+    this VM carries: the GCP service account on shared-filesystem clusters,
+    or the burla-node managed identity every Azure node has (an Azure VM
+    can't stop billing by powering off, so self-deletion is the only clean
+    exit when the head is gone). Uses the metadata server's token, so it
+    needs no SDK and no static credentials."""
+    if await _delete_self_via_gcp():
+        return True
+    return await _delete_self_via_azure()
+
+
+async def _delete_self_via_gcp() -> bool:
     token_json = await _gcp_metadata("instance/service-accounts/default/token")
     zone_path = await _gcp_metadata("instance/zone")
     if not token_json or not zone_path:
@@ -264,6 +275,48 @@ async def _delete_self_via_cloud_api() -> bool:
         timeout = aiohttp.ClientTimeout(total=15)
         async with aiohttp.ClientSession(timeout=timeout) as session:
             headers = {"Authorization": f"Bearer {access_token}"}
+            async with session.delete(url, headers=headers) as response:
+                return response.status < 300
+    except Exception:
+        return False
+
+
+_AZURE_IMDS = "http://169.254.169.254/metadata"
+_AZURE_IMDS_HEADERS = {"Metadata": "true"}
+
+
+async def _azure_imds(path: str) -> dict | None:
+    """A JSON value from the Azure metadata service, or None off Azure."""
+    try:
+        timeout = aiohttp.ClientTimeout(total=3)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            url = f"{_AZURE_IMDS}/{path}"
+            async with session.get(url, headers=_AZURE_IMDS_HEADERS) as response:
+                return await response.json() if response.status == 200 else None
+    except Exception:
+        return None
+
+
+async def _delete_self_via_azure() -> bool:
+    token_info = await _azure_imds(
+        "identity/oauth2/token?api-version=2018-02-01"
+        "&resource=https%3A%2F%2Fmanagement.azure.com%2F"
+    )
+    compute_info = await _azure_imds("instance/compute?api-version=2021-02-01")
+    if not token_info or not compute_info:
+        return False
+
+    url = (
+        "https://management.azure.com/subscriptions/"
+        f"{compute_info['subscriptionId']}/resourceGroups/"
+        f"{compute_info['resourceGroupName']}/providers/Microsoft.Compute"
+        f"/virtualMachines/{compute_info['name']}"
+        "?api-version=2024-07-01&forceDeletion=true"
+    )
+    try:
+        timeout = aiohttp.ClientTimeout(total=15)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            headers = {"Authorization": f"Bearer {token_info['access_token']}"}
             async with session.delete(url, headers=headers) as response:
                 return response.status < 300
     except Exception:

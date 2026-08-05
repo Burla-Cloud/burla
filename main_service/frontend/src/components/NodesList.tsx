@@ -90,6 +90,9 @@ export const NodesList: React.FC<NodesListProps> = ({
         const awsSpec = AWS_MACHINE_SPECS[type.toLowerCase()];
         if (awsSpec) return awsSpec.cpus;
 
+        const azureMatch = type.toLowerCase().match(/^standard_d(\d+)s_v5$/);
+        if (azureMatch) return parseInt(azureMatch[1], 10);
+
         const customMatch = type.match(/^custom-(\d+)-/);
         if (customMatch) return parseInt(customMatch[1], 10);
 
@@ -150,7 +153,7 @@ export const NodesList: React.FC<NodesListProps> = ({
         const awsSpec = AWS_MACHINE_SPECS[lower];
         if (awsSpec) return awsSpec.ram;
 
-        if (lower.startsWith("n4-standard-")) {
+        if (lower.startsWith("n4-standard-") || lower.startsWith("standard_d")) {
             const cpu = extractCpuCount(type);
             if (cpu !== null) return `${cpu * 4}G`;
         }

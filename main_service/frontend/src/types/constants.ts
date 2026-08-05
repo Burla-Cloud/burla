@@ -41,6 +41,14 @@ const GCP_MACHINE_MAPPING: Record<string, VmType> = {
   "m7i.4xlarge": "CPU",
   "m7i.8xlarge": "CPU",
   "m7i.16xlarge": "CPU",
+
+  // Azure
+  Standard_D2s_v5: "CPU",
+  Standard_D4s_v5: "CPU",
+  Standard_D8s_v5: "CPU",
+  Standard_D16s_v5: "CPU",
+  Standard_D32s_v5: "CPU",
+  Standard_D64s_v5: "CPU",
 };
 
 const GCP_MACHINE_PRICING_MAPPING: Record<
@@ -84,6 +92,14 @@ const GCP_MACHINE_PRICING_MAPPING: Record<
   "m7i.4xlarge": { type: "CPU", on_demand_price: 0.8064 },
   "m7i.8xlarge": { type: "CPU", on_demand_price: 1.6128 },
   "m7i.16xlarge": { type: "CPU", on_demand_price: 3.2256 },
+
+  // Azure on-demand (eastus)
+  Standard_D2s_v5: { type: "CPU", on_demand_price: 0.096 },
+  Standard_D4s_v5: { type: "CPU", on_demand_price: 0.192 },
+  Standard_D8s_v5: { type: "CPU", on_demand_price: 0.384 },
+  Standard_D16s_v5: { type: "CPU", on_demand_price: 0.768 },
+  Standard_D32s_v5: { type: "CPU", on_demand_price: 1.536 },
+  Standard_D64s_v5: { type: "CPU", on_demand_price: 3.072 },
 };
 
 // AWS machine specs for cluster-status displays (mirrors main_service/providers/catalog.py).
@@ -108,8 +124,8 @@ export function getVmCategory(machineType: string): VmType | null {
   const mapped = GCP_MACHINE_MAPPING[mt];
   if (mapped) return mapped;
 
-  // fallback: any n4 (GCP) or m7i (AWS) is CPU
-  if (mt.startsWith("n4-") || mt.startsWith("m7i.")) return "CPU";
+  // fallback: any n4 (GCP), m7i (AWS), or Dsv5 (Azure) is CPU
+  if (mt.startsWith("n4-") || mt.startsWith("m7i.") || mt.startsWith("Standard_D")) return "CPU";
 
   return null;
 }

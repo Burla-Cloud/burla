@@ -233,6 +233,7 @@ def deploy(cloud: str = "gcp"):
       Run: `gcloud config get project` to view your default project.
       Run: `gcloud config set project <new-project-id>` to change your default project.
     - `burla deploy --cloud=aws` deploys into your current default AWS account/region.
+    - `burla deploy --cloud=azure` deploys into your current default Azure subscription.
     """
     try:
         with yaspin() as spinner:
@@ -240,10 +241,16 @@ def deploy(cloud: str = "gcp"):
                 from burla._deploy_aws import deploy_aws
 
                 deploy_aws(spinner)
+            elif cloud == "azure":
+                from burla._deploy_azure import deploy_azure
+
+                deploy_azure(spinner)
             elif cloud == "gcp":
                 _deploy_gcp(spinner)
             else:
-                raise ValueError(f"Unknown cloud: {cloud!r}. Use 'gcp' or 'aws'.")
+                raise ValueError(
+                    f"Unknown cloud: {cloud!r}. Use 'gcp', 'aws', or 'azure'."
+                )
     except Exception as e:
         # Report errors back to Burla's cloud.
         exc_type, exc_value, exc_traceback = sys.exc_info()

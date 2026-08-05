@@ -82,7 +82,11 @@ async def update_settings(request: Request):
 
     if IN_LOCAL_DEV_MODE:
         LOCAL_DEV_CONFIG["Nodes"] = nodes
-        LOCAL_DEV_CONFIG["Nodes"][0]["machine_type"] = "n4-standard-2"
+        LOCAL_DEV_CONFIG["Nodes"][0]["machine_type"] = {
+            "gcp": "n4-standard-2",
+            "aws": "m7i.large",
+            "azure": "Standard_D2s_v5",
+        }[CLOUD_PROVIDER]
         LOCAL_DEV_CONFIG["Nodes"][0]["quantity"] = 1
 
     email = request.session.get("X-User-Email")

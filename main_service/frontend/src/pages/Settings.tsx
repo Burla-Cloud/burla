@@ -150,11 +150,11 @@ const SettingsPage = () => {
 
   const showSaveButton = section === "cluster" && hasUnsavedChanges;
   const isAws = settings.cloudProvider === "aws";
-  const cloudLabel = isAws ? "AWS" : "GCP";
-  const resourceLabel = isAws ? "Account" : "Project";
-  const resourceId = isAws
-    ? settings.cloudAccountName
-    : settings.googleCloudProjectId;
+  const isAzure = settings.cloudProvider === "azure";
+  const cloudLabel = isAws ? "AWS" : isAzure ? "Azure" : "GCP";
+  const resourceLabel = isAws ? "Account" : isAzure ? "Subscription" : "Project";
+  const resourceId =
+    isAws || isAzure ? settings.cloudAccountName : settings.googleCloudProjectId;
 
   const content = (() => {
     if (loading) {

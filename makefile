@@ -172,15 +172,16 @@ local-dev:
 	uv run --project $(PROJECT_ABS) --group dev python -m burla._local_dev
 
 # `main_service` runs here as a local subprocess hot-reloading this checkout;
-# nodes are real EC2 instances in the Burla test AWS account. Nodes reach this
-# head through the relay, so many of these run at once on one machine.
-# Node VMs cannot see this working tree: they run this checkout's branch, so
-# push node_service changes before expecting them here.
+# nodes are real cloud VMs: EC2 in the Burla test AWS account by default, or
+# Azure VMs with BURLA_CLOUD=azure (uses your active `az` subscription).
+# Nodes reach this head through the relay, so many of these run at once on
+# one machine. Node VMs cannot see this working tree: they run this
+# checkout's branch, so push node_service changes before expecting them here.
 remote-dev:
 	set -e; \
 	$(MAKE) -C main_service ensure-frontend; \
 	BURLA_ENVIRONMENT=test \
-	BURLA_CLOUD=aws \
+	BURLA_CLOUD=$${BURLA_CLOUD:-aws} \
 	BURLA_CLUSTER_NAME=$(BURLA_CLUSTER_NAME) \
 	uv run --project $(PROJECT_ABS) --group dev python -m burla._remote_dev
 

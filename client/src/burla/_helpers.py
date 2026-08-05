@@ -67,6 +67,7 @@ def install_signal_handlers(
     # (for `run_command`). Deferring this import to signal-handler install
     # time sidesteps that cycle.
     from burla._cluster_client import ClusterClient
+    from burla._reporting import safe_print
 
     def _signal_handler(signum, frame):
         if terminal_cancel_event.is_set():
@@ -97,10 +98,13 @@ def install_signal_handlers(
             msg = "Background mode is enabled.\n"
             msg += f"This job will continue running on the cluster, to monitor progress go to:"
             msg += f"\n\n    {job_url}\n"
-            spinner.write(msg)
-            spinner.text = "Detached successfully."
-            spinner.ok("✔")
-        else:
+            if spinner:
+                spinner.write(msg)
+                spinner.text = "Detached successfully."
+                spinner.ok("✔")
+            else:
+                safe_print(msg)
+        elif spinner:
             spinner.text = "Job Canceled."
             spinner.fail("✘")
 

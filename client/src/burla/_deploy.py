@@ -222,18 +222,24 @@ class AuthError(Exception):
         super().__init__(message)
 
 
-def deploy(cloud: str = "gcp"):
+def deploy(cloud: str = None):
     """Deploy (or update) an always-on, shared Burla cluster with a head VM.
 
     Burla works with zero deployment: `remote_parallel_map` and
     `burla dashboard` run the cluster head on this machine. Deploy when you
     want the dashboard and cluster to stay up for your whole team.
 
-    - `burla deploy` deploys into your current default Google Cloud project.
+    Deploys into the cloud selected by `burla config set cloud <aws|gcp>`,
+    unless `--cloud` is passed.
+
+    - On AWS, deploys into your current default AWS account/region.
+    - On GCP, deploys into your current default Google Cloud project.
       Run: `gcloud config get project` to view your default project.
       Run: `gcloud config set project <new-project-id>` to change your default project.
-    - `burla deploy --cloud=aws` deploys into your current default AWS account/region.
     """
+    from burla import get_cloud
+
+    cloud = (cloud or get_cloud()).lower()
     try:
         with yaspin() as spinner:
             if cloud == "aws":

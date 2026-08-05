@@ -321,9 +321,14 @@ def local_dev_cluster(burla_auth_headers) -> dict[str, Any]:
 
 @pytest.fixture(autouse=True)
 def clean_local_dev_cluster_before_cluster_tests(request):
-    cluster_markers = ("service", "e2e")
+    cluster_markers = ("service", "e2e", "dashboard")
     if any(request.node.get_closest_marker(marker) for marker in cluster_markers):
         request.getfixturevalue("local_dev_cluster")
+
+
+@pytest.fixture(scope="session")
+def dashboard_url() -> str:
+    return DASHBOARD_URL
 
 
 def _cluster_state_via_http() -> dict[str, Any]:
@@ -698,7 +703,7 @@ def burla_version_current() -> str:
 def pytest_collection_modifyitems(
     config: pytest.Config, items: list[pytest.Item]
 ) -> None:
-    requires_cluster = {"service", "e2e"}
+    requires_cluster = {"service", "e2e", "dashboard"}
     cluster_up = _main_service_reachable()
     if REQUIRE_CLUSTER and not cluster_up:
         raise pytest.UsageError(f"local-dev cluster not running at {DASHBOARD_URL}")

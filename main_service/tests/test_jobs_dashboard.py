@@ -1,12 +1,8 @@
 """
-Section 19 of the test plan: job-related dashboard endpoints.
-
-- GET  /v1/jobs  (list, pagination, SSE)
-- POST /v1/jobs/{id}/stop
-- GET  /v1/jobs/{id}/result-stats
-- GET  /v1/jobs/{id}/logged-input-indexes
-- GET  /v1/jobs/{id}/next-failed-input
-- GET  /v1/jobs/{id}/logs
+Job-endpoint contracts that need precisely seeded state: the dashboard-stop
+cancellation signal the client reacts to, log-index semantics, and the 404
+boundary the client's pollers depend on. Happy-path rendering of the jobs
+pages is covered by the browser tier in tests/dashboard/.
 """
 
 from __future__ import annotations
@@ -91,20 +87,6 @@ def test_result_stats_404_when_missing(main_http_client, local_dev_cluster):
     assert resp.status_code == 404
 
 
-def test_result_stats_returns_counters(
-    main_http_client, local_dev_cluster, isolated_job_id, cleanup_job
-):
-    job_id = cleanup_job(isolated_job_id())
-    _seed_running_job(main_http_client, job_id, n_inputs=5)
-
-    resp = main_http_client.get(f"/v1/jobs/{job_id}/result-stats")
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["n_inputs"] == 5
-    assert "n_results" in body
-    assert "n_failed" in body
-
-
 def test_logged_input_indexes_returns_sorted_unique(
     main_http_client, local_dev_cluster, isolated_job_id, cleanup_job
 ):
@@ -126,11 +108,6 @@ def test_logged_input_indexes_returns_sorted_unique(
     body = resp.json()
     assert sorted(body["indexes_with_logs"]) == body["indexes_with_logs"]
     assert 5 in body["failed_indexes"]
-
-
-def test_job_logs_404_when_job_missing(main_http_client, local_dev_cluster):
-    resp = main_http_client.get(f"/v1/jobs/nomatch-{int(time.time())}/logs?index=0")
-    assert resp.status_code in (200, 404)  # may return {logs: []}
 
 
 def test_job_logs_returns_logs_for_index(

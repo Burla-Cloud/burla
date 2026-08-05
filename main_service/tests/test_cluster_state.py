@@ -1,7 +1,8 @@
 """
-Section 17 of the test plan: `GET /v1/cluster/state`,
-`GET /v1/cluster/nodes/{id}`, `GET /v1/cluster/nodes/{id}/fail_reason`,
-`POST /v1/cluster/nodes/{id}/fail`.
+Node-state contracts the burla client and node_services rely on:
+`GET /v1/cluster/nodes/{id}` (the client's node poll), the reserved-node
+exclusion invariant, and fail-reason extraction from node logs. All state is
+seeded through the same push endpoints real nodes use.
 """
 
 from __future__ import annotations
@@ -22,18 +23,6 @@ def _push_node_state(main_http_client, instance_name: str, state: dict) -> None:
 def _push_node_logs(main_http_client, instance_name: str, logs: list[dict]) -> None:
     resp = main_http_client.post(f"/v1/nodes/{instance_name}/logs:batch", json={"logs": logs})
     assert resp.status_code == 200, resp.text
-
-
-def test_cluster_state_returns_expected_shape(main_http_client, local_dev_cluster):
-    resp = main_http_client.get("/v1/cluster/state")
-    assert resp.status_code == 200
-    body = resp.json()
-    assert "booting_count" in body
-    assert "running_count" in body
-    assert "ready_nodes" in body
-    assert isinstance(body["booting_count"], int)
-    assert isinstance(body["running_count"], int)
-    assert isinstance(body["ready_nodes"], list)
 
 
 def test_cluster_state_ready_nodes_excludes_reserved(
@@ -76,24 +65,10 @@ def test_get_node_returns_dict_for_live_node(main_http_client, local_dev_cluster
 
 
 def test_get_node_404_when_not_in_cache(main_http_client, local_dev_cluster):
+    """The client treats a 404 on a node it was polling as node failure, so
+    absent nodes must read as 404, never as an empty 200."""
     resp = main_http_client.get("/v1/cluster/nodes/burla-node-definitely-does-not-exist")
     assert resp.status_code == 404
-
-
-def test_get_node_fail_reason_404_when_no_matching_log(
-    main_http_client, local_dev_cluster, cleanup_node
-):
-    """Node with no error-looking logs should return 404. fail_reason reads
-    log history only, so no live node needs to exist."""
-    instance_name = f"burla-node-nolog{int(time.time())%100000}"
-    cleanup_node(instance_name)
-    # A non-error log ensures the token filter works.
-    _push_node_logs(main_http_client, instance_name, [
-        {"msg": "routine info message", "ts": time.time()},
-    ])
-    time.sleep(1)
-    resp = main_http_client.get(f"/v1/cluster/nodes/{instance_name}/fail_reason")
-    assert resp.status_code in (200, 404)
 
 
 def test_get_node_fail_reason_returns_first_matching_error(
@@ -110,34 +85,3 @@ def test_get_node_fail_reason_returns_first_matching_error(
     resp = main_http_client.get(f"/v1/cluster/nodes/{instance_name}/fail_reason")
     assert resp.status_code == 200
     assert "Traceback" in resp.json()["reason"] or "wrong" in resp.json()["reason"]
-
-
-@pytest.mark.skip(
-    reason="needs rework: firestore removed, cannot seed state directly. A fake "
-    "node marked FAILED can never be removed from live state (DELETED does not "
-    "overwrite FAILED) and would permanently dirty the cluster readiness gate."
-)
-def test_post_node_fail_marks_and_deletes(
-    main_http_client, local_dev_cluster, cleanup_node, wait_for_fixture
-):
-    instance_name = f"burla-node-fail{int(time.time())%100000}"
-    cleanup_node(instance_name)
-    _push_node_state(main_http_client, instance_name, {
-        "status": "READY",
-        "started_booting_at": time.time(),
-    })
-
-    resp = main_http_client.post(
-        f"/v1/cluster/nodes/{instance_name}/fail",
-        json={"reason": "test-induced failure"},
-    )
-    # The endpoint marks the node FAILED synchronously, then kicks off a
-    # background delete of the VM. For this fake node the VM delete will fail
-    # (no such instance), but the status update must still have landed.
-    assert resp.status_code in (200, 204, 500)
-
-    def _status():
-        node_resp = main_http_client.get(f"/v1/cluster/nodes/{instance_name}")
-        return node_resp.json().get("status") if node_resp.status_code == 200 else None
-
-    assert wait_for_fixture(_status, timeout=5) == "FAILED"

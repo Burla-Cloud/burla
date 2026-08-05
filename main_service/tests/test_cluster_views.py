@@ -1,15 +1,10 @@
 """
-Section 20: cluster dashboard endpoints.
-
-- GET    /v1/cluster (SSE)
-- DELETE /v1/cluster/{node_id}
-- GET    /v1/cluster/{node_id}/logs (SSE)
-- GET    /v1/cluster/deleted_recent_paginated
+The dashboard's live cluster feed: `GET /v1/cluster` (SSE). The protocol
+itself (an initial event on connect) can't be pinned down through a browser
+test, which only sees the rendered result.
 """
 
 from __future__ import annotations
-
-import time
 
 import pytest
 
@@ -37,15 +32,3 @@ def test_cluster_sse_initial_event(main_http_client, local_dev_cluster):
             lines_read += 1
             if lines_read > 2:
                 break
-
-
-def test_deleted_recent_paginated_returns_shape(main_http_client, local_dev_cluster):
-    resp = main_http_client.get("/v1/cluster/deleted_recent_paginated?page_size=10")
-    if resp.status_code == 401:
-        pytest.skip("auth required")
-    assert resp.status_code == 200
-    body = resp.json()
-    assert "nodes" in body
-    assert "total" in body
-    assert "meta" in body
-    assert body["meta"]["cutoff_days"] == 7

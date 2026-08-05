@@ -36,7 +36,7 @@ define TEST_SHELL
 endef
 
 .PHONY: 3.11-dev 3.12-dev 3.13-dev 3.14-dev local-dev remote-dev local-images \
-	stop stop-all cluster-info test test-service test-e2e \
+	stop stop-all cluster-info test test-service test-e2e test-dashboard \
 	kill-kernels
 
 3.11-dev:
@@ -65,6 +65,12 @@ test-service:
 test-e2e:
 	BURLA_CLUSTER_DASHBOARD_URL=$${BURLA_CLUSTER_DASHBOARD_URL:-$(BURLA_DASHBOARD_URL)} \
 	BURLA_REQUIRE_CLUSTER=1 uv run --project ./client --group dev pytest -m e2e -s --disable-warnings
+
+# Dashboard-UI tests, driven through real Chromium. Requires a cluster.
+test-dashboard:
+	uv run --project ./client --group dev playwright install chromium; \
+	BURLA_CLUSTER_DASHBOARD_URL=$${BURLA_CLUSTER_DASHBOARD_URL:-$(BURLA_DASHBOARD_URL)} \
+	BURLA_REQUIRE_CLUSTER=1 uv run --project ./client --group dev pytest -m dashboard -s --disable-warnings
 
 cluster-info:
 	echo "cluster:        $(BURLA_CLUSTER_NAME)"; \

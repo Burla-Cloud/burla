@@ -6,7 +6,6 @@ interface ClusterStatusCardProps {
   status: ClusterStatus;
   parallelism: number;
   totalRam: string;
-  gpuSummary: string;
   gpuCount?: number;
   hasResources?: boolean;
 }
@@ -23,7 +22,6 @@ export const ClusterStatusCard = ({
   status,
   parallelism,
   totalRam,
-  gpuSummary,
   gpuCount,
   hasResources = false,
 }: ClusterStatusCardProps) => {

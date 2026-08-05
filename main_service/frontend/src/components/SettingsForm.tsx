@@ -12,16 +12,13 @@ import {
     SelectContent,
     SelectItem,
 } from "@/components/ui/select";
-import { toast } from "@/components/ui/use-toast";
 
-// Add prop type for SettingsForm
 interface SettingsFormProps {
-    isEditing: boolean;
-    onChange?: () => void;
+    onChange: () => void;
 }
 
 export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, SettingsFormProps>(
-    ({ isEditing, onChange }, ref) => {
+    ({ onChange }, ref) => {
         const { settings, setSettings } = useSettings();
         const users = settings.users ?? [];
         const [newUser, setNewUser] = useState("");
@@ -117,8 +114,6 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
         }, [settings.machineType]);
 
         React.useEffect(() => {
-            if (!gpuCpuMap) return;
-        
             let newMachineType;
             if (gpuVariant === "None") {
                 newMachineType = cpuChoice;
@@ -129,7 +124,7 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
         
             if (settings.machineType !== newMachineType) {
                 setSettings((prev) => ({ ...prev, machineType: newMachineType }));
-                if (typeof onChange === "function") onChange(); // trigger dirty flag
+                onChange();
             }
         }, [gpuVariant, gpusPerVm, cpuChoice]);
 
@@ -137,7 +132,7 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
             setSettings((prev) => {
                 const changed = prev[key] !== value;
                 const next = changed ? { ...prev, [key]: value } : prev;
-                if (changed && typeof onChange === "function") onChange();
+                if (changed) onChange();
                 return next;
             });
         };
@@ -152,13 +147,13 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
             const nextUsers = [...users, email];
             setSettings(prev => ({ ...prev, users: nextUsers }));
             setNewUser("");
-            if (typeof onChange === "function") onChange(); // mark dirty so Save shows
+            onChange();
           };
 
           const removeUser = (user: string) => {
             const nextUsers = users.filter(u => u !== user);
             setSettings(prev => ({ ...prev, users: nextUsers }));
-            if (typeof onChange === "function") onChange();
+            onChange();
           };
 
         const labelClass = "block text-sm font-medium text-gray-500 mb-1";
@@ -234,38 +229,6 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
         // AWS regions where each machine family is actually offered
         // (CPU nodes are m7i.*, GPU mappings come from providers/catalog.py).
         const AWS_REGION_OPTIONS = {
-            "A100 40G": [
-                // p4d.24xlarge
-                { value: "us-east-1", label: "us-east-1" },
-                { value: "us-east-2", label: "us-east-2" },
-                { value: "us-west-2", label: "us-west-2" },
-                { value: "eu-west-1", label: "eu-west-1" },
-                { value: "eu-west-2", label: "eu-west-2" },
-                { value: "eu-central-1", label: "eu-central-1" },
-                { value: "ap-northeast-1", label: "ap-northeast-1" },
-                { value: "ap-northeast-2", label: "ap-northeast-2" },
-                { value: "ap-south-1", label: "ap-south-1" },
-                { value: "ap-southeast-1", label: "ap-southeast-1" },
-            ],
-            "A100 80G": [
-                // p4de.24xlarge
-                { value: "us-east-1", label: "us-east-1" },
-                { value: "us-west-2", label: "us-west-2" },
-            ],
-            "H100 80G": [
-                // union of p5.4xlarge and p5.48xlarge availability
-                { value: "us-east-1", label: "us-east-1" },
-                { value: "us-east-2", label: "us-east-2" },
-                { value: "us-west-2", label: "us-west-2" },
-                { value: "eu-central-1", label: "eu-central-1" },
-                { value: "eu-north-1", label: "eu-north-1" },
-                { value: "eu-west-2", label: "eu-west-2" },
-                { value: "ap-south-1", label: "ap-south-1" },
-                { value: "ap-northeast-1", label: "ap-northeast-1" },
-                { value: "ap-southeast-2", label: "ap-southeast-2" },
-                { value: "ap-southeast-3", label: "ap-southeast-3" },
-                { value: "sa-east-1", label: "sa-east-1" },
-            ],
             None: [
                 { value: "us-east-1", label: "us-east-1" },
                 { value: "us-east-2", label: "us-east-2" },
@@ -288,14 +251,13 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
 
         // Helper to determine which region list to use
         function getRegionOptionsForGpu(gpuVariant) {
-            const options = isAws ? AWS_REGION_OPTIONS : GCP_REGION_OPTIONS;
-            if (gpuVariant === "None") return options["None"];
-            if (gpuVariant.includes("A100 40G")) return options["A100 40G"];
-            if (gpuVariant.includes("A100 80G")) return options["A100 80G"];
-            if (gpuVariant.includes("H100 80G")) return options["H100 80G"];
-            if (gpuVariant.includes("H200 141G")) return options["H200 141G"] || options["None"];
-            // fallback to None if unknown
-            return options["None"];
+            if (isAws) return AWS_REGION_OPTIONS.None;
+            if (gpuVariant === "None") return GCP_REGION_OPTIONS.None;
+            if (gpuVariant.includes("A100 40G")) return GCP_REGION_OPTIONS["A100 40G"];
+            if (gpuVariant.includes("A100 80G")) return GCP_REGION_OPTIONS["A100 80G"];
+            if (gpuVariant.includes("H100 80G")) return GCP_REGION_OPTIONS["H100 80G"];
+            if (gpuVariant.includes("H200 141G")) return GCP_REGION_OPTIONS["H200 141G"];
+            return GCP_REGION_OPTIONS.None;
         }
 
         const regionOptions = getRegionOptionsForGpu(gpuVariant);
@@ -309,18 +271,6 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
             }),
             [isRegionValid]
         );
-
-        // --- Save button logic ---
-        // If parent controls isEditing, we need to notify parent to block save if region is invalid.
-        // We'll assume SettingsForm gets a prop onInvalidRegion if needed, but for now, show toast and block save.
-        React.useEffect(() => {
-            if (!isEditing && !isRegionValid) {
-                toast({
-                    title: "Please select a region from dropdown",
-                    variant: "destructive",
-                });
-            }
-        }, [isEditing, isRegionValid]);
 
         return (
             <div className="space-y-12 overflow-hidden max-w-6xl mx-auto w-full">
@@ -353,7 +303,6 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
                                         </TooltipProvider>
                                     </div>
                                     <Input
-                                        disabled={!isEditing}
                                         className="w-full h-9.5"
                                         value={settings.containerImage}
                                         onChange={(e) =>
@@ -375,7 +324,6 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
                                     <Input
                                         type="text"
                                         inputMode="numeric"
-                                        disabled={!isEditing}
                                         className="h-9.5 w-full"
                                         value={settings.machineQuantity || ""}
                                         onChange={(e) => {
@@ -398,7 +346,7 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
                                 <div className="flex flex-col space-y-2">
                                     <label className={labelClass}>vCPU / RAM</label>
                                     <Select
-                                        disabled={!isEditing || gpuVariant !== "None"}
+                                        disabled={gpuVariant !== "None"}
                                         value={
                                             gpuVariant === "None"
                                                 ? cpuChoice
@@ -407,7 +355,7 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
                                         onValueChange={(val) => {
                                             setCpuChoice(val);
                                             setSettings((prev) => ({ ...prev, machineType: val }));
-                                            if (typeof onChange === "function") onChange();
+                                            onChange();
                                         }}
                                     >
                                         <SelectTrigger className="w-full h-9.5">
@@ -449,7 +397,7 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
                                         )}
                                     </div>
                                     <Select
-                                        disabled={!isEditing || isAws}
+                                        disabled={isAws}
                                         value={gpuVariant}
                                         onValueChange={(val) => {
                                             setGpuVariant(val);
@@ -479,7 +427,6 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
                                     <label className={labelClass}>GPUs per VM</label>
                                     <Select
                                         disabled={
-                                            !isEditing ||
                                             gpuVariant === "None" ||
                                             // only one size sold (e.g. AWS A100s): nothing to choose
                                             VARIANT_INFO[gpuVariant].length === 1
@@ -514,7 +461,6 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
                                     <Input
                                         type="text"
                                         inputMode="numeric"
-                                        disabled={!isEditing}
                                         className="w-full h-9.5"
                                         value={settings.diskSize || ""}
                                         onChange={(e) => {
@@ -539,13 +485,12 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
                                         {isAws ? "AWS Region" : "GCP Region"}
                                     </label>
                                     <Select
-                                        disabled={!isEditing}
                                         value={settings.gcpRegion || ""}
                                         onValueChange={(val) => handleInputChange("gcpRegion", val)}
                                     >
                                         <SelectTrigger
                                             className={`w-full h-9.5 ${
-                                                !isRegionValid && isEditing
+                                                !isRegionValid
                                                     ? "border-red-500 focus:ring-red-500 ring-2"
                                                     : ""
                                             }`}
@@ -560,7 +505,7 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
                                             ))}
                                         </SelectContent>
                                     </Select>
-                                    {!isRegionValid && isEditing && (
+                                    {!isRegionValid && (
                                         <span className="text-xs text-red-600 mt-1">
                                             Please select a region from dropdown
                                         </span>
@@ -575,7 +520,6 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
                                     <Input
                                         type="text"
                                         inputMode="numeric"
-                                        disabled={!isEditing}
                                         className="w-full h-9.5"
                                         value={settings.inactivityTimeout ?? ""}
                                         onChange={(e) => {
@@ -618,17 +562,16 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
                                 <form
                                     onSubmit={(e) => {
                                         e.preventDefault();
-                                        if (isEditing) addUser();
+                                        addUser();
                                     }}
                                     className="flex gap-2 w-full"
                                 >
                                     <Input
-                                        disabled={!isEditing}
                                         className="w-full h-9.5"
                                         value={newUser}
                                         onChange={(e) => setNewUser(e.target.value)}
                                     />
-                                    <Button type="button" onClick={() => isEditing && addUser()} disabled={!isEditing} variant="secondary">
+                                    <Button type="button" onClick={addUser} variant="secondary">
                                         Add
                                     </Button>
                                 </form>
@@ -640,14 +583,12 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
                                         className="bg-gray-100 border border-gray-300 text-gray-800 px-2 py-1 rounded-md flex items-center gap-1"
                                     >
                                         {user}
-                                        {isEditing && (
-                                            <button
-                                                onClick={() => removeUser(user)}
-                                                className="text-gray-500 hover:text-gray-700 text-xl leading-none"
-                                            >
-                                                ×
-                                            </button>
-                                        )}
+                                        <button
+                                            onClick={() => removeUser(user)}
+                                            className="text-gray-500 hover:text-gray-700 text-xl leading-none"
+                                        >
+                                            ×
+                                        </button>
                                     </span>
                                 ))}
                             </div>

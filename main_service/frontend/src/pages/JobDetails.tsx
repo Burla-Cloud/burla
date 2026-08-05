@@ -1,4 +1,4 @@
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams } from "react-router-dom";
 import { useEffect, useRef, useState } from "react";
 import { useJobs } from "@/contexts/JobsContext";
 import JobLogs from "@/components/JobLogs";
@@ -38,9 +38,8 @@ const Fact = ({
 );
 
 const JobDetails = () => {
-    const { jobId } = useParams<{ jobId: string }>();
+    const jobId = useParams<{ jobId: string }>().jobId!;
     const { jobs } = useJobs();
-    const navigate = useNavigate();
     const { toast } = useToast();
     const [isStopping, setIsStopping] = useState(false);
     const [stats, setStats] = useState<JobResultStats | null>(null);
@@ -92,48 +91,6 @@ const JobDetails = () => {
         };
     }, []);
 
-    const getTimeZoneAbbr = (tz: string, at: Date): string => {
-        const parts = new Intl.DateTimeFormat("en-US", {
-            timeZone: tz,
-            timeZoneName: "short",
-            hour: "numeric",
-        }).formatToParts(at);
-        return parts.find((p) => p.type === "timeZoneName")?.value || "";
-    };
-
-    const formatStartedAtTime = (date?: Date): string => {
-        if (!date) return "";
-        const tz = userTimeZone || Intl.DateTimeFormat().resolvedOptions().timeZone;
-        const t = date.toLocaleTimeString("en-US", {
-            timeZone: tz,
-            hour: "numeric",
-            minute: "2-digit",
-            hour12: true,
-        });
-        const abbr = getTimeZoneAbbr(tz, date);
-        return `${t} ${abbr},`;
-    };
-
-    const formatStartedAtWeekday = (date?: Date): string => {
-        if (!date) return "";
-        const tz = userTimeZone || Intl.DateTimeFormat().resolvedOptions().timeZone;
-        const wd = date.toLocaleDateString("en-US", {
-            timeZone: tz,
-            weekday: "long",
-        });
-        return `${wd},`;
-    };
-
-    const formatStartedAtMonthDay = (date?: Date): string => {
-        if (!date) return "";
-        const tz = userTimeZone || Intl.DateTimeFormat().resolvedOptions().timeZone;
-        return date.toLocaleDateString("en-US", {
-            timeZone: tz,
-            month: "short",
-            day: "numeric",
-        });
-    };
-
     const formatStartedAt = (date?: Date): string => {
         if (!date) return "—";
         const tz = userTimeZone || Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -173,7 +130,6 @@ const JobDetails = () => {
     };
 
     const stopJob = async () => {
-        if (!jobId) return;
         try {
             setIsStopping(true);
             const res = await fetch(`/v1/jobs/${jobId}/stop`, { method: "POST" });
@@ -190,25 +146,9 @@ const JobDetails = () => {
         }
     };
 
-    if (!jobId) {
-        return (
-            <div className="flex-1 flex flex-col items-center justify-center px-12 pt-10">
-                <h1 className="text-2xl font-semibold text-red-600">Missing job ID</h1>
-                <button
-                    onClick={() => navigate("/jobs")}
-                    className="mt-4 text-primary underline underline-offset-2"
-                >
-                    Back to Jobs
-                </button>
-            </div>
-        );
-    }
-
     const job = jobs.find((j) => j.id === jobId);
 
     useEffect(() => {
-        if (!jobId) return;
-
         setStats(null);
         setStatsLoadError(false);
         setIsStatsLoading(true);
@@ -216,7 +156,6 @@ const JobDetails = () => {
     }, [jobId]);
 
     useEffect(() => {
-        if (!jobId) return;
         setJobDoc(null);
         const controller = new AbortController();
         (async () => {
@@ -228,8 +167,6 @@ const JobDetails = () => {
     }, [jobId]);
 
     useEffect(() => {
-        if (!jobId) return;
-
         const controller = new AbortController();
         let cancelled = false;
         let refreshIntervalId: number | undefined;

@@ -3,13 +3,11 @@ import { BurlaNode, NodeStatus } from "@/types/coreTypes";
 
 interface NodesContextType {
   nodes: BurlaNode[];
-  setNodes: React.Dispatch<React.SetStateAction<BurlaNode[]>>;
   loading: boolean;
 }
 
 const NodesContext = createContext<NodesContextType>({
   nodes: [],
-  setNodes: () => {},
   loading: true,
 });
 
@@ -147,7 +145,7 @@ export const NodesProvider = ({ children }: { children: React.ReactNode }) => {
   }, []);
 
   return (
-    <NodesContext.Provider value={{ nodes, setNodes, loading }}>
+    <NodesContext.Provider value={{ nodes, loading }}>
       {children}
     </NodesContext.Provider>
   );

@@ -857,13 +857,7 @@ export default function Filesystem() {
                     continue;
                 }
 
-                let originalRelativePath: string;
-                try {
-                    originalRelativePath = relativePathForFile(fileEntry);
-                } catch (error) {
-                    throw error;
-                }
-
+                const originalRelativePath = relativePathForFile(fileEntry);
                 const normalizedRelativePath = normalizeUploadRelativePath(originalRelativePath);
                 const segments = normalizedRelativePath.split("/").filter(Boolean);
                 if (segments.length > 1) {
@@ -1362,15 +1356,9 @@ export default function Filesystem() {
         if (args.action === "delete") {
             const result = (args.result ?? {}) as {
                 backgroundDelete?: boolean;
-                deletedCount?: number;
             };
 
             if (result.backgroundDelete) {
-                const itemCount =
-                    typeof result.deletedCount === "number" && result.deletedCount > 0
-                        ? result.deletedCount
-                        : null;
-                const countLabel = itemCount ? `${itemCount} items` : "selected items";
                 showBackgroundDeletePopup(
                     `Due to the high number of items to delete, this operation will be completed in the background.`
                 );

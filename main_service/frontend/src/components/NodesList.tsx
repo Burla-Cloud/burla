@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
     Table,
@@ -10,7 +10,7 @@ import {
 } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
-import { Cpu, X, ChevronRight, Copy } from "lucide-react";
+import { Cpu, X, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { BurlaNode, NodeStatus } from "@/types/coreTypes";
 import { AWS_MACHINE_SPECS } from "@/types/constants";
@@ -33,12 +33,10 @@ export const NodesList: React.FC<NodesListProps> = ({
     onShowDeletedChange,
 }) => {
     const [showWelcome, setShowWelcome] = useState(true);
-    const [copied, setCopied] = useState(false);
 
     const [expandedNodeId, setExpandedNodeId] = useState<string | null>(null);
     const [nodeLogs, setNodeLogs] = useState<Record<string, string[]>>({});
     const [logsLoading, setLogsLoading] = useState<Record<string, boolean>>({});
-    const logSourceRef = useRef<EventSource | null>(null);
 
     const didMountRef = useRef(false);
 
@@ -53,13 +51,6 @@ export const NodesList: React.FC<NodesListProps> = ({
 
     // UX: when switching showDeleted on, show loader until first deleted page returns
     const [showDeletedHydrating, setShowDeletedHydrating] = useState(false);
-
-    const pythonExampleCode = `from burla import remote_parallel_map
-
-def my_function(x):
-    print(f"Running on a remote computer in the cloud! #{x}")
-
-remote_parallel_map(my_function, list(range(1000)))`;
 
     useEffect(() => {
         const isWelcomeHidden =
@@ -215,7 +206,6 @@ remote_parallel_map(my_function, list(range(1000)))`;
             let clearedOnThisConnection = false;
 
             source = new EventSource(`/v1/cluster/${expandedNodeId}/logs`);
-            logSourceRef.current = source;
 
             source.onopen = () => {
                 armRotationTimer();

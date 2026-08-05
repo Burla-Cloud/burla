@@ -3,7 +3,6 @@ import { BurlaJob, JobsStatus } from "@/types/coreTypes";
 
 interface JobsContextType {
     jobs: BurlaJob[];
-    setJobs: React.Dispatch<React.SetStateAction<BurlaJob[]>>;
     page: number;
     setPage: React.Dispatch<React.SetStateAction<number>>;
     totalPages: number;
@@ -12,7 +11,6 @@ interface JobsContextType {
 
 const JobsContext = createContext<JobsContextType>({
     jobs: [],
-    setJobs: () => {},
     page: 0,
     setPage: () => {},
     totalPages: 1,
@@ -101,7 +99,6 @@ export const JobsProvider = ({ children }: { children: React.ReactNode }) => {
                         id: data.jobId,
                         status: data.status as JobsStatus,
                         user: data.user || "Unknown",
-                        checked: false,
                         n_inputs: typeof data.n_inputs === "number" ? data.n_inputs : 0,
                         n_results: typeof data.n_results === "number" ? data.n_results : 0,
                         n_failed: typeof data.n_failed === "number" ? data.n_failed : 0,
@@ -159,7 +156,7 @@ export const JobsProvider = ({ children }: { children: React.ReactNode }) => {
     }, [page]);
 
     return (
-        <JobsContext.Provider value={{ jobs, setJobs, page, setPage, totalPages, isLoading }}>
+        <JobsContext.Provider value={{ jobs, page, setPage, totalPages, isLoading }}>
             {children}
         </JobsContext.Provider>
     );
@@ -169,7 +166,6 @@ const createNewJob = (data: any): BurlaJob => ({
     id: data.jobId,
     status: data.status as JobsStatus,
     user: data.user || "Unknown",
-    checked: false,
     n_inputs: typeof data.n_inputs === "number" ? data.n_inputs : 0,
     n_results: typeof data.n_results === "number" ? data.n_results : 0,
     n_failed: typeof data.n_failed === "number" ? data.n_failed : 0,

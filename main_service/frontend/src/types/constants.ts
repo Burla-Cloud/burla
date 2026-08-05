@@ -4,18 +4,7 @@ export type VmType = "CPU" | "A100" | "H100" | "H200";
 
 export const VM_TYPES: VmType[] = ["CPU", "A100", "H100", "H200"];
 
-// Keep if other UI uses it. Removed n4-standard-48 because you do not price it.
-export const MACHINE_TYPES = [
-  "n4-standard-2",
-  "n4-standard-4",
-  "n4-standard-8",
-  "n4-standard-16",
-  "n4-standard-32",
-  "n4-standard-64",
-  "n4-standard-80",
-];
-
-export const GCP_MACHINE_MAPPING: Record<string, VmType> = {
+const GCP_MACHINE_MAPPING: Record<string, VmType> = {
   "a2-highgpu-1g": "A100",
   "a2-highgpu-2g": "A100",
   "a2-highgpu-4g": "A100",
@@ -54,7 +43,7 @@ export const GCP_MACHINE_MAPPING: Record<string, VmType> = {
   "m7i.16xlarge": "CPU",
 };
 
-export const GCP_MACHINE_PRICING_MAPPING: Record<
+const GCP_MACHINE_PRICING_MAPPING: Record<
   string,
   { type: VmType; on_demand_price: number }
 > = {

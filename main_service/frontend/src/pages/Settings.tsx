@@ -187,7 +187,6 @@ const SettingsPage = () => {
       return (
         <SettingsForm
           ref={settingsFormRef}
-          isEditing={true}
           onChange={() => setHasUnsavedChanges(true)}
         />
       );

@@ -52,23 +52,33 @@ endef
 # `make remote-dev`) in another terminal. Tests reach it at
 # BURLA_CLUSTER_DASHBOARD_URL, defaulted here to this checkout's head port so
 # they never talk to another checkout's cluster.
+#
+# DISABLE_BURLA_TELEMETRY silences the client's telemetry (which the backend
+# forwards to Slack) for the pytest process and every rpm subprocess it
+# spawns. It does NOT reach the already-running head/nodes/workers: those
+# inherited their env from the `make local-dev` that started them, so export
+# DISABLE_BURLA_TELEMETRY=True before `make local-dev` to silence those too.
 test:
+	DISABLE_BURLA_TELEMETRY=True \
 	BURLA_CLUSTER_DASHBOARD_URL=$${BURLA_CLUSTER_DASHBOARD_URL:-$(BURLA_DASHBOARD_URL)} \
 	BURLA_REQUIRE_CLUSTER=1 uv run --project ./client --group dev pytest -s --disable-warnings
 
 # Service-level tests. Requires a cluster for this checkout.
 test-service:
+	DISABLE_BURLA_TELEMETRY=True \
 	BURLA_CLUSTER_DASHBOARD_URL=$${BURLA_CLUSTER_DASHBOARD_URL:-$(BURLA_DASHBOARD_URL)} \
 	BURLA_REQUIRE_CLUSTER=1 uv run --project ./client --group dev pytest -m service -s --disable-warnings
 
 # End-to-end tests. Requires a cluster for this checkout.
 test-e2e:
+	DISABLE_BURLA_TELEMETRY=True \
 	BURLA_CLUSTER_DASHBOARD_URL=$${BURLA_CLUSTER_DASHBOARD_URL:-$(BURLA_DASHBOARD_URL)} \
 	BURLA_REQUIRE_CLUSTER=1 uv run --project ./client --group dev pytest -m e2e -s --disable-warnings
 
 # Dashboard-UI tests, driven through real Chromium. Requires a cluster.
 test-dashboard:
 	uv run --project ./client --group dev playwright install chromium; \
+	DISABLE_BURLA_TELEMETRY=True \
 	BURLA_CLUSTER_DASHBOARD_URL=$${BURLA_CLUSTER_DASHBOARD_URL:-$(BURLA_DASHBOARD_URL)} \
 	BURLA_REQUIRE_CLUSTER=1 uv run --project ./client --group dev pytest -m dashboard -s --disable-warnings
 

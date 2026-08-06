@@ -1,3 +1,4 @@
+import os
 import sys
 import requests
 import logging as python_logging
@@ -39,6 +40,10 @@ class ChattyClientEndpointFilter(python_logging.Filter):
 
 
 def log_telemetry(message, severity="INFO", **kwargs):
+    # Same kill switch as the client's _reporting.py; test runs set it so
+    # they don't spam Slack through the backend's telemetry route.
+    if os.environ.get("DISABLE_BURLA_TELEMETRY") == "True":
+        return
     try:
         payload = {"project_id": PROJECT_ID, "message": message, **kwargs}
         requests.post(f"{BURLA_BACKEND_URL}/v1/telemetry/log/{severity}", json=payload, timeout=1)

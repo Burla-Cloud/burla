@@ -536,6 +536,9 @@ class WorkerClient:
                 "REQUESTS_CA_BUNDLE=/etc/burla/ca-bundle.pem",
                 "CURL_CA_BUNDLE=/etc/burla/ca-bundle.pem",
                 "BURLA_IN_WORKER=1",
+                # Nested rpm calls import the client in here, and that client
+                # sends telemetry too; forward the node's kill switch.
+                f"DISABLE_BURLA_TELEMETRY={os.environ.get('DISABLE_BURLA_TELEMETRY', '')}",
             ],
         }
 

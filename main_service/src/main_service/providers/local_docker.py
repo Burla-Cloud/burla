@@ -106,6 +106,10 @@ class LocalDockerProvider:
                 "MAIN_SERVICE_URL": MAIN_SERVICE_URL_FOR_NODES,
                 "CLUSTER_ID_TOKEN": CLUSTER_ID_TOKEN,
                 "BURLA_BACKEND_URL": BURLA_BACKEND_URL,
+                # Pass the telemetry kill switch down so a cluster started
+                # with it set is silent end to end (nodes forward it to
+                # their workers, where nested rpm clients also send telemetry).
+                "DISABLE_BURLA_TELEMETRY": os.environ.get("DISABLE_BURLA_TELEMETRY", ""),
             },
             detach=True,
         )

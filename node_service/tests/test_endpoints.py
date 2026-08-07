@@ -15,7 +15,9 @@ import time
 
 import pytest
 
-pytestmark = pytest.mark.service
+# Node calls go over plain http to localhost in local-dev, so the real host,
+# TLS, and cluster-CA path these endpoints serve only exists on real VMs.
+pytestmark = [pytest.mark.service, pytest.mark.remote_dev]
 
 
 def test_root_returns_status(node_http_client, any_ready_node):

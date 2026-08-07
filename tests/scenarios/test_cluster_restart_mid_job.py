@@ -14,7 +14,9 @@ import time
 
 import pytest
 
-pytestmark = [pytest.mark.e2e, pytest.mark.slow]
+# Restart is `docker rm` locally but a real terminate-and-reboot on VMs, and
+# the client-visible behavior that matters is the latter.
+pytestmark = [pytest.mark.e2e, pytest.mark.slow, pytest.mark.remote_dev]
 
 
 def test_cluster_restart_mid_job(

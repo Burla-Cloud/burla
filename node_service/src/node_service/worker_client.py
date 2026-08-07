@@ -16,6 +16,9 @@ from tblib import Traceback
 from node_service import (
     SELF,
     BURLA_CLUSTER_NAME,
+    INSTANCE_NAME,
+    IN_LOCAL_DEV_MODE,
+    LOCAL_DEV_NETWORK,
     NUM_GPUS,
     Logger,
     __version__,
@@ -32,10 +35,10 @@ LOG_START_MARKER_PREFIX = "__burla_input_start__:"
 LOG_END_MARKER_PREFIX = "__burla_input_end__:"
 OOM_KILL_MARKER_PREFIX = "__burla_oom_kill__:"
 
-# The first worker on a fresh VM downloads uv from GitHub and installs cloudpickle/tblib into
+# The first worker on a fresh VM downloads uv from GitHub and installs burla into
 # /worker_service_python_env before opening its socket. Under any network slowness this can take
-# well over 10 seconds (10s caused ~15% of initial boots to fail), and local-dev's fake-VM nodes
-# pay it on every node boot behind an extra layer of NAT; 20s still flaked there.
+# well over 10 seconds (10s caused ~15% of initial boots to fail), and local-dev pays it on every
+# node boot, into a bind-mounted host directory uv cannot hardlink into; 20s still flaked there.
 WORKER_BOOT_TIMEOUT_SECONDS = 60
 DYNAMIC_RAM_MAX_NODE_MEMORY_USED_FRACTION = 0.90
 DYNAMIC_RAM_TARGET_NODE_MEMORY_USED_FRACTION = 0.85
@@ -104,25 +107,9 @@ async def dynamic_ram_monitor_loop():
             try:
                 worker_memory.append((worker.memory_rss_bytes(), worker))
             except psutil.NoSuchProcess:
-                # The cached pid goes stale whenever worker_server.py exits and
-                # the container's shell loop relaunches it (OOM kill, crash).
-                # That is a restart, not a death: re-locate the process and only
-                # retire the worker when its container is actually gone.
-                stale_pid = worker.worker_host_pid
-                try:
-                    worker.worker_host_pid = await worker._get_worker_host_pid()
-                except Exception:
-                    container_info = await worker.container.show()
-                    if container_info["State"]["Running"]:
-                        continue  # worker_server.py is mid-relaunch, check next poll
-                    worker.retired = True
-                    worker.is_idle = True
-                    SELF["reboot_containers_after_job"] = True
-                    await Logger().log(
-                        f"Retired {worker.container_name}: process {stale_pid} is "
-                        "gone and its container is not running.",
-                        severity="WARNING",
-                    )
+                worker.retired = True
+                worker.is_idle = True
+                SELF["reboot_containers_after_job"] = True
         if not worker_memory:
             continue
 
@@ -444,6 +431,9 @@ async def retire_workers_for_dynamic_memory_pressure(
 class WorkerClient:
     def __init__(self, image: str):
         self.container_name = f"worker_{uuid4().hex[:8]}"
+        self.container_name += (
+            f"--node_{INSTANCE_NAME[11:]}" if IN_LOCAL_DEV_MODE else ""
+        )
         self.port = None
         self.image = image
         self.docker = aiodocker.Docker()
@@ -462,6 +452,8 @@ class WorkerClient:
         self.current_input = None
 
     def _worker_server_host_path(self):
+        if IN_LOCAL_DEV_MODE:
+            return f"{os.environ['HOST_PWD']}/node_service/src/node_service/worker_server.py"
         return str(Path(__file__).resolve().parent / "worker_server.py")
 
     async def _start_container(self):
@@ -472,26 +464,46 @@ class WorkerClient:
             "ShmSize": 16 * 1024**3,
         }
 
-        host_config["CgroupParent"] = "burla-workers.slice"
-        if NUM_GPUS != 0:
-            host_config["DeviceRequests"] = [{"Count": -1, "Capabilities": [["gpu"]]}]
-            host_config["Runtime"] = "nvidia"
-        binds.extend(
-            [
-                "/worker_service_python_env:/worker_service_python_env",
-                "/workspace/shared:/workspace/shared",
-                # node_auth bind: see NODE_AUTH_DIR in node_service/__init__.py.
-                "/opt/burla/node_auth:/root/.config/burla",
-                # worker_server.py installs burla from this checkout when
-                # the pre-populated env is missing - installing from PyPI
-                # instead would break any unreleased version.
-                "/opt/burla/client:/opt/burla/client:ro",
-                # public CAs + the cluster CA, so nested rpm calls can
-                # reach the head (cluster-CA cert) without breaking
-                # public-internet TLS for user code.
-                "/etc/burla/tls/ca-bundle.pem:/etc/burla/ca-bundle.pem:ro",
-            ]
-        )
+        # node_auth bind: see NODE_AUTH_DIR in node_service/__init__.py.
+        if IN_LOCAL_DEV_MODE:
+            host_pwd = os.environ["HOST_PWD"]
+            worker_python_environment_dir = (
+                f"{host_pwd}/_worker_service_python_env/{INSTANCE_NAME}"
+            )
+            host_config["NetworkMode"] = LOCAL_DEV_NETWORK
+            # The head runs on the docker host in local-dev; a nested rpm from
+            # user code reaches it at host.docker.internal.
+            host_config["ExtraHosts"] = ["host.docker.internal:host-gateway"]
+            binds.extend(
+                [
+                    f"{host_pwd}/_shared_workspace:/workspace/shared",
+                    f"{worker_python_environment_dir}:/worker_service_python_env",
+                    f"{host_pwd}/_node_auth:/root/.config/burla",
+                    f"{host_pwd}/client:/opt/burla/client:ro",
+                ]
+            )
+        else:
+            host_config["CgroupParent"] = "burla-workers.slice"
+            if NUM_GPUS != 0:
+                host_config["DeviceRequests"] = [
+                    {"Count": -1, "Capabilities": [["gpu"]]}
+                ]
+                host_config["Runtime"] = "nvidia"
+            binds.extend(
+                [
+                    "/worker_service_python_env:/worker_service_python_env",
+                    "/workspace/shared:/workspace/shared",
+                    "/opt/burla/node_auth:/root/.config/burla",
+                    # worker_server.py installs burla from this checkout when
+                    # the pre-populated env is missing - installing from PyPI
+                    # instead would break any unreleased version.
+                    "/opt/burla/client:/opt/burla/client:ro",
+                    # public CAs + the cluster CA, so nested rpm calls can
+                    # reach the head (cluster-CA cert) without breaking
+                    # public-internet TLS for user code.
+                    "/etc/burla/tls/ca-bundle.pem:/etc/burla/ca-bundle.pem:ro",
+                ]
+            )
 
         host_config["Binds"] = binds
 
@@ -522,25 +534,29 @@ class WorkerClient:
             "WorkingDir": "/workspace",
             "ExposedPorts": {f"{WORKER_INTERNAL_PORT}/tcp": {}},
             "HostConfig": host_config,
+            # Lets local-dev teardown find this cluster's containers without
+            # touching another checkout's cluster on the same docker daemon.
+            # `burla-cluster-member` excludes the head, which must survive a
+            # cluster restart.
             "Labels": {
                 "burla-cluster": BURLA_CLUSTER_NAME,
                 "burla-cluster-member": BURLA_CLUSTER_NAME,
             },
-            # The bundle is public CAs + the cluster CA (just public CAs when
-            # there is no cluster CA), so pointing every TLS stack at it
-            # (requests ignores SSL_CERT_FILE) changes nothing for public hosts.
-            # BURLA_IN_WORKER tells a nested rpm's client it can reach node
-            # hosts directly instead of via a local-dev localhost rewrite.
+            # Nested rpm calls import the client in here, and that client
+            # sends telemetry too; forward the node's kill switch.
             "Env": [
+                f"DISABLE_BURLA_TELEMETRY={os.environ.get('DISABLE_BURLA_TELEMETRY', '')}"
+            ],
+        }
+        if not IN_LOCAL_DEV_MODE:
+            # The bundle is public CAs + the cluster CA, so pointing every
+            # TLS stack at it (requests ignores SSL_CERT_FILE) changes
+            # nothing for public hosts.
+            config["Env"] += [
                 "SSL_CERT_FILE=/etc/burla/ca-bundle.pem",
                 "REQUESTS_CA_BUNDLE=/etc/burla/ca-bundle.pem",
                 "CURL_CA_BUNDLE=/etc/burla/ca-bundle.pem",
-                "BURLA_IN_WORKER=1",
-                # Nested rpm calls import the client in here, and that client
-                # sends telemetry too; forward the node's kill switch.
-                f"DISABLE_BURLA_TELEMETRY={os.environ.get('DISABLE_BURLA_TELEMETRY', '')}",
-            ],
-        }
+            ]
 
         self.container = await self.docker.containers.run(
             config=config, name=self.container_name
@@ -626,12 +642,20 @@ class WorkerClient:
     async def boot(self):
         await self._start_container()
         self.python_version = await self._get_python_version()
-        self.port = await self._get_host_port()
+        self.port = (
+            WORKER_INTERNAL_PORT if IN_LOCAL_DEV_MODE else await self._get_host_port()
+        )
         boot_started_at = time.perf_counter()
         while True:
             try:
+                connection_host = (
+                    self.container_name if IN_LOCAL_DEV_MODE else "127.0.0.1"
+                )
+                connection_port = (
+                    WORKER_INTERNAL_PORT if IN_LOCAL_DEV_MODE else self.port
+                )
                 self.reader, self.writer = await asyncio.open_connection(
-                    "127.0.0.1", self.port
+                    connection_host, connection_port
                 )
                 worker_socket = self.writer.get_extra_info("socket")
                 worker_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
@@ -895,8 +919,14 @@ class WorkerClient:
         reconnect_started_at = time.perf_counter()
         while True:
             try:
+                connection_host = (
+                    self.container_name if IN_LOCAL_DEV_MODE else "127.0.0.1"
+                )
+                connection_port = (
+                    WORKER_INTERNAL_PORT if IN_LOCAL_DEV_MODE else self.port
+                )
                 self.reader, self.writer = await asyncio.open_connection(
-                    "127.0.0.1", self.port
+                    connection_host, connection_port
                 )
                 worker_socket = self.writer.get_extra_info("socket")
                 worker_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
@@ -941,10 +971,13 @@ class WorkerClient:
         if self.log_writer is not None:
             await self.log_writer.stop()
             self.log_writer = None
-        try:
-            os.killpg(self.worker_host_pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
+        if IN_LOCAL_DEV_MODE:
+            await self.container.restart(t=0)
+        else:
+            try:
+                os.killpg(self.worker_host_pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
         await self._reconnect()
 
     async def _kill_worker_process(self):
@@ -966,7 +999,10 @@ class WorkerClient:
         if self.log_writer is not None:
             await self.log_writer.stop()
             self.log_writer = None
-        os.killpg(self.worker_host_pid, signal.SIGKILL)
+        if IN_LOCAL_DEV_MODE:
+            await self.container.delete(force=True)
+        else:
+            os.killpg(self.worker_host_pid, signal.SIGKILL)
         container_id = self.container_id
         self.container = None
         self.container_id = None

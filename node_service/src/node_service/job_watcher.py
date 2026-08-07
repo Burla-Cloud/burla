@@ -23,11 +23,6 @@ CLIENT_CONTACT_TIMEOUT_SEC = 5
 ACK_RETRY_TIMEOUT_SEC = 600
 ACK_RETRY_DELAY_SEC = 15
 WORKER_CLEANUP_TIMEOUT_SEC = 120
-# The set of nodes on a job changes rarely, so re-asking the head is cheap to do
-# seldom. Matches the client's wait before it hands a booting node the job.
-PEER_RECHECK_INTERVAL_SEC = 30
-# How long a node can make no progress before it logs its input accounting.
-STALL_REPORT_INTERVAL_SEC = 10
 
 SEC_NEIGHBOR_HAD_NO_INPUTS = 0
 
@@ -72,7 +67,6 @@ async def _input_steal_loop(session, logger, job_started_at, node_ids_expected):
     if not (neighbor_id or nodes_might_join):
         return
     neighbor_had_no_inputs_at = None
-    last_peer_check = time()
 
     while not SELF["job_watcher_stop_event"].is_set():
         await asyncio.sleep(1)
@@ -81,8 +75,7 @@ async def _input_steal_loop(session, logger, job_started_at, node_ids_expected):
             await asyncio.sleep(1)
             continue
 
-        if nodes_might_join and (time() - last_peer_check > PEER_RECHECK_INTERVAL_SEC):
-            last_peer_check = time()
+        if nodes_might_join and (time() - job_started_at > 60):
             neighbor_id, neighbor_host, nodes_might_join = await get_neighbor(
                 node_ids_expected
             )
@@ -208,8 +201,6 @@ async def _job_watcher(
     JOB_CANCELED = False
     last_results_update_time = time()
     last_reported_result_count = 0
-    last_progress_at = time()
-    last_progress_result_count = 0
     while not SELF["job_watcher_stop_event"].is_set():
 
         SELF["current_parallelism"] = sum(
@@ -261,28 +252,6 @@ async def _job_watcher(
             job_view = await _push_progress()
             last_results_update_time = time()
             last_reported_result_count = current_num_results
-
-        # A job that stops advancing is only diagnosable if you can see where
-        # its inputs went: this node's queue, a parked transfer, or a worker.
-        if current_num_results != last_progress_result_count:
-            last_progress_result_count = current_num_results
-            last_progress_at = time()
-        elif time() - last_progress_at > STALL_REPORT_INTERVAL_SEC:
-            last_progress_at = time()
-            await logger.log(
-                f"No new results for {STALL_REPORT_INTERVAL_SEC}s: "
-                f"queued_inputs={SELF['inputs_queue'].qsize()} "
-                f"inputs_in_transfer={pending_transfer_count} "
-                f"transfers={list(SELF['pending_transfers'])} "
-                f"busy_workers={SELF['current_parallelism']} "
-                f"results_produced={current_num_results} "
-                f"queued_results={SELF['results_queue'].qsize()} "
-                f"queued_result_bytes={SELF['results_queue'].size_bytes} "
-                f"unacked_result_batch={not pending_results_empty} "
-                f"workers={[(w.is_idle, w.retired) for w in SELF['workers']]} "
-                f"all_inputs_uploaded={SELF['all_inputs_uploaded']}",
-                severity="WARNING",
-            )
 
         client_disconnected = False
         if not client_contact_last_1s:

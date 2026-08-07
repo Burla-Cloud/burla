@@ -83,6 +83,46 @@ def image_size_GB(image: str):
     return round(size / 1_000_000_000, 2)
 
 
+async def _LOCAL_DEV_ONLY_pull_image_if_missing(
+    image: str, logger: Logger, docker: aiodocker.Docker
+):
+    """
+    Cannot pull using cli in local dev mode because this is already running in a docker container
+    and im too lazy to setup docker-in-docker that works with the CLI.
+    It dosent use this in prod because it's unreliable, `docker_client.pull` often fails silently.
+    """
+    try:
+        await docker.images.inspect(image)
+    except aiodocker.DockerError as e:
+        if e.status != 404:
+            raise
+
+        try:
+            await logger.log(f"Pulling image {image} ({image_size_GB(image)} GB) ...")
+        except Exception:
+            await logger.log(f"Pulling image {image} ...")
+
+        try:
+            await docker.images.pull(image)
+        except aiodocker.DockerError as e:
+            if "Unauthenticated request" in str(e):
+                print("Image is not public, trying again with credentials ...")
+                auth_config = _gcp_artifact_registry_auth()
+                await docker.images.pull(image, auth=auth_config)
+            else:
+                raise
+        # ODDLY, if docker_client.pull fails to pull the image, it will NOT throw any error >:(
+        # check here that the image was actually pulled and exists on disk,
+        try:
+            await docker.images.inspect(image)
+        except aiodocker.DockerError as e:
+            if e.status == 404:
+                raise Exception(
+                    f"Image {image} not found after pulling!\nDid vm run out of disk space?"
+                )
+            raise
+
+
 def _gcp_artifact_registry_auth() -> dict:
     """Private-image pulls from Google Artifact Registry. Only reachable on
     GCP (local-dev containers mount gcloud creds; GCE VMs use ADC)."""
@@ -97,6 +137,9 @@ def _gcp_artifact_registry_auth() -> dict:
 async def _pull_image_if_missing(image: str, logger: Logger, docker: aiodocker.Docker):
     # Use CLI instead of python api because that api just generally horrible and broken.
     # I already tried using it correctly, it wasnt worth it.
+
+    if IN_LOCAL_DEV_MODE:
+        return await _LOCAL_DEV_ONLY_pull_image_if_missing(image, logger, docker)
 
     async def _run_command(*args, input_bytes=None, raise_error=True):
         process = await asyncio.create_subprocess_exec(
@@ -291,17 +334,49 @@ async def reboot_containers(
 
         docker = aiodocker.Docker()
         try:
-            # remove all worker containers
-            all_containers = await docker.containers.list()
-            for container in all_containers:
-                if "worker" in container._container["Names"][0]:
-                    try:
-                        await container.kill()
-                    except Exception:
-                        pass
-                    _schedule_container_removal(
-                        container.id, logger, add_background_task
-                    )
+            if IN_LOCAL_DEV_MODE:
+                # Remove all "old" worker containers.
+                # Mark all existing workers as "old".
+                all_containers = await docker.containers.list(all=True)
+                worker_containers = [
+                    c for c in all_containers if "worker" in c._container["Names"][0]
+                ]
+                tasks = []
+                for container in worker_containers:
+                    name = container._container["Names"][0][1:]
+                    is_old = name.startswith("OLD")
+                    belongs_to_current_node = f"node_{INSTANCE_NAME[11:]}" in name
+
+                    if is_old and belongs_to_current_node:
+                        try:
+                            await container.kill()
+                        except Exception:
+                            pass
+                        _schedule_container_removal(
+                            container.id, logger, add_background_task
+                        )
+
+                    elif belongs_to_current_node:
+                        tasks.append(container.rename(f"OLD--{name}"))
+                        tasks.append(container.stop(t=0))
+
+                try:
+                    await asyncio.gather(*tasks)
+                except aiodocker.DockerError as e:
+                    if "already in progress" not in str(e):
+                        raise
+            else:
+                # remove all worker containers
+                all_containers = await docker.containers.list()
+                for container in all_containers:
+                    if "worker" in container._container["Names"][0]:
+                        try:
+                            await container.kill()
+                        except Exception:
+                            pass
+                        _schedule_container_removal(
+                            container.id, logger, add_background_task
+                        )
 
             # start new workers.
             workers = []

@@ -293,7 +293,12 @@ async def execute(
     SELF["current_parallelism"] = 0
     SELF["dynamic_func_ram"] = request_json["func_ram"] == "dynamic"
     SELF["reboot_containers_after_job"] = False
-    if SELF["dynamic_func_ram"]:
+    # In local-dev the workers are sibling containers of this one, so the pids
+    # docker reports for them belong to the docker host and don't exist in this
+    # container's pid namespace: every memory read raises NoSuchProcess and
+    # retires a perfectly healthy worker. Nothing is lost by skipping it, local-dev
+    # puts no memory limit on nodes or workers, so there is no pressure to relieve.
+    if SELF["dynamic_func_ram"] and not IN_LOCAL_DEV_MODE:
         SELF["dynamic_ram_monitor_task"] = asyncio.create_task(
             dynamic_ram_monitor_loop()
         )

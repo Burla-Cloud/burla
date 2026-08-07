@@ -15,8 +15,14 @@ import time
 import pytest
 
 # Restart is `docker rm` locally but a real terminate-and-reboot on VMs, and
-# the client-visible behavior that matters is the latter.
-pytestmark = [pytest.mark.e2e, pytest.mark.slow, pytest.mark.remote_dev]
+# the client-visible behavior that matters is the latter. Recovery means a
+# full EC2 node boot (~2 min), which doesn't fit the default 120s timeout.
+pytestmark = [
+    pytest.mark.e2e,
+    pytest.mark.slow,
+    pytest.mark.remote_dev,
+    pytest.mark.timeout(600),
+]
 
 
 def test_cluster_restart_mid_job(

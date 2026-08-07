@@ -192,7 +192,7 @@ def _default_shared_workspace_bucket():
 _DEFAULT_MACHINE_TYPES = {
     "gcp": "n4-standard-4",
     "aws": "m7i.2xlarge",
-    "azure": "Standard_D8s_v5",
+    "azure": "Standard_D8s_v6",
 }
 
 
@@ -225,8 +225,18 @@ DEFAULT_CONFIG = {  # <- config used only when no config has ever been saved
 
 from main_service import history
 
-if history.get_cluster_config() is None:
+cluster_config = history.get_cluster_config()
+if cluster_config is None:
     history.save_cluster_config(DEFAULT_CONFIG)
+elif CLOUD_PROVIDER == "azure":
+    migrated = False
+    for node_spec in cluster_config["Nodes"]:
+        machine_type = node_spec["machine_type"]
+        if machine_type.startswith("Standard_D") and machine_type.endswith("s_v5"):
+            node_spec["machine_type"] = machine_type.removesuffix("s_v5") + "s_v6"
+            migrated = True
+    if migrated:
+        history.save_cluster_config(cluster_config)
 
 LOCAL_DEV_CONFIG = None
 if IN_LOCAL_DEV_MODE:
@@ -236,7 +246,7 @@ if IN_LOCAL_DEV_MODE:
     LOCAL_DEV_CONFIG["Nodes"][0]["machine_type"] = {
         "gcp": "n4-standard-2",
         "aws": "m7i.large",
-        "azure": "Standard_D2s_v5",
+        "azure": "Standard_D2s_v6",
     }[CLOUD_PROVIDER]
     # One node by default: several of these clusters run side by side on one
     # laptop, and each node is a container that spawns a worker per core.

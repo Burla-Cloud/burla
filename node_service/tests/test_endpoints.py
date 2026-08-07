@@ -108,8 +108,10 @@ def test_ack_transfer_404_when_wrong_job_id(node_http_client, any_ready_node):
         client.close()
 
 
-def test_shutdown_requires_localhost(any_ready_node, main_http_client):
-    """POST /shutdown returns 403 for any non-localhost caller."""
+def test_shutdown_requires_cluster_token(
+    node_http_client, any_ready_node, main_http_client
+):
+    """Unauthenticated POST /shutdown is rejected and the node stays up."""
     import ssl
 
     import httpx
@@ -121,15 +123,17 @@ def test_shutdown_requires_localhost(any_ready_node, main_http_client):
 
     cluster_ca = main_http_client.get("/v1/cluster/state").json().get("cluster_ca")
     verify = ssl.create_default_context(cadata=cluster_ca) if cluster_ca else True
-    # From the test process, the request_client.host varies — it may be 127.0.0.1
-    # if Docker port-binding is used (most common in local-dev), or the Docker
-    # bridge IP otherwise.
-    resp = httpx.post(f"{host}/shutdown", timeout=2, verify=verify)
-    assert resp.status_code in (200, 403, 499)  # accepted or rejected
-    # Do NOT let this test leak a real shutdown into other tests — if it
-    # succeeded, we've damaged the cluster state.
-    if resp.status_code == 200:
-        pytest.skip("Unintended shutdown succeeded; subsequent tests may fail")
+    resp = httpx.post(f"{host}/shutdown", timeout=10, verify=verify)
+    assert resp.status_code in (401, 403)
+
+    # The node must still be alive and serving.
+    client = node_http_client(any_ready_node["instance_name"])
+    try:
+        resp = client.get("/")
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "READY"
+    finally:
+        client.close()
 
 
 def test_reboot_starts_booting_then_returns(node_http_client, any_ready_node):

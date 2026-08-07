@@ -90,7 +90,7 @@ export const NodesList: React.FC<NodesListProps> = ({
         const awsSpec = AWS_MACHINE_SPECS[type.toLowerCase()];
         if (awsSpec) return awsSpec.cpus;
 
-        const azureMatch = type.toLowerCase().match(/^standard_d(\d+)s_v5$/);
+        const azureMatch = type.toLowerCase().match(/^standard_d(\d+)s_v6$/);
         if (azureMatch) return parseInt(azureMatch[1], 10);
 
         const customMatch = type.match(/^custom-(\d+)-/);

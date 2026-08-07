@@ -458,6 +458,12 @@ class Node:
             worker_memory_kb=$((1024 * 1024))
         fi
 
+        # The AMI-baked shutdown hook (AWS/Azure) predates /shutdown requiring auth;
+        # this drop-in makes it send the cluster token. No-op on GCP (no such unit).
+        mkdir -p /etc/systemd/system/burla-shutdown-hook.service.d
+        printf '[Service]\\nExecStart=\\nExecStart=/usr/bin/curl -s -X POST -H "%s" http://localhost:8081/shutdown\\n' \\
+            "$AUTH_HEADER" >/etc/systemd/system/burla-shutdown-hook.service.d/auth.conf
+
         printf '[Slice]\\nMemoryMin={NODE_SERVICE_RESERVED_MEMORY_GB}G\\nCPUWeight=1000\\n' \\
             >/etc/systemd/system/burla-node-service.slice
         printf '[Slice]\\nMemoryMax=%sK\\nCPUWeight=80\\n' "$worker_memory_kb" \\
@@ -513,7 +519,7 @@ class Node:
         script = f"""
         #! /bin/bash
         # Tell the node_service this VM is being shutdown so it can reassign inputs and stuff.
-        curl -X POST "http://localhost:8081/shutdown"
+        curl -X POST -H "Authorization: Bearer {CLUSTER_ID_TOKEN}" "http://localhost:8081/shutdown"
         curl -X PUT --data "true" -H "Metadata-Flavor: Google" \\
             "http://metadata.google.internal/computeMetadata/v1/instance/guest-attributes/{SELF_DELETE_GUEST_ATTRIBUTE}" \\
             || true

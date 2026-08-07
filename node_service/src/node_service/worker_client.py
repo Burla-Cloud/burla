@@ -35,10 +35,11 @@ LOG_START_MARKER_PREFIX = "__burla_input_start__:"
 LOG_END_MARKER_PREFIX = "__burla_input_end__:"
 OOM_KILL_MARKER_PREFIX = "__burla_oom_kill__:"
 
-# The first worker on a fresh VM downloads uv from GitHub and installs cloudpickle/tblib into
+# The first worker on a fresh VM downloads uv from GitHub and installs burla into
 # /worker_service_python_env before opening its socket. Under any network slowness this can take
-# well over 10 seconds; 10s was causing ~15% of initial boots to fail.
-WORKER_BOOT_TIMEOUT_SECONDS = 20
+# well over 10 seconds (10s caused ~15% of initial boots to fail), and local-dev pays it on every
+# node boot, into a bind-mounted host directory uv cannot hardlink into; 20s still flaked there.
+WORKER_BOOT_TIMEOUT_SECONDS = 60
 DYNAMIC_RAM_MAX_NODE_MEMORY_USED_FRACTION = 0.90
 DYNAMIC_RAM_TARGET_NODE_MEMORY_USED_FRACTION = 0.85
 DYNAMIC_RAM_MONITOR_INTERVAL_SECONDS = 0.25
@@ -541,12 +542,17 @@ class WorkerClient:
                 "burla-cluster": BURLA_CLUSTER_NAME,
                 "burla-cluster-member": BURLA_CLUSTER_NAME,
             },
+            # Nested rpm calls import the client in here, and that client
+            # sends telemetry too; forward the node's kill switch.
+            "Env": [
+                f"DISABLE_BURLA_TELEMETRY={os.environ.get('DISABLE_BURLA_TELEMETRY', '')}"
+            ],
         }
         if not IN_LOCAL_DEV_MODE:
             # The bundle is public CAs + the cluster CA, so pointing every
             # TLS stack at it (requests ignores SSL_CERT_FILE) changes
             # nothing for public hosts.
-            config["Env"] = [
+            config["Env"] += [
                 "SSL_CERT_FILE=/etc/burla/ca-bundle.pem",
                 "REQUESTS_CA_BUNDLE=/etc/burla/ca-bundle.pem",
                 "CURL_CA_BUNDLE=/etc/burla/ca-bundle.pem",

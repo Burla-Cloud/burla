@@ -85,7 +85,7 @@ async def update_settings(request: Request):
         LOCAL_DEV_CONFIG["Nodes"][0]["machine_type"] = {
             "gcp": "n4-standard-2",
             "aws": "m7i.large",
-            "azure": "Standard_D2s_v5",
+            "azure": "Standard_D2s_v6",
         }[CLOUD_PROVIDER]
         LOCAL_DEV_CONFIG["Nodes"][0]["quantity"] = 1
 

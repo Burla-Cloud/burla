@@ -35,19 +35,20 @@ def _local_url(host: str) -> str:
     return f"http://localhost:{port}"
 
 
+@pytest.mark.timeout(600)
 def test_input_steal_between_nodes(
     rpm_subprocess,
     local_dev_cluster,
+    cluster_with_n_nodes,
     main_http_client,
     burla_auth_headers,
     wait_for_fixture,
 ):
     import httpx
 
-    # Need at least 2 nodes for stealing to be meaningful.
+    # Stealing is only meaningful between two nodes.
+    cluster_with_n_nodes(2)
     state = main_http_client.get("/v1/cluster/state").json()
-    if len(state["ready_nodes"]) < 2:
-        pytest.skip(f"need >=2 ready nodes, got {len(state['ready_nodes'])}")
 
     # Sleep-heavy UDF so the inputs queue stays deep while we poke
     # endpoints. 20 inputs * 15s / 4 worker slots = 75s — plenty of time.

@@ -14,12 +14,15 @@ import pytest
 pytestmark = [pytest.mark.e2e, pytest.mark.slow]
 
 
+@pytest.mark.timeout(300)
 def test_two_rpms_run_concurrently_each_on_its_own_node(
-    rpm_subprocess, local_dev_cluster, main_http_client, wait_for_fixture
+    rpm_subprocess,
+    local_dev_cluster,
+    cluster_with_n_nodes,
+    main_http_client,
+    wait_for_fixture,
 ):
-    state = main_http_client.get("/v1/cluster/state").json()
-    if len(state["ready_nodes"]) < 2:
-        pytest.skip(f"need >=2 ready nodes, got {len(state['ready_nodes'])}")
+    cluster_with_n_nodes(2)
 
     # Slow UDF so the two jobs are genuinely in flight at the same time;
     # without the sleep the first job can finish before the second even

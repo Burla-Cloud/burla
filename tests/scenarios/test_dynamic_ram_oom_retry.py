@@ -4,7 +4,10 @@ import uuid
 
 import pytest
 
-pytestmark = [pytest.mark.e2e, pytest.mark.slow]
+# Real OOM kills need a node whose memory is actually bounded. local-dev sets
+# no memory limit on node or worker containers, so these would instead exhaust
+# the whole docker VM and take unrelated containers down with them.
+pytestmark = [pytest.mark.e2e, pytest.mark.slow, pytest.mark.remote_dev]
 
 
 def _oom_like_source(marker_path: str, always_kill: bool = False):

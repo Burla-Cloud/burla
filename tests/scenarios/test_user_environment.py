@@ -70,9 +70,9 @@ def test_package_install_custom_image_and_shared_filesystem(
 
 def test_udf_can_call_a_local_module(rpm_subprocess, local_dev_cluster, tmp_path):
     """Local modules are pickled by value, so a UDF can call code the worker
-    cannot import. The module has to live outside the checkout: `_scan_sys_modules`
-    treats any module whose path contains `burla` as Burla's own code."""
-    module_dir = tmp_path / "local_modules"
+    cannot import. The directory name is deliberate: modules were once
+    classified as Burla's own, and skipped, on any path containing "burla"."""
+    module_dir = tmp_path / "burla_helpers"
     module_dir.mkdir()
     (module_dir / "udf_helpers.py").write_text(
         "GREETING = 'hello-from-a-local-module'\n"

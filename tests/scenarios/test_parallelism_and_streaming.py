@@ -65,14 +65,6 @@ def test_max_parallelism_caps_concurrency(rpm_subprocess, local_dev_cluster):
     assert peak <= CAP, f"{peak} calls ran at once with max_parallelism={CAP}"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "generator=True does not stream: remote_parallel_map joins the job "
-        "thread before building the generator, so every result is already in "
-        "hand when the caller gets it"
-    ),
-)
 def test_generator_yields_results_while_the_job_is_still_running(
     rpm_subprocess, local_dev_cluster
 ):

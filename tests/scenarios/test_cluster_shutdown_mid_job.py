@@ -5,9 +5,10 @@ The restart path is covered; shutdown is the other half of the same lifecycle
 branch and reaches the client as `ClusterShutdown`. Only the head's
 `cluster_shutdown` flag was tested before.
 
-Slow by construction: shutdown deletes the node without telling the client, so
-the client notices only after its 10-minute result-poll silence budget
-(`RESULT_POLL_SILENCE_TIMEOUT_SECONDS`) runs out and it re-reads the job.
+Shutdown deletes the node without telling the client, so the client only learns
+of it by finding the node unreachable and asking the head, which no longer has
+it. That has to happen in seconds, not after the 10-minute result-poll silence
+budget.
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ import pytest
 
 pytestmark = [pytest.mark.e2e, pytest.mark.slow]
 
-CLIENT_EXIT_BUDGET_SEC = 840
+CLIENT_EXIT_BUDGET_SEC = 120
 
 
 @pytest.mark.timeout(CLIENT_EXIT_BUDGET_SEC + 180)

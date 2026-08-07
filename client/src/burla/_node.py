@@ -372,6 +372,17 @@ class Node:
             self.host = _local_host_from(node_data["host"])
             self.machine_type = node_data["machine_type"]
 
+    async def _head_says_node_is_gone(self) -> bool:
+        try:
+            node_data = await self.client.get_node(self.instance_name)
+        except NETWORK_ERROR_TYPES:
+            # Head unreachable too: this says nothing about the node.
+            return False
+        if node_data is None or node_data["status"] in ("FAILED", "DELETED"):
+            self.state = "FAILED"
+            return True
+        return False
+
     async def _fail_and_delete(self, message: str):
         self.state = "FAILED"
         self.spinner_compatible_print(
@@ -507,6 +518,12 @@ class Node:
                     msg = f"Node {self.instance_name} disconnected while transmitting results.\n"
                     raise NodeDisconnected(self, await self._failure_message(msg))
         except NETWORK_ERROR_TYPES:
+            # A node we cannot reach is usually a blip, worth waiting out. If the
+            # head says it is gone too (preempted, killed, cluster shut down),
+            # waiting out the full silence timeout just stalls the caller.
+            if await self._head_says_node_is_gone():
+                msg = f"Node {self.instance_name} is unreachable and no longer known to the cluster.\n"
+                raise NodeDisconnected(self, await self._failure_message(msg))
             if self._result_poll_silence_timeout_exceeded():
                 msg = self._node_silence_timeout_message("returning results")
                 await self._fail_and_delete(msg)

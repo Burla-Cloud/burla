@@ -512,11 +512,19 @@ async def list_cluster_nodes():
 @router.get("/v1/cluster/nodes/{node_id}")
 async def get_cluster_node(node_id: str):
     """
-    Read a single node's live state. Used by the client to poll a BOOTING node.
+    Read a single node's live state. Used by the client to poll a BOOTING node,
+    and to ask whether a node it can no longer reach still exists.
+
+    A node that stopped pushing reads as gone: the client treats 404 as node
+    failure, and a preempted or killed VM would otherwise keep its last state
+    here forever, leaving the client polling a machine that no longer exists.
+    BOOTING nodes are exempt because they are registered before their first push.
     """
     data = cluster_state.get_node(node_id)
     if data is None:
         raise HTTPException(status_code=404, detail="node not found")
+    if data.get("status") != "BOOTING" and not cluster_state.node_is_fresh(data):
+        raise HTTPException(status_code=404, detail="node stopped reporting state")
     return data
 
 

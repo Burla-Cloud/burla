@@ -5,9 +5,10 @@ Spot preemption and plain VM loss are advertised as survivable, and the client
 reports them as `NodeDisconnected`. The existing worker-crash test kills a
 process inside a healthy node; this kills the node itself.
 
-Slow by construction: a node that stops answering while the client is polling
-for results is only failed after `RESULT_POLL_SILENCE_TIMEOUT_SECONDS`
-(10 minutes), so this test has to outlast that budget.
+The client should not sit through its 10-minute result-poll silence budget for
+this: an unreachable node whose state the head has also stopped receiving is
+gone, and the client is expected to say so within seconds of the head's
+`NODE_FRESHNESS_SEC` window.
 """
 
 from __future__ import annotations
@@ -20,8 +21,9 @@ import pytest
 
 pytestmark = [pytest.mark.e2e, pytest.mark.slow]
 
-# 10-minute silence budget in the client, plus room for job start and teardown.
-CLIENT_EXIT_BUDGET_SEC = 840
+# The head needs NODE_FRESHNESS_SEC (15s) to consider the node gone; the rest
+# is room for the client's next poll and its retries.
+CLIENT_EXIT_BUDGET_SEC = 90
 
 
 def _container_name(instance_name: str) -> str:

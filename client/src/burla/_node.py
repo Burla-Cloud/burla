@@ -19,7 +19,8 @@ from burla._cluster_client import ClusterClient, _local_host_from
 from burla._reporting import RemoteParallelMapReporter, safe_print, safe_spinner_write
 
 NODE_SILENCE_TIMEOUT_SECONDS = 2 * 60
-RESULT_POLL_SILENCE_TIMEOUT_SECONDS = 10 * 60
+RESULT_POLL_SILENCE_WARNING_SECONDS = 10 * 60
+UNRESPONSIVE_NODE_WARNING_PERIOD = 5 * 60
 NODE_BOOT_DEADLINE_SEC = 10 * 60
 LOGIN_TIMEOUT_SEC = 10
 MAX_INPUT_SIZE_BYTES = 1_000_000 * 200  # 200MB
@@ -251,6 +252,7 @@ class Node:
         self.dynamic_worker_reduction = None
         self.last_reply_timestamp = time()
         self.last_result_poll_timestamp = None
+        self.last_unresponsive_warning_at = 0
         self.started_booting_at = time()
         self.auth_headers = get_auth_headers()
         self.removed_reason = ""
@@ -264,14 +266,11 @@ class Node:
     def _node_silence_timeout_exceeded(self):
         return self._seconds_since_last_reply() > NODE_SILENCE_TIMEOUT_SECONDS
 
-    def _result_poll_silence_timeout_exceeded(self):
-        return self._seconds_since_last_reply() > RESULT_POLL_SILENCE_TIMEOUT_SECONDS
+    def _result_poll_silence_warning_due(self):
+        return self._seconds_since_last_reply() > RESULT_POLL_SILENCE_WARNING_SECONDS
 
     def _node_silence_timeout_message(self, action: str):
-        if action == "returning results":
-            timeout_minutes = RESULT_POLL_SILENCE_TIMEOUT_SECONDS // 60
-        else:
-            timeout_minutes = NODE_SILENCE_TIMEOUT_SECONDS // 60
+        timeout_minutes = NODE_SILENCE_TIMEOUT_SECONDS // 60
         return f"Node {self.instance_name} has not replied for over {timeout_minutes} minutes while {action}.\n"
 
     def _diagnostic_summary(self) -> str:
@@ -371,6 +370,16 @@ class Node:
         if self.state == "READY":
             self.host = _local_host_from(node_data["host"])
             self.machine_type = node_data["machine_type"]
+
+    def _warn_about_unresponsive_node(self):
+        if time() - self.last_unresponsive_warning_at < UNRESPONSIVE_NODE_WARNING_PERIOD:
+            return
+        self.last_unresponsive_warning_at = time()
+        minutes = self._seconds_since_last_reply() / 60
+        msg = f"Node {self.instance_name} has not answered for {minutes:.0f} minutes, "
+        msg += "but still exists, so its work is assumed to be running. "
+        msg += "Press Ctrl-C to give up on it."
+        self.spinner_compatible_print(msg)
 
     async def _head_says_node_is_gone(self) -> bool:
         try:
@@ -518,16 +527,15 @@ class Node:
                     msg = f"Node {self.instance_name} disconnected while transmitting results.\n"
                     raise NodeDisconnected(self, await self._failure_message(msg))
         except NETWORK_ERROR_TYPES:
-            # A node we cannot reach is usually a blip, worth waiting out. If the
-            # head says it is gone too (preempted, killed, cluster shut down),
-            # waiting out the full silence timeout just stalls the caller.
+            # An unreachable node is only a failure if it is really gone: the
+            # head checks with the cloud. A node too busy to answer is still
+            # running the user's work, so it is waited on for as long as it
+            # exists, with a periodic warning instead of a silent stall.
             if await self._head_says_node_is_gone():
-                msg = f"Node {self.instance_name} is unreachable and no longer known to the cluster.\n"
+                msg = f"Node {self.instance_name} is unreachable and no longer exists.\n"
                 raise NodeDisconnected(self, await self._failure_message(msg))
-            if self._result_poll_silence_timeout_exceeded():
-                msg = self._node_silence_timeout_message("returning results")
-                await self._fail_and_delete(msg)
-                raise NodeDisconnected(self, await self._failure_message(msg))
+            if self._result_poll_silence_warning_due():
+                self._warn_about_unresponsive_node()
             return self._empty_node_results()
 
         if node_results.get("cluster_shutdown"):

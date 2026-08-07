@@ -210,6 +210,7 @@ async def _job_watcher(
     last_reported_result_count = 0
     last_progress_at = time()
     last_progress_result_count = 0
+    last_loop_at = time()
     while not SELF["job_watcher_stop_event"].is_set():
 
         SELF["current_parallelism"] = sum(
@@ -233,6 +234,20 @@ async def _job_watcher(
             JOB_FAILED = True
         elif job_view.get("status") == "CANCELED":
             JOB_CANCELED = True
+
+        # A workload heavy enough to starve this process makes the loop skip
+        # whole seconds. The client cannot be blamed for a window this node
+        # slept through, so give it a fresh one instead of reading the gap as
+        # a disconnect.
+        loop_gap = time() - last_loop_at
+        if loop_gap > CLIENT_CONTACT_TIMEOUT_SEC:
+            SELF["last_client_activity_timestamp"] = time()
+            await logger.log(
+                f"Job watcher was starved for {loop_gap:.0f}s, "
+                "not counting that against the client.",
+                severity="WARNING",
+            )
+        last_loop_at = time()
 
         # Client still listening? (the direct /client-heartbeat is the signal;
         # the head aggregates every node's flag for the quorum check below)

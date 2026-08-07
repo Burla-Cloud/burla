@@ -5,6 +5,7 @@ this layer (node lifecycle, growth, dashboards) is cloud-agnostic.
 A provider knows how to:
 - create a VM that runs the burla node_service (create_instance)
 - delete a VM (delete_instance)
+- say whether a VM is still there (instance_exists)
 
 `create_instance` blocks until the VM exists and returns its external IP.
 Providers raise `NoCapacity` when every zone/AZ in the region is out of

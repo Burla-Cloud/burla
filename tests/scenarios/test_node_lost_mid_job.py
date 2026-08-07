@@ -6,9 +6,9 @@ reports them as `NodeDisconnected`. The existing worker-crash test kills a
 process inside a healthy node; this kills the node itself.
 
 The client should not sit through its 10-minute result-poll silence budget for
-this: an unreachable node whose state the head has also stopped receiving is
-gone, and the client is expected to say so within seconds of the head's
-`NODE_FRESHNESS_SEC` window.
+this: the head confirms with the cloud that the VM is gone, so the client is
+expected to say so within seconds. The companion case, a node that goes silent
+but still exists, is in `test_unresponsive_node_mid_job.py` and must NOT fail.
 """
 
 from __future__ import annotations

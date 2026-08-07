@@ -30,8 +30,8 @@ router = APIRouter()
 @router.post("/shutdown")
 async def shutdown_node(logger: Logger = Depends(get_logger)):
     """
-    We dont need to delete the node here because the only way to call this is to run the shutdown
-    script (by deleting the node)
+    We dont need to delete the node here because this is only called by the in-VM
+    shutdown hooks, i.e. the VM is already being deleted.
     """
     SELF["job_watcher_stop_event"].set()
     SELF["current_parallelism"] = 0

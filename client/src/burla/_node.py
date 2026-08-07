@@ -356,7 +356,23 @@ class Node:
         self.target_parallelism = target_parallelism
         return self
 
-    async def _update_status(self):
+    async def _raise_if_job_ended_by_lifecycle(self, job_id: str):
+        """A dead node can't deliver the restart/shutdown/cancel signal that
+        normally rides its /results responses, so ask the head directly."""
+        try:
+            job_doc = await self.client.get_job(job_id) or {}
+        except NETWORK_ERROR_TYPES:
+            # Head unreachable too (same network blip): keep the normal
+            # silence-tolerance behavior instead of failing the job early.
+            return
+        if job_doc.get("cluster_shutdown"):
+            raise ClusterShutdown()
+        if job_doc.get("cluster_restarted"):
+            raise ClusterRestarted()
+        if job_doc.get("dashboard_canceled"):
+            raise JobCanceled("\n\nJob canceled from dashboard.\n")
+
+    async def _update_status(self, job_id: str):
         node_data = await self.client.get_node(self.instance_name)
         if node_data is None:
             # A 404 during BOOTING can race main_service's background
@@ -364,6 +380,10 @@ class Node:
             # /v1/jobs/{id}/start before Node.start registered the node.
             # Not a real eviction.
             if self.state == "BOOTING":
+                # ...unless the cluster was restarted/shut down and this VM is
+                # simply gone: without this the client waits out the 10-minute
+                # boot deadline then misreports NodesFailedToBoot.
+                await self._raise_if_job_ended_by_lifecycle(job_id)
                 return
             self.state = "FAILED"
             return
@@ -507,6 +527,11 @@ class Node:
                     msg = f"Node {self.instance_name} disconnected while transmitting results.\n"
                     raise NodeDisconnected(self, await self._failure_message(msg))
         except NETWORK_ERROR_TYPES:
+            # The node normally attaches restart/shutdown/cancel signals to
+            # its /results responses, but a restart terminates the VM before
+            # it can answer this poll, so the head is the only place left
+            # that knows why the node went silent.
+            await self._raise_if_job_ended_by_lifecycle(self.job_id)
             if self._result_poll_silence_timeout_exceeded():
                 msg = self._node_silence_timeout_message("returning results")
                 await self._fail_and_delete(msg)
@@ -565,7 +590,7 @@ class Node:
         if self.state != "READY":
             await asyncio.sleep(max(0, 30 - (time() - start_time)))
             while self.state == "BOOTING":
-                await self._update_status()
+                await self._update_status(job_id)
                 if self.state == "BOOTING":
                     if (time() - self.started_booting_at) > NODE_BOOT_DEADLINE_SEC:
                         self.state = "FAILED"

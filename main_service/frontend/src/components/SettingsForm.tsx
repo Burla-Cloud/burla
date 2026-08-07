@@ -35,12 +35,12 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
             { label: "64vCPU / 256G RAM", value: "m7i.16xlarge" },
         ];
         const AZURE_CPU_OPTIONS = [
-            { label: "2vCPU / 8G RAM", value: "Standard_D2s_v5" },
-            { label: "4vCPU / 16G RAM", value: "Standard_D4s_v5" },
-            { label: "8vCPU / 32G RAM", value: "Standard_D8s_v5" },
-            { label: "16vCPU / 64G RAM", value: "Standard_D16s_v5" },
-            { label: "32vCPU / 128G RAM", value: "Standard_D32s_v5" },
-            { label: "64vCPU / 256G RAM", value: "Standard_D64s_v5" },
+            { label: "2vCPU / 8G RAM", value: "Standard_D2s_v6" },
+            { label: "4vCPU / 16G RAM", value: "Standard_D4s_v6" },
+            { label: "8vCPU / 32G RAM", value: "Standard_D8s_v6" },
+            { label: "16vCPU / 64G RAM", value: "Standard_D16s_v6" },
+            { label: "32vCPU / 128G RAM", value: "Standard_D32s_v6" },
+            { label: "64vCPU / 256G RAM", value: "Standard_D64s_v6" },
         ];
         const GCP_CPU_OPTIONS = [
             { label: "2vCPU / 8G RAM", value: "n4-standard-2" },
@@ -261,7 +261,7 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
             ],
         };
 
-        // Azure regions where Dsv5 CPU nodes are widely available.
+        // Azure regions where Dsv6 CPU nodes are widely available.
         const AZURE_REGION_OPTIONS = {
             None: [
                 { value: "eastus", label: "eastus" },

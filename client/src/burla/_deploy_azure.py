@@ -36,7 +36,7 @@ from burla._reporting import log_telemetry
 
 RESOURCE_GROUP = "burla"
 HEAD_VM_SIZE = "Standard_B2s"
-IMAGE_BUILDER_VM_SIZE = "Standard_D2s_v5"
+IMAGE_BUILDER_VM_SIZE = "Standard_D2s_v6"
 UBUNTU_IMAGE_URN = "Canonical:0001-com-ubuntu-server-jammy:22_04-lts-gen2:latest"
 NODE_SELF_DELETE_ROLE = "Burla Node Self Delete"
 SHARED_WORKSPACE_CONTAINER = "shared-workspace"

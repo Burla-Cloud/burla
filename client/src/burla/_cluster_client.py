@@ -39,9 +39,12 @@ def _local_host_from(host: str) -> str:
 
 
 def _on_local_cluster_network() -> bool:
+    # A caller inside a container reaches the local-dev head (a process on the
+    # docker host) at host.docker.internal; one running on the host itself
+    # reaches it at localhost.
     from burla import get_cluster_dashboard_url
 
-    return "main_service" in get_cluster_dashboard_url()
+    return "host.docker.internal" in get_cluster_dashboard_url()
 
 
 def _build_patch_job_body(

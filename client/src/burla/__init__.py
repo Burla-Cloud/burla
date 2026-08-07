@@ -9,12 +9,8 @@ from platformdirs import user_config_dir
 # needed so main_service can associate a client version with a request
 __version__ = "1.6.1"
 
-# In a checkout this file is <root>/client/src/burla/__init__.py. Installed
-# flat (e.g. /worker_service_python_env/burla/ on nodes) there is no parents[3],
-# so guard the depth or importing burla crashes there.
-_parents = Path(__file__).resolve().parents
-_SOURCE_ROOT = _parents[3] if len(_parents) > 3 else None
-_IN_SOURCE_CHECKOUT = _SOURCE_ROOT is not None and (
+_SOURCE_ROOT = Path(__file__).resolve().parents[3]
+_IN_SOURCE_CHECKOUT = (
     (_SOURCE_ROOT / ".git").exists()
     and (_SOURCE_ROOT / "client" / "pyproject.toml").exists()
 )

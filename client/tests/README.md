@@ -91,6 +91,11 @@ boots nodes itself instead of relying on an already-started cluster.
 All tests have a 120s default timeout. If output doesn't advance past
 `collected N items` within 10 seconds, stop and report blocked.
 
+Two exceptions, both in `tests/scenarios/`: `test_node_lost_mid_job.py` and
+`test_cluster_shutdown_mid_job.py` raise their own timeout to ~17 minutes.
+A node that stops answering is only failed after the client's 10-minute
+result-poll silence budget, so those two cannot finish sooner.
+
 #### Notes for agents
 
 1. Work in your own worktree and run your own cluster. Never reuse another

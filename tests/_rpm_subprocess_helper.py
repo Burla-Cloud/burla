@@ -11,6 +11,7 @@ from __future__ import annotations
 import contextlib
 import io
 import os
+import time
 import traceback
 from typing import Any
 
@@ -59,17 +60,24 @@ def run_rpm_in_subprocess(
 
     stdout_buffer = io.StringIO()
     stderr_buffer = io.StringIO()
+    output_times: list[float] = []
     try:
         with contextlib.redirect_stdout(stdout_buffer), contextlib.redirect_stderr(stderr_buffer):
+            started_at = time.time()
             outputs = remote_parallel_map(test_function, inputs, **kwargs)
             if kwargs.get("generator"):
-                outputs = list(outputs)
+                collected = []
+                for output in outputs:
+                    collected.append(output)
+                    output_times.append(time.time() - started_at)
+                outputs = collected
         result_queue.put(
             {
                 "ok": True,
                 "stdout": stdout_buffer.getvalue(),
                 "stderr": stderr_buffer.getvalue(),
                 "outputs": outputs,
+                "output_times": output_times,
             }
         )
     except BaseException as e:

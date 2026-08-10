@@ -5,6 +5,7 @@ from typing import Optional
 from uuid import uuid4
 
 import asyncio
+import psutil
 from fastapi import APIRouter, Path, Query, Depends, Response, Request
 
 from node_service import (
@@ -28,6 +29,12 @@ _LOGS_OVERFLOW_MESSAGE = (
 MAX_LOGS_RESPONSE_BYTES = 1_000_000
 MAX_LOG_DOCUMENTS_PER_RESULTS_RESPONSE = 500
 MAX_RESULTS_RESPONSE_BYTES = 1_000_000
+
+# Companion to RESULTS_QUEUE_RAM_LIMIT_BYTES (worker_client.py): together they
+# keep node_service's buffering inside its memory reservation.
+INPUTS_QUEUE_RAM_LIMIT_BYTES = min(
+    1 * 1024**3, int(psutil.virtual_memory().total * 0.125)
+)
 
 router = APIRouter()
 
@@ -151,6 +158,17 @@ async def upload_inputs(
 ):
     if job_id != SELF["current_job"]:
         return Response("job not found", status_code=404)
+
+    # Backpressure, same idea as the results queue: hold the upload until
+    # workers drain the queue, so the client's send rate can never balloon
+    # node_service past its memory reservation. Uploads arrive in <=2MB
+    # chunks, so waiting here holds almost nothing in memory.
+    while SELF["inputs_queue"].size_bytes > INPUTS_QUEUE_RAM_LIMIT_BYTES:
+        await asyncio.sleep(0.1)
+        # The job can end mid-wait; inputs must not leak into the queue the
+        # next job will inherit.
+        if job_id != SELF["current_job"]:
+            return Response("job not found", status_code=404)
 
     inputs_pkl_with_idx = pickle.loads(request_files["inputs_pkl_with_idx"])
     await asyncio.sleep(0)

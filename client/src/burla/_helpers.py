@@ -115,6 +115,10 @@ def install_signal_handlers(
 # Layout: (modules_count, custom_module_names, package_module_names, has_custom_modules)
 _sys_modules_scan_cache = None
 
+# Burla's own code, which the remote side already has. In a source checkout
+# these are imported from the working tree, not site-packages.
+_BURLA_MODULE_NAMES = ("burla", "main_service", "node_service")
+
 
 def _scan_sys_modules():
     global _sys_modules_scan_cache
@@ -139,7 +143,9 @@ def _scan_sys_modules():
             is_builtin = (
                 origin in ("built-in", "frozen") or "lib/python" in origin or r"\DLLs" in origin
             )
-            is_burla = "burla" in origin  # <- make dev mode not always false positive
+            # By module name, not by path: a user module under any directory
+            # named "burla" is still the user's, and must ship with the job.
+            is_burla = module_name.split(".")[0] in _BURLA_MODULE_NAMES
             is_custom = not (is_package or is_builtin or is_burla)
             if is_package:
                 base_module_name = module_name.split(".")[0]

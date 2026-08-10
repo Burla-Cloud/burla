@@ -6,8 +6,6 @@ import traceback
 import base64
 from asyncio import create_task
 from contextlib import AsyncExitStack
-from functools import cache
-from importlib import metadata
 from queue import Queue
 from threading import Event, Thread
 from time import time
@@ -35,12 +33,9 @@ from yaspin import Spinner, yaspin
 
 from burla import __version__
 from burla._cluster_client import ClusterClient, NodesBusy, _local_host_from
+from burla._env_scan import modules_to_pickle_by_value, scan_environment
 from burla._heartbeat import run_in_subprocess, send_alive_pings
-from burla._helpers import (
-    get_modules_required_on_remote,
-    install_signal_handlers,
-    restore_signal_handlers,
-)
+from burla._helpers import install_signal_handlers, restore_signal_handlers
 from burla._node import (
     AllNodesBusy,
     ClusterRestarted,
@@ -62,18 +57,6 @@ from burla._reporting import (
     log_job_failure_telemetry,
     stdio_supports_unicode,
 )
-
-
-# `metadata.packages_distributions()` takes hundreds of ms to multiple seconds in
-# fat notebook envs. Deferring it to first-call time means `import burla` stays
-# fast for users who don't call `remote_parallel_map` right away; repeat calls in
-# the same session share the cached result.
-@cache
-def _pkg_module_mapping():
-    return metadata.packages_distributions()
-
-
-BANNED_PACKAGES = ["ipython", "burla", "google-colab"]
 
 
 def _machine_ram_gb(machine_type: str) -> int:
@@ -573,76 +556,14 @@ def remote_parallel_map(
 
     wrapped_function_.__name__ = function_.__name__
 
-    # Move below code back into `_execute_job` after above todo is done.
-    # Needs to operate on function_.__globals__ which cannot be reassigned -> must be done here.
-    custom_module_names, package_module_names = get_modules_required_on_remote(
-        function_
-    )
-
-    # temp fix: these are mistetected as PyPI packages but are not!
-    if "clim_shift" in package_module_names:
-        package_module_names.remove("clim_shift")
-        custom_module_names.add("clim_shift")
-    if "climate_analysis_toolkit" in package_module_names:
-        package_module_names.remove("climate_analysis_toolkit")
-        custom_module_names.add("climate_analysis_toolkit")
-    # temp fix: these are not listed as dependencies but are often required!
-    if "xarray" in package_module_names:
-        package_module_names.update(["netcdf4", "h5netcdf", "h5py"])
-
-    for module_name in custom_module_names:
+    # Environment replication: every distribution importable in this
+    # interpreter is pinned exactly and installed on the workers, so lazy
+    # imports buried inside libraries just work. Local/editable code that no
+    # index can provide ships inside the pickled function instead.
+    scan = scan_environment()
+    packages = dict(scan.requirements)
+    for module_name in modules_to_pickle_by_value(scan):
         cloudpickle.register_pickle_by_value(sys.modules[module_name])
-    pkg_module_mapping = _pkg_module_mapping()
-    packages = {}
-    for module_name in package_module_names:
-        # some of these are unnecessary since we get all that map to the base module
-        # example google.cloud.storage -> google -> every installed google package
-        # for now we just install more packages than we need to, it's fast enough
-        if not pkg_module_mapping.get(module_name):
-            continue
-        for package_name in pkg_module_mapping.get(module_name):
-            packages[package_name] = metadata.version(package_name)
-
-    # unnecessary / already installed / will break stuff
-    for package in BANNED_PACKAGES:
-        packages.pop(package, None)
-
-    # not an official dep
-    if packages.get("SQLAlchemy") and "psycopg2-binary" in pkg_module_mapping.get(
-        "psycopg2", []
-    ):
-        packages["psycopg2-binary"] = metadata.version("psycopg2-binary")
-
-    # manually check for extras until we can support automatic extra detection.
-    if packages.get("geopandas"):
-        if "geoalchemy2" in pkg_module_mapping and not ("geoalchemy2" in packages):
-            packages["geoalchemy2"] = metadata.version("geoalchemy2")
-        if "geopy" in pkg_module_mapping and not ("geopy" in packages):
-            packages["geopy"] = metadata.version("geopy")
-        if "matplotlib" in pkg_module_mapping and not ("matplotlib" in packages):
-            packages["matplotlib"] = metadata.version("matplotlib")
-        if "mapclassify" in pkg_module_mapping and not ("mapclassify" in packages):
-            packages["mapclassify"] = metadata.version("mapclassify")
-        if "xyzservices" in pkg_module_mapping and not ("xyzservices" in packages):
-            packages["xyzservices"] = metadata.version("xyzservices")
-        if "folium" in pkg_module_mapping and not ("folium" in packages):
-            packages["folium"] = metadata.version("folium")
-        if "pointpats" in pkg_module_mapping and not ("pointpats" in packages):
-            packages["pointpats"] = metadata.version("pointpats")
-        if "scipy" in pkg_module_mapping and not ("scipy" in packages):
-            packages["scipy"] = metadata.version("scipy")
-        if "pyarrow" in pkg_module_mapping and not ("pyarrow" in packages):
-            packages["pyarrow"] = metadata.version("pyarrow")
-        if "SQLAlchemy" in pkg_module_mapping and not ("SQLAlchemy" in packages):
-            packages["SQLAlchemy"] = metadata.version("SQLAlchemy")
-
-    if packages.get("mapclassify"):
-        if "libpysal" in pkg_module_mapping and not ("libpysal" in packages):
-            packages["libpysal"] = metadata.version("libpysal")
-        if "shapely" in pkg_module_mapping and not ("shapely" in packages):
-            packages["shapely"] = metadata.version("shapely")
-        if "matplotlib" in pkg_module_mapping and not ("matplotlib" in packages):
-            packages["matplotlib"] = metadata.version("matplotlib")
     # ------------------------------------------------
 
     max_parallelism = max_parallelism if max_parallelism else len(inputs)

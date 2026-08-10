@@ -38,7 +38,10 @@ async def _send_node_pings(
                 # ignore all error responses.
                 pass
         except Exception:
-            pass
+            import os, traceback
+
+            if os.environ.get("BURLA_DEBUG_HEARTBEAT"):
+                traceback.print_exc()
         await asyncio.sleep(0.5)
 
 

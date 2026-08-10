@@ -44,13 +44,11 @@ network, and node port base. The head is not on port 5001; it is on a port
 derived from the checkout name, so that several clusters coexist.
 
 In `local-dev` the head runs as a host subprocess straight from this checkout
-(like `remote-dev`). Each node is a privileged container acting as a fake VM:
-it runs its own docker daemon, and its workers are containers *inside* it,
-exactly like on a real VM (`docker exec node_<id> docker ps` to see them). The
-node base image is built from `node_service/Dockerfile` on first run, so no
-image registry is involved. Rebuild it with `make local-images` after changing
-the node Dockerfile or a `uv.lock`; service code is bind-mounted, so ordinary
-edits need no rebuild.
+(like `remote-dev`); only the nodes/workers are containers. That needs one node
+base image, built from `node_service/Dockerfile` on first run, so no image
+registry is involved. Rebuild it with `make local-images` after changing the
+node Dockerfile or a `uv.lock`; service code is bind-mounted, so ordinary edits
+need no rebuild.
 
 Both dev modes need a working AWS identity and a saved cluster token, because
 nodes authorize callers against the backend's user list for this cluster id.
@@ -94,9 +92,8 @@ All tests have a 120s default timeout. If output doesn't advance past
 #### Notes for agents
 
 1. Work in your own worktree and run your own cluster. Never reuse another
-   agent's cluster, and never `docker rm` containers by `node_*` name prefix;
-   that destroys other agents' clusters. Use `make stop`. (Workers live inside
-   their node's own docker daemon and die with it.)
+   agent's cluster, and never `docker rm` containers by `node_*` / `worker_*`
+   name prefix; that destroys other agents' clusters. Use `make stop`.
 2. Prefer `local-dev` while iterating: node and worker code is bind-mounted, so
    your edits apply on save. In `remote-dev`, node VMs run your branch from
    GitHub, so `node_service` / `worker_server.py` changes need a push first.

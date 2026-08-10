@@ -407,7 +407,10 @@ class Node:
             "cluster_dashboard_url": self.client._url,
         }
         url = f"{self.host}/jobs/{job_id}"
-        timeout = aiohttp.ClientTimeout(120)
+        # Assignment blocks while the node installs the client's environment,
+        # which on a fresh node can be the whole thing (GBs, minutes when the
+        # uv cache is cold). Install *errors* still fail fast as 500s.
+        timeout = aiohttp.ClientTimeout(total=1800, connect=30)
         self.last_reply_timestamp = time()
 
         async def request_function():

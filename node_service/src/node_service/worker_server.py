@@ -5,7 +5,9 @@
 import importlib
 import importlib.metadata
 import io
+import json
 import os
+import re
 import signal
 import sys
 import pickle
@@ -99,6 +101,39 @@ def receive_exactly(connection, byte_count):
     return payload
 
 
+def env_dir_distributions():
+    """canonical name -> (version, direct-url spec) for every dist burla
+    itself installed into /worker_service_python_env (bootstrap or any
+    previous job). Read from dist-info dirnames + direct_url.json."""
+    dists = {}
+    if not os.path.isdir("/worker_service_python_env"):
+        return dists
+    for entry in os.listdir("/worker_service_python_env"):
+        if entry.startswith(("~", ".")) or not entry.endswith(".dist-info"):
+            continue
+        name, _, version = entry[: -len(".dist-info")].rpartition("-")
+        if not name:
+            continue
+        canonical_name = re.sub(r"[-_.]+", "-", name).lower()
+        direct_url_spec = None
+        direct_url_path = f"/worker_service_python_env/{entry}/direct_url.json"
+        try:
+            with open(direct_url_path, encoding="utf-8") as f:
+                direct_url = json.load(f)
+            url = direct_url.get("url") or ""
+            vcs_info = direct_url.get("vcs_info")
+            if isinstance(vcs_info, dict) and vcs_info.get("vcs"):
+                direct_url_spec = f"{vcs_info['vcs']}+{url}"
+                if vcs_info.get("commit_id"):
+                    direct_url_spec += f"@{vcs_info['commit_id']}"
+            elif url:
+                direct_url_spec = url
+        except (OSError, ValueError):
+            pass
+        dists[canonical_name] = (version.split("+", 1)[0], direct_url_spec)
+    return dists
+
+
 # Become a session + process group leader so the node_service can kill this worker together with
 # any subprocess the user's UDF spawned via a single os.killpg from the host. Runs after uv/pip
 # setup so subprocess.run above still inherits the container's original session cleanly.
@@ -130,17 +165,37 @@ with socket.create_server(("0.0.0.0", port)) as listener:
                     if auth_module is not None:
                         auth_module._get_auth_info.cache_clear()
                 if command == b"i":
+                    # {canonical dist name: uv requirement string}, the
+                    # client's entire environment, pinned exactly.
                     packages = pickle.loads(request_payload)
-                    missing_packages = []
-                    # Reinstalling to match the client's version would silently replace
-                    # pre-baked GPU wheels (CUDA-built torch, ABI-pinned numpy) with
-                    # incompatible ones from PyPI's default index.
-                    for package_name, version in packages.items():
-                        try:
-                            importlib.metadata.version(package_name)
-                        except importlib.metadata.PackageNotFoundError:
-                            missing_packages.append(f"{package_name}=={version}")
-                    if missing_packages:
+                    env_dir_dists = env_dir_distributions()
+                    packages_to_install = []
+                    for package_name, requirement in packages.items():
+                        env_dir_dist = env_dir_dists.get(package_name)
+                        if env_dir_dist is None:
+                            # Not installed by burla, so if it's importable it
+                            # is baked into the image. Reinstalling to match
+                            # the client's version would silently replace
+                            # pre-baked GPU wheels (CUDA-built torch,
+                            # ABI-pinned numpy) with incompatible ones from
+                            # PyPI's default index.
+                            try:
+                                importlib.metadata.version(package_name)
+                            except importlib.metadata.PackageNotFoundError:
+                                packages_to_install.append(requirement)
+                        elif " @ " in requirement:
+                            requested_spec = requirement.split(" @ ", 1)[1]
+                            if env_dir_dist[1] != requested_spec:
+                                packages_to_install.append(requirement)
+                        else:
+                            requested_version = requirement.split("==", 1)[1]
+                            version_matches = env_dir_dist[0] == requested_version
+                            if env_dir_dist[1] or not version_matches:
+                                packages_to_install.append(requirement)
+                    if packages_to_install:
+                        # --no-deps: the client's list is its whole environment,
+                        # so it is already closed under dependencies; resolving
+                        # would only let uv "upgrade" pre-baked image packages.
                         subprocess.run(
                             [
                                 "uv",
@@ -150,7 +205,8 @@ with socket.create_server(("0.0.0.0", port)) as listener:
                                 "python",
                                 "--target",
                                 "/worker_service_python_env",
-                                *missing_packages,
+                                "--no-deps",
+                                *packages_to_install,
                             ],
                             check=True,
                         )

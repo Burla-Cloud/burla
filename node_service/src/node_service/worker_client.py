@@ -23,7 +23,13 @@ from node_service import (
     head_client,
 )
 
-RESULTS_QUEUE_RAM_LIMIT_BYTES = int(psutil.virtual_memory().total * 0.5)
+# Sized so node_service's buffering fits inside its own memory reservation
+# (NODE_SERVICE_RESERVED_MEMORY_GB, 4GB on real VMs): workers own the rest of
+# the machine, so a bigger budget here lets node_service + workers outgrow
+# physical RAM and thrash the host. The fraction keeps small machines sane.
+RESULTS_QUEUE_RAM_LIMIT_BYTES = min(
+    2 * 1024**3, int(psutil.virtual_memory().total * 0.25)
+)
 
 WORKER_INTERNAL_PORT = 8080
 LOG_FLUSH_INTERVAL_SECONDS = 1

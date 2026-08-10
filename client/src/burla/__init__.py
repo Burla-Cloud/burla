@@ -159,16 +159,22 @@ def _deployed_dashboard_url() -> str | None:
 # running against (observed mid-job: "Shutting down" then a second head on a
 # different port). Process-wide, like the resolution it short-circuits.
 _pinned_cluster_url: str | None = None
+# Whether the pinned head outlives this machine (deployed or env-pointed), so a
+# concurrent `remote_parallel_map(detach=True)` in this process resolving to the
+# pin is gated correctly.
+_pinned_head_supports_detach: bool = False
 
 
-def _pin_cluster_url(url: str):
-    global _pinned_cluster_url
+def _pin_cluster_url(url: str, supports_detach: bool = False):
+    global _pinned_cluster_url, _pinned_head_supports_detach
     _pinned_cluster_url = url
+    _pinned_head_supports_detach = supports_detach
 
 
 def _unpin_cluster_url():
-    global _pinned_cluster_url
+    global _pinned_cluster_url, _pinned_head_supports_detach
     _pinned_cluster_url = None
+    _pinned_head_supports_detach = False
 
 
 def _existing_cluster_dashboard_url() -> str | None:

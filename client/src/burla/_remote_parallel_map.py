@@ -40,6 +40,7 @@ from burla._node import (
     AllNodesBusy,
     ClusterRestarted,
     ClusterShutdown,
+    DetachRequiresDeployedCluster,
     JobCanceled,
     JobStalled,
     MainServiceTimeout,
@@ -145,6 +146,7 @@ EXEC_TYPES_TO_NOT_ALERT = [
     ClusterShutdown,
     VersionMismatch,
     FunctionTooBig,
+    DetachRequiresDeployedCluster,
     MainServiceTimeout,
     UnauthorizedError,
     KeyboardInterrupt,
@@ -203,10 +205,10 @@ async def _execute_job(
     from burla import _pin_cluster_url, _unpin_cluster_url
     from burla._local_head import acquire_head_for_job, release_head
 
-    head = acquire_head_for_job()
+    head = acquire_head_for_job(for_background_job=background)
     # Pin it so nothing re-resolves mid-job: a lookup whose health probe times
     # out would otherwise start a replacement head and kill this one.
-    _pin_cluster_url(head.url)
+    _pin_cluster_url(head.url, head.supports_detach)
 
     def _release_cluster():
         _unpin_cluster_url()
@@ -512,7 +514,9 @@ def remote_parallel_map(
             Defaults to the number of provided inputs.
         detach (bool, optional):
             If True, job will continue running on cluster, when canceled locally.
-            Defaults to False.
+            Requires a deployed cluster (`burla deploy`): a cluster head running
+            locally on this machine cannot outlive it, so background jobs
+            against one raise `DetachRequiresDeployedCluster`. Defaults to False.
         generator (bool, optional):
             If True, returns a generator that yields outputs as they are produced; otherwise,
             returns a list of outputs once all have been processed. Defaults to False.

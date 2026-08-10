@@ -105,6 +105,11 @@ async def verify_worker_cgroup_isolation(workers: list, logger: Logger):
             f"node_service runs outside {NODE_SERVICE_CGROUP_SLICE} "
             f"(cgroup: {node_cgroup.strip()!r})"
         )
+    # systemd nests slices by dash-splitting their names (burla-workers.slice
+    # lives at /sys/fs/cgroup/burla.slice/burla-workers.slice), so resolve the
+    # slice's real directory from a worker's own cgroup path instead of
+    # guessing it.
+    slice_dir = None
     for worker in workers:
         worker_cgroup = Path(f"/proc/{worker.worker_host_pid}/cgroup").read_text()
         if WORKERS_CGROUP_SLICE not in worker_cgroup:
@@ -112,10 +117,17 @@ async def verify_worker_cgroup_isolation(workers: list, logger: Logger):
                 f"{worker.container_name} runs outside {WORKERS_CGROUP_SLICE} "
                 f"(cgroup: {worker_cgroup.strip()!r})"
             )
+        elif slice_dir is None:
+            for line in worker_cgroup.splitlines():
+                cgroup_path = line.split(":", 2)[2]
+                if WORKERS_CGROUP_SLICE in cgroup_path:
+                    segments = cgroup_path.strip("/").split("/")
+                    slice_depth = segments.index(WORKERS_CGROUP_SLICE) + 1
+                    slice_dir = Path("/sys/fs/cgroup", *segments[:slice_depth])
+                    break
 
     memory_max = cpu_weight = None
-    slice_dir = Path("/sys/fs/cgroup") / WORKERS_CGROUP_SLICE
-    if not (slice_dir / "memory.max").exists():
+    if slice_dir is not None and not (slice_dir / "memory.max").exists():
         # Enough detail to diagnose from the log alone, since this only ever
         # fires on a real VM nobody can shell into.
         slice_contents = (
@@ -123,12 +135,10 @@ async def verify_worker_cgroup_isolation(workers: list, logger: Logger):
             if slice_dir.is_dir()
             else "<no such directory>"
         )
-        cgroup_root = sorted(p.name for p in Path("/sys/fs/cgroup").iterdir())[:15]
         problems.append(
-            f"{slice_dir} has no memory.max file "
-            f"(slice dir: {slice_contents}, /sys/fs/cgroup: {cgroup_root})"
+            f"{slice_dir} has no memory.max file (slice dir: {slice_contents})"
         )
-    else:
+    elif slice_dir is not None:
         memory_max = (slice_dir / "memory.max").read_text().strip()
         cpu_weight = (slice_dir / "cpu.weight").read_text().strip()
         if memory_max == "max":

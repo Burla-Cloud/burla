@@ -116,8 +116,17 @@ async def verify_worker_cgroup_isolation(workers: list, logger: Logger):
     memory_max = cpu_weight = None
     slice_dir = Path("/sys/fs/cgroup") / WORKERS_CGROUP_SLICE
     if not (slice_dir / "memory.max").exists():
+        # Enough detail to diagnose from the log alone, since this only ever
+        # fires on a real VM nobody can shell into.
+        slice_contents = (
+            sorted(p.name for p in slice_dir.iterdir())[:12]
+            if slice_dir.is_dir()
+            else "<no such directory>"
+        )
+        cgroup_root = sorted(p.name for p in Path("/sys/fs/cgroup").iterdir())[:15]
         problems.append(
-            f"{slice_dir} has no memory.max file (cgroup v1 host, or slice not started?)"
+            f"{slice_dir} has no memory.max file "
+            f"(slice dir: {slice_contents}, /sys/fs/cgroup: {cgroup_root})"
         )
     else:
         memory_max = (slice_dir / "memory.max").read_text().strip()

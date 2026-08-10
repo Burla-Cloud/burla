@@ -116,14 +116,6 @@ class LocalDockerProvider:
         docker_client.start(container=container.get("Id"))
         return f"http://{container_name}:{port}"
 
-    def instance_exists(self, instance_name: str) -> bool:
-        docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
-        container_name = f"node_{instance_name[11:]}"
-        return any(
-            f"/{container_name}" in container["Names"]
-            for container in docker_client.containers(all=True)
-        )
-
     def delete_instance(self, instance_name: str, zone: str | None = None):
         docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
         container_name = f"node_{instance_name[11:]}"

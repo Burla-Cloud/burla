@@ -32,7 +32,7 @@ from main_service import (
     get_auth_headers,
     get_logger,
 )
-from main_service import cluster_state, history, node_liveness
+from main_service import cluster_state, history
 from main_service.helpers import Logger, parse_version
 from main_service.node import Node
 from main_service.transport_tls import cluster_ca_pem
@@ -512,21 +512,11 @@ async def list_cluster_nodes():
 @router.get("/v1/cluster/nodes/{node_id}")
 async def get_cluster_node(node_id: str):
     """
-    Read a single node's live state. Used by the client to poll a BOOTING node,
-    and to ask whether a node it can no longer reach still exists.
-
-    A node whose VM is gone reads as 404, so a client polling a preempted or
-    deleted node stops waiting on it. Silence alone is never enough: a node
-    starved by an intense workload stops pushing while its work continues, so
-    the cloud has to confirm the VM is really gone. BOOTING nodes are exempt
-    because they are registered before their first push.
+    Read a single node's live state. Used by the client to poll a BOOTING node.
     """
     data = cluster_state.get_node(node_id)
     if data is None:
         raise HTTPException(status_code=404, detail="node not found")
-    if data.get("status") != "BOOTING" and not cluster_state.node_is_fresh(data):
-        if await asyncio.to_thread(node_liveness.instance_is_gone, node_id):
-            raise HTTPException(status_code=404, detail="node no longer exists")
     return data
 
 

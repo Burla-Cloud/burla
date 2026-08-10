@@ -16,6 +16,7 @@ from tblib import Traceback
 from node_service import (
     SELF,
     BURLA_CLUSTER_NAME,
+    IN_LOCAL_DEV_MODE,
     NUM_GPUS,
     Logger,
     __version__,
@@ -81,6 +82,69 @@ def _is_worker_internal_log_message(message: str) -> bool:
 
 def _active_dynamic_workers():
     return [worker for worker in SELF["workers"] if not worker.retired]
+
+
+WORKERS_CGROUP_SLICE = "burla-workers.slice"
+NODE_SERVICE_CGROUP_SLICE = "burla-node-service.slice"
+
+
+async def verify_worker_cgroup_isolation(workers: list, logger: Logger):
+    """The VM startup script (see main_service/node.py) puts node_service and
+    the workers in systemd slices so user load can never starve node_service.
+    Whether that actually takes effect depends on the image's cgroup version,
+    docker's cgroup driver, and systemd, any of which can silently ignore it,
+    so every node proves the isolation at boot instead of trusting it.
+    """
+    if IN_LOCAL_DEV_MODE:
+        return  # fake VMs: no systemd, no slices.
+
+    problems = []
+    node_cgroup = Path("/proc/self/cgroup").read_text()
+    if NODE_SERVICE_CGROUP_SLICE not in node_cgroup:
+        problems.append(
+            f"node_service runs outside {NODE_SERVICE_CGROUP_SLICE} "
+            f"(cgroup: {node_cgroup.strip()!r})"
+        )
+    for worker in workers:
+        worker_cgroup = Path(f"/proc/{worker.worker_host_pid}/cgroup").read_text()
+        if WORKERS_CGROUP_SLICE not in worker_cgroup:
+            problems.append(
+                f"{worker.container_name} runs outside {WORKERS_CGROUP_SLICE} "
+                f"(cgroup: {worker_cgroup.strip()!r})"
+            )
+
+    memory_max = cpu_weight = None
+    slice_dir = Path("/sys/fs/cgroup") / WORKERS_CGROUP_SLICE
+    if not (slice_dir / "memory.max").exists():
+        problems.append(
+            f"{slice_dir} has no memory.max file (cgroup v1 host, or slice not started?)"
+        )
+    else:
+        memory_max = (slice_dir / "memory.max").read_text().strip()
+        cpu_weight = (slice_dir / "cpu.weight").read_text().strip()
+        if memory_max == "max":
+            problems.append(f"{WORKERS_CGROUP_SLICE} has no memory cap (memory.max=max)")
+        # 80 is what the startup script writes; anything else means the config
+        # was not applied (100 is the kernel default).
+        if cpu_weight != "80":
+            problems.append(
+                f"{WORKERS_CGROUP_SLICE} cpu.weight is {cpu_weight}, expected 80"
+            )
+
+    if problems:
+        message = (
+            "WORKER CGROUP ISOLATION IS NOT ACTIVE on this node: "
+            + "; ".join(problems)
+            + ". An intense workload can starve node_service here, making a "
+            "healthy node look dead."
+        )
+        await logger.log(message, severity="ERROR")
+    else:
+        await logger.log(
+            f"Worker cgroup isolation verified: {len(workers)} workers in "
+            f"{WORKERS_CGROUP_SLICE} (memory.max={memory_max}, "
+            f"cpu.weight={cpu_weight}), node_service in {NODE_SERVICE_CGROUP_SLICE}."
+        )
 
 
 async def dynamic_ram_monitor_loop():

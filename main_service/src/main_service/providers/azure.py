@@ -251,13 +251,6 @@ class AzureProvider:
         )
         return public_ip.ip_address, private_ip, region
 
-    def instance_exists(self, instance_name: str) -> bool:
-        try:
-            self.compute.virtual_machines.get(RESOURCE_GROUP, instance_name)
-            return True
-        except ResourceNotFoundError:
-            return False
-
     def delete_instance(self, instance_name: str, zone: str | None = None):
         try:
             poller = self.compute.virtual_machines.begin_delete(

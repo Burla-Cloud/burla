@@ -201,22 +201,6 @@ class AWSProvider:
         )
         return public_ip, private_ip, zone
 
-    def instance_exists(self, instance_name: str) -> bool:
-        ec2 = self._ec2(self.region)
-        response = ec2.describe_instances(
-            Filters=[
-                {"Name": "tag:Name", "Values": [instance_name]},
-                {"Name": "tag:burla-cluster-id", "Values": [CLUSTER_NAME]},
-                {
-                    "Name": "instance-state-name",
-                    "Values": ["pending", "running", "stopping", "stopped"],
-                },
-            ]
-        )
-        return any(
-            reservation["Instances"] for reservation in response["Reservations"]
-        )
-
     def delete_instance(self, instance_name: str, zone: str | None = None):
         cached = _instance_ids.pop(instance_name, None)
         if cached:

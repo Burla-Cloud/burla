@@ -170,9 +170,6 @@ class GCPProvider:
         )
         return external_ip, internal_ip, zone
 
-    def instance_exists(self, instance_name: str) -> bool:
-        return self._find_zone(instance_name) is not None
-
     def delete_instance(self, instance_name: str, zone: str | None = None):
         if zone is None:
             zone = self._find_zone(instance_name)

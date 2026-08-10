@@ -16,7 +16,7 @@ import asyncio
 import threading
 from time import time
 
-from main_service import history, node_liveness
+from main_service import history
 
 _lock = threading.RLock()
 
@@ -472,30 +472,13 @@ async def job_reaper_loop(logger=None):
                         and job.get("all_inputs_uploaded")
                         and all_results_in
                     )
-                    candidates.append(
-                        (
-                            job_id,
-                            "COMPLETED" if completed else "FAILED",
-                            list(assigned),
-                        )
-                    )
+                    candidates.append((job_id, "COMPLETED" if completed else "FAILED"))
 
-        for job_id, status, assigned_names in candidates:
+        for job_id, status in candidates:
             if status == "COMPLETED":
                 update_job(job_id, {"status": status})
                 if logger is not None:
                     logger.log(f"Reaped completed job {job_id}", severity="WARNING")
-                continue
-            # Silence is not proof: a node starved by an intense workload
-            # stops pushing state while its work keeps running. Only the cloud
-            # saying every VM is gone makes this job unrecoverable.
-            any_node_alive = await asyncio.to_thread(
-                lambda: any(
-                    not node_liveness.instance_is_gone(name)
-                    for name in assigned_names
-                )
-            )
-            if any_node_alive:
                 continue
             reason = 'main_svc: job is "running" but no nodes working on it ???'
             update_job(job_id, {"status": "FAILED"}, append_fail_reason=reason)

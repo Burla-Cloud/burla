@@ -22,7 +22,7 @@ from node_service import (
     head_client,
 )
 from node_service.helpers import Logger
-from node_service.worker_client import WorkerClient
+from node_service.worker_client import WorkerClient, verify_worker_cgroup_isolation
 
 router = APIRouter()
 
@@ -322,6 +322,7 @@ async def reboot_containers(
         # then others use that env instead of setting up themself.
         await workers[0].boot()
         await asyncio.gather(*[worker.boot() for worker in workers[1:]])
+        await verify_worker_cgroup_isolation(workers, logger)
         SELF["BOOTING"] = False
 
         # main_service learns the host when it creates the VM/container and

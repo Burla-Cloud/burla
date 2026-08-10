@@ -19,8 +19,7 @@ from burla._cluster_client import ClusterClient, _local_host_from
 from burla._reporting import RemoteParallelMapReporter, safe_print, safe_spinner_write
 
 NODE_SILENCE_TIMEOUT_SECONDS = 2 * 60
-RESULT_POLL_SILENCE_WARNING_SECONDS = 10 * 60
-UNRESPONSIVE_NODE_WARNING_PERIOD = 5 * 60
+RESULT_POLL_SILENCE_TIMEOUT_SECONDS = 10 * 60
 NODE_BOOT_DEADLINE_SEC = 10 * 60
 LOGIN_TIMEOUT_SEC = 10
 MAX_INPUT_SIZE_BYTES = 1_000_000 * 200  # 200MB
@@ -252,7 +251,6 @@ class Node:
         self.dynamic_worker_reduction = None
         self.last_reply_timestamp = time()
         self.last_result_poll_timestamp = None
-        self.last_unresponsive_warning_at = 0
         self.started_booting_at = time()
         self.auth_headers = get_auth_headers()
         self.removed_reason = ""
@@ -266,11 +264,14 @@ class Node:
     def _node_silence_timeout_exceeded(self):
         return self._seconds_since_last_reply() > NODE_SILENCE_TIMEOUT_SECONDS
 
-    def _result_poll_silence_warning_due(self):
-        return self._seconds_since_last_reply() > RESULT_POLL_SILENCE_WARNING_SECONDS
+    def _result_poll_silence_timeout_exceeded(self):
+        return self._seconds_since_last_reply() > RESULT_POLL_SILENCE_TIMEOUT_SECONDS
 
     def _node_silence_timeout_message(self, action: str):
-        timeout_minutes = NODE_SILENCE_TIMEOUT_SECONDS // 60
+        if action == "returning results":
+            timeout_minutes = RESULT_POLL_SILENCE_TIMEOUT_SECONDS // 60
+        else:
+            timeout_minutes = NODE_SILENCE_TIMEOUT_SECONDS // 60
         return f"Node {self.instance_name} has not replied for over {timeout_minutes} minutes while {action}.\n"
 
     def _diagnostic_summary(self) -> str:
@@ -355,7 +356,23 @@ class Node:
         self.target_parallelism = target_parallelism
         return self
 
-    async def _update_status(self):
+    async def _raise_if_job_ended_by_lifecycle(self, job_id: str):
+        """A dead node can't deliver the restart/shutdown/cancel signal that
+        normally rides its /results responses, so ask the head directly."""
+        try:
+            job_doc = await self.client.get_job(job_id) or {}
+        except NETWORK_ERROR_TYPES:
+            # Head unreachable too (same network blip): keep the normal
+            # silence-tolerance behavior instead of failing the job early.
+            return
+        if job_doc.get("cluster_shutdown"):
+            raise ClusterShutdown()
+        if job_doc.get("cluster_restarted"):
+            raise ClusterRestarted()
+        if job_doc.get("dashboard_canceled"):
+            raise JobCanceled("\n\nJob canceled from dashboard.\n")
+
+    async def _update_status(self, job_id: str):
         node_data = await self.client.get_node(self.instance_name)
         if node_data is None:
             # A 404 during BOOTING can race main_service's background
@@ -363,6 +380,10 @@ class Node:
             # /v1/jobs/{id}/start before Node.start registered the node.
             # Not a real eviction.
             if self.state == "BOOTING":
+                # ...unless the cluster was restarted/shut down and this VM is
+                # simply gone: without this the client waits out the 10-minute
+                # boot deadline then misreports NodesFailedToBoot.
+                await self._raise_if_job_ended_by_lifecycle(job_id)
                 return
             self.state = "FAILED"
             return
@@ -370,27 +391,6 @@ class Node:
         if self.state == "READY":
             self.host = _local_host_from(node_data["host"])
             self.machine_type = node_data["machine_type"]
-
-    def _warn_about_unresponsive_node(self):
-        if time() - self.last_unresponsive_warning_at < UNRESPONSIVE_NODE_WARNING_PERIOD:
-            return
-        self.last_unresponsive_warning_at = time()
-        minutes = self._seconds_since_last_reply() / 60
-        msg = f"Node {self.instance_name} has not answered for {minutes:.0f} minutes, "
-        msg += "but still exists, so its work is assumed to be running. "
-        msg += "Press Ctrl-C to give up on it."
-        self.spinner_compatible_print(msg)
-
-    async def _head_says_node_is_gone(self) -> bool:
-        try:
-            node_data = await self.client.get_node(self.instance_name)
-        except NETWORK_ERROR_TYPES:
-            # Head unreachable too: this says nothing about the node.
-            return False
-        if node_data is None or node_data["status"] in ("FAILED", "DELETED"):
-            self.state = "FAILED"
-            return True
-        return False
 
     async def _fail_and_delete(self, message: str):
         self.state = "FAILED"
@@ -527,15 +527,15 @@ class Node:
                     msg = f"Node {self.instance_name} disconnected while transmitting results.\n"
                     raise NodeDisconnected(self, await self._failure_message(msg))
         except NETWORK_ERROR_TYPES:
-            # An unreachable node is only a failure if it is really gone: the
-            # head checks with the cloud. A node too busy to answer is still
-            # running the user's work, so it is waited on for as long as it
-            # exists, with a periodic warning instead of a silent stall.
-            if await self._head_says_node_is_gone():
-                msg = f"Node {self.instance_name} is unreachable and no longer exists.\n"
+            # The node normally attaches restart/shutdown/cancel signals to
+            # its /results responses, but a restart terminates the VM before
+            # it can answer this poll, so the head is the only place left
+            # that knows why the node went silent.
+            await self._raise_if_job_ended_by_lifecycle(self.job_id)
+            if self._result_poll_silence_timeout_exceeded():
+                msg = self._node_silence_timeout_message("returning results")
+                await self._fail_and_delete(msg)
                 raise NodeDisconnected(self, await self._failure_message(msg))
-            if self._result_poll_silence_warning_due():
-                self._warn_about_unresponsive_node()
             return self._empty_node_results()
 
         if node_results.get("cluster_shutdown"):
@@ -590,7 +590,7 @@ class Node:
         if self.state != "READY":
             await asyncio.sleep(max(0, 30 - (time() - start_time)))
             while self.state == "BOOTING":
-                await self._update_status()
+                await self._update_status(job_id)
                 if self.state == "BOOTING":
                     if (time() - self.started_booting_at) > NODE_BOOT_DEADLINE_SEC:
                         self.state = "FAILED"

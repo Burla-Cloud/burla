@@ -168,10 +168,10 @@ class UnauthorizedError(Exception):
 class DetachRequiresDeployedCluster(Exception):
     def __init__(self):
         msg = "\n\nBackground jobs (detach=True) require a deployed Burla cluster.\n"
-        msg += "This job would run against a cluster head running locally on this machine.\n"
-        msg += "A local head stops when this machine sleeps, goes offline, or the process\n"
+        msg += "This job would run against a Burla dashboard running locally on this machine.\n"
+        msg += "A local dashboard stops when this machine sleeps, goes offline, or the process\n"
         msg += "hosting it exits, which kills any background job it is coordinating.\n"
-        msg += "To run background jobs, first deploy a small always-on head VM:\n\n"
+        msg += "To run background jobs, first deploy your dashboard to a small always-on VM:\n\n"
         msg += "    burla deploy\n\n"
         msg += "Or remove `detach=True` to run this job in the foreground.\n"
         super().__init__(msg)

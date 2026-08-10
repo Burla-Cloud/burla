@@ -514,7 +514,7 @@ def remote_parallel_map(
             Defaults to the number of provided inputs.
         detach (bool, optional):
             If True, job will continue running on cluster, when canceled locally.
-            Requires a deployed cluster (`burla deploy`): a cluster head running
+            Requires a deployed cluster (`burla deploy`): a dashboard running
             locally on this machine cannot outlive it, so background jobs
             against one raise `DetachRequiresDeployedCluster`. Defaults to False.
         generator (bool, optional):

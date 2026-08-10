@@ -207,7 +207,6 @@ _shared_workspace/*
 _python_version_marker/*
 _node_auth/*
 _local_dev_state/*
-_image_seed/*
 .gstack/
 
 # remote-dev history db mount

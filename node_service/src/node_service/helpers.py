@@ -1,5 +1,4 @@
 import asyncio
-import os
 import requests
 from itertools import groupby
 from typing import Optional
@@ -75,11 +74,6 @@ class Logger:
             await head_client.post_node_logs([{"msg": head_msg, "ts": time()}])
         except Exception as e:
             print(f"failed to forward log to head: {e}")
-
-        # Same kill switch as the client's _reporting.py; test clusters set it
-        # so node errors don't spam Slack through the backend telemetry route.
-        if os.environ.get("DISABLE_BURLA_TELEMETRY") == "True":
-            return
 
         if severity == "ERROR" or traceback_str:
             try:

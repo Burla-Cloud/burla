@@ -37,10 +37,11 @@ CLUSTER_ID_TOKEN = os.environ["CLUSTER_ID_TOKEN"]
 NUM_GPUS = int(os.environ.get("NUM_GPUS"))
 INSTANCE_NAME = os.environ["INSTANCE_NAME"]
 
-# local-dev only: which checkout's cluster this node belongs to. Workers get
-# labeled with it purely for identification; they live on this node's own
-# docker daemon so they cannot collide with other clusters regardless.
+# local-dev only: which cluster this node belongs to, and the docker network its
+# workers join. Several local-dev clusters share one docker daemon, so both are
+# namespaced per checkout by the head that booted this node.
 BURLA_CLUSTER_NAME = os.environ.get("BURLA_CLUSTER_NAME", "default")
+LOCAL_DEV_NETWORK = os.environ.get("LOCAL_DEV_NETWORK", "local-burla-cluster")
 _raw_inactivity = os.environ.get("INACTIVITY_SHUTDOWN_TIME_SEC")
 INACTIVITY_SHUTDOWN_TIME_SEC = (
     int(_raw_inactivity) if _raw_inactivity is not None else None
@@ -658,18 +659,10 @@ async def validate_requests(request: Request, call_next):
     How request validation works:
     - SELF["authorized_users"] is pre-loaded in the reboot endpoint.
     - If user/token doesn't match any authorized_users, refresh and try again before returning 401
-    - Shutdown endpoint only callable from localhost (inside the shutdown script in the main_svc).
+    - /shutdown gets no special treatment: in relayed setups every request arrives
+      from loopback, so trusting request.client.host would let anyone shut nodes down.
+      The in-VM shutdown hooks send the cluster token like everything else.
     """
-    # validate shutdown requests
-    is_shutdown_request = str(request.url).endswith("/shutdown")
-    if is_shutdown_request:
-        if request.client.host == "127.0.0.1":
-            return await call_next(request)
-        else:
-            return Response(
-                "Shutdown endpoint can only be called from localhost", status_code=403
-            )
-
     # The head authenticates with the cluster token (same check the head runs
     # for node traffic). Every node gets the identical token at boot, so this
     # is a local comparison, no backend round-trip.

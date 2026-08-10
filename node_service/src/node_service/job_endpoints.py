@@ -5,6 +5,7 @@ from typing import Optional
 from uuid import uuid4
 
 import asyncio
+import psutil
 from fastapi import APIRouter, Path, Query, Depends, Response, Request
 
 from node_service import (
@@ -28,6 +29,12 @@ _LOGS_OVERFLOW_MESSAGE = (
 MAX_LOGS_RESPONSE_BYTES = 1_000_000
 MAX_LOG_DOCUMENTS_PER_RESULTS_RESPONSE = 500
 MAX_RESULTS_RESPONSE_BYTES = 1_000_000
+
+# Companion to RESULTS_QUEUE_RAM_LIMIT_BYTES (worker_client.py): together they
+# keep node_service's buffering inside its memory reservation.
+INPUTS_QUEUE_RAM_LIMIT_BYTES = min(
+    1 * 1024**3, int(psutil.virtual_memory().total * 0.125)
+)
 
 router = APIRouter()
 
@@ -151,6 +158,17 @@ async def upload_inputs(
 ):
     if job_id != SELF["current_job"]:
         return Response("job not found", status_code=404)
+
+    # Backpressure, same idea as the results queue: hold the upload until
+    # workers drain the queue, so the client's send rate can never balloon
+    # node_service past its memory reservation. Uploads arrive in <=2MB
+    # chunks, so waiting here holds almost nothing in memory.
+    while SELF["inputs_queue"].size_bytes > INPUTS_QUEUE_RAM_LIMIT_BYTES:
+        await asyncio.sleep(0.1)
+        # The job can end mid-wait; inputs must not leak into the queue the
+        # next job will inherit.
+        if job_id != SELF["current_job"]:
+            return Response("job not found", status_code=404)
 
     inputs_pkl_with_idx = pickle.loads(request_files["inputs_pkl_with_idx"])
     await asyncio.sleep(0)
@@ -293,7 +311,12 @@ async def execute(
     SELF["current_parallelism"] = 0
     SELF["dynamic_func_ram"] = request_json["func_ram"] == "dynamic"
     SELF["reboot_containers_after_job"] = False
-    if SELF["dynamic_func_ram"]:
+    # In local-dev the workers are sibling containers of this one, so the pids
+    # docker reports for them belong to the docker host and don't exist in this
+    # container's pid namespace: every memory read raises NoSuchProcess and
+    # retires a perfectly healthy worker. Nothing is lost by skipping it, local-dev
+    # puts no memory limit on nodes or workers, so there is no pressure to relieve.
+    if SELF["dynamic_func_ram"] and not IN_LOCAL_DEV_MODE:
         SELF["dynamic_ram_monitor_task"] = asyncio.create_task(
             dynamic_ram_monitor_loop()
         )

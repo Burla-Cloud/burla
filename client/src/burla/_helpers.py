@@ -86,16 +86,21 @@ def install_signal_handlers(
                 append_fail_reason=fail_reason,
             )
 
+        # spinner is False when the caller disabled it; touching it then would
+        # turn the JobCanceled a Ctrl-C should raise into an AttributeError.
         if background and inputs_done_event.is_set():
             main_service_url = get_cluster_dashboard_url()
             job_url = f"{main_service_url}/jobs/{job_id}"
             msg = "Background mode is enabled.\n"
             msg += f"This job will continue running on the cluster, to monitor progress go to:"
             msg += f"\n\n    {job_url}\n"
-            spinner.write(msg)
-            spinner.text = "Detached successfully."
-            spinner.ok("✔")
-        else:
+            if spinner:
+                spinner.write(msg)
+                spinner.text = "Detached successfully."
+                spinner.ok("✔")
+            else:
+                print(msg)
+        elif spinner:
             spinner.text = "Job Canceled."
             spinner.fail("✘")
 

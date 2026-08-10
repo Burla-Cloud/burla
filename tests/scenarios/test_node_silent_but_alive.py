@@ -32,12 +32,16 @@ def _container_name(instance_name: str) -> str:
 
 
 def _node_service_pids(container: str) -> list[str]:
+    # The node image has no `ps`; /proc has the same answer everywhere.
+    list_processes = (
+        'for d in /proc/[0-9]*; do echo "${d#/proc/} $(cat $d/comm 2>/dev/null)"; done'
+    )
     listing = subprocess.run(
-        ["docker", "exec", container, "ps", "-eo", "pid,comm"],
+        ["docker", "exec", container, "sh", "-c", list_processes],
         capture_output=True,
         text=True,
         check=True,
-    ).stdout.splitlines()[1:]
+    ).stdout.splitlines()
     pids = []
     for line in listing:
         pid, _, command = line.strip().partition(" ")
@@ -47,8 +51,9 @@ def _node_service_pids(container: str) -> list[str]:
 
 
 def _signal_node_service(container: str, signal: str, pids: list[str]):
+    # No `kill` binary in the node image; the shell builtin is always there.
     subprocess.run(
-        ["docker", "exec", container, "kill", f"-{signal}", *pids],
+        ["docker", "exec", container, "sh", "-c", f"kill -{signal} {' '.join(pids)}"],
         capture_output=True,
         text=True,
         check=True,

@@ -563,6 +563,7 @@ def run_rpm_in_subprocess(
     env_overrides: dict | None = None,
     signal_after_seconds: float | None = None,
     signal_name: str = "SIGINT",
+    resume_after_seconds: float | None = None,
     **rpm_kwargs: Any,
 ) -> dict:
     """
@@ -601,6 +602,12 @@ def run_rpm_in_subprocess(
         if process.is_alive():
             try:
                 os.kill(process.pid, sig)
+            except ProcessLookupError:
+                pass
+        if resume_after_seconds is not None and process.is_alive():
+            time.sleep(resume_after_seconds)
+            try:
+                os.kill(process.pid, signal.SIGCONT)
             except ProcessLookupError:
                 pass
 
@@ -649,6 +656,33 @@ def ctrl_c_after():
         )
 
     return _send
+
+
+@pytest.fixture
+def suspend_client_for():
+    """
+    Helper for e2e tests that suspend the client process mid-job: SIGSTOP
+    after delay_s, SIGCONT suspend_s later. Usage:
+        result = suspend_client_for(source, inputs, delay_s=6, suspend_s=20, **kwargs)
+    """
+
+    def _suspend(
+        function_source: str,
+        inputs: list,
+        delay_s: float,
+        suspend_s: float,
+        **kwargs: Any,
+    ) -> dict:
+        return run_rpm_in_subprocess(
+            function_source,
+            inputs,
+            signal_after_seconds=delay_s,
+            signal_name="SIGSTOP",
+            resume_after_seconds=suspend_s,
+            **kwargs,
+        )
+
+    return _suspend
 
 
 # ---------------------------------------------------------------------------

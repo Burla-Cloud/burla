@@ -19,7 +19,7 @@ from burla._cluster_client import ClusterClient, _local_host_from
 from burla._reporting import RemoteParallelMapReporter, safe_print, safe_spinner_write
 
 NODE_SILENCE_TIMEOUT_SECONDS = 2 * 60
-RESULT_POLL_SILENCE_TIMEOUT_SECONDS = 10 * 60
+RESULT_POLL_SILENCE_TIMEOUT_SECONDS = 3 * 60
 NODE_BOOT_DEADLINE_SEC = 10 * 60
 LOGIN_TIMEOUT_SEC = 10
 MAX_INPUT_SIZE_BYTES = 1_000_000 * 200  # 200MB
@@ -33,6 +33,25 @@ NETWORK_ERROR_TYPES = (
     ClientError,
     OSError,
 )
+
+# Gaps longer than this between loop iterations mean the client process was
+# suspended (laptop sleep, SIGSTOP), not that the nodes went silent.
+CLIENT_SUSPEND_GAP_SECONDS = 10
+
+
+def reset_silence_clocks_after_suspend(nodes: list["Node"], last_loop_at: float):
+    """A suspended client wakes up owing the whole nap, and its first polls can
+    fail while the network reattaches, so without this a healthy node looks
+    like it was silent the entire time. Mirrors the node's job-watcher guard."""
+    now = time()
+    gap = now - last_loop_at
+    if gap > CLIENT_SUSPEND_GAP_SECONDS and nodes:
+        for node in nodes:
+            node.last_reply_timestamp = now
+        nodes[0].spinner_compatible_print(
+            f"Client was suspended for {gap:.0f}s, giving nodes a fresh reply window."
+        )
+    return now
 
 
 class InputTooBig(Exception):

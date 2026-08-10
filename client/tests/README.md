@@ -93,10 +93,10 @@ All tests have a 120s default timeout. If output doesn't advance past
 
 Three exceptions, all in `tests/scenarios/`, raise their own timeouts:
 
-- `test_node_lost_mid_job.py` runs up to ~17 minutes. A node that stops
-  answering (with no lifecycle signal on the job doc) is only failed after the
-  client's 10-minute result-poll silence budget, so it cannot finish sooner.
-- `test_cluster_shutdown_mid_job.py` keeps the same headroom but normally
+- `test_node_lost_mid_job.py` runs ~4-5 minutes. A node that stops answering
+  (with no lifecycle signal on the job doc) is only failed after the client's
+  3-minute result-poll silence budget, so it cannot finish sooner.
+- `test_cluster_shutdown_mid_job.py` keeps similar headroom but normally
   finishes fast: shutdown is recorded on the job doc, which the client reads
   as soon as its node stops answering.
 - `test_node_silent_but_alive.py` freezes a node for a minute, and runs a

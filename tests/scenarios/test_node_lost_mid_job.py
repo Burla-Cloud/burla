@@ -7,7 +7,7 @@ process inside a healthy node; this kills the node itself.
 
 Slow by construction: a node that stops answering while the client is polling
 for results is only failed after `RESULT_POLL_SILENCE_TIMEOUT_SECONDS`
-(10 minutes), so this test has to outlast that budget.
+(3 minutes), so this test has to outlast that budget.
 """
 
 from __future__ import annotations
@@ -20,8 +20,8 @@ import pytest
 
 pytestmark = [pytest.mark.e2e, pytest.mark.slow]
 
-# 10-minute silence budget in the client, plus room for job start and teardown.
-CLIENT_EXIT_BUDGET_SEC = 840
+# 3-minute silence budget in the client, plus room for job start and teardown.
+CLIENT_EXIT_BUDGET_SEC = 300
 
 
 def _container_name(instance_name: str) -> str:

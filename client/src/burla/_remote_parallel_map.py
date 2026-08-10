@@ -54,6 +54,7 @@ from burla._node import (
     NodeDisconnected,
     NodesFailedToBoot,
     UnauthorizedError,
+    reset_silence_clocks_after_suspend,
     VersionMismatch,
     wait_for_nodes_to_be_ready,
 )
@@ -364,9 +365,11 @@ async def _execute_job(
 
         session_stack.callback(_cleanup_ping_process)
         last_status_message_update_time = 0.0
+        last_loop_at = time()
         total_result_count = sum(node.result_count for node in nodes)
         while total_result_count < n_inputs:
             await asyncio.sleep(0.05)
+            last_loop_at = reset_silence_clocks_after_suspend(nodes, last_loop_at)
 
             if terminal_cancel_event.is_set():
                 return

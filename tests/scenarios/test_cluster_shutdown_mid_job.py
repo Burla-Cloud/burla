@@ -20,7 +20,7 @@ import pytest
 
 pytestmark = [pytest.mark.e2e, pytest.mark.slow]
 
-CLIENT_EXIT_BUDGET_SEC = 840
+CLIENT_EXIT_BUDGET_SEC = 300
 
 
 @pytest.mark.timeout(CLIENT_EXIT_BUDGET_SEC + 180)

@@ -9,7 +9,7 @@ because the cost of being wrong is killing a healthy job.
 Two shapes of the same thing: node_service frozen outright, and a node buried
 under a workload that uses everything it has. Both must finish with every
 result. The opposite case, a node that really is gone, is in
-`test_node_lost_mid_job.py` and is allowed the full 10-minute silence budget.
+`test_node_lost_mid_job.py` and is allowed the full 3-minute silence budget.
 """
 
 from __future__ import annotations

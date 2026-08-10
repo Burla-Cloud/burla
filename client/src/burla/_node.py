@@ -19,7 +19,7 @@ from burla._cluster_client import ClusterClient, _local_host_from
 from burla._reporting import RemoteParallelMapReporter, safe_print, safe_spinner_write
 
 NODE_SILENCE_TIMEOUT_SECONDS = 2 * 60
-RESULT_POLL_SILENCE_TIMEOUT_SECONDS = 10 * 60
+RESULT_POLL_SILENCE_TIMEOUT_SECONDS = 3 * 60
 NODE_BOOT_DEADLINE_SEC = 10 * 60
 LOGIN_TIMEOUT_SEC = 10
 MAX_INPUT_SIZE_BYTES = 1_000_000 * 200  # 200MB
@@ -33,6 +33,25 @@ NETWORK_ERROR_TYPES = (
     ClientError,
     OSError,
 )
+
+# Gaps longer than this between loop iterations mean the client process was
+# suspended (laptop sleep, SIGSTOP), not that the nodes went silent.
+CLIENT_SUSPEND_GAP_SECONDS = 10
+
+
+def reset_silence_clocks_after_suspend(nodes: list["Node"], last_loop_at: float):
+    """A suspended client wakes up owing the whole nap, and its first polls can
+    fail while the network reattaches, so without this a healthy node looks
+    like it was silent the entire time. Mirrors the node's job-watcher guard."""
+    now = time()
+    gap = now - last_loop_at
+    if gap > CLIENT_SUSPEND_GAP_SECONDS and nodes:
+        for node in nodes:
+            node.last_reply_timestamp = now
+        nodes[0].spinner_compatible_print(
+            f"Client was suspended for {gap:.0f}s, giving nodes a fresh reply window."
+        )
+    return now
 
 
 class InputTooBig(Exception):
@@ -356,7 +375,23 @@ class Node:
         self.target_parallelism = target_parallelism
         return self
 
-    async def _update_status(self):
+    async def _raise_if_job_ended_by_lifecycle(self, job_id: str):
+        """A dead node can't deliver the restart/shutdown/cancel signal that
+        normally rides its /results responses, so ask the head directly."""
+        try:
+            job_doc = await self.client.get_job(job_id) or {}
+        except NETWORK_ERROR_TYPES:
+            # Head unreachable too (same network blip): keep the normal
+            # silence-tolerance behavior instead of failing the job early.
+            return
+        if job_doc.get("cluster_shutdown"):
+            raise ClusterShutdown()
+        if job_doc.get("cluster_restarted"):
+            raise ClusterRestarted()
+        if job_doc.get("dashboard_canceled"):
+            raise JobCanceled("\n\nJob canceled from dashboard.\n")
+
+    async def _update_status(self, job_id: str):
         node_data = await self.client.get_node(self.instance_name)
         if node_data is None:
             # A 404 during BOOTING can race main_service's background
@@ -364,6 +399,10 @@ class Node:
             # /v1/jobs/{id}/start before Node.start registered the node.
             # Not a real eviction.
             if self.state == "BOOTING":
+                # ...unless the cluster was restarted/shut down and this VM is
+                # simply gone: without this the client waits out the 10-minute
+                # boot deadline then misreports NodesFailedToBoot.
+                await self._raise_if_job_ended_by_lifecycle(job_id)
                 return
             self.state = "FAILED"
             return
@@ -510,6 +549,11 @@ class Node:
                     msg = f"Node {self.instance_name} disconnected while transmitting results.\n"
                     raise NodeDisconnected(self, await self._failure_message(msg))
         except NETWORK_ERROR_TYPES:
+            # The node normally attaches restart/shutdown/cancel signals to
+            # its /results responses, but a restart terminates the VM before
+            # it can answer this poll, so the head is the only place left
+            # that knows why the node went silent.
+            await self._raise_if_job_ended_by_lifecycle(self.job_id)
             if self._result_poll_silence_timeout_exceeded():
                 msg = self._node_silence_timeout_message("returning results")
                 await self._fail_and_delete(msg)
@@ -568,7 +612,7 @@ class Node:
         if self.state != "READY":
             await asyncio.sleep(max(0, 30 - (time() - start_time)))
             while self.state == "BOOTING":
-                await self._update_status()
+                await self._update_status(job_id)
                 if self.state == "BOOTING":
                     if (time() - self.started_booting_at) > NODE_BOOT_DEADLINE_SEC:
                         self.state = "FAILED"

@@ -659,18 +659,10 @@ async def validate_requests(request: Request, call_next):
     How request validation works:
     - SELF["authorized_users"] is pre-loaded in the reboot endpoint.
     - If user/token doesn't match any authorized_users, refresh and try again before returning 401
-    - Shutdown endpoint only callable from localhost (inside the shutdown script in the main_svc).
+    - /shutdown gets no special treatment: in relayed setups every request arrives
+      from loopback, so trusting request.client.host would let anyone shut nodes down.
+      The in-VM shutdown hooks send the cluster token like everything else.
     """
-    # validate shutdown requests
-    is_shutdown_request = str(request.url).endswith("/shutdown")
-    if is_shutdown_request:
-        if request.client.host == "127.0.0.1":
-            return await call_next(request)
-        else:
-            return Response(
-                "Shutdown endpoint can only be called from localhost", status_code=403
-            )
-
     # The head authenticates with the cluster token (same check the head runs
     # for node traffic). Every node gets the identical token at boot, so this
     # is a local comparison, no backend round-trip.

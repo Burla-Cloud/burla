@@ -13,7 +13,9 @@ import time
 
 import pytest
 
-pytestmark = [pytest.mark.e2e, pytest.mark.slow]
+# local-dev caps grow at LOCAL_DEV_MAX_GROW_CPUS=4, so only real VMs exercise
+# a genuine capacity deficit and real boot latency.
+pytestmark = [pytest.mark.e2e, pytest.mark.slow, pytest.mark.remote_dev]
 
 
 def test_grow_under_load(

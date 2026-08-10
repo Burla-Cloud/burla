@@ -432,8 +432,10 @@ def job_summary(job_id: str) -> dict | None:
 
 # A RUNNING job whose nodes have all stopped pushing state was previously
 # detected by the dashboard's SSE stream (only while someone had it open).
-# The head now owns that watchdog. 300s matches the old threshold.
-REAPER_JOB_SILENCE_SEC = 300
+# The head now owns that watchdog. The budget can be short because cgroup
+# isolation (verified at node boot) keeps node_service responsive under any
+# user workload, so real silence this long means the nodes are gone.
+REAPER_JOB_SILENCE_SEC = 150
 REAPER_INTERVAL_SEC = 10
 
 

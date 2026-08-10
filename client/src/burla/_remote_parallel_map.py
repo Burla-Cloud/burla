@@ -6,7 +6,7 @@ import traceback
 import base64
 from asyncio import create_task
 from contextlib import AsyncExitStack
-from queue import Queue
+from queue import Empty, Queue
 from threading import Event, Thread
 from time import time
 from typing import Callable, Literal, Optional, Union
@@ -49,6 +49,7 @@ from burla._node import (
     NodeDisconnected,
     NodesFailedToBoot,
     UnauthorizedError,
+    reset_silence_clocks_after_suspend,
     VersionMismatch,
     wait_for_nodes_to_be_ready,
 )
@@ -347,9 +348,11 @@ async def _execute_job(
 
         session_stack.callback(_cleanup_ping_process)
         last_status_message_update_time = 0.0
+        last_loop_at = time()
         total_result_count = sum(node.result_count for node in nodes)
         while total_result_count < n_inputs:
             await asyncio.sleep(0.05)
+            last_loop_at = reset_silence_clocks_after_suspend(nodes, last_loop_at)
 
             if terminal_cancel_event.is_set():
                 return
@@ -571,89 +574,57 @@ def remote_parallel_map(
     job_id = f"{function_.__name__}-{uid}"
 
     return_queue = Queue()
-    original_signal_handlers = None
-    try:
-        if spinner is True and not stdio_supports_unicode():
-            spinner = False
-        if spinner:
-            spinner = yaspin(
-                sigmap={}
-            )  # <- .start will overwrite my handlers without sigmap={}
-            spinner.start()
-            spinner.text = (
-                f"Preparing to call `{function_.__name__}` on {len(inputs)} inputs ..."
-            )
-        terminal_cancel_event = Event()
-        inputs_done_event = Event()
-        original_signal_handlers = install_signal_handlers(
-            job_id, background, spinner, terminal_cancel_event, inputs_done_event
+    detached_and_canceled = []
+
+    if spinner is True and not stdio_supports_unicode():
+        spinner = False
+    if spinner:
+        spinner = yaspin(
+            sigmap={}
+        )  # <- .start will overwrite my handlers without sigmap={}
+        spinner.start()
+        spinner.text = (
+            f"Preparing to call `{function_.__name__}` on {len(inputs)} inputs ..."
         )
+    terminal_cancel_event = Event()
+    inputs_done_event = Event()
+    original_signal_handlers = install_signal_handlers(
+        job_id, background, spinner, terminal_cancel_event, inputs_done_event
+    )
 
-        def execute_job():
-            try:
-                asyncio.run(
-                    _execute_job_wrapped(
-                        job_id=job_id,
-                        return_queue=return_queue,
-                        function_=wrapped_function_,
-                        inputs=inputs,
-                        packages=packages,
-                        func_cpu=func_cpu,
-                        func_ram=func_ram,
-                        max_parallelism=max_parallelism,
-                        background=background,
-                        spinner=spinner,
-                        terminal_cancel_event=terminal_cancel_event,
-                        inputs_done_event=inputs_done_event,
-                        start_time=start_time,
-                        generator=generator,
-                        udf_error_event=udf_error_event,
-                        grow=grow,
-                        image=image,
-                        func_gpu=func_gpu,
-                    )
+    def execute_job():
+        try:
+            asyncio.run(
+                _execute_job_wrapped(
+                    job_id=job_id,
+                    return_queue=return_queue,
+                    function_=wrapped_function_,
+                    inputs=inputs,
+                    packages=packages,
+                    func_cpu=func_cpu,
+                    func_ram=func_ram,
+                    max_parallelism=max_parallelism,
+                    background=background,
+                    spinner=spinner,
+                    terminal_cancel_event=terminal_cancel_event,
+                    inputs_done_event=inputs_done_event,
+                    start_time=start_time,
+                    generator=generator,
+                    udf_error_event=udf_error_event,
+                    grow=grow,
+                    image=image,
+                    func_gpu=func_gpu,
                 )
-            except BaseException:
-                execute_job.exc_info = sys.exc_info()
-
-        t = Thread(target=execute_job, daemon=True)
-        t.start()
-        t.join()
-
-        if hasattr(execute_job, "exc_info"):
-            raise execute_job.exc_info[1].with_traceback(execute_job.exc_info[2])
-
-        if terminal_cancel_event.is_set() and background and inputs_done_event.is_set():
-            return
-        elif (
-            terminal_cancel_event.is_set()
-            and background
-            and not inputs_done_event.is_set()
-        ):
-            message = (
-                "\n\nBackground job canceled before all inputs finished uploading!"
             )
-            message += '\nPlease wait until the message "Done uploading inputs!" '
-            message += "appears before canceling.\n\n-"
-            raise JobCanceled(message)
-        elif terminal_cancel_event.is_set():
-            raise JobCanceled("Job canceled by user.")
+        except BaseException:
+            execute_job.exc_info = sys.exc_info()
 
-        def _output_generator():
-            n_results = 0
-            while n_results != len(inputs):
-                yield return_queue.get()
-                n_results += 1
+    # Started here rather than on first iteration of the generator below, so a
+    # caller that holds the generator without consuming it still runs its job.
+    job_thread = Thread(target=execute_job, daemon=True)
+    job_thread.start()
 
-        if spinner:
-            spinner.text = (
-                f"Done! {len(inputs)} `{function_.__name__}` calls completed."
-            )
-            spinner.ok("OK")
-
-        return _output_generator() if generator else list(_output_generator())
-
-    except BaseException as e:
+    def _handle_failure(e: BaseException):
         if spinner:
             spinner.stop()
 
@@ -662,7 +633,9 @@ def remote_parallel_map(
         lifecycle_exception = isinstance(
             e, (ClusterRestarted, ClusterShutdown, JobCanceled)
         )
-        if not (isinstance(e, MainServiceTimeout) or background or lifecycle_exception):
+        if not (
+            isinstance(e, MainServiceTimeout) or background or lifecycle_exception
+        ):
             ClusterClient.patch_job_sync(
                 job_id,
                 updates={"status": "FAILED"},
@@ -676,7 +649,9 @@ def remote_parallel_map(
             )
 
             exc_type, exc_value, exc_traceback = sys.exc_info()
-            tb_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
+            tb_details = traceback.format_exception(
+                exc_type, exc_value, exc_traceback
+            )
             traceback_str = "".join(tb_details)
 
             try:
@@ -689,7 +664,52 @@ def remote_parallel_map(
             except:
                 pass
 
-        raise
-    finally:
-        if original_signal_handlers:
+    def _output_generator():
+        try:
+            n_results = 0
+            while n_results != len(inputs):
+                try:
+                    output = return_queue.get(timeout=0.1)
+                except Empty:
+                    # Only stop waiting once the job itself is done: it
+                    # ended early, and the checks below say why.
+                    if job_thread.is_alive():
+                        continue
+                    break
+                yield output
+                n_results += 1
+
+            job_thread.join()
+
+            if hasattr(execute_job, "exc_info"):
+                raise execute_job.exc_info[1].with_traceback(
+                    execute_job.exc_info[2]
+                )
+
+            if terminal_cancel_event.is_set():
+                if background and inputs_done_event.is_set():
+                    detached_and_canceled.append(True)
+                    return
+                if background:
+                    message = "\n\nBackground job canceled before all inputs finished uploading!"
+                    message += '\nPlease wait until the message "Done uploading inputs!" '
+                    message += "appears before canceling.\n\n-"
+                    raise JobCanceled(message)
+                raise JobCanceled("Job canceled by user.")
+
+            if spinner:
+                spinner.text = (
+                    f"Done! {len(inputs)} `{function_.__name__}` calls completed."
+                )
+                spinner.ok("OK")
+        except BaseException as e:
+            _handle_failure(e)
+            raise
+        finally:
             restore_signal_handlers(original_signal_handlers)
+
+    outputs = _output_generator()
+    if generator:
+        return outputs
+    outputs = list(outputs)
+    return None if detached_and_canceled else outputs

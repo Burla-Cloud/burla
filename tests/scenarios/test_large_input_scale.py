@@ -16,7 +16,9 @@ import time
 
 import pytest
 
-pytestmark = [pytest.mark.e2e, pytest.mark.slow]
+# 1000 inputs are only a scale test where the cluster can actually scale;
+# local-dev tops out at 4 worker slots.
+pytestmark = [pytest.mark.e2e, pytest.mark.slow, pytest.mark.remote_dev]
 
 N_INPUTS = 1000
 

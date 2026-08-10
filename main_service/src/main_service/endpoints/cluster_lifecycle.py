@@ -98,6 +98,17 @@ def _get_cluster_config():
     return history.get_cluster_config()
 
 
+@router.post("/v1/local-dev/node-quantity/{quantity}")
+def set_local_dev_node_quantity(quantity: int):
+    """Test-only knob. Multi-node tests need more than the one node local-dev
+    boots, and local-dev reads the quantity once at startup then forces it back
+    to 1 on every settings write, so nothing else can change it at runtime."""
+    if not IN_LOCAL_DEV_MODE:
+        raise HTTPException(status_code=404, detail="local-dev clusters only")
+    LOCAL_DEV_CONFIG["Nodes"][0]["quantity"] = quantity
+    return {"quantity": quantity}
+
+
 def _start_nodes(
     logger: Logger,
     config: dict,
@@ -162,11 +173,14 @@ def _start_nodes(
 
         docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
         node_ids = [name[11:] for name in node_instance_names]
-        for container in docker_client.containers(all=True):
+        # Scoped to this cluster's members: an unfiltered sweep would delete
+        # every other local-dev cluster's containers on this docker daemon.
+        containers = docker_client.containers(
+            all=True, filters={"label": f"burla-cluster-member={CLUSTER_NAME}"}
+        )
+        for container in containers:
             name = container["Names"][0]
-            is_main_service = name.startswith("/main_service")
-            belongs_to_current_node = any([id_ in name for id_ in node_ids])
-            if not (is_main_service or belongs_to_current_node):
+            if not any([id_ in name for id_ in node_ids]):
                 docker_client.remove_container(container["Id"], force=True)
 
     return node_instance_names

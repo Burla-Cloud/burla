@@ -25,6 +25,14 @@ Which tier a behavior belongs in:
   validation a correct client can't produce (malformed versions, bad months),
   auth bypasses, and precisely seeded state transitions.
 
+Tests marked `@pytest.mark.remote_dev` are skipped against a local-dev cluster
+and need `make remote-dev`: real OOM kills, real grow, real scale, real restart,
+and the node endpoints' TLS path all need nodes that are VMs rather than
+containers. Everything else runs in either mode.
+
+Tests that need more than one node ask for them with the `cluster_with_n_nodes`
+fixture, which resizes and restarts the cluster instead of skipping.
+
 Nothing runs in GitHub Actions.
 
 `make 3.11-dev` through `make 3.14-dev` drop you into a shell on that
@@ -88,6 +96,18 @@ boots nodes itself instead of relying on an already-started cluster.
 
 All tests have a 120s default timeout. If output doesn't advance past
 `collected N items` within 10 seconds, stop and report blocked.
+
+Three exceptions, all in `tests/scenarios/`, raise their own timeouts:
+
+- `test_node_lost_mid_job.py` runs ~4-5 minutes. A node that stops answering
+  (with no lifecycle signal on the job doc) is only failed after the client's
+  3-minute result-poll silence budget, so it cannot finish sooner.
+- `test_cluster_shutdown_mid_job.py` keeps similar headroom but normally
+  finishes fast: shutdown is recorded on the job doc, which the client reads
+  as soon as its node stops answering.
+- `test_node_silent_but_alive.py` freezes a node for a minute, and runs a
+  workload that pins a node for several, to prove neither is mistaken for a
+  dead node.
 
 #### Notes for agents
 

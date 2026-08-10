@@ -48,6 +48,8 @@ CLEAN_CLUSTER_TIMEOUT_SEC = int(os.environ.get("BURLA_CLEAN_CLUSTER_TIMEOUT_SEC"
 # How long the readiness gate lets post-job dirt (cancel propagation, worker
 # reboots) settle on its own before paying for a full cluster restart.
 SETTLE_TIMEOUT_SEC = 30
+# Whether the head under test is a local-dev head; resolved on first use.
+_LOCAL_DEV_MODE: bool | None = None
 
 
 def _port_open(host: str, port: int) -> bool:
@@ -97,6 +99,10 @@ def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line(
         "markers", "dashboard: requires Playwright, browser, and dashboard UI"
     )
+    config.addinivalue_line(
+        "markers",
+        "remote_dev: only meaningful against real VMs, requires make remote-dev",
+    )
 
 
 def _active_node_docs() -> list[dict[str, Any]]:
@@ -135,6 +141,36 @@ def _ready_nodes_unreachable(
         if resp.status_code != 200:
             return f"{node['instance_name']} returned {resp.status_code} at {url}"
     return None
+
+
+def _head_in_local_dev_mode() -> bool:
+    """local-dev heads mint no cluster CA: their nodes are containers reached
+    over plain http. Every other head has one."""
+    global _LOCAL_DEV_MODE
+    if _LOCAL_DEV_MODE is None:
+        _LOCAL_DEV_MODE = _cluster_state_via_http().get("cluster_ca") is None
+    return _LOCAL_DEV_MODE
+
+
+def _set_local_dev_node_quantity(quantity: int) -> None:
+    import requests
+
+    resp = requests.post(
+        f"{DASHBOARD_URL}/v1/local-dev/node-quantity/{quantity}",
+        headers=_request_headers(),
+        timeout=10,
+    )
+    resp.raise_for_status()
+
+
+def _wait_for_ready_nodes(n: int, timeout: float) -> list[dict[str, Any]]:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        ready_nodes = _cluster_state_via_http()["ready_nodes"]
+        if len(ready_nodes) >= n:
+            return ready_nodes
+        time.sleep(0.5)
+    raise AssertionError(f"cluster never reached {n} READY nodes within {timeout}s")
 
 
 def _expected_ready_node_count(auth_headers: dict[str, str]) -> int:
@@ -322,8 +358,52 @@ def local_dev_cluster(burla_auth_headers) -> dict[str, Any]:
 @pytest.fixture(autouse=True)
 def clean_local_dev_cluster_before_cluster_tests(request):
     cluster_markers = ("service", "e2e", "dashboard")
-    if any(request.node.get_closest_marker(marker) for marker in cluster_markers):
-        request.getfixturevalue("local_dev_cluster")
+    if not any(request.node.get_closest_marker(marker) for marker in cluster_markers):
+        return
+    # Checked before the readiness gate so a wrong-mode test doesn't pay for a
+    # cluster reset it will never use.
+    if request.node.get_closest_marker("remote_dev") and _head_in_local_dev_mode():
+        # Always a skip, never a failure: running the whole suite against a
+        # local-dev cluster is normal, these tests just aren't part of it.
+        pytest.skip(
+            "this test only means anything against real VMs; start this "
+            "checkout's cluster with `make remote-dev`."
+        )
+    request.getfixturevalue("local_dev_cluster")
+
+
+@pytest.fixture
+def cluster_with_n_nodes(main_http_client, local_dev_cluster):
+    """Grow this checkout's cluster to `n` READY nodes for tests that need
+    more than one, then put it back. local-dev fixes the node count at head
+    startup and resets it on every settings write, so the head exposes a
+    test-only knob for this."""
+    original_quantity = None
+
+    def _ensure(n: int) -> list[dict[str, Any]]:
+        nonlocal original_quantity
+        state = _cluster_state_via_http()
+        if len(state["ready_nodes"]) >= n:
+            return state["ready_nodes"]
+
+        if not _head_in_local_dev_mode():
+            pytest.fail(
+                f"this test needs {n} READY nodes but the cluster has "
+                f"{len(state['ready_nodes'])}; raise machineQuantity in settings "
+                "and restart the cluster."
+            )
+
+        original_quantity = _expected_ready_node_count(_request_headers())
+        _set_local_dev_node_quantity(n)
+        main_http_client.post("/v1/cluster/restart").raise_for_status()
+        return _wait_for_ready_nodes(n, CLEAN_CLUSTER_TIMEOUT_SEC)
+
+    yield _ensure
+
+    if original_quantity is not None:
+        _set_local_dev_node_quantity(original_quantity)
+        main_http_client.post("/v1/cluster/restart")
+        _wait_for_ready_nodes(original_quantity, CLEAN_CLUSTER_TIMEOUT_SEC)
 
 
 @pytest.fixture(scope="session")
@@ -560,6 +640,7 @@ def run_rpm_in_subprocess(
     env_overrides: dict | None = None,
     signal_after_seconds: float | None = None,
     signal_name: str = "SIGINT",
+    resume_after_seconds: float | None = None,
     **rpm_kwargs: Any,
 ) -> dict:
     """
@@ -598,6 +679,12 @@ def run_rpm_in_subprocess(
         if process.is_alive():
             try:
                 os.kill(process.pid, sig)
+            except ProcessLookupError:
+                pass
+        if resume_after_seconds is not None and process.is_alive():
+            time.sleep(resume_after_seconds)
+            try:
+                os.kill(process.pid, signal.SIGCONT)
             except ProcessLookupError:
                 pass
 
@@ -646,6 +733,33 @@ def ctrl_c_after():
         )
 
     return _send
+
+
+@pytest.fixture
+def suspend_client_for():
+    """
+    Helper for e2e tests that suspend the client process mid-job: SIGSTOP
+    after delay_s, SIGCONT suspend_s later. Usage:
+        result = suspend_client_for(source, inputs, delay_s=6, suspend_s=20, **kwargs)
+    """
+
+    def _suspend(
+        function_source: str,
+        inputs: list,
+        delay_s: float,
+        suspend_s: float,
+        **kwargs: Any,
+    ) -> dict:
+        return run_rpm_in_subprocess(
+            function_source,
+            inputs,
+            signal_after_seconds=delay_s,
+            signal_name="SIGSTOP",
+            resume_after_seconds=suspend_s,
+            **kwargs,
+        )
+
+    return _suspend
 
 
 # ---------------------------------------------------------------------------

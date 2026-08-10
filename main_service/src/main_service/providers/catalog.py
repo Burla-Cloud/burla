@@ -6,7 +6,7 @@ machine-type strings itself.
 
 GCP CPU nodes are n4-standard-N (4 GB RAM per vCPU).
 AWS CPU nodes are m7i.<size> (also 4 GiB RAM per vCPU), and Azure CPU nodes
-are Standard_DNs_v5 (also 4 GiB RAM per vCPU), so capacity math is identical
+are Standard_DNs_v6 (also 4 GiB RAM per vCPU), so capacity math is identical
 across clouds.
 """
 
@@ -23,12 +23,12 @@ _M7I_SIZE_TO_CPUS = {
     "24xlarge": 96,
 }
 
-_DSV5_CPU_SIZES = (2, 4, 8, 16, 32, 48, 64, 96)
-_DSV5_PATTERN = re.compile(r"^Standard_D(\d+)s_v5$")
+_DSV6_CPU_SIZES = (2, 4, 8, 16, 32, 48, 64, 96, 128, 192)
+_DSV6_PATTERN = re.compile(r"^Standard_D(\d+)s_v6$")
 
 # Largest-first sizes the grow path may provision. n4-standard-48 is
 # intentionally omitted to match main_service/frontend/src/types/constants.ts
-# (pricing isn't defined for it). m7i.12xlarge and Standard_D48s_v5 omitted
+# (pricing isn't defined for it). m7i.12xlarge and Standard_D48s_v6 omitted
 # for symmetry.
 GCP_PACK_SIZES = (80, 64, 32, 16, 8, 4, 2)
 AWS_PACK_SIZES = ("16xlarge", "8xlarge", "4xlarge", "2xlarge", "xlarge", "large")
@@ -84,9 +84,9 @@ def machine_spec(machine_type: str) -> dict:
         cpus = _M7I_SIZE_TO_CPUS[machine_type.split(".")[-1]]
         return {"cpus": cpus, "ram_gb": cpus * 4, "gpus": 0}
 
-    dsv5_match = _DSV5_PATTERN.match(machine_type)
-    if dsv5_match and int(dsv5_match.group(1)) in _DSV5_CPU_SIZES:
-        cpus = int(dsv5_match.group(1))
+    dsv6_match = _DSV6_PATTERN.match(machine_type)
+    if dsv6_match and int(dsv6_match.group(1)) in _DSV6_CPU_SIZES:
+        cpus = int(dsv6_match.group(1))
         return {"cpus": cpus, "ram_gb": cpus * 4, "gpus": 0}
 
     if machine_type in _GPU_MACHINE_SPECS:
@@ -131,7 +131,7 @@ def pack_cpu_machines(num_cpus: int, cloud_provider: str) -> list[str]:
     if cloud_provider == "aws":
         sizes = [(f"m7i.{size}", _M7I_SIZE_TO_CPUS[size]) for size in AWS_PACK_SIZES]
     elif cloud_provider == "azure":
-        sizes = [(f"Standard_D{cpus}s_v5", cpus) for cpus in AZURE_PACK_SIZES]
+        sizes = [(f"Standard_D{cpus}s_v6", cpus) for cpus in AZURE_PACK_SIZES]
     else:
         sizes = [(f"n4-standard-{cpus}", cpus) for cpus in GCP_PACK_SIZES]
 
@@ -155,7 +155,7 @@ def is_packable_cpu_machine(machine_type: str) -> bool:
     return (
         machine_type.startswith("n4-standard-")
         or machine_type.startswith("m7i.")
-        or bool(_DSV5_PATTERN.match(machine_type))
+        or bool(_DSV6_PATTERN.match(machine_type))
     )
 
 

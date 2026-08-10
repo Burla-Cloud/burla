@@ -12,10 +12,20 @@ import pytest
 pytestmark = pytest.mark.service
 
 
-def test_post_settings_local_dev_forces_n4_standard_2(
+# Must match the mapping local-dev pins in main_service/__init__.py and
+# endpoints/settings.py.
+LOCAL_DEV_MACHINE_TYPES = {
+    "gcp": "n4-standard-2",
+    "aws": "m7i.large",
+    "azure": "Standard_D2s_v5",
+}
+
+
+def test_post_settings_local_dev_forces_small_machine_and_one_node(
     main_http_client, local_dev_cluster
 ):
-    """In local-dev, POST /v1/settings forces machine_type = n4-standard-2, quantity=1."""
+    """In local-dev, POST /v1/settings forces this cloud's smallest machine
+    type and quantity=1, whatever was submitted."""
     payload = {
         "containerImage": "python:3.12",
         "machineType": "n4-standard-16",  # will be overridden
@@ -37,5 +47,5 @@ def test_post_settings_local_dev_forces_n4_standard_2(
     verify = main_http_client.get("/v1/settings")
     assert verify.status_code == 200
     body = verify.json()
-    assert body["machineType"] == "n4-standard-2"
+    assert body["machineType"] == LOCAL_DEV_MACHINE_TYPES[body["cloudProvider"]]
     assert body["machineQuantity"] == 1

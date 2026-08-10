@@ -384,7 +384,9 @@ def modules_to_pickle_by_value(scan: ScannedEnvironment) -> set:
     known_prefixes = scan.dist_dir_prefixes + scan.stdlib_prefixes
     for module_name, module in list(sys.modules.items()):
         top_level = module_name.partition(".")[0]
-        if top_level == "burla":
+        # Burla's own code, which the remote side already has. In a source
+        # checkout these import from the working tree, not site-packages.
+        if top_level in ("burla", "main_service", "node_service"):
             continue
         spec = getattr(module, "__spec__", None)
         origin = getattr(spec, "origin", None)

@@ -593,19 +593,53 @@ def running_head_url() -> str | None:
 class HeadHandle:
     url: str
     owned: bool  # True only for a head this process started (and must stop).
+    # True when the head outlives this machine: a deployed cluster, or one the
+    # caller explicitly pointed at via BURLA_CLUSTER_DASHBOARD_URL (dev
+    # clusters). Local ad hoc heads die with this machine, so background jobs
+    # are refused for them.
+    supports_detach: bool = False
 
 
-def acquire_head_for_job() -> HeadHandle:
+def acquire_head_for_job(for_background_job: bool = False) -> HeadHandle:
     """Resolve the cluster for one job, matching `get_cluster_dashboard_url`'s
     precedence. Reuses an env-pointed, already-running, or deployed cluster
     (owned=False); only when nothing is available does it start a head here,
-    which the caller must stop with `release_head`."""
-    from burla import _existing_cluster_dashboard_url
+    which the caller must stop with `release_head`.
 
-    url = _existing_cluster_dashboard_url()
-    if url:
-        return HeadHandle(url=url, owned=False)
-    return HeadHandle(url=ensure_local_head(), owned=True)
+    Background jobs are refused unless the head survives this machine going
+    away (deployed, or explicitly env-pointed), and are refused *before* an ad
+    hoc head gets started for them."""
+    import burla
+    from burla import _deployed_dashboard_url, _env_dashboard_url
+
+    handle = None
+    if burla._pinned_cluster_url:
+        handle = HeadHandle(
+            url=burla._pinned_cluster_url,
+            owned=False,
+            supports_detach=burla._pinned_head_supports_detach,
+        )
+    if handle is None:
+        url = _env_dashboard_url()
+        if url:
+            handle = HeadHandle(url=url, owned=False, supports_detach=True)
+    if handle is None:
+        url = _deployed_dashboard_url()
+        if url:
+            handle = HeadHandle(url=url, owned=False, supports_detach=True)
+    if handle is None:
+        url = running_head_url()
+        if url:
+            handle = HeadHandle(url=url, owned=False, supports_detach=False)
+
+    if for_background_job and (handle is None or not handle.supports_detach):
+        from burla._node import DetachRequiresDeployedCluster
+
+        raise DetachRequiresDeployedCluster()
+
+    if handle is None:
+        handle = HeadHandle(url=ensure_local_head(), owned=True)
+    return handle
 
 
 # How long to wait for the head to delete this cluster's nodes before killing

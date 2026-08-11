@@ -14,7 +14,6 @@ import { SettingsProvider } from "@/contexts/SettingsContext";
 import { LogsProvider } from "@/contexts/LogsContext";
 import ErrorBoundary from "@/components/ErrorBoundary";
 import ProfilePicture from "@/components/ProfilePicture";
-import ThemeToggle from "@/components/ThemeToggle";
 import { useState } from "react";
 
 const Layout = () => {
@@ -22,10 +21,7 @@ const Layout = () => {
 
   return (
     <div className="flex h-screen w-full overflow-hidden bg-background">
-      <div className="fixed top-6 right-6 z-50 flex items-center gap-3">
-        <ThemeToggle />
-        <ProfilePicture />
-      </div>
+      <ProfilePicture />
       <div className="shrink-0">
         <Sidebar disabled={saving} />
       </div>

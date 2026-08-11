@@ -21,6 +21,29 @@
       -webkit-font-smoothing: antialiased;
     }
 
+    /* Faint nebula washes behind the stars, echoing burla.dev's deep space */
+    .starfield {
+      position: fixed;
+      inset: 0;
+      z-index: 0;
+      pointer-events: none;
+      background:
+        radial-gradient(900px circle at 18% 22%, rgba(42, 127, 150, 0.14), transparent 60%),
+        radial-gradient(1100px circle at 82% 70%, rgba(126, 203, 221, 0.08), transparent 65%),
+        radial-gradient(700px circle at 65% 12%, rgba(42, 127, 150, 0.1), transparent 60%);
+    }
+
+    .starfield canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+
+    .page-layer {
+      position: relative;
+      z-index: 1;
+    }
+
     ::selection {
       background: #7ecbdd;
       color: #03080d;
@@ -209,12 +232,19 @@
   </style>
 </head>
 <body>
-  <a href="https://burla.dev" aria-label="Go to burla.dev" class="corner-logo-link">
-    <svg viewBox="0 0 12 18" class="corner-logo" aria-hidden="true">
+  <div class="starfield" aria-hidden="true"><canvas id="stars"></canvas></div>
+  <a href="https://burla.dev" aria-label="Go to burla.dev" class="corner-logo-link page-layer">
+    <!-- Compact mark: the tile stair plus the underscore block -->
+    <svg viewBox="0 0 30 18" class="corner-logo" aria-hidden="true">
       <defs>
         <linearGradient id="corner-face" x1="0" y1="0" x2="1" y2="1">
           <stop offset="0" stop-color="#AEE1ED" />
           <stop offset="0.45" stop-color="#7ECBDD" />
+          <stop offset="1" stop-color="#56A4B7" />
+        </linearGradient>
+        <linearGradient id="corner-bar" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="#AEE1ED" />
+          <stop offset="0.5" stop-color="#7ECBDD" />
           <stop offset="1" stop-color="#56A4B7" />
         </linearGradient>
       </defs>
@@ -225,11 +255,13 @@
         <rect x="6" y="6" width="6" height="6" fill="url(#corner-face)" />
         <rect x="0" y="12.5" width="6" height="6" fill="#04141B" opacity="0.36" />
         <rect x="0" y="12" width="6" height="6" fill="url(#corner-face)" />
+        <rect x="18" y="12.6" width="12" height="6" fill="#04141B" opacity="0.36" />
+        <rect x="18" y="12" width="12" height="6" fill="url(#corner-bar)" />
       </g>
     </svg>
   </a>
-  <a href="https://docs.burla.dev/privacy-policy" class="privacy-policy-link">Privacy Policy</a>
-  <main class="page-content">
+  <a href="https://docs.burla.dev/privacy-policy" class="privacy-policy-link page-layer">Privacy Policy</a>
+  <main class="page-content page-layer">
     <div class="auth-panel">
       <div class="hero-lockup" aria-label="Burla">
         <svg viewBox="0 0 12 18" class="mark" aria-hidden="true">
@@ -285,6 +317,61 @@
     </div>
   </main>
   <script>
+    // Starfield: canvas dots in the site's teal/cyan/ice, twinkling gently.
+    (function () {
+      const canvas = document.getElementById("stars");
+      const ctx = canvas.getContext("2d");
+      const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      let stars = [];
+
+      function build() {
+        const dpr = Math.min(2, window.devicePixelRatio || 1);
+        canvas.width = window.innerWidth * dpr;
+        canvas.height = window.innerHeight * dpr;
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+        const count = Math.round((window.innerWidth * window.innerHeight) / 5500);
+        stars = Array.from({ length: count }, () => {
+          const seed = Math.random();
+          const color = seed > 0.78 ? "#EAF6FA" : seed > 0.4 ? "#7ECBDD" : "#2A7F96";
+          return {
+            x: Math.random() * window.innerWidth,
+            y: Math.random() * window.innerHeight,
+            r: 0.4 + Math.pow(Math.random(), 2.4) * 1.4,
+            color,
+            base: 0.25 + Math.random() * 0.55,
+            phase: Math.random() * Math.PI * 2,
+            speed: 0.4 + Math.random() * 0.9,
+          };
+        });
+      }
+
+      function draw(t) {
+        ctx.clearRect(0, 0, window.innerWidth, window.innerHeight);
+        for (const s of stars) {
+          const twinkle = reducedMotion ? 1 : 0.65 + 0.35 * Math.sin(s.phase + t * 0.001 * s.speed);
+          ctx.globalAlpha = s.base * twinkle;
+          ctx.fillStyle = s.color;
+          ctx.beginPath();
+          ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.globalAlpha = 1;
+      }
+
+      function loop(t) {
+        draw(t);
+        if (!reducedMotion) requestAnimationFrame(loop);
+      }
+
+      build();
+      window.addEventListener("resize", () => {
+        build();
+        if (reducedMotion) draw(0);
+      });
+      requestAnimationFrame(loop);
+    })();
+
     const redirectLocally = {{ redirect_locally | tojson }};
     const projectId = {{ project_id | tojson }};
     const loginParams = new URLSearchParams({

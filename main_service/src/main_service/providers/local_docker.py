@@ -24,10 +24,12 @@ def _ensure_node_image(docker_client, image: str):
 
 
 class LocalDockerProvider:
-    """local-dev: nodes are docker containers on this cluster's own docker
-    network, mounted so node/worker code hot-reloads on save. Every container
-    carries a `burla-cluster` label so teardown never touches another
-    checkout's cluster running on the same docker daemon."""
+    """local-dev: each node is a privileged container acting as a fake VM. It
+    runs its own docker daemon (see node_service/local_dev_entrypoint.sh), so
+    workers are inner containers owned by the node, exactly like on a real VM,
+    and node_service runs the same code path in every mode. Node containers
+    carry a `burla-cluster` label so teardown never touches another checkout's
+    cluster; workers live inside the node and die with it."""
 
     def create_node_container(
         self,
@@ -40,6 +42,8 @@ class LocalDockerProvider:
         image = os.environ.get("BURLA_NODE_IMAGE", "burla-node-service:local-dev")
         docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
         host_config = docker_client.create_host_config(
+            # Privileged so the node can run its own dockerd for its workers.
+            privileged=True,
             port_bindings={port: ("127.0.0.1", port)},
             network_mode=LOCAL_DEV_NETWORK,
             # The head runs on the docker host, so nodes reach it (MAIN_SERVICE_URL
@@ -49,43 +53,55 @@ class LocalDockerProvider:
             binds={
                 f"{os.environ['HOST_PWD']}/node_service": "/opt/burla/node_service",
                 f"{os.environ['HOST_PWD']}/_shared_workspace": "/workspace/shared",
-                f"{os.environ['HOST_PWD']}/_worker_service_python_env": "/worker_service_python_env",
                 # node_auth bind: see NODE_AUTH_DIR in node_service/__init__.py.
                 f"{os.environ['HOST_PWD']}/_node_auth": "/opt/burla/node_auth",
-                "/var/run/docker.sock": "/var/run/docker.sock",
+                # Real VMs carry the client checkout at this path; workers
+                # install burla from it when their python env is empty.
+                f"{os.environ['HOST_PWD']}/client": {
+                    "bind": "/opt/burla/client",
+                    "mode": "ro",
+                },
+                f"{os.environ['HOST_PWD']}/_image_seed": {
+                    "bind": "/opt/burla/image-seed",
+                    "mode": "ro",
+                },
+                # Worker env installs cache here (workers bind the node's
+                # /uv_cache); a host bind keeps the cache warm across node
+                # reboots and cluster restarts.
+                f"{os.environ['HOST_PWD']}/_uv_cache": "/uv_cache",
             },
         )
 
         _ensure_node_image(docker_client, image)
 
-        cmd_script = f"""
-            cd /opt/burla/node_service
-            uv run -m uvicorn node_service:app --host 0.0.0.0 --port {port} --workers 1 \
-                --timeout-keep-alive 600 --reload
-        """.strip()
         container_name = f"node_{instance_name[11:]}"
         container = docker_client.create_container(
             image=image,
-            command=["-c", cmd_script],
+            command=["/opt/burla/node_service/local_dev_entrypoint.sh"],
             entrypoint=["bash"],
             name=container_name,
             ports=[port],
             host_config=host_config,
+            # The inner daemon's image/layer store. Declared as an anonymous
+            # volume because overlayfs cannot stack on the node's own overlayfs
+            # root; without it dockerd falls back to the crawling `vfs` driver.
+            # `make stop` removes these volumes together with the containers.
+            volumes=["/var/lib/docker"],
             # `burla-cluster` marks everything belonging to this cluster (what
             # `make stop` removes). `burla-cluster-member` marks only the
-            # nodes/workers, so the head tearing the cluster down cannot delete
-            # itself.
+            # nodes, so the head tearing the cluster down cannot delete itself.
             labels={
                 "burla-cluster": CLUSTER_NAME,
                 "burla-cluster-member": CLUSTER_NAME,
             },
             environment={
+                # Without this python buffers stdout, so `docker logs node_*`
+                # lags far behind the node and looks stuck mid-boot.
+                "PYTHONUNBUFFERED": "1",
                 "PROJECT_ID": PROJECT_ID,
-                "BURLA_BACKEND_URL": BURLA_BACKEND_URL,
                 "IN_LOCAL_DEV_MODE": "True",
                 "BURLA_CLUSTER_NAME": CLUSTER_NAME,
-                "LOCAL_DEV_NETWORK": LOCAL_DEV_NETWORK,
-                "HOST_PWD": os.environ["HOST_PWD"],
+                "NODE_PORT": port,
                 "INSTANCE_NAME": instance_name,
                 "CONTAINERS": json.dumps(containers),
                 "INACTIVITY_SHUTDOWN_TIME_SEC": inactivity_shutdown_time_sec,
@@ -94,6 +110,10 @@ class LocalDockerProvider:
                 "MAIN_SERVICE_URL": MAIN_SERVICE_URL_FOR_NODES,
                 "CLUSTER_ID_TOKEN": CLUSTER_ID_TOKEN,
                 "BURLA_BACKEND_URL": BURLA_BACKEND_URL,
+                # Pass the telemetry kill switch down so a cluster started
+                # with it set is silent end to end (nodes forward it to
+                # their workers, where nested rpm clients also send telemetry).
+                "DISABLE_BURLA_TELEMETRY": os.environ.get("DISABLE_BURLA_TELEMETRY", ""),
             },
             detach=True,
         )
@@ -105,4 +125,6 @@ class LocalDockerProvider:
         container_name = f"node_{instance_name[11:]}"
         for container in docker_client.containers(all=True):
             if any(name == f"/{container_name}" for name in container["Names"]):
-                docker_client.remove_container(container["Id"], force=True)
+                # v=True removes the node's anonymous /var/lib/docker volume,
+                # which is ~1GB of inner images per node otherwise stranded.
+                docker_client.remove_container(container["Id"], force=True, v=True)

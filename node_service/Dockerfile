@@ -2,8 +2,9 @@
 # This Docker image exists to mimic the VM disk image that the node service is designed to run on.
 # (named: `burla-node-gpu`, and `burla-node-nogpu`)
 
-# When running the cluster locally, we run the node service inside this image and point the 
-# docker python client at the host machines docker service (because you cannot run docker in docker)
+# When running the cluster locally, node containers run this image *privileged* with their own
+# docker daemon inside (started by local_dev_entrypoint.sh), so each node owns its worker
+# containers exactly like a real VM does and node_service needs no local-dev special cases.
 
 ### To create a new VM disk image:
 # start a 2 vms (one with GPU, one without) from a base image or from the the last disk image:
@@ -66,14 +67,11 @@ RUN uv python install 3.13 && \
     ln -sf /usr/local/bin/python3 /usr/local/bin/python && \
     ln -sf /usr/local/bin/python3 /usr/bin/python3
 
-# Install docker,
-# Not done here because you can't run docker in docker, and this image only exists
-# to mimic a VM disk image, where docker would be installed using the below commands.
-# ================================================
-# RUN apt-get update && apt-get install -y docker.io
-# RUN systemctl start docker
-# RUN systemctl enable docker
-# ================================================
+# Install docker. Real VMs get it from their disk image; local-dev nodes run
+# dockerd themselves (see local_dev_entrypoint.sh) instead of systemd starting it.
+# procps because `docker top` (worker pid discovery) shells out to `ps`.
+# dnsmasq so workers can resolve other nodes' names (see local_dev_entrypoint.sh).
+RUN apt-get update && apt-get install -y docker.io procps dnsmasq && rm -rf /var/lib/apt/lists/*
 
 # Install latest node_service and pip install packages now to make node starts faster
 WORKDIR /opt

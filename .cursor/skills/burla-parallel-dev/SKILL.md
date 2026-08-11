@@ -26,11 +26,14 @@ difference is where nodes and workers run.
 
 Use **`make local-dev`** when the change can be exercised with very light
 resources: dashboard and frontend work, head/API behavior, anything where you
-need a cluster to exist and boot but not to do real work. Nodes and workers are
-docker containers on this machine bind-mounted to the working tree, so node and
-worker edits apply on save with no pushing. This is the fast loop, but every
-cluster costs containers on a laptop, so keep them small (1 node by default) and
-stop the ones you are not using.
+need a cluster to exist and boot but not to do real work. Each node is a
+privileged container acting as a fake VM: it runs its own docker daemon and its
+workers live inside it, exactly like on a real VM, so node_service runs the
+same worker code path as prod. Node and worker code is bind-mounted from the
+working tree, so edits apply on save with no pushing. This is the fast loop,
+but every cluster costs containers on a laptop (plus one inner dockerd and
+~1GB of inner image store per node), so keep clusters small (1 node by
+default) and stop the ones you are not using.
 
 Use **`make remote-dev`** when local-dev is the wrong tool:
 
@@ -96,8 +99,11 @@ account ("push this to test", see the `burla-release` skill).
 ## Guardrails
 
 - Never edit the primary checkout for a task; always work in a linked worktree.
-- Never run `docker rm` by container-name prefix (`node_*`, `worker_*`); that
-  deletes other agents' clusters. Use `make stop`.
+- Never run `docker rm` by container-name prefix (`node_*`); that deletes other
+  agents' clusters. Use `make stop` (it also removes each node's inner-docker
+  volume; workers live inside their node and die with it).
+- To inspect a worker in local-dev, go through its node:
+  `docker exec node_<id> docker ps` / `docker exec node_<id> docker logs <worker>`.
 - Never assume the head is on port 5001; ask `make cluster-info`.
 - Do not point a dev cluster's client at a deployed cluster: the service and
   e2e tiers restart and mutate whatever they are aimed at.

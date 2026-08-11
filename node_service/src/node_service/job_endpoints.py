@@ -316,18 +316,14 @@ async def execute(
     SELF["dynamic_func_ram"] = request_json["func_ram"] == "dynamic"
     SELF["dynamic_func_cpu"] = request_json["func_cpu"] == "dynamic"
     SELF["reboot_containers_after_job"] = False
-    # In local-dev the workers are sibling containers of this one, so the pids
-    # docker reports for them belong to the docker host and don't exist in this
-    # container's pid namespace: every memory read raises NoSuchProcess and
-    # retires a perfectly healthy worker. Nothing is lost by skipping it, local-dev
-    # puts no memory limit on nodes or workers, so there is no pressure to relieve.
-    # The CPU monitor is skipped for the same pid reason, and because the node
-    # container's cpu.pressure file doesn't cover its sibling workers anyway.
+    # In local-dev psutil.virtual_memory() inside the node container reports the
+    # whole docker VM, not this node, so the monitor's "90% of total" trigger
+    # measures the wrong machine and would shed workers over other nodes' usage.
     if SELF["dynamic_func_ram"] and not IN_LOCAL_DEV_MODE:
         SELF["dynamic_ram_monitor_task"] = asyncio.create_task(
             dynamic_ram_monitor_loop()
         )
-    if SELF["dynamic_func_cpu"] and not IN_LOCAL_DEV_MODE:
+    if SELF["dynamic_func_cpu"]:
         SELF["cpu_pressure_monitor_task"] = asyncio.create_task(
             cpu_pressure_monitor_loop()
         )

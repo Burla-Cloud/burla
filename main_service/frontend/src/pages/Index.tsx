@@ -301,9 +301,9 @@ const Dashboard = () => {
                     )}
                 </div>
 
-                <div className="text-center text-sm text-gray-500 mt-auto pt-8">
+                <div className="text-center text-sm text-muted-foreground mt-auto pt-8">
                     Need help? Email me{" "}
-                    <a href="mailto:jake@burla.dev" className="text-blue-500 hover:underline">
+                    <a href="mailto:jake@burla.dev" className="text-primary hover:underline">
                         jake@burla.dev
                     </a>
                 </div>

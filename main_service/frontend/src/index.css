@@ -3,91 +3,92 @@
 @tailwind utilities;
 
 @layer base {
+  /* Light "sky" theme: white/ice surfaces, navy ink, the site's blue as accent. */
   :root {
-    --background: 0 0% 100%;
-    --foreground: 222.2 84% 4.9%;
+    color-scheme: light;
+
+    --background: 200 50% 98%;
+    --foreground: 206 50% 11%;
 
     --card: 0 0% 100%;
-    --card-foreground: 222.2 84% 4.9%;
+    --card-foreground: 206 50% 11%;
 
     --popover: 0 0% 100%;
-    --popover-foreground: 222.2 84% 4.9%;
+    --popover-foreground: 206 50% 11%;
 
-    --brand: 198 20% 32%;
+    --brand: 193 56% 38%;
     --primary: var(--brand);
-    --primary-foreground: 210 40% 98%;
+    --primary-foreground: 197 60% 97%;
 
-    --secondary: 210 40% 96.1%;
-    --secondary-foreground: 222.2 47.4% 11.2%;
+    --secondary: 199 40% 94%;
+    --secondary-foreground: 206 45% 15%;
 
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
+    --muted: 199 40% 94%;
+    --muted-foreground: 205 18% 42%;
 
-    --accent: 210 40% 96.1%;
-    --accent-foreground: 222.2 47.4% 11.2%;
+    --accent: 196 45% 91%;
+    --accent-foreground: 206 45% 15%;
 
-    --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 210 40% 98%;
+    --destructive: 6 78% 50%;
+    --destructive-foreground: 197 60% 97%;
 
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
-    --ring: 222.2 84% 4.9%;
+    --border: 200 30% 88%;
+    --input: 200 30% 88%;
+    --ring: 193 56% 38%;
 
     --radius: 0.5rem;
 
-    --sidebar-background: 0 0% 98%;
-
-    --sidebar-foreground: 240 5.3% 26.1%;
-
+    --sidebar-background: 202 45% 96%;
+    --sidebar-foreground: 206 30% 25%;
     --sidebar-primary: var(--brand);
-
     --sidebar-primary-foreground: 0 0% 98%;
-
-    --sidebar-accent: 240 4.8% 95.9%;
-
-    --sidebar-accent-foreground: 240 5.9% 10%;
-
-    --sidebar-border: 220 13% 91%;
-
+    --sidebar-accent: 199 40% 91%;
+    --sidebar-accent-foreground: 206 45% 15%;
+    --sidebar-border: 200 30% 88%;
     --sidebar-ring: var(--brand);
   }
 
+  /* Dark "space" theme, softened: burla.dev's navy/cyan/ice/coral hues with
+     surfaces a step lighter than the site so dense tables stay readable. */
   .dark {
-    --background: 222.2 84% 4.9%;
-    --foreground: 210 40% 98%;
+    color-scheme: dark;
 
-    --card: 222.2 84% 4.9%;
-    --card-foreground: 210 40% 98%;
+    --background: 207 45% 10%;
+    --foreground: 197 60% 97%;
 
-    --popover: 222.2 84% 4.9%;
-    --popover-foreground: 210 40% 98%;
+    --card: 206 40% 14%;
+    --card-foreground: 197 60% 97%;
 
-    --brand: 198 20% 32%;
+    --popover: 206 40% 15%;
+    --popover-foreground: 197 60% 97%;
+
+    --brand: 191 58% 68%;
     --primary: var(--brand);
-    --primary-foreground: 222.2 47.4% 11.2%;
+    --primary-foreground: 207 60% 7%;
 
-    --secondary: 217.2 32.6% 17.5%;
-    --secondary-foreground: 210 40% 98%;
+    --secondary: 205 35% 20%;
+    --secondary-foreground: 197 60% 97%;
 
-    --muted: 217.2 32.6% 17.5%;
-    --muted-foreground: 215 20.2% 65.1%;
+    --muted: 206 35% 18%;
+    --muted-foreground: 202 28% 76%;
 
-    --accent: 217.2 32.6% 17.5%;
-    --accent-foreground: 210 40% 98%;
+    --accent: 203 40% 22%;
+    --accent-foreground: 197 60% 97%;
 
-    --destructive: 0 62.8% 30.6%;
-    --destructive-foreground: 210 40% 98%;
+    --destructive: 8 100% 71%;
+    --destructive-foreground: 207 60% 7%;
 
-    --border: 217.2 32.6% 17.5%;
-    --input: 217.2 32.6% 17.5%;
-    --ring: 212.7 26.8% 83.9%;
-    --sidebar-background: 240 5.9% 10%;
-    --sidebar-foreground: 240 4.8% 95.9%;
+    --border: 199 30% 26%;
+    --input: 199 30% 26%;
+    --ring: 191 58% 68%;
+
+    --sidebar-background: 208 45% 8%;
+    --sidebar-foreground: 202 25% 80%;
     --sidebar-primary: var(--brand);
-    --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 240 3.7% 15.9%;
-    --sidebar-accent-foreground: 240 4.8% 95.9%;
-    --sidebar-border: 240 3.7% 15.9%;
+    --sidebar-primary-foreground: 207 60% 7%;
+    --sidebar-accent: 204 40% 16%;
+    --sidebar-accent-foreground: 197 60% 97%;
+    --sidebar-border: 202 35% 17%;
     --sidebar-ring: var(--brand);
   }
 }
@@ -101,9 +102,19 @@
     @apply bg-background text-foreground;
     font-family: 'Inter', sans-serif;
   }
+
+  .dark ::selection {
+    background: hsl(var(--primary));
+    color: hsl(var(--primary-foreground));
+  }
 }
 
 @layer components {
+  /* Small mono uppercase label, borrowed from burla.dev */
+  .eyebrow {
+    @apply font-mono text-[11px] font-medium uppercase tracking-eyebrow text-muted-foreground;
+  }
+
   .filesystem-filemanager .e-upload-dialog,
   .filesystem-filemanager .e-upload-popup,
   .filesystem-filemanager .e-upload-list-wrap {
@@ -240,7 +251,7 @@
   .filesystem-shell .e-dialog {
     border-radius: 0.85rem !important;
     overflow: hidden;
-    border: 1px solid rgba(15, 23, 42, 0.08) !important;
+    border: 1px solid hsl(var(--border)) !important;
     box-shadow:
       0 18px 40px -24px rgba(15, 23, 42, 0.45),
       0 12px 24px -18px rgba(15, 23, 42, 0.35) !important;
@@ -275,7 +286,7 @@
   .filesystem-shell .e-dialog input.e-input,
   .filesystem-shell .e-dialog textarea.e-input {
     border: none !important;
-    border-bottom: 2px solid rgba(15, 23, 42, 0.16) !important;
+    border-bottom: 2px solid hsl(var(--border)) !important;
     border-radius: 0 !important;
     padding-left: 0;
     padding-right: 0;
@@ -322,7 +333,7 @@
   .e-dlg-container .e-dialog .e-float-input textarea::selection,
   .e-dlg-container .e-dialog .e-float-input input::-moz-selection,
   .e-dlg-container .e-dialog .e-float-input textarea::-moz-selection {
-    background-color: rgba(148, 163, 184, 0.35) !important;
+    background-color: hsl(var(--primary) / 0.35) !important;
     color: inherit !important;
   }
 
@@ -330,7 +341,7 @@
   .filesystem-shell .e-dialog .e-footer-content .e-btn.e-flat.e-primary {
     background-color: hsl(var(--brand)) !important;
     border-color: hsl(var(--brand)) !important;
-    color: white !important;
+    color: hsl(var(--primary-foreground)) !important;
     box-shadow: 0 12px 24px -16px hsl(var(--brand) / 0.6) !important;
   }
 
@@ -359,11 +370,45 @@
   .filesystem-filemanager .e-toolbar {
     border-radius: 0 !important;
     margin-bottom: 0 !important;
-    background-color: #f8f9fb;
-    border-bottom: 1px solid rgba(148, 163, 184, 0.35);
+    background-color: hsl(var(--muted) / 0.55) !important;
+    border-bottom: 1px solid hsl(var(--border));
     padding: 0.35rem 0.75rem !important;
     display: flex;
     align-items: center;
+  }
+
+  /* Blend Syncfusion's material/material-dark surfaces into the app's card
+     color, in both themes. Row hover/selection states are left to the theme
+     CSS, so rowcells themselves are not forced. */
+  .filesystem-filemanager,
+  .filesystem-filemanager .e-splitter,
+  .filesystem-filemanager .e-splitter .e-pane,
+  .filesystem-filemanager .e-grid,
+  .filesystem-filemanager .e-grid .e-gridheader,
+  .filesystem-filemanager .e-grid .e-gridheader .e-headercell,
+  .filesystem-filemanager .e-grid .e-gridcontent,
+  .filesystem-filemanager .e-grid .e-content,
+  .filesystem-filemanager .e-grid .e-content .e-table,
+  .filesystem-filemanager .e-large-icons,
+  .filesystem-filemanager .e-address,
+  .filesystem-filemanager .e-treeview {
+    background-color: hsl(var(--card)) !important;
+  }
+
+  .filesystem-filemanager .e-grid .e-content tr.e-row:not(:hover):not(.e-active) .e-rowcell {
+    background-color: transparent !important;
+  }
+
+  .filesystem-shell .e-dialog,
+  .filesystem-shell .e-dialog .e-dlg-header-content,
+  .filesystem-shell .e-dialog .e-dlg-content,
+  .filesystem-shell .e-dialog .e-footer-content {
+    background-color: hsl(var(--card)) !important;
+  }
+
+  .filesystem-shell .e-dialog .e-dlg-header,
+  .filesystem-shell .e-dialog .e-dlg-content {
+    color: hsl(var(--foreground) / 0.92) !important;
   }
 
   .filesystem-filemanager .e-grid .e-gridcontent,
@@ -390,7 +435,7 @@
     font-weight: 600 !important;
     padding: 0.4rem 0.75rem !important;
     line-height: 1.35 !important;
-    color: #374151 !important;
+    color: hsl(var(--foreground) / 0.85) !important;
   }
 
   .filesystem-shell .e-toolbar .e-toolbar-item .e-tbar-btn-text,
@@ -399,7 +444,7 @@
     font-size: 1rem !important;
     font-weight: 600 !important;
     line-height: 1.35 !important;
-    color: #374151 !important;
+    color: hsl(var(--foreground) / 0.85) !important;
   }
 
   .filesystem-shell .e-grid .e-rowcell,
@@ -409,7 +454,7 @@
   .filesystem-shell .e-treeview .e-list-text
   {
     font-size: 0.94rem;
-    color: #1f2937;
+    color: hsl(var(--foreground) / 0.92);
     padding-top: 0.75rem !important;
     padding-bottom: 0.75rem !important;
   }
@@ -422,7 +467,7 @@
   .filesystem-shell .e-grid .e-rowcell .e-fe-date-value *
   {
     font-size: 0.94rem !important;
-    color: #1f2937 !important;
+    color: hsl(var(--foreground) / 0.92) !important;
   }
 
   .filesystem-shell .e-grid .e-gridheader .e-headercelldiv,
@@ -465,7 +510,7 @@
   {
     background-color: hsl(var(--brand)) !important;
     border-color: hsl(var(--brand)) !important;
-    color: #fff !important;
+    color: hsl(var(--primary-foreground)) !important;
   }
 
   .filesystem-shell .e-checkbox-wrapper .e-icons.e-check,
@@ -488,7 +533,7 @@
   .filesystem-shell .e-css.e-checkbox-wrapper .e-checkbox:active + .e-frame
   {
     border-color: hsl(var(--brand)) !important;
-    box-shadow: 0 0 0 2px #fff, 0 0 0 4px hsl(var(--brand)) !important;
+    box-shadow: 0 0 0 2px hsl(var(--card)), 0 0 0 4px hsl(var(--brand)) !important;
   }
 
   .filesystem-shell .e-checkbox-wrapper:hover .e-frame.e-check,
@@ -507,7 +552,7 @@
   {
     font-size: 1.1rem !important;
     line-height: 1 !important;
-    color: #64748b !important;
+    color: hsl(var(--muted-foreground)) !important;
 }
 
   .filesystem-shell .e-toolbar .e-btn-icon {
@@ -535,7 +580,7 @@
 
   .filesystem-shell .e-toolbar .e-btn.e-tbar-btn:hover,
   .filesystem-shell .e-toolbar .e-btn.e-tbar-btn:focus-visible {
-    background: rgba(99, 102, 241, 0.12) !important;
+    background: hsl(var(--primary) / 0.12) !important;
   }
 
   .filesystem-shell .e-toolbar .e-separator {
@@ -557,36 +602,30 @@
 
   .filesystem-filemanager .e-address .e-addressbar-ul .e-list-text {
     font-size: 1.08rem !important;
-    color: #64748b !important;
+    color: hsl(var(--muted-foreground)) !important;
     font-weight: 500 !important;
     line-height: 1.45 !important;
   }
 }
 
-/* Start button glow pulse animation */
-@keyframes glowPulseBlue {
+/* Start button glow pulse, in the current theme's accent */
+@keyframes glowPulse {
   0% {
-    box-shadow: 0 0 0 0 rgba(29, 78, 216, 0.35), 0 0 16px rgba(29, 78, 216, 0.65);
+    box-shadow: 0 0 0 0 hsl(var(--primary) / 0.35), 0 0 16px hsl(var(--primary) / 0.65);
   }
   50% {
-    box-shadow: 0 0 0 8px rgba(29, 78, 216, 0.14), 0 0 28px rgba(29, 78, 216, 0.95);
+    box-shadow: 0 0 0 8px hsl(var(--primary) / 0.14), 0 0 28px hsl(var(--primary) / 0.95);
   }
   100% {
-    box-shadow: 0 0 0 0 rgba(29, 78, 216, 0.14), 0 0 16px rgba(29, 78, 216, 0.65);
+    box-shadow: 0 0 0 0 hsl(var(--primary) / 0.14), 0 0 16px hsl(var(--primary) / 0.65);
   }
 }
 
-.glow-pulse-blue {
-  animation: glowPulseBlue 1.6s ease-in-out infinite;
+.glow-pulse {
+  animation: glowPulse 1.6s ease-in-out infinite;
 }
 
-/* Spotlight surface: soft elevation, animated gradient hairline, subtle radial wash */
-@keyframes spotlightRotate {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
+/* Spotlight surface: soft elevation, gradient hairline, subtle radial wash */
 .spotlight-surface {
   position: relative;
   border-radius: 0.75rem; /* ~12px matches rounded-xl */
@@ -603,16 +642,16 @@
   box-sizing: border-box;
   background: conic-gradient(
     from 0deg,
-    rgba(56, 189, 248, 0.22), /* sky-400 */
-    rgba(99, 102, 241, 0.22), /* indigo-500 */
-    rgba(56, 189, 248, 0.22)
+    hsl(var(--primary) / 0.25),
+    hsl(var(--primary) / 0.08),
+    hsl(var(--primary) / 0.25)
   );
   -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
   -webkit-mask-composite: xor;
   mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
   mask-composite: exclude;
   pointer-events: none;
-  opacity: 0.18; /* fainter and static */
+  opacity: 0.3;
 }
 
 .spotlight-surface::after {
@@ -622,14 +661,48 @@
   border-radius: inherit;
   background: radial-gradient(
     900px circle at 50% -10%,
-    rgba(99, 102, 241, 0.12), /* indigo */
-    rgba(56, 189, 248, 0.08), /* sky */
+    hsl(var(--primary) / 0.12),
+    hsl(var(--primary) / 0.06),
     transparent 60%
   );
   z-index: -1; /* sit behind content */
   pointer-events: none;
   filter: blur(12px);
   opacity: 0.15; /* even subtler */
+}
+
+/* Lockup only: a lit top edge and a short extrusion below give the wordmark
+   the same beveled read as the gradient-filled marks beside it. Dark-only,
+   because the halo is tuned for navy backgrounds. */
+.dark .text-shadow-logo {
+  text-shadow:
+    0 -1px 0 rgba(226, 250, 255, 0.26),
+    0 1px 0 rgba(6, 26, 34, 0.48),
+    0 2px 1px rgba(2, 12, 18, 0.38),
+    0 3px 6px rgba(0, 0, 0, 0.34),
+    0 0 22px rgba(150, 221, 240, 0.16);
+}
+
+/* The lockup's trailing block blinks like a shell cursor on hover; class is
+   added/removed by BrandLockup so the full sequence plays out. */
+@keyframes logo-caret-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+
+.logo-caret-blink {
+  animation: logo-caret-blink 0.75s steps(1, end) 4;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .logo-caret-blink {
+    animation: none;
+  }
 }
 
 /* Subtle table row slide-in */

@@ -177,27 +177,29 @@ EOF
 systemctl enable burla-shutdown-hook
 """
 
-# NVSwitch machines (p4d.*, p5.48xlarge) refuse to run CUDA unless a fabric
-# manager whose version exactly matches the driver is running, and Ubuntu's
-# archive publishes driver and FM from separate source packages that have
-# skewed (and its cuda-drivers-fabricmanager meta doesn't even pull the
-# driver), so NVIDIA's CUDA repo is apt-pinned above the archive: it ships
-# driver + FM in lockstep. The toolkit registers the `nvidia` docker runtime
-# the workers' host_config asks for. Drivers build via DKMS, so no GPU is
-# needed to build this image and the cheap CPU builder instance still works.
+# Driver stack comes from Ubuntu's archive, all built from one SRU cycle so
+# the kernel modules (precompiled + signed for this exact aws kernel, no
+# DKMS, so no GPU is needed to build this image), userspace libs, and fabric
+# manager stay version-locked. FM matters: NVSwitch machines (p4d.*,
+# p5.48xlarge) refuse to run CUDA unless a fabric manager exactly matching
+# the driver is running. NVIDIA's own CUDA repo can't serve this: it dropped
+# classic fabricmanager packaging after driver branch 575 (580+ only ships
+# Blackwell's nvlink5). GL/X libs are skipped (headless), decode/encode are
+# kept so containers requesting the `video` capability still start. The
+# toolkit (not in Ubuntu's archive) registers the `nvidia` docker runtime
+# the workers' host_config asks for.
 _GPU_AMI_EXTRA_SETUP = """
-apt-get install -y linux-headers-$(uname -r)
-curl -fsSL https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb -o /tmp/cuda-keyring.deb
-dpkg -i /tmp/cuda-keyring.deb
-cat > /etc/apt/preferences.d/nvidia-cuda-repo <<'EOF'
-Package: *
-Pin: origin developer.download.nvidia.com
-Pin-Priority: 1001
-EOF
+apt-get install -y \
+  linux-modules-nvidia-580-server-$(uname -r) \
+  nvidia-headless-no-dkms-580-server \
+  nvidia-utils-580-server \
+  libnvidia-decode-580-server \
+  libnvidia-encode-580-server \
+  nvidia-fabricmanager-580
 curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
 curl -fsSL https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' > /etc/apt/sources.list.d/nvidia-container-toolkit.list
 apt-get update
-apt-get install -y cuda-drivers-fabricmanager-580 nvidia-container-toolkit
+apt-get install -y nvidia-container-toolkit
 nvidia-ctk runtime configure --runtime=docker
 systemctl enable nvidia-fabricmanager
 """

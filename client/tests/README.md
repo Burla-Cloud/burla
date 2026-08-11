@@ -56,8 +56,9 @@ In `local-dev` the head runs as a host subprocess straight from this checkout
 it runs its own docker daemon, and its workers are containers *inside* it,
 exactly like on a real VM (`docker exec node_<id> docker ps` to see them). The
 node base image is built from `node_service/Dockerfile` on first run, so no
-image registry is involved. Rebuild it with `make local-images` after changing
-the node Dockerfile or a `uv.lock`; service code is bind-mounted, so ordinary
+image registry is involved. `make local-dev` rebuilds it whenever that
+Dockerfile changes; run `make local-images` by hand after a `uv.lock` change,
+which the rebuild check cannot see. Service code is bind-mounted, so ordinary
 edits need no rebuild.
 
 Both dev modes need a working AWS identity and a saved cluster token, because

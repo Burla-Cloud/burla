@@ -300,7 +300,7 @@ async def _job_watcher(
             )
 
         client_disconnected = False
-        if not client_contact_last_1s:
+        if not client_contact_last_1s and SELF["client_heartbeat_received"]:
             client_disconnected = not job_view.get("any_node_client_contact")
         must_be_connected = not is_background_job or not SELF["all_inputs_uploaded"]
         if (

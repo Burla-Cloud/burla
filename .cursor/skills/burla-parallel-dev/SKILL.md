@@ -100,8 +100,9 @@ account ("push this to test", see the `burla-release` skill).
 
 - Never edit the primary checkout for a task; always work in a linked worktree.
 - Never run `docker rm` by container-name prefix (`node_*`); that deletes other
-  agents' clusters. Use `make stop` (it also removes each node's inner-docker
-  volume; workers live inside their node and die with it).
+  agents' clusters. Use `make stop`: it is what removes the nodes' inner-docker
+  volumes, which are kept across node replacement on purpose so a replacement
+  node doesn't unpack its whole image store again.
 - To inspect a worker in local-dev, go through its node:
   `docker exec node_<id> docker ps` / `docker exec node_<id> docker logs <worker>`.
 - Never assume the head is on port 5001; ask `make cluster-info`.

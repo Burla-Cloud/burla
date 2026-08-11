@@ -99,6 +99,10 @@ def REINIT_SELF(SELF):
     SELF["pending_dashboard_canceled"] = False
     SELF["active_client_request_count"] = 0
     SELF["last_client_activity_timestamp"] = time()
+    # Whether the client's heartbeat channel has ever been up on this node.
+    # Silence only means "disconnected" after it has, otherwise a node that the
+    # client hasn't gotten around to pinging yet fails the job out from under it.
+    SELF["client_heartbeat_received"] = False
     SELF["reserved_for_job"] = None
     SELF["watch_reservation_task"] = None
     SELF["SHUTTING_DOWN"] = False
@@ -589,6 +593,7 @@ async def get_status():
 @app.post("/client-heartbeat")
 async def client_heartbeat(request: Request, logger: Logger = Depends(get_logger)):
     last_ping_received_at = None
+    SELF["client_heartbeat_received"] = True
     async for _ in request.stream():
         now = time()
         seconds_since_last_ping = now - (last_ping_received_at or now)

@@ -134,7 +134,11 @@ async def verify_worker_cgroup_isolation(workers: list, logger: Logger):
     so every node proves the isolation at boot instead of trusting it.
     """
     if IN_LOCAL_DEV_MODE:
-        return  # fake VMs: no systemd, no slices.
+        # Fake VMs build the same two slices by hand (see
+        # local_dev_entrypoint.sh) but deliberately leave the workers' memory
+        # cap off: their "machine" is the docker VM every cluster shares, so
+        # there is no per-node memory total to carve up.
+        return
 
     problems = []
     node_cgroup = Path("/proc/self/cgroup").read_text()

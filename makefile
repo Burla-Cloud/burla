@@ -21,6 +21,12 @@ BURLA_DASHBOARD_URL := http://localhost:$(BURLA_HEAD_PORT)
 # or node_service's locked dependencies change. (The head has no image: it runs
 # as a host subprocess straight from this checkout, like remote-dev.)
 LOCAL_NODE_IMAGE := burla-node-service:local-dev
+# Stamped onto the image as a label so `local-dev` can tell an image built from
+# today's Dockerfile from one built from an older one. Without it a stale image
+# under the same tag is silently reused and its nodes die on whatever the
+# Dockerfile added since (a pre-DinD image exits 127 on `dnsmasq`).
+NODE_IMAGE_FINGERPRINT := $(shell python3 -c 'import hashlib;print(hashlib.sha256(open("node_service/Dockerfile","rb").read()).hexdigest()[:16])')
+NODE_IMAGE_FINGERPRINT_LABEL := burla.node-image-fingerprint
 
 # A test shell on a chosen interpreter. `--python` is passed per-run instead of
 # pinned, so switching versions never edits the tracked `client/.python-version`.
@@ -101,14 +107,17 @@ node-logs:
 # Remove this checkout's cluster containers. Filtered by label so other
 # checkouts' clusters on the same docker daemon are left alone. Cluster state
 # lives inside the main_service process, so there is nothing else to clean up.
-# `-v` also removes each node's anonymous /var/lib/docker volume (the inner
-# docker daemon's image store, ~1GB per node), which would otherwise strand.
+# The volumes are the nodes' inner docker image stores (~1GB each); they are
+# deliberately kept when a node is replaced, so stopping the cluster is what
+# reclaims them.
 stop:
 	set -e; \
 	pids=$$(lsof -ti tcp:$(BURLA_HEAD_PORT) -sTCP:LISTEN 2>/dev/null || true); \
 	if [ -n "$$pids" ]; then kill $$pids 2>/dev/null || true; fi; \
 	ids=$$(docker ps -aq --filter label=burla-cluster=$(BURLA_CLUSTER_NAME)); \
 	if [ -n "$$ids" ]; then docker rm -f -v $$ids >/dev/null; fi; \
+	vols=$$(docker volume ls -q --filter label=burla-cluster=$(BURLA_CLUSTER_NAME)); \
+	if [ -n "$$vols" ]; then docker volume rm $$vols >/dev/null; fi; \
 	docker network rm $(BURLA_CLUSTER_NETWORK) >/dev/null 2>&1 || true; \
 	echo "Removed cluster [$(BURLA_CLUSTER_NAME)]."
 
@@ -116,30 +125,38 @@ stop-all:
 	set -e; \
 	ids=$$(docker ps -aq --filter label=burla-cluster); \
 	if [ -n "$$ids" ]; then docker rm -f -v $$ids >/dev/null; fi; \
+	vols=$$(docker volume ls -q --filter label=burla-cluster); \
+	if [ -n "$$vols" ]; then docker volume rm $$vols >/dev/null; fi; \
 	echo "Removed every burla dev cluster on this machine."
 
 
 # Rebuild local-dev's node base image. `local-dev` does this for you when it's
-# missing; run it by hand after changing the node Dockerfile or a uv.lock.
+# missing or stale; run it by hand to pick up new node_service dependencies,
+# which the fingerprint can't see (they're installed from a git clone, not from
+# this checkout, so an unchanged Dockerfile can still produce a new image).
 local-images:
 	set -e; \
-	docker build -t $(LOCAL_NODE_IMAGE) ./node_service; \
+	docker build -t $(LOCAL_NODE_IMAGE) \
+		--label $(NODE_IMAGE_FINGERPRINT_LABEL)=$(NODE_IMAGE_FINGERPRINT) \
+		./node_service; \
 	echo "Built $(LOCAL_NODE_IMAGE)."
 
 # Each node runs its own docker daemon, so without this tarball every node
 # would download the default worker image from the registry at boot. Kept
 # current with the registry (when online) because nodes always `docker pull`,
 # and a stale seed would make that pull a full re-download instead of a no-op.
+# The `.ref` sidecar names the image the tarball holds (for the node, which
+# skips loading an image it already has) and its id (for the check below).
 image-seed:
 	set -e; \
 	mkdir -p _image_seed; \
 	docker pull -q python:3.12 >/dev/null 2>&1 || true; \
 	docker image inspect python:3.12 >/dev/null 2>&1 || docker pull python:3.12; \
 	current=$$(docker image inspect -f '{{.Id}}' python:3.12); \
-	saved=$$(cat _image_seed/python-3.12.id 2>/dev/null || true); \
+	saved=$$(awk '{print $$2}' _image_seed/python-3.12.ref 2>/dev/null || true); \
 	if [ "$$current" != "$$saved" ]; then \
 		docker save python:3.12 -o _image_seed/python-3.12.tar; \
-		echo "$$current" > _image_seed/python-3.12.id; \
+		echo "python:3.12 $$current" > _image_seed/python-3.12.ref; \
 		echo "Saved python:3.12 seed for node-local docker daemons."; \
 	fi
 
@@ -164,8 +181,13 @@ local-dev:
 		exit 1; \
 	fi; \
 	NODE_IMAGE=$${BURLA_NODE_IMAGE:-$(LOCAL_NODE_IMAGE)}; \
-	if ! docker image inspect $${NODE_IMAGE} >/dev/null 2>&1; then \
-		$(MAKE) local-images; \
+	if [ "$${NODE_IMAGE}" = "$(LOCAL_NODE_IMAGE)" ]; then \
+		built_from=$$(docker image inspect \
+			-f '{{index .Config.Labels "$(NODE_IMAGE_FINGERPRINT_LABEL)"}}' \
+			$${NODE_IMAGE} 2>/dev/null || true); \
+		if [ "$${built_from}" != "$(NODE_IMAGE_FINGERPRINT)" ]; then \
+			$(MAKE) local-images; \
+		fi; \
 	fi; \
 	$(MAKE) image-seed; \
 	$(MAKE) -C main_service ensure-frontend; \
@@ -198,9 +220,10 @@ local-dev:
 	echo "Starting cluster [$(BURLA_CLUSTER_NAME)] at $(BURLA_DASHBOARD_URL) (cluster id $${PROJECT_ID})"; \
 	ids=$$(docker ps -aq --filter label=burla-cluster=$(BURLA_CLUSTER_NAME)); \
 	if [ -n "$$ids" ]; then docker rm -f $$ids >/dev/null; fi; \
-	for scratch in _shared_workspace _node_auth _local_dev_state; do \
+	for scratch in _shared_workspace _node_auth _local_dev_state _worker_service_python_env; do \
 		rm -rf ./$$scratch; mkdir -p ./$$scratch; chmod 777 ./$$scratch; \
 	done; \
+	mkdir -p ./_uv_cache; chmod 777 ./_uv_cache; \
 	docker network create $(BURLA_CLUSTER_NETWORK) 2>/dev/null || true; \
 	BURLA_ENVIRONMENT=test \
 	PROJECT_ID=$${PROJECT_ID} \

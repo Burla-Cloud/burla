@@ -427,10 +427,13 @@ async def _execute_job(
                     reporter.print_inputs_done_message()
 
             # Respawn the ping subprocess whenever the set of ready hosts changes,
-            # since it captures its host list at spawn time.
+            # since it captures its host list at spawn time. Spawned the moment
+            # there is anything to ping: nodes give the client 5s of silence
+            # before calling it disconnected, and the subprocess needs a second
+            # or two of that just to boot a python and import aiohttp.
             current_hosts = tuple(sorted(n.host for n in nodes if n.host))
             hosts_changed = current_hosts != pinged_hosts
-            if (time() - start_time) >= 5 and current_hosts and hosts_changed:
+            if current_hosts and hosts_changed:
                 if ping_process is not None:
                     ping_process.kill()
                 ping_process = await run_in_subprocess(

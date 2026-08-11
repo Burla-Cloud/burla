@@ -31,8 +31,8 @@ pushed git ref, never from your working tree.
   (`_DEFAULT_NODE_SOURCE_REF = "dev"`), so `dev` is "the version I'm running".
 - The version number is chosen at release time, not when a branch is created.
   Never make a release-named branch.
-- Releasing merges `dev` into `main`, tags `main`, and publishes. `main` only
-  ever advances through a release.
+- Releasing fast-forwards `main` to `dev`, tags it, and publishes. `main` only
+  ever advances through a release, and never diverges from `dev`.
 
 ## What the release CI enforces
 
@@ -121,18 +121,21 @@ again: it shuts the existing cluster down and restarts the head on the new code.
 
 Releasing pushes to `origin/main`, `origin/dev`, and a new tag, and publishes a
 public GitHub release + PyPI package. The "release it" instruction is the
-authorization for those pushes. Run from a clean worktree that has all the work
-on `dev`.
+authorization for those pushes. Run from the worktree that has `dev` checked
+out, with a clean tree. Nothing below switches branches, so it never collides
+with another worktree.
 
 If Jake did not give a version, propose one (major = breaking, minor = new
 feature, patch = fix) based on `git log origin/main..dev`, and confirm it.
 
-1. Preflight. Fetch, confirm `dev` is checked out and clean, and capture the
-   range to write notes from before the merge erases it:
+1. Preflight. Fetch, confirm you are on a clean `dev`, and capture the range to
+   write notes from before `main` advances:
 
    ```bash
    git fetch origin --quiet
-   git switch dev && git pull --ff-only origin dev
+   git branch --show-current               # must print `dev`
+   git status --porcelain                  # must be empty
+   git pull --ff-only origin dev
    PREV=$(git rev-parse origin/main)
    git log --oneline "$PREV"..dev          # this is what ships
    ```
@@ -161,12 +164,12 @@ feature, patch = fix) based on `git log origin/main..dev`, and confirm it.
    git push origin dev
    ```
 
-5. Merge into `main` and push (fast-forwards in the normal case):
+5. Advance `main` to `dev` without checking it out. A non-fast-forward push is
+   rejected, which is the right outcome: it means something landed on `main`
+   that is not on `dev`, and that needs a human before anything is published.
 
    ```bash
-   git switch main && git pull --ff-only origin main
-   git merge dev
-   git push origin main
+   git push origin dev:main
    ```
 
 6. Draft release notes in the house style (see below) from `"$PREV"..dev`, then
@@ -187,13 +190,7 @@ feature, patch = fix) based on `git log origin/main..dev`, and confirm it.
    The curl must print `X.Y.Z`. If the workflow fails, read its logs
    (`gh run view --log-failed`), fix, and re-release; do not report success.
 
-8. Resync `dev` to `main` so it stays "main + in-flight" for the next cycle:
-
-   ```bash
-   git switch dev && git merge --ff-only main && git push origin dev
-   ```
-
-9. Report done: the version is live on PyPI, plus the GitHub release URL and the
+8. Report done: the version is live on PyPI, plus the GitHub release URL and the
    Actions run URL.
 
 ## Release notes house style

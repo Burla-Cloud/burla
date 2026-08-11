@@ -8,7 +8,7 @@ alwaysApply: true
 Never violate:
 
 1. Make code as simple as possible.
-2. Comments explain WHY code is there — never WHAT it does, never history. If the WHY is obvious, skip it.
+2. Comments explain WHY code is there, never WHAT it does, never history. If the WHY is obvious, skip it.
 3. Never use the walrus operator (`:=`) in Python.
-4. Always tell the user when you find pointless code, dead code, or abstractions that do nothing useful.
+4. Always tell the user when you find pointless code, dead code, or abstractions that do nothing useful. Report it in the trailing `Notes` section defined by the concise-responses rule, never inline in the answer.
 5. For any browser automation / screenshotting / web QA, always use the gstack browse tools. Never use `cursor-ide-browser`.

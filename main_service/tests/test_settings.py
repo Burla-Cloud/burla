@@ -12,10 +12,11 @@ import pytest
 pytestmark = pytest.mark.service
 
 
-def test_post_settings_local_dev_forces_n4_standard_2(
+def test_post_settings_local_dev_forces_small_machine(
     main_http_client, local_dev_cluster
 ):
-    """In local-dev, POST /v1/settings forces machine_type = n4-standard-2, quantity=1."""
+    """In local-dev, POST /v1/settings forces the cloud's small fixed machine
+    type (n4-standard-2 / m7i.large / Standard_D2s_v5) and quantity=1."""
     current = main_http_client.get("/v1/settings")
     assert current.status_code == 200
 
@@ -40,5 +41,10 @@ def test_post_settings_local_dev_forces_n4_standard_2(
     verify = main_http_client.get("/v1/settings")
     assert verify.status_code == 200
     body = verify.json()
-    assert body["machineType"] == "n4-standard-2"
+    forced_small_machine = {
+        "gcp": "n4-standard-2",
+        "aws": "m7i.large",
+        "azure": "Standard_D2s_v5",
+    }[body["cloudProvider"]]
+    assert body["machineType"] == forced_small_machine
     assert body["machineQuantity"] == 1

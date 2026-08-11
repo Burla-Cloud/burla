@@ -15,8 +15,8 @@ type JobResultStats = {
 type JobDoc = {
     image?: string | null;
     max_parallelism?: number | null;
-    func_cpu?: number | null;
-    func_ram?: number | null;
+    func_cpu?: number | string | null;
+    func_ram?: number | string | null;
     func_gpu?: string | null;
 };
 

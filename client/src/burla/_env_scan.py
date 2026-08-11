@@ -20,11 +20,15 @@ modules are shipped inside the pickled function instead (cloudpickle
 by-value), which is decided by `modules_to_pickle_by_value`.
 """
 
+import ast
+import importlib.util
+import inspect
 import json
 import os
 import re
 import sys
 import sysconfig
+import textwrap
 from dataclasses import dataclass
 from urllib.parse import unquote, urlparse
 
@@ -403,3 +407,129 @@ def modules_to_pickle_by_value(scan: ScannedEnvironment) -> set:
         if not resolved.startswith(known_prefixes):
             module_names.add(module_name)
     return module_names
+
+
+class UnsupportedLocalImport(Exception):
+    def __init__(self, offenders: list):
+        msg = (
+            "\n\nThese imports run at call time, but they import local modules."
+            "\nLocal modules travel to workers inside your pickled function, they"
+            "\nare not installed there, so an import statement that executes on a"
+            "\nworker cannot find them:\n\n"
+            + "\n".join(offenders)
+            + "\n\nFix: move each of these imports to the top of its file.\n"
+        )
+        super().__init__(msg)
+
+
+def _call_time_imports(tree):
+    """Every import statement that executes at call time, not import time:
+    (lineno, enclosing function name, statement as written, top-level name).
+    A top-level name of None means a relative import (always local code)."""
+    findings = []
+
+    def visit(node, enclosing_function):
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                visit(child, child.name)
+                continue
+            if enclosing_function is not None:
+                if isinstance(child, ast.Import):
+                    for alias in child.names:
+                        written = f"import {alias.name}"
+                        top_level = alias.name.partition(".")[0]
+                        findings.append(
+                            (child.lineno, enclosing_function, written, top_level)
+                        )
+                elif isinstance(child, ast.ImportFrom):
+                    imported = ", ".join(alias.name for alias in child.names)
+                    source = "." * child.level + (child.module or "")
+                    written = f"from {source} import {imported}"
+                    top_level = None
+                    if not child.level and child.module:
+                        top_level = child.module.partition(".")[0]
+                    findings.append(
+                        (child.lineno, enclosing_function, written, top_level)
+                    )
+            visit(child, enclosing_function)
+
+    visit(tree, None)
+    return findings
+
+
+def _import_is_local(top_level, scan: ScannedEnvironment) -> bool:
+    if top_level is None:
+        return True  # relative import: the local package itself
+    # burla is installed on workers by the node itself.
+    if top_level in ("burla", "main_service", "node_service"):
+        return False
+    if top_level in sys.builtin_module_names:
+        return False
+    # local-dir installs whose code was copied into site-packages: path
+    # checks below would misread them as dist-installed
+    if top_level in scan.local_top_levels:
+        return True
+    try:
+        spec = importlib.util.find_spec(top_level)
+    except (ImportError, ValueError):
+        return False  # would fail locally too; not this guard's problem
+    if spec is None:
+        return False
+    if spec.origin in (None, "built-in", "frozen"):
+        search_locations = list(spec.submodule_search_locations or [])
+        if not search_locations:
+            return False
+        directory = str(search_locations[0])
+    else:
+        if not os.path.isabs(spec.origin):
+            return False  # "<string>" and other non-file origins
+        directory = os.path.dirname(spec.origin)
+    resolved = _resolve(directory) + os.sep
+    return not resolved.startswith(scan.dist_dir_prefixes + scan.stdlib_prefixes)
+
+
+_findings_cache = {}  # file path -> (mtime_ns, findings)
+
+
+def _findings_for_file(file_path: str):
+    try:
+        mtime_ns = os.stat(file_path).st_mtime_ns
+    except OSError:
+        return []
+    cached = _findings_cache.get(file_path)
+    if cached is not None and cached[0] == mtime_ns:
+        return cached[1]
+    try:
+        with open(file_path, encoding="utf-8", errors="ignore") as f:
+            tree = ast.parse(f.read())
+    except (OSError, SyntaxError):
+        return []
+    findings = _call_time_imports(tree)
+    _findings_cache[file_path] = (mtime_ns, findings)
+    return findings
+
+
+def raise_on_call_time_local_imports(function_, scan, by_value_module_names):
+    """Fail at submit time instead of with a ModuleNotFoundError on a worker."""
+    sources = []
+    try:
+        udf_tree = ast.parse(textwrap.dedent(inspect.getsource(function_)))
+        sources.append((f"function `{function_.__name__}`", _call_time_imports(udf_tree)))
+    except (OSError, TypeError, SyntaxError):
+        pass  # source unavailable (REPL lambdas, exec'd code): nothing to check
+    checked_files = set()
+    for module_name in by_value_module_names:
+        module = sys.modules.get(module_name)
+        file_path = getattr(module, "__file__", None)
+        if not file_path or file_path in checked_files:
+            continue
+        checked_files.add(file_path)
+        sources.append((file_path, _findings_for_file(file_path)))
+
+    offenders = []
+    for label, findings in sources:
+        for lineno, function_name, written, top_level in findings:
+            if _import_is_local(top_level, scan):
+                offenders.append(f"    {label}:{lineno} in `{function_name}()`: {written}")
+    if offenders:
+        raise UnsupportedLocalImport(offenders)

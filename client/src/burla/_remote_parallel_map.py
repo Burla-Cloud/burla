@@ -33,7 +33,11 @@ from yaspin import Spinner, yaspin
 
 from burla import __version__
 from burla._cluster_client import ClusterClient, NodesBusy, _local_host_from
-from burla._env_scan import modules_to_pickle_by_value, scan_environment
+from burla._env_scan import (
+    modules_to_pickle_by_value,
+    raise_on_call_time_local_imports,
+    scan_environment,
+)
 from burla._heartbeat import run_in_subprocess, send_alive_pings
 from burla._helpers import install_signal_handlers, restore_signal_handlers
 from burla._node import (
@@ -565,8 +569,10 @@ def remote_parallel_map(
     # index can provide ships inside the pickled function instead.
     scan = scan_environment()
     packages = dict(scan.requirements)
-    for module_name in modules_to_pickle_by_value(scan):
+    by_value_module_names = modules_to_pickle_by_value(scan)
+    for module_name in by_value_module_names:
         cloudpickle.register_pickle_by_value(sys.modules[module_name])
+    raise_on_call_time_local_imports(function_, scan, by_value_module_names)
     # ------------------------------------------------
 
     max_parallelism = max_parallelism if max_parallelism else len(inputs)

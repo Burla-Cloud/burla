@@ -30,10 +30,8 @@ const Fact = ({
     span?: number;
 }) => (
     <div className="min-w-0" style={{ gridColumn: `span ${span} / span ${span}` }}>
-        <div className="text-[11px] uppercase tracking-[0.08em] font-medium text-gray-500">
-            {label}
-        </div>
-        <div className="mt-1.5 text-[14.5px] leading-snug text-gray-900">{value}</div>
+        <div className="eyebrow">{label}</div>
+        <div className="mt-1.5 text-[14.5px] leading-snug text-foreground">{value}</div>
     </div>
 );
 
@@ -107,26 +105,29 @@ const JobDetails = () => {
         });
         return `${time}, ${monthDay}`;
     };
+    const defaultBadge = "border-border bg-muted text-muted-foreground";
     const getStatusBadgeClass = (status: string | null) => {
         const statusClasses: Record<string, string> = {
-            PENDING: "border-slate-300 bg-slate-50 text-slate-700",
-            RUNNING: "border-amber-200 bg-amber-50 text-amber-700",
-            FAILED: "border-rose-200 bg-rose-50 text-rose-600",
-            CANCELED: "border-rose-200 bg-rose-50 text-rose-600",
-            COMPLETED: "border-emerald-200 bg-emerald-50 text-emerald-700",
+            PENDING: defaultBadge,
+            RUNNING:
+                "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-300/30 dark:bg-amber-300/10 dark:text-amber-300",
+            FAILED: "border-destructive/30 bg-destructive/10 text-destructive",
+            CANCELED: "border-destructive/30 bg-destructive/10 text-destructive",
+            COMPLETED:
+                "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-300/30 dark:bg-emerald-300/10 dark:text-emerald-300",
         };
-        return status ? statusClasses[status] || "border-slate-300 bg-slate-50 text-slate-700" : "border-slate-300 bg-slate-50 text-slate-700";
+        return status ? statusClasses[status] || defaultBadge : defaultBadge;
     };
 
     const getStatusDotClass = (status: string | null) => {
         const statusDotClasses: Record<string, string> = {
-            PENDING: "bg-slate-500",
-            RUNNING: "bg-amber-500",
-            FAILED: "bg-rose-500",
-            CANCELED: "bg-rose-500",
-            COMPLETED: "bg-emerald-500",
+            PENDING: "bg-muted-foreground/60",
+            RUNNING: "bg-amber-400",
+            FAILED: "bg-destructive",
+            CANCELED: "bg-destructive",
+            COMPLETED: "bg-emerald-500 dark:bg-emerald-400",
         };
-        return status ? statusDotClasses[status] || "bg-slate-500" : "bg-slate-500";
+        return status ? statusDotClasses[status] || "bg-muted-foreground/60" : "bg-muted-foreground/60";
     };
 
     const stopJob = async () => {
@@ -235,7 +236,7 @@ const JobDetails = () => {
     if (!job) {
         return (
             <div className="flex-1 flex flex-col items-center justify-center px-12 pt-10">
-                <h1 className="text-2xl font-semibold text-gray-500">Loading job...</h1>
+                <h1 className="text-2xl font-semibold text-muted-foreground">Loading job...</h1>
             </div>
         );
     }
@@ -243,13 +244,13 @@ const JobDetails = () => {
     if (isStatsLoading) {
         return (
             <div className="flex-1 flex flex-col items-center justify-center px-12 pt-10">
-                <div className="inline-flex items-center gap-3 text-gray-600">
+                <div className="inline-flex items-center gap-3 text-muted-foreground">
                     <div
-                        className="h-6 w-6 rounded-full border-2 border-gray-300 border-t-primary animate-spin"
+                        className="h-6 w-6 rounded-full border-2 border-border border-t-primary animate-spin"
                         role="status"
                         aria-label="Loading job result stats"
                     />
-                    <h1 className="text-2xl font-semibold text-gray-500">Loading job details...</h1>
+                    <h1 className="text-2xl font-semibold text-muted-foreground">Loading job details...</h1>
                 </div>
             </div>
         );
@@ -258,7 +259,7 @@ const JobDetails = () => {
     if (statsLoadError || !stats) {
         return (
             <div className="flex-1 flex flex-col items-center justify-center px-12 pt-10">
-                <h1 className="text-2xl font-semibold text-red-600">
+                <h1 className="text-2xl font-semibold text-destructive">
                     Failed to load job result stats
                 </h1>
                 <button
@@ -281,21 +282,21 @@ const JobDetails = () => {
     return (
         <div className="flex flex-col flex-1 min-h-0 px-12 pt-0">
             <div className="max-w-6xl mx-auto w-full flex flex-col flex-1 min-h-0">
-                <div className="mb-3 rounded-lg border border-gray-200 bg-white px-6 py-5">
+                <div className="mb-3 rounded-lg border border-border bg-card px-6 py-5">
                     <div className="flex flex-row items-start justify-between gap-4">
                         <div className="min-w-0">
                             <div className="flex items-center gap-3 flex-wrap">
-                                <h1 className="text-[24px] font-semibold tracking-tight text-gray-900 truncate">
+                                <h1 className="text-[24px] font-semibold tracking-tight text-foreground truncate">
                                     {job.function_name ?? "Unknown"}
                                 </h1>
                                 <span
-                                    className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-[13.5px] font-medium ${getStatusBadgeClass(job.status)}`}
+                                    className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 font-mono text-[12.5px] font-medium ${getStatusBadgeClass(job.status)}`}
                                 >
                                     <span className={`h-2 w-2 rounded-full ${getStatusDotClass(job.status)}`} />
                                     <span>{(job.status ?? "UNKNOWN").toLowerCase().replace(/^./, c => c.toUpperCase())}</span>
                                 </span>
                             </div>
-                            <div className="mt-1.5 font-mono text-[13px] text-gray-500 truncate">
+                            <div className="mt-1.5 font-mono text-[13px] text-muted-foreground truncate">
                                 {job.id}
                             </div>
                         </div>
@@ -305,7 +306,7 @@ const JobDetails = () => {
                                 <Button
                                     variant={canStop ? "destructive" : "outline"}
                                     size="sm"
-                                    className="h-9 rounded-md shrink-0"
+                                    className="h-9 shrink-0"
                                     onClick={stopJob}
                                     disabled={isStopping || !canStop}
                                 >
@@ -316,7 +317,7 @@ const JobDetails = () => {
                         })()}
                     </div>
 
-                    <div className="mt-5 pt-5 border-t border-gray-100 grid grid-cols-2 sm:grid-cols-3 gap-x-8 gap-y-5">
+                    <div className="mt-5 pt-5 border-t border-border/60 grid grid-cols-2 sm:grid-cols-3 gap-x-8 gap-y-5">
                         <Fact
                             label="Started"
                             value={
@@ -364,10 +365,10 @@ const JobDetails = () => {
                     </div>
                 </div>
 
-                <div className="mb-3 rounded-lg border border-gray-200 bg-white px-4 py-3">
+                <div className="mb-3 rounded-lg border border-border bg-card px-4 py-3">
                     <div className="flex items-end justify-between gap-6">
                         <div>
-                            <div className="mt-0.5 text-[14.5px] tabular-nums text-gray-800">
+                            <div className="mt-0.5 text-[14.5px] tabular-nums text-foreground/90">
                                 {succeededCount.toLocaleString()}
                                 <span className="mx-1.5">/</span>
                                 <span>
@@ -379,16 +380,16 @@ const JobDetails = () => {
                             </div>
                         </div>
 
-                        <div className="flex flex-wrap items-center justify-end gap-5 text-[14.5px] text-gray-800">
+                        <div className="flex flex-wrap items-center justify-end gap-5 text-[14.5px] text-foreground/90">
                             <span className="inline-flex items-center gap-1.5">
-                                <span className="h-2 w-2 rounded-full bg-emerald-500" />
+                                <span className="h-2 w-2 rounded-full bg-emerald-500 dark:bg-emerald-400" />
                                 <span>Success</span>
                                 <span className="tabular-nums">
                                     {succeededCount.toLocaleString()}
                                 </span>
                             </span>
                             <span className="inline-flex items-center gap-1.5">
-                                <span className="h-2 w-2 rounded-full bg-rose-500" />
+                                <span className="h-2 w-2 rounded-full bg-destructive" />
                                 <span>Failed</span>
                                 <span className="tabular-nums">
                                     {safeFailedCount.toLocaleString()}
@@ -404,15 +405,15 @@ const JobDetails = () => {
                         </div>
                     </div>
 
-                    <div className="mt-2 h-2.5 w-full overflow-hidden rounded-full bg-slate-200">
+                    <div className="mt-2 h-2.5 w-full overflow-hidden rounded-full bg-secondary">
                         <div className="flex h-full w-full">
                             <div
-                                className="h-full bg-emerald-500 transition-all"
+                                className="h-full bg-emerald-500 dark:bg-emerald-400 transition-all"
                                 style={{ width: `${succeededPct}%` }}
                                 aria-hidden="true"
                             />
                             <div
-                                className="h-full bg-rose-500 transition-all"
+                                className="h-full bg-destructive transition-all"
                                 style={{ width: `${failedPct}%` }}
                                 aria-hidden="true"
                             />

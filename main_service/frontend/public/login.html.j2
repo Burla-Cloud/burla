@@ -5,7 +5,7 @@
   <title>Burla - Sign In</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <link rel="icon" type="image/png" href="/favicon.png" />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&family=Poppins:wght@700&display=swap" rel="stylesheet" />
   <style>
     * {
       box-sizing: border-box;
@@ -15,8 +15,15 @@
       margin: 0;
       min-height: 100vh;
       font-family: "Inter", sans-serif;
-      background: #fdfdfd;
-      color: #111111;
+      background: #03080d;
+      color: #f4fbfd;
+      color-scheme: dark;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    ::selection {
+      background: #7ecbdd;
+      color: #03080d;
     }
 
     .corner-logo-link {
@@ -25,10 +32,10 @@
       left: clamp(12px, 1.6vw, 24px);
       width: clamp(34px, 3.5vw, 50px);
       height: clamp(34px, 3.5vw, 50px);
-      border: 1px solid #d8d8d8;
+      border: 1px solid rgba(126, 203, 221, 0.3);
       border-radius: 8px;
-      background: #ffffff;
-      box-shadow: 0 2px 7px rgba(0, 0, 0, 0.08);
+      background: #091823;
+      box-shadow: 0 2px 7px rgba(0, 0, 0, 0.4);
       display: flex;
       align-items: center;
       justify-content: center;
@@ -37,8 +44,8 @@
 
     .corner-logo-link:hover {
       transform: translateY(-1px);
-      border-color: #bfc3c9;
-      box-shadow: 0 6px 14px rgba(0, 0, 0, 0.13);
+      border-color: rgba(126, 203, 221, 0.68);
+      box-shadow: 0 6px 14px rgba(0, 0, 0, 0.5);
     }
 
     .corner-logo {
@@ -51,7 +58,7 @@
       position: fixed;
       left: clamp(12px, 1.6vw, 24px);
       bottom: clamp(12px, 1.6vw, 24px);
-      color: #6d6d6d;
+      color: rgba(234, 246, 250, 0.55);
       font-size: 12px;
       font-weight: 400;
       text-decoration: none;
@@ -75,22 +82,61 @@
       text-align: center;
     }
 
-    .hero-logo {
-      width: min(345.6px, 100%);
-      aspect-ratio: 1636 / 250;
-      height: auto;
-      display: block;
-      margin: 0 auto 8px;
+    /* The burla.dev lockup: stair of three squares, wordmark, underscore block */
+    .hero-lockup {
+      display: inline-flex;
+      align-items: baseline;
+      gap: 10px;
+      margin: 0 auto 10px;
+      font-family: "Poppins", system-ui, sans-serif;
+      font-weight: 700;
+      font-size: 58px;
+      letter-spacing: -0.025em;
+      line-height: 1;
+      color: #7ecbdd;
+      text-shadow:
+        0 -1px 0 rgba(226, 250, 255, 0.26),
+        0 1px 0 rgba(6, 26, 34, 0.48),
+        0 2px 1px rgba(2, 12, 18, 0.38),
+        0 3px 6px rgba(0, 0, 0, 0.34),
+        0 0 22px rgba(150, 221, 240, 0.16);
+    }
+
+    .hero-lockup .mark {
+      height: 0.78em;
+      width: auto;
+      align-self: center;
+    }
+
+    .hero-lockup .caret {
+      height: 0.26em;
+      width: auto;
+      animation: caret-blink 1.05s steps(1) infinite;
+    }
+
+    @keyframes caret-blink {
+      0%, 55% {
+        opacity: 1;
+      }
+      56%, 100% {
+        opacity: 0;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .hero-lockup .caret {
+        animation: none;
+      }
     }
 
     .tagline {
-      margin: 0 0 26px;
+      margin: 0 0 30px;
       font-size: 15.6px;
       font-weight: 400;
       line-height: 1.35;
-      color: #3B5A64;
+      color: rgba(234, 246, 250, 0.75);
       opacity: 0;
-      animation: fade-in 1s ease 3s forwards;
+      animation: fade-in 1s ease 0.6s forwards;
     }
 
     @keyframes fade-in {
@@ -103,9 +149,9 @@
       margin: 0 0 14px;
       padding: 10px 12px;
       border-radius: 6px;
-      border: 1px solid #e9b8b3;
-      background: #fdf0ee;
-      color: #7c261d;
+      border: 1px solid rgba(255, 128, 108, 0.4);
+      background: rgba(255, 128, 108, 0.1);
+      color: #ffb3a6;
       text-align: left;
       font-size: 13px;
       line-height: 1.45;
@@ -114,6 +160,7 @@
     .banner strong {
       display: block;
       margin-bottom: 2px;
+      color: #ff806c;
     }
 
     .login-btn {
@@ -124,23 +171,24 @@
       justify-content: center;
       gap: 9px;
       padding: 0 18px;
-      border-radius: 7px;
-      border: 1px solid #767676;
-      background: #ffffff;
-      color: #161616;
+      border-radius: 999px;
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      background: rgba(9, 24, 35, 0.8);
+      color: rgba(234, 246, 250, 0.9);
       text-decoration: none;
-      font-size: 15px;
+      font-family: "IBM Plex Mono", ui-monospace, monospace;
+      font-size: 14px;
       font-weight: 500;
       line-height: 1.2;
-      box-shadow: 0 2px 7px rgba(0, 0, 0, 0.08);
-      transition: transform 0.16s ease, box-shadow 0.16s ease, border-color 0.16s ease, background 0.12s ease;
+      box-shadow: 0 2px 7px rgba(0, 0, 0, 0.35);
+      transition: transform 0.16s ease, box-shadow 0.16s ease, border-color 0.16s ease, color 0.12s ease;
     }
 
     .login-btn:hover {
       transform: translateY(-1px);
-      background: #fbfbfb;
-      border-color: #5f5f5f;
-      box-shadow: 0 6px 14px rgba(0, 0, 0, 0.13);
+      border-color: rgba(126, 203, 221, 0.6);
+      color: #eaf6fa;
+      box-shadow: 0 6px 14px rgba(0, 0, 0, 0.45);
     }
 
     .login-btn + .login-btn {
@@ -162,12 +210,58 @@
 </head>
 <body>
   <a href="https://burla.dev" aria-label="Go to burla.dev" class="corner-logo-link">
-    <img src="/logo_small.svg" alt="Burla logo" class="corner-logo" />
+    <svg viewBox="0 0 12 18" class="corner-logo" aria-hidden="true">
+      <defs>
+        <linearGradient id="corner-face" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stop-color="#AEE1ED" />
+          <stop offset="0.45" stop-color="#7ECBDD" />
+          <stop offset="1" stop-color="#56A4B7" />
+        </linearGradient>
+      </defs>
+      <g>
+        <rect x="0" y="0.5" width="6" height="6" fill="#04141B" opacity="0.36" />
+        <rect x="0" y="0" width="6" height="6" fill="url(#corner-face)" />
+        <rect x="6" y="6.5" width="6" height="6" fill="#04141B" opacity="0.36" />
+        <rect x="6" y="6" width="6" height="6" fill="url(#corner-face)" />
+        <rect x="0" y="12.5" width="6" height="6" fill="#04141B" opacity="0.36" />
+        <rect x="0" y="12" width="6" height="6" fill="url(#corner-face)" />
+      </g>
+    </svg>
   </a>
   <a href="https://docs.burla.dev/privacy-policy" class="privacy-policy-link">Privacy Policy</a>
   <main class="page-content">
     <div class="auth-panel">
-      <img src="/logo.gif" alt="Burla logo" class="hero-logo" />
+      <div class="hero-lockup" aria-label="Burla">
+        <svg viewBox="0 0 12 18" class="mark" aria-hidden="true">
+          <defs>
+            <linearGradient id="hero-face" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0" stop-color="#AEE1ED" />
+              <stop offset="0.45" stop-color="#7ECBDD" />
+              <stop offset="1" stop-color="#56A4B7" />
+            </linearGradient>
+          </defs>
+          <g>
+            <rect x="0" y="0.5" width="6" height="6" fill="#04141B" opacity="0.36" />
+            <rect x="0" y="0" width="6" height="6" fill="url(#hero-face)" />
+            <rect x="6" y="6.5" width="6" height="6" fill="#04141B" opacity="0.36" />
+            <rect x="6" y="6" width="6" height="6" fill="url(#hero-face)" />
+            <rect x="0" y="12.5" width="6" height="6" fill="#04141B" opacity="0.36" />
+            <rect x="0" y="12" width="6" height="6" fill="url(#hero-face)" />
+          </g>
+        </svg>
+        <span>Burla</span>
+        <svg viewBox="0 0 12 6" class="caret" aria-hidden="true">
+          <defs>
+            <linearGradient id="hero-bar" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="#AEE1ED" />
+              <stop offset="0.5" stop-color="#7ECBDD" />
+              <stop offset="1" stop-color="#56A4B7" />
+            </linearGradient>
+          </defs>
+          <rect y="0.6" width="12" height="6" fill="#04141B" opacity="0.36" />
+          <rect width="12" height="6" fill="url(#hero-bar)" />
+        </svg>
+      </div>
       <p class="tagline">The simplest way to scale Python.</p>
       {% if user_email %}
       <div class="banner">

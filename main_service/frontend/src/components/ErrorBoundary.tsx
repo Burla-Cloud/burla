@@ -1,5 +1,5 @@
 import { Component, ErrorInfo, ReactNode } from "react";
-import clusterImage from "@/assets/logo.svg";
+import { BrandLockup } from "@/components/BrandLockup";
 
 interface Props {
     children: ReactNode;
@@ -23,24 +23,17 @@ class ErrorBoundary extends Component<Props, State> {
     public render() {
         if (this.state.hasError) {
             return (
-                <div style={{ padding: "20px", textAlign: "center" }}>
-                    <br />
-                    <br />
-                    <img
-                        src={clusterImage}
-                        style={{
-                            width: "120px",
-                            height: "auto",
-                            margin: "0 auto 20px",
-                        }}
-                    />
-                    <h2>Oops! Something went wrong.</h2>
+                <div className="min-h-screen bg-background text-foreground pt-10 text-center">
+                    <div className="mb-5 flex justify-center">
+                        <BrandLockup linked={false} />
+                    </div>
+                    <h2 className="text-lg font-semibold">Oops! Something went wrong.</h2>
                     <p>Please try refreshing the page.</p>
                     <br />
                     <p>If that dosen't work please email me!</p>
                     <p>
                         (&nbsp;{" "}
-                        <a href="mailto:jake@burla.dev" className="text-blue-500 hover:underline">
+                        <a href="mailto:jake@burla.dev" className="text-primary hover:underline">
                             jake@burla.dev
                         </a>
                         &nbsp;)

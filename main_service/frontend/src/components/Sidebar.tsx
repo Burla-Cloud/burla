@@ -1,5 +1,5 @@
-import clusterImage from "@/assets/logo.svg";
 import { Link } from "react-router-dom";
+import { BrandLockup } from "@/components/BrandLockup";
 
 interface SidebarProps {
   disabled?: boolean;
@@ -13,52 +13,37 @@ declare global {
   }
 }
 
+const linkClass =
+  "flex items-center space-x-1 font-mono text-[15px] text-sidebar-foreground hover:text-sidebar-accent-foreground hover:bg-sidebar-accent p-2 rounded-md";
+
 const Sidebar = ({ disabled = false }: SidebarProps) => {
   const filesystemEnabled = window.__BURLA_FILESYSTEM_ENABLED__ !== false;
   return (
     <div
-      className={`w-60 min-h-screen bg-gray-100 border-r p-4 flex flex-col transition-opacity duration-200 ${
+      className={`w-60 min-h-screen bg-sidebar border-r border-sidebar-border p-4 flex flex-col transition-opacity duration-200 ${
         disabled ? "opacity-60 pointer-events-none select-none" : ""
       }`}
     >
       {/* Logo */}
-      <div className="flex justify-left mt-6 mb-4">
-        <Link to="/">
-          <img
-            src={clusterImage}
-            style={{ width: "128px", height: "auto" }}
-            className="ml-2"
-          />
-        </Link>
+      <div className="flex justify-left mt-6 mb-4 ml-2">
+        <BrandLockup />
       </div>
 
-      <hr className="border-gray-300 my-5 w-full" />
+      <hr className="border-sidebar-border my-5 w-full" />
 
-      <nav className="space-y-1 text-lg font-medium">
-        <Link
-          to="/"
-          className="flex items-center space-x-1 text-gray-700 hover:text-primary hover:bg-primary/10 p-2 rounded-md"
-        >
+      <nav className="space-y-1">
+        <Link to="/" className={linkClass}>
           <span>Cluster Status</span>
         </Link>
-        <Link
-          to="/jobs"
-          className="flex items-center space-x-1 text-gray-700 hover:text-primary hover:bg-primary/10 p-2 rounded-md"
-        >
+        <Link to="/jobs" className={linkClass}>
           <span>Jobs</span>
         </Link>
         {filesystemEnabled && (
-          <Link
-            to="/filesystem"
-            className="flex items-center space-x-1 text-gray-700 hover:text-primary hover:bg-primary/10 p-2 rounded-md"
-          >
+          <Link to="/filesystem" className={linkClass}>
             <span>Filesystem</span>
           </Link>
         )}
-        <Link
-          to="/settings"
-          className="flex items-center space-x-1 text-gray-700 hover:text-primary hover:bg-primary/10 p-2 rounded-md"
-        >
+        <Link to="/settings" className={linkClass}>
           <span>Settings</span>
         </Link>
       </nav>

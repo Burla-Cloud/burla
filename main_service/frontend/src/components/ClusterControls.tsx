@@ -76,14 +76,11 @@ export const ClusterControls = ({
                 disabled={isStartDisabled}
                 aria-busy={isStarting || isRebooting}
                 className={cn(
-                    "w-32 text-white transition-all duration-300 ease-in-out shadow-md hover:shadow-xl active:shadow transform-gpu hover:-translate-y-0.5 active:translate-y-0 disabled:shadow-none",
-                    isStarting || isRebooting
-                        ? "bg-primary hover:bg-primary/90"
-                        : "bg-primary hover:bg-primary/90 disabled:bg-gray-400",
+                    "w-36 px-3 transition-all duration-300 ease-in-out shadow-md hover:shadow-xl active:shadow transform-gpu hover:-translate-y-0.5 active:translate-y-0 disabled:shadow-none disabled:bg-muted disabled:text-muted-foreground",
                     highlightStart &&
                         !isOn &&
                         !isStartDisabled &&
-                        "bg-blue-700 hover:bg-blue-800 animate-pulse glow-pulse-blue ring-4 ring-blue-500 ring-offset-2 ring-offset-background transition-shadow transform transition-transform hover:scale-105",
+                        "animate-pulse glow-pulse ring-4 ring-primary/50 ring-offset-2 ring-offset-background transition-shadow transform transition-transform hover:scale-105",
                 )}
             >
                 {startButtonIcon}
@@ -95,7 +92,7 @@ export const ClusterControls = ({
                 onClick={onStop}
                 disabled={isStopping || isOff || disableStopButton}
                 aria-busy={isStopping}
-                className="w-32 transition-all duration-300 ease-in-out shadow-md hover:shadow-xl active:shadow transform-gpu hover:-translate-y-0.5 active:translate-y-0 disabled:shadow-none"
+                className="w-36 px-3 transition-all duration-300 ease-in-out shadow-md hover:shadow-xl active:shadow transform-gpu hover:-translate-y-0.5 active:translate-y-0 disabled:shadow-none disabled:bg-muted disabled:text-muted-foreground"
             >
                 {stopButtonIcon}
                 {stopButtonText}

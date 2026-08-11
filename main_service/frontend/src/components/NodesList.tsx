@@ -71,18 +71,18 @@ export const NodesList: React.FC<NodesListProps> = ({
 
     const getStatusClass = (nodeStatus: NodeStatusLike) => {
         const statusClasses: Record<string, string> = {
-            READY: "bg-green-500",
-            RUNNING: "bg-green-500 animate-pulse",
-            BOOTING: "bg-yellow-500 animate-pulse",
-            STOPPING: "bg-gray-300 animate-pulse",
-            FAILED: "bg-red-500",
-            DELETED: "bg-red-500",
+            READY: "bg-emerald-500 dark:bg-emerald-400",
+            RUNNING: "bg-emerald-500 dark:bg-emerald-400 animate-pulse",
+            BOOTING: "bg-amber-400 animate-pulse",
+            STOPPING: "bg-muted-foreground/40 animate-pulse",
+            FAILED: "bg-destructive",
+            DELETED: "bg-destructive",
         };
 
         const key = typeof nodeStatus === "string" ? nodeStatus.toUpperCase() : "";
         return cn(
             "w-2 h-2 rounded-full",
-            key ? (statusClasses[key] ?? "bg-gray-300") : "bg-gray-300",
+            key ? (statusClasses[key] ?? "bg-muted-foreground/40") : "bg-muted-foreground/40",
         );
     };
 
@@ -407,10 +407,10 @@ export const NodesList: React.FC<NodesListProps> = ({
         <div className="space-y-6 [scrollbar-gutter:stable_both-edges]">
             {showWelcome && (
                 <div className="spotlight-surface rounded-xl mt-4 mb-8">
-                    <Card className="w-full relative rounded-xl shadow-lg shadow-black/5 bg-white/90 backdrop-blur">
+                    <Card className="w-full relative rounded-xl shadow-lg shadow-black/5 bg-card/90 backdrop-blur">
                         <button
                             onClick={handleDismissWelcome}
-                            className="absolute top-2 right-2 p-1 hover:bg-gray-100 rounded-full"
+                            className="absolute top-2 right-2 p-1 hover:bg-accent rounded-full"
                             aria-label="Dismiss welcome message"
                         >
                             <X className="h-6 w-6" />
@@ -422,13 +422,12 @@ export const NodesList: React.FC<NodesListProps> = ({
                                         <h2 className="text-xl font-semibold text-primary">
                                             Two minute quickstart:
                                         </h2>
-                                        <ol className="list-decimal pl-6 mt-2 space-y-2 text-base font-medium text-gray-700">
+                                        <ol className="list-decimal pl-6 mt-2 space-y-2 text-base font-medium text-foreground/85">
                                             <li>
                                                 Hit the flashing{" "}
                                                 <span
-                                                    className="font-semibold text-gray-900"
+                                                    className="font-semibold text-foreground bg-secondary"
                                                     style={{
-                                                        background: "#f6f6f6",
                                                         borderRadius: "0.36rem",
                                                         padding: "0.11em 0.44em",
                                                         display: "inline-block",
@@ -455,7 +454,7 @@ export const NodesList: React.FC<NodesListProps> = ({
                                                     href="https://colab.research.google.com/drive/1bR8Gpa85gqJi7_9uKdcJDX9_WG0tuVmG?usp=sharing"
                                                     target="_blank"
                                                     rel="noopener noreferrer"
-                                                    className="inline-flex items-center gap-1 text-[#2563eb] hover:underline font-medium"
+                                                    className="inline-flex items-center gap-1 text-primary hover:underline font-medium"
                                                 >
                                                     Google Colab notebook
                                                     <span
@@ -526,7 +525,7 @@ export const NodesList: React.FC<NodesListProps> = ({
                             )}
 
                             {deletedError && showDeleted && (
-                                <div className="border border-red-300 rounded-lg p-4 mb-4 text-sm text-red-700 bg-red-50">
+                                <div className="border border-destructive/40 rounded-lg p-4 mb-4 text-sm text-destructive bg-destructive/10">
                                     {deletedError}
                                 </div>
                             )}
@@ -630,16 +629,16 @@ export const NodesList: React.FC<NodesListProps> = ({
                                                     {expandedNodeId === node.id && (
                                                         <TableRow
                                                             key={`${node.id}-logs`}
-                                                            className="bg-gray-50"
+                                                            className="bg-muted/50"
                                                         >
                                                             <TableCell colSpan={8} className="p-0">
                                                                 <div className="overflow-y-auto h-[400px] resize-y py-2 px-4">
                                                                     {logsLoading[node.id] ? (
-                                                                        <div className="flex flex-col items-center justify-center h-40 w-full text-gray-500">
+                                                                        <div className="flex flex-col items-center justify-center h-40 w-full text-muted-foreground">
                                                                             <div className="w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin mb-2" />
                                                                         </div>
                                                                     ) : (
-                                                                        <pre className="whitespace-pre-wrap text-gray-600 text-sm">
+                                                                        <pre className="whitespace-pre-wrap text-muted-foreground text-sm">
                                                                             {nodeLogs[
                                                                                 node.id
                                                                             ]?.join("\n")}
@@ -669,7 +668,7 @@ export const NodesList: React.FC<NodesListProps> = ({
                                             className={`px-3 py-1 rounded text-sm border ${
                                                 page === 0
                                                     ? "bg-primary text-primary-foreground"
-                                                    : "bg-white text-gray-700 hover:bg-gray-100"
+                                                    : "bg-card text-foreground/80 hover:bg-accent"
                                             }`}
                                         >
                                             1
@@ -691,7 +690,7 @@ export const NodesList: React.FC<NodesListProps> = ({
                                                     className={`px-3 py-1 rounded text-sm border ${
                                                         page === i
                                                             ? "bg-primary text-primary-foreground"
-                                                            : "bg-white text-gray-700 hover:bg-gray-100"
+                                                            : "bg-card text-foreground/80 hover:bg-accent"
                                                     }`}
                                                 >
                                                     {i + 1}
@@ -706,7 +705,7 @@ export const NodesList: React.FC<NodesListProps> = ({
                                                 className={`px-3 py-1 rounded text-sm border ${
                                                     page === totalPages - 1
                                                         ? "bg-primary text-primary-foreground"
-                                                        : "bg-white text-gray-700 hover:bg-gray-100"
+                                                        : "bg-card text-foreground/80 hover:bg-accent"
                                                 }`}
                                             >
                                                 {totalPages}

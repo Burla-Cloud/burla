@@ -168,7 +168,7 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
             onChange();
           };
 
-        const labelClass = "block text-sm font-medium text-gray-500 mb-1";
+        const labelClass = "block text-sm font-medium text-muted-foreground mb-1";
 
         // --- REGION LOGIC ---
         // Region lists for each GPU type
@@ -324,7 +324,7 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
                                         <TooltipProvider>
                                             <Tooltip>
                                                 <TooltipTrigger asChild>
-                                                    <InfoIcon className="h-4 w-4 text-gray-400 hover:text-gray-600 cursor-help -mt-2" />
+                                                    <InfoIcon className="h-4 w-4 text-muted-foreground/70 hover:text-muted-foreground cursor-help -mt-2" />
                                                 </TooltipTrigger>
                                                 <TooltipContent>
                                                     <p>
@@ -535,7 +535,7 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
                                         <SelectTrigger
                                             className={`w-full h-9.5 ${
                                                 !isRegionValid
-                                                    ? "border-red-500 focus:ring-red-500 ring-2"
+                                                    ? "border-destructive focus:ring-destructive ring-2"
                                                     : ""
                                             }`}
                                         >
@@ -550,7 +550,7 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
                                         </SelectContent>
                                     </Select>
                                     {!isRegionValid && (
-                                        <span className="text-xs text-red-600 mt-1">
+                                        <span className="text-xs text-destructive mt-1">
                                             Please select a region from dropdown
                                         </span>
                                     )}
@@ -592,7 +592,7 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
                                     <TooltipProvider>
                                         <Tooltip>
                                             <TooltipTrigger asChild>
-                                                <InfoIcon className="h-4 w-4 text-gray-400 hover:text-gray-600 cursor-help -mt-2" />
+                                                <InfoIcon className="h-4 w-4 text-muted-foreground/70 hover:text-muted-foreground cursor-help -mt-2" />
                                             </TooltipTrigger>
                                             <TooltipContent>
                                                 <p>
@@ -624,12 +624,12 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
                             {users.map((user) => (
                                     <span
                                         key={user}
-                                        className="bg-gray-100 border border-gray-300 text-gray-800 px-2 py-1 rounded-md flex items-center gap-1"
+                                        className="bg-secondary border border-border text-secondary-foreground px-2 py-1 rounded-md flex items-center gap-1"
                                     >
                                         {user}
                                         <button
                                             onClick={() => removeUser(user)}
-                                            className="text-gray-500 hover:text-gray-700 text-xl leading-none"
+                                            className="text-muted-foreground hover:text-foreground text-xl leading-none"
                                         >
                                             ×
                                         </button>

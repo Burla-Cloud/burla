@@ -26,23 +26,26 @@ def test_post_settings_local_dev_forces_small_machine_and_one_node(
 ):
     """In local-dev, POST /v1/settings forces this cloud's smallest machine
     type and quantity=1, whatever was submitted."""
+    current = main_http_client.get("/v1/settings")
+    assert current.status_code == 200
+
+    # Only the fields this test is about. No `gcpRegion`: posting one from the
+    # wrong cloud wedges the config in a state the dashboard's region validation
+    # refuses to re-save (which broke the settings browser test whenever it ran
+    # after this one). `users` echoes the current list because POST reconciles
+    # it against the backend, and posting [] asks it to de-authorize everyone.
     payload = {
         "containerImage": "python:3.12",
         "machineType": "n4-standard-16",  # will be overridden
-        "gcpRegion": "us-central1",
         "machineQuantity": 10,  # will be overridden to 1
         "diskSize": 20,
         "inactivityTimeout": 10,
-        "users": [],
+        "users": current.json()["users"],
     }
     resp = main_http_client.post("/v1/settings", json=payload)
     if resp.status_code == 401:
         pytest.skip("auth required")
-    # POST /v1/settings also reconciles authorized users with backend.burla.dev.
-    # That backend call may 500 depending on cluster metadata; in that case the
-    # settings were still saved, so we verify via GET.
-    if resp.status_code not in (200, 204, 500):
-        pytest.fail(f"unexpected status {resp.status_code}: {resp.text}")
+    assert resp.status_code in (200, 204), f"unexpected {resp.status_code}: {resp.text}"
 
     verify = main_http_client.get("/v1/settings")
     assert verify.status_code == 200

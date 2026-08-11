@@ -6,6 +6,7 @@ the cluster.
 Each method maps one-to-one to a main_service endpoint.
 """
 
+import os
 from typing import Optional
 
 import aiohttp
@@ -31,20 +32,17 @@ class NodesBusy(Exception):
 
 
 def _local_host_from(host: str) -> str:
-    # Rewrite is for local-dev clients on the host; callers on the docker
-    # network (a nested RPM inside a worker) reach node_xxx directly.
-    if host.startswith("http://node_") and not _on_local_cluster_network():
+    # `node_xxx` names only resolve on the cluster's docker network. Clients on
+    # the developer's machine reach those nodes through their published
+    # localhost ports instead; a nested rpm inside a worker reaches them
+    # directly (its node forwards worker DNS to the cluster network's DNS).
+    if host.startswith("http://node_") and not _in_burla_worker():
         return f"http://localhost:{host.split(':')[-1]}"
     return host
 
 
-def _on_local_cluster_network() -> bool:
-    # A caller inside a container reaches the local-dev head (a process on the
-    # docker host) at host.docker.internal; one running on the host itself
-    # reaches it at localhost.
-    from burla import get_cluster_dashboard_url
-
-    return "host.docker.internal" in get_cluster_dashboard_url()
+def _in_burla_worker() -> bool:
+    return os.environ.get("BURLA_IN_WORKER") == "1"
 
 
 def _build_patch_job_body(

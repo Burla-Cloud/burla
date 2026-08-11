@@ -62,6 +62,7 @@ def install_signal_handlers(
     # (for `run_command`). Deferring this import to signal-handler install
     # time sidesteps that cycle.
     from burla._cluster_client import ClusterClient
+    from burla._reporting import safe_print
 
     def _signal_handler(signum, frame):
         if terminal_cancel_event.is_set():
@@ -99,7 +100,7 @@ def install_signal_handlers(
                 spinner.text = "Detached successfully."
                 spinner.ok("✔")
             else:
-                print(msg)
+                safe_print(msg)
         elif spinner:
             spinner.text = "Job Canceled."
             spinner.fail("✘")

@@ -38,16 +38,17 @@ def _remove_local_dev_cluster_containers():
         return
     import docker
 
-    # Filter on this cluster's member label: matching by `node_`/`worker` name
-    # prefix would delete every other local-dev cluster's containers, and
-    # matching `burla-cluster` would delete this head too (it carries that label
-    # so `make stop` gets it).
+    # Filter on this cluster's member label: matching by `node_` name prefix
+    # would delete every other local-dev cluster's containers, and matching
+    # `burla-cluster` would delete this head too (it carries that label so
+    # `make stop` gets it). Workers live on each node's own docker daemon and
+    # die with it. v=True drops the node's anonymous inner-docker volume.
     docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
     containers = docker_client.containers(
         all=True, filters={"label": f"burla-cluster-member={CLUSTER_NAME}"}
     )
     for container in containers:
-        docker_client.remove_container(container["Id"], force=True)
+        docker_client.remove_container(container["Id"], force=True, v=True)
 
 
 def _shutdown_cluster(logger: Logger):

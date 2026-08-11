@@ -36,6 +36,9 @@ if os.environ.get("BURLA_BACKEND_URL") == "https://backend.burla.dev":
     raise RuntimeError("The test suite cannot use the production Burla backend.")
 os.environ["BURLA_ENVIRONMENT"] = "test"
 os.environ.setdefault("BURLA_BACKEND_URL", "https://test.backend.burla.dev")
+# Test runs must never reach Slack through the backend's telemetry route.
+# rpm subprocesses inherit this from the pytest process.
+os.environ["DISABLE_BURLA_TELEMETRY"] = "True"
 
 # `make test*` passes this checkout's head port so tests never reach another
 # checkout's cluster on the same machine.

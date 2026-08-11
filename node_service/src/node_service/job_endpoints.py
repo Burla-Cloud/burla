@@ -21,7 +21,10 @@ from node_service import (
 )
 from node_service.helpers import Logger
 from node_service.job_watcher import job_watcher_logged
-from node_service.worker_client import dynamic_ram_monitor_loop
+from node_service.worker_client import (
+    cpu_pressure_monitor_loop,
+    dynamic_ram_monitor_loop,
+)
 
 _LOGS_OVERFLOW_MESSAGE = (
     "Logs dequeued due to high volume, see dashboard to view all logs."
@@ -194,7 +197,8 @@ async def get_results(
     original_worker_count = len(SELF["workers"])
     current_worker_count = sum(not worker.retired for worker in SELF["workers"])
     dynamic_worker_reduction = None
-    if SELF["dynamic_func_ram"] and current_worker_count < original_worker_count:
+    job_is_dynamic = SELF["dynamic_func_ram"] or SELF["dynamic_func_cpu"]
+    if job_is_dynamic and current_worker_count < original_worker_count:
         dynamic_worker_reduction = {
             "original": original_worker_count,
             "current": current_worker_count,
@@ -310,6 +314,7 @@ async def execute(
     SELF["idle_workers"] = workers_to_leave_idle
     SELF["current_parallelism"] = 0
     SELF["dynamic_func_ram"] = request_json["func_ram"] == "dynamic"
+    SELF["dynamic_func_cpu"] = request_json["func_cpu"] == "dynamic"
     SELF["reboot_containers_after_job"] = False
     # In local-dev the workers are sibling containers of this one, so the pids
     # docker reports for them belong to the docker host and don't exist in this
@@ -319,6 +324,10 @@ async def execute(
     if SELF["dynamic_func_ram"] and not IN_LOCAL_DEV_MODE:
         SELF["dynamic_ram_monitor_task"] = asyncio.create_task(
             dynamic_ram_monitor_loop()
+        )
+    if SELF["dynamic_func_cpu"]:
+        SELF["cpu_pressure_monitor_task"] = asyncio.create_task(
+            cpu_pressure_monitor_loop()
         )
     # user specific, assign to self to use for node <-> node requests only during this job.
     SELF["auth_headers"] = {

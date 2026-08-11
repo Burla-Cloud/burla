@@ -13,6 +13,7 @@ from typing import Callable, Literal, Optional, Union
 
 FuncGpu = Literal["A100", "A100_40G", "A100_80G", "H100", "H100_80G"]
 FuncRam = Union[int, Literal["dynamic"]]
+FuncCpu = Union[int, Literal["dynamic"]]
 from uuid import uuid4
 
 _N_FOUR_STANDARD_CPU_TO_RAM = {
@@ -186,7 +187,7 @@ async def _execute_job(
     function_: Callable,
     inputs: list,
     packages: dict,
-    func_cpu: int,
+    func_cpu: FuncCpu,
     func_ram: FuncRam,
     max_parallelism: int,
     background: bool,
@@ -329,6 +330,7 @@ async def _execute_job(
                     background=background,
                     n_inputs=n_inputs,
                     packages=packages,
+                    func_cpu=func_cpu,
                     func_ram=func_ram,
                     start_time=start_time,
                     function_pkl=function_pkl,
@@ -467,7 +469,7 @@ async def _execute_job(
 def remote_parallel_map(
     function_: Callable,
     inputs: list,
-    func_cpu: int = 1,
+    func_cpu: FuncCpu = "dynamic",
     func_ram: FuncRam = "dynamic",
     func_gpu: Optional[FuncGpu] = None,
     image: Optional[str] = None,
@@ -493,8 +495,12 @@ def remote_parallel_map(
             An iterable of objects that will be passed to `function_`.
             If the iterable contains tuples, they will be unpacked!
             Example: `inputs=[(1, 2)]` -> `function_(1, 2)`
-        func_cpu (int, optional):
-            The number of CPUs allocated for each instance of `function_`. Defaults to 1.
+        func_cpu (int | "dynamic", optional):
+            The number of CPUs allocated for each instance of `function_`.
+            Defaults to "dynamic": Burla starts with one parallel call per CPU,
+            then gives each call more CPU by lowering parallelism on any node
+            where calls are measurably delayed waiting for a core. Pass an
+            integer to reserve a fixed number of CPUs per function call instead.
         func_ram (int | "dynamic", optional):
             The amount of RAM (in GB) allocated for each instance of `function_`.
             Defaults to "dynamic": Burla starts with as many parallel calls as the

@@ -50,6 +50,16 @@ DYNAMIC_RAM_MONITOR_INTERVAL_SECONDS = 0.25
 DYNAMIC_RAM_STARTUP_MONITOR_INTERVAL_SECONDS = 0.05
 DYNAMIC_RAM_STARTUP_MONITOR_SECONDS = 30
 
+# Read from the cgroup root instead of /proc/pressure/cpu: identical on real
+# VMs (node_service is a host process), but inside a local-dev DinD node the
+# private cgroup namespace scopes it to that fake VM instead of the whole
+# docker-desktop VM shared by every cluster on the machine.
+CPU_PRESSURE_FILE = Path("/sys/fs/cgroup/cpu.pressure")
+# 2s is PSI's own internal update cadence; 1s windows are too noisy.
+CPU_PRESSURE_MONITOR_INTERVAL_SECONDS = 2
+CPU_PRESSURE_MAX_STALL_FRACTION = 0.10
+CPU_PRESSURE_MAX_KILL_FRACTION = 0.5
+
 
 class WorkerOutOfMemoryError(RuntimeError):
     pass
@@ -88,6 +98,28 @@ def _is_worker_internal_log_message(message: str) -> bool:
 
 def _active_dynamic_workers():
     return [worker for worker in SELF["workers"] if not worker.retired]
+
+
+async def _relocate_worker_process_or_retire(worker: "WorkerClient"):
+    # The cached pid goes stale whenever worker_server.py exits and the
+    # container's shell loop relaunches it (OOM kill, crash). That is a
+    # restart, not a death: re-locate the process and only retire the worker
+    # when its container is actually gone.
+    stale_pid = worker.worker_host_pid
+    try:
+        worker.worker_host_pid = await worker._get_worker_host_pid()
+    except Exception:
+        container_info = await worker.container.show()
+        if container_info["State"]["Running"]:
+            return  # worker_server.py is mid-relaunch, check next poll
+        worker.retired = True
+        worker.is_idle = True
+        SELF["reboot_containers_after_job"] = True
+        await Logger().log(
+            f"Retired {worker.container_name}: process {stale_pid} is "
+            "gone and its container is not running.",
+            severity="WARNING",
+        )
 
 
 WORKERS_CGROUP_SLICE = "burla-workers.slice"
@@ -193,25 +225,7 @@ async def dynamic_ram_monitor_loop():
             try:
                 worker_memory.append((worker.memory_rss_bytes(), worker))
             except psutil.NoSuchProcess:
-                # The cached pid goes stale whenever worker_server.py exits and
-                # the container's shell loop relaunches it (OOM kill, crash).
-                # That is a restart, not a death: re-locate the process and only
-                # retire the worker when its container is actually gone.
-                stale_pid = worker.worker_host_pid
-                try:
-                    worker.worker_host_pid = await worker._get_worker_host_pid()
-                except Exception:
-                    container_info = await worker.container.show()
-                    if container_info["State"]["Running"]:
-                        continue  # worker_server.py is mid-relaunch, check next poll
-                    worker.retired = True
-                    worker.is_idle = True
-                    SELF["reboot_containers_after_job"] = True
-                    await Logger().log(
-                        f"Retired {worker.container_name}: process {stale_pid} is "
-                        "gone and its container is not running.",
-                        severity="WARNING",
-                    )
+                await _relocate_worker_process_or_retire(worker)
         if not worker_memory:
             continue
 
@@ -237,7 +251,9 @@ async def dynamic_ram_monitor_loop():
         ]
         if not running_worker_memory:
             continue
-        running_worker_memory.sort(reverse=True, key=lambda item: item[0])
+        # Smallest first: retiring small workers gives large tasks more room
+        # while losing the least in-flight progress to the requeue.
+        running_worker_memory.sort(key=lambda item: item[0])
 
         selected_worker_memory = []
         selected_rss_bytes = 0
@@ -249,8 +265,84 @@ async def dynamic_ram_monitor_loop():
             if selected_rss_bytes >= bytes_to_free:
                 break
 
-        await retire_workers_for_dynamic_memory_pressure(
-            selected_worker_memory,
+        await retire_workers_for_pressure(
+            selected_worker_memory, reason="memory pressure"
+        )
+
+
+def _read_cpu_stall_usec() -> int:
+    # `some` line, `total` field: cumulative microseconds during which at
+    # least one runnable task sat waiting for a core.
+    some_line = CPU_PRESSURE_FILE.read_text().splitlines()[0]
+    return int(some_line.rsplit("total=", 1)[1])
+
+
+async def cpu_pressure_monitor_loop():
+    if not CPU_PRESSURE_FILE.exists():
+        await Logger().log(
+            f"{CPU_PRESSURE_FILE} does not exist (kernel without PSI?), "
+            "dynamic CPU is disabled for this job.",
+            severity="WARNING",
+        )
+        return
+
+    # Prime every worker's cpu_percent handle: psutil measures CPU use since
+    # the previous call on the same handle, and a fresh handle reads 0.0,
+    # which would make victim ranking garbage on the first pressured tick.
+    for worker in _active_dynamic_workers():
+        try:
+            worker.cpu_percent()
+        except psutil.NoSuchProcess:
+            pass  # mid-relaunch; the loop below re-locates it
+
+    last_stall_usec = _read_cpu_stall_usec()
+    last_read_at = time.perf_counter()
+    while SELF["dynamic_func_cpu"]:
+        await asyncio.sleep(CPU_PRESSURE_MONITOR_INTERVAL_SECONDS)
+        active_workers = _active_dynamic_workers()
+        if not active_workers:
+            return
+
+        # Sample every tick so each reading covers exactly the last tick.
+        worker_cpu = []
+        for worker in active_workers:
+            try:
+                worker_cpu.append((worker.cpu_percent(), worker))
+            except psutil.NoSuchProcess:
+                await _relocate_worker_process_or_retire(worker)
+
+        stall_usec = _read_cpu_stall_usec()
+        read_at = time.perf_counter()
+        elapsed_usec = (read_at - last_read_at) * 1_000_000
+        stall_fraction = (stall_usec - last_stall_usec) / elapsed_usec
+        last_stall_usec, last_read_at = stall_usec, read_at
+
+        if stall_fraction < CPU_PRESSURE_MAX_STALL_FRACTION:
+            continue
+        if len(worker_cpu) <= 1:
+            continue
+
+        running_worker_cpu = [
+            (cpu, worker)
+            for cpu, worker in worker_cpu
+            if not worker.is_idle and worker.current_input is not None
+        ]
+        if not running_worker_cpu:
+            continue
+        # Least CPU first: cheapest to evict and requeue, and the biggest
+        # tasks keep the cores they are clearly using.
+        running_worker_cpu.sort(key=lambda item: item[0])
+
+        # Batch scales with how far past the threshold pressure is, capped at
+        # half the running workers per tick, so a slammed node converges in a
+        # few ticks while mild pressure sheds one worker at a time.
+        kill_fraction = min(
+            CPU_PRESSURE_MAX_KILL_FRACTION,
+            stall_fraction - CPU_PRESSURE_MAX_STALL_FRACTION,
+        )
+        n_to_retire = max(1, int(len(running_worker_cpu) * kill_fraction))
+        await retire_workers_for_pressure(
+            running_worker_cpu[:n_to_retire], reason="CPU pressure"
         )
 
 
@@ -475,26 +567,27 @@ def _worker_boot_timeout_error(logs: str):
     return RuntimeError(message)
 
 
-async def retire_workers_for_dynamic_memory_pressure(
-    selected_worker_memory: list[tuple[int, "WorkerClient"]],
+async def retire_workers_for_pressure(
+    selected_workers: list[tuple[float, "WorkerClient"]],
+    reason: str,
 ):
-    if not selected_worker_memory:
+    if not selected_workers:
         return
-    async with SELF["dynamic_ram_lock"]:
+    async with SELF["dynamic_retire_lock"]:
         active_workers = [worker for worker in SELF["workers"] if not worker.retired]
         max_retire_count = max(0, len(active_workers) - 1)
-        selected_worker_memory = [
-            (rss_bytes, worker)
-            for rss_bytes, worker in selected_worker_memory
+        selected_workers = [
+            (metric, worker)
+            for metric, worker in selected_workers
             if not worker.retired and worker.current_input is not None
         ][:max_retire_count]
-        if not selected_worker_memory:
+        if not selected_workers:
             return
 
         old_parallelism = len(active_workers)
-        new_parallelism = old_parallelism - len(selected_worker_memory)
+        new_parallelism = old_parallelism - len(selected_workers)
         input_indexes = []
-        for _, worker in selected_worker_memory:
+        for _, worker in selected_workers:
             input_index, input_pkl = worker.current_input
             input_indexes.append(input_index)
             worker.retired = True
@@ -504,7 +597,7 @@ async def retire_workers_for_dynamic_memory_pressure(
         SELF["reboot_containers_after_job"] = True
         msg = (
             f"Node parallelism decreased from {old_parallelism} to {new_parallelism} "
-            "due to memory pressure."
+            f"due to {reason}."
         )
         await Logger().log(
             msg,
@@ -516,17 +609,14 @@ async def retire_workers_for_dynamic_memory_pressure(
         )
 
         current_inputs = []
-        for _, worker in selected_worker_memory:
+        for _, worker in selected_workers:
             input_index = worker.current_input[0]
             current_inputs.append((worker, input_index))
         for worker, input_index in current_inputs:
             worker.current_input = None
 
         await asyncio.gather(
-            *(
-                worker.retire_for_dynamic_memory_pressure()
-                for _, worker in selected_worker_memory
-            )
+            *(worker.retire_for_pressure() for _, worker in selected_workers)
         )
 
 
@@ -546,6 +636,7 @@ class WorkerClient:
         self.process_inputs_task = None
         self.log_writer = None
         self.worker_host_pid = None
+        self._psutil_process = None
         self.oom_kill_marker_count = 0
         self.retired = False
         self.current_input = None
@@ -672,6 +763,16 @@ class WorkerClient:
     def memory_rss_bytes(self) -> int:
         return psutil.Process(self.worker_host_pid).memory_info().rss
 
+    def cpu_percent(self) -> float:
+        # psutil measures CPU use since the previous call on the same handle
+        # (a fresh handle reads 0.0), so the handle must persist across calls.
+        # Rebuild it when worker_server.py was relaunched under a new pid.
+        process = self._psutil_process
+        if process is None or process.pid != self.worker_host_pid:
+            process = psutil.Process(self.worker_host_pid)
+            self._psutil_process = process
+        return process.cpu_percent()
+
     async def _get_python_version(self):
         for _ in range(20):
             logs = await self._get_logs()
@@ -783,9 +884,9 @@ class WorkerClient:
         input_pkl: bytes,
         error: WorkerOutOfMemoryError | WorkerProcessTerminatedError,
     ):
-        async with SELF["dynamic_ram_lock"]:
-            # A memory-pressure retirement already requeued this input (it
-            # clears current_input before killing the process). Requeueing or
+        async with SELF["dynamic_retire_lock"]:
+            # A pressure retirement already requeued this input (it clears
+            # current_input before killing the process). Requeueing or
             # delivering here too would run the input twice.
             if self.current_input is None:
                 return None
@@ -833,7 +934,7 @@ class WorkerClient:
             await self._delete_container()
             return None
 
-    async def retire_for_dynamic_memory_pressure(self):
+    async def retire_for_pressure(self):
         await self._kill_worker_process()
 
     async def _read_response(self):

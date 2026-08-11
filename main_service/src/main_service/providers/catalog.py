@@ -107,9 +107,12 @@ def machine_spec(machine_type: str) -> dict:
     raise ValueError(f"Unknown machine type: {machine_type}")
 
 
-def parallelism_capacity(machine_type: str, func_cpu: int, func_ram: int | str) -> int:
+def parallelism_capacity(
+    machine_type: str, func_cpu: int | str, func_ram: int | str
+) -> int:
     """How many copies of a UDF with func_cpu/func_ram fit on one node.
     GPU machines run one function call per GPU."""
+    func_cpu = 1 if func_cpu == "dynamic" else int(func_cpu)
     func_ram = 4 if func_ram == "dynamic" else int(func_ram)
     spec = machine_spec(machine_type)
     if spec["gpus"] > 0:

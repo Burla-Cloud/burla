@@ -393,17 +393,18 @@ async def reinit_node(assigned_workers: list):
 async def reset_workers(logger: Logger):
     # Stops idle or reassigned workers from holding creds for a finished job.
     NODE_AUTH_CREDENTIALS_PATH.unlink(missing_ok=True)
-    monitor_task = SELF["dynamic_ram_monitor_task"]
-    if monitor_task is not None:
-        monitor_task.cancel()
-        try:
-            await monitor_task
-        except asyncio.CancelledError:
-            pass
-        SELF["dynamic_ram_monitor_task"] = None
+    for task_key in ("dynamic_ram_monitor_task", "cpu_pressure_monitor_task"):
+        monitor_task = SELF[task_key]
+        if monitor_task is not None:
+            monitor_task.cancel()
+            try:
+                await monitor_task
+            except asyncio.CancelledError:
+                pass
+            SELF[task_key] = None
     if SELF["reboot_containers_after_job"]:
         await logger.log(
-            "Rebooting worker containers to restore dynamic RAM capacity ..."
+            "Rebooting worker containers to restore dynamic worker capacity ..."
         )
         try:
             await asyncio.wait_for(

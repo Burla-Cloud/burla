@@ -93,7 +93,7 @@ async def patch_job_doc(job_id: str, request: Request):
 
 
 def _select_ready_nodes_from_state(
-    func_cpu: int,
+    func_cpu: int | str,
     func_ram: int | str,
     max_parallelism: int,
     image: Optional[str],
@@ -168,7 +168,7 @@ def _grow_if_needed(
     target_parallelism: int,
     n_inputs: int,
     max_parallelism: int,
-    func_cpu: int,
+    func_cpu: int | str,
     func_ram: int | str,
     image: Optional[str],
     func_gpu: Optional[str],
@@ -196,9 +196,10 @@ def _grow_if_needed(
         node_machine_types = [gpu_mt] * n_nodes
         config = _get_cluster_config()
     else:
+        func_cpu_for_scheduling = 1 if func_cpu == "dynamic" else int(func_cpu)
         func_ram_for_scheduling = 4 if func_ram == "dynamic" else int(func_ram)
         required_cpus_for_ram = (func_ram_for_scheduling + 3) // 4
-        required_cpus_per_call = max(func_cpu, required_cpus_for_ram)
+        required_cpus_per_call = max(func_cpu_for_scheduling, required_cpus_for_ram)
         target_cpus = requested_parallelism * required_cpus_per_call
         current_cpus = target_parallelism * required_cpus_per_call
         missing_cpus = max(0, target_cpus - current_cpus)
@@ -317,7 +318,9 @@ async def start_job(
         )
 
     body = await request.json()
-    func_cpu = int(body["func_cpu"])
+    func_cpu = body["func_cpu"]
+    if func_cpu != "dynamic":
+        func_cpu = int(func_cpu)
     func_ram = body["func_ram"]
     if func_ram != "dynamic":
         func_ram = int(func_ram)

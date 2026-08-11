@@ -13,17 +13,27 @@ from main_service import (
 )
 
 
-def _inner_docker_store_volume(docker_client, port: int) -> str:
-    """The inner daemon's image/layer store, as a named volume so it outlives
-    the node container. A node's whole image store (~1GB) is otherwise unpacked
-    from scratch every time a node is replaced, and the test suite replaces
-    nodes constantly. Keyed by port because that is this cluster's node slot:
-    ports are handed out from a fixed base, so a replacement node reuses the
-    store of the node it replaces, and two live nodes never share one.
-    `make stop` removes these along with the cluster's containers."""
-    name = f"burla-node-docker-{CLUSTER_NAME}-{port}"
-    docker_client.create_volume(name=name, labels={"burla-cluster": CLUSTER_NAME})
-    return name
+def remove_container(docker_client, container_id: str):
+    """Tearing a node down means tearing down its inner docker daemon, which
+    takes docker tens of seconds. Two removals of one node overlap easily in
+    that window (a cluster restart racing the previous restart's cleanup), and
+    docker answers the second with a 409. The container is going away either
+    way, so treat that, and an already-gone container, as success: raising here
+    aborts a whole cluster teardown and leaves the cluster with no nodes."""
+    try:
+        docker_client.remove_container(container_id, force=True)
+    except docker.errors.NotFound:
+        pass
+    except docker.errors.APIError as e:
+        if "already in progress" not in str(e):
+            raise
+
+
+def _cluster_volume(docker_client, name: str) -> str:
+    """A docker volume tagged for this cluster, so `make stop` reclaims it."""
+    full_name = f"burla-{CLUSTER_NAME}-{name}"
+    docker_client.create_volume(name=full_name, labels={"burla-cluster": CLUSTER_NAME})
+    return full_name
 
 
 def _ensure_node_image(docker_client, image: str):
@@ -54,7 +64,21 @@ class LocalDockerProvider:
     ) -> str:
         image = os.environ.get("BURLA_NODE_IMAGE", "burla-node-service:local-dev")
         docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
-        inner_docker_store = _inner_docker_store_volume(docker_client, port)
+        # Everything heavy a node builds for itself lives in volumes rather than
+        # in the node, so a replacement node inherits it instead of rebuilding
+        # it: the inner image store (~1GB unpacked) and the python env rpm
+        # replicates from the client (gigabytes, installed inside the client's
+        # 2min assign-job budget). The test suite replaces nodes constantly.
+        # Keyed by port, this cluster's node slot: ports are handed out from a
+        # fixed base, so a replacement reuses the store of the node it replaces
+        # and two live nodes never share one. The uv cache feeds those installs
+        # and is safe to share cluster-wide.
+        # These are volumes and not host binds because a host bind on macOS is
+        # virtiofs, and two nodes installing multi-GB envs across it at once
+        # stall each other long enough to look dead to the head.
+        inner_docker_store = _cluster_volume(docker_client, f"docker-{port}")
+        worker_python_env = _cluster_volume(docker_client, f"worker-env-{port}")
+        uv_cache = _cluster_volume(docker_client, "uv-cache")
         host_config = docker_client.create_host_config(
             # Privileged so the node can run its own dockerd for its workers.
             privileged=True,
@@ -79,23 +103,11 @@ class LocalDockerProvider:
                     "bind": "/opt/burla/image-seed",
                     "mode": "ro",
                 },
-                # Worker env installs cache here (workers bind the node's
-                # /uv_cache); a host bind keeps the cache warm across node
-                # reboots and cluster restarts.
-                f"{os.environ['HOST_PWD']}/_uv_cache": "/uv_cache",
-                # The python env every worker on this node shares. rpm
-                # replicates the client's whole environment into it, which is
-                # gigabytes, and it is installed inside the client's
-                # assign-job request: node-local it would be reinstalled on
-                # every node replacement and blow the client's 2min assign
-                # budget. Per port so two live nodes never install into one
-                # directory. `make local-dev` clears them all.
-                f"{os.environ['HOST_PWD']}/_worker_service_python_env/{port}": (
-                    "/worker_service_python_env"
-                ),
-                # A volume rather than a directory in the node's own overlayfs
-                # root, which cannot stack another overlayfs: without it the
-                # inner dockerd falls back to the crawling `vfs` driver.
+                uv_cache: "/uv_cache",
+                worker_python_env: "/worker_service_python_env",
+                # /var/lib/docker also cannot be a directory in the node's own
+                # overlayfs root, which cannot stack another overlayfs: the
+                # inner dockerd would fall back to the crawling `vfs` driver.
                 inner_docker_store: "/var/lib/docker",
             },
         )
@@ -148,4 +160,4 @@ class LocalDockerProvider:
         container_name = f"node_{instance_name[11:]}"
         for container in docker_client.containers(all=True):
             if any(name == f"/{container_name}" for name in container["Names"]):
-                docker_client.remove_container(container["Id"], force=True)
+                remove_container(docker_client, container["Id"])

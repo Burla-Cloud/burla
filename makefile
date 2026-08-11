@@ -220,10 +220,9 @@ local-dev:
 	echo "Starting cluster [$(BURLA_CLUSTER_NAME)] at $(BURLA_DASHBOARD_URL) (cluster id $${PROJECT_ID})"; \
 	ids=$$(docker ps -aq --filter label=burla-cluster=$(BURLA_CLUSTER_NAME)); \
 	if [ -n "$$ids" ]; then docker rm -f $$ids >/dev/null; fi; \
-	for scratch in _shared_workspace _node_auth _local_dev_state _worker_service_python_env; do \
+	for scratch in _shared_workspace _node_auth _local_dev_state; do \
 		rm -rf ./$$scratch; mkdir -p ./$$scratch; chmod 777 ./$$scratch; \
 	done; \
-	mkdir -p ./_uv_cache; chmod 777 ./_uv_cache; \
 	docker network create $(BURLA_CLUSTER_NETWORK) 2>/dev/null || true; \
 	BURLA_ENVIRONMENT=test \
 	PROJECT_ID=$${PROJECT_ID} \

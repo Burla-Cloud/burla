@@ -37,6 +37,7 @@ def _remove_local_dev_cluster_containers():
     if not IN_LOCAL_DEV_MODE:
         return
     import docker
+    from main_service.providers.local_docker import remove_container
 
     # Filter on this cluster's member label: matching by `node_` name prefix
     # would delete every other local-dev cluster's containers, and matching
@@ -48,7 +49,7 @@ def _remove_local_dev_cluster_containers():
         all=True, filters={"label": f"burla-cluster-member={CLUSTER_NAME}"}
     )
     for container in containers:
-        docker_client.remove_container(container["Id"], force=True)
+        remove_container(docker_client, container["Id"])
 
 
 def _shutdown_cluster(logger: Logger):
@@ -76,21 +77,32 @@ def _shutdown_cluster(logger: Logger):
     _remove_local_dev_cluster_containers()
 
 
-def _current_local_dev_max_node_port():
-    # Node ports are published on the host and the client reaches nodes at
-    # localhost:<port>, so each cluster needs its own non-overlapping block.
-    max_port = LOCAL_DEV_NODE_PORT_BASE
+def _taken_local_dev_node_ports():
+    """Ports this cluster is already using. Node ports are published on the host
+    and the client reaches nodes at localhost:<port>, so each cluster gets its
+    own block starting at LOCAL_DEV_NODE_PORT_BASE. Live containers count as
+    well as live state: a node deleted a moment ago can still hold its host port
+    binding while docker tears it down."""
+    import docker
+
     active_statuses = ("READY", "BOOTING", "RUNNING")
+    ports = set()
     for node in cluster_state.list_nodes():
         if node.get("status") not in active_statuses:
             continue
-        host = str(node.get("host") or "")
-        if ":" not in host:
-            continue
-        port = host.rsplit(":", 1)[-1]
+        port = str(node.get("host") or "").rsplit(":", 1)[-1]
         if port.isdigit():
-            max_port = max(max_port, int(port))
-    return max_port
+            ports.add(int(port))
+
+    docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
+    containers = docker_client.containers(
+        filters={"label": f"burla-cluster-member={CLUSTER_NAME}"}
+    )
+    for container in containers:
+        for port in container.get("Ports") or []:
+            if port.get("PublicPort"):
+                ports.add(port["PublicPort"])
+    return ports
 
 
 def _get_cluster_config():
@@ -120,7 +132,11 @@ def _start_nodes(
     containers_override: list[dict] = None,
     inactivity_shutdown_time_sec_override: int | None = None,
 ):
-    node_service_port = _current_local_dev_max_node_port()
+    # Lowest free port rather than highest+1, so a node slot is reused by the
+    # node that replaces it. The heavy per-slot caches (inner docker image
+    # store, worker python env) are keyed by port, and the test suite churns
+    # nodes hard enough that ever-climbing ports would rebuild both every time.
+    taken_ports = _taken_local_dev_node_ports() if IN_LOCAL_DEV_MODE else set()
     futures = []
     executor = ThreadPoolExecutor(max_workers=32)
     provider = get_provider()
@@ -132,8 +148,12 @@ def _start_nodes(
         quantity = node_spec["quantity"] if n_nodes_to_add is None else n_nodes_to_add
         spec_containers = containers_override or node_spec["containers"]
         for index in range(quantity):
+            node_service_port = LOCAL_DEV_NODE_PORT_BASE
             if IN_LOCAL_DEV_MODE:
-                node_service_port += 1
+                node_service_port = LOCAL_DEV_NODE_PORT_BASE + 1
+                while node_service_port in taken_ports:
+                    node_service_port += 1
+                taken_ports.add(node_service_port)
             instance_name = (
                 None if node_instance_names is None else node_instance_names[index]
             )

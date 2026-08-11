@@ -18,8 +18,9 @@ _CAPACITY_ERROR_CODES = (
 
 class AWSProvider:
     """EC2 twin of the GCP provider. Nodes are plain EC2 instances built from
-    the burla node AMI (see scripts/build_aws_node_ami.sh), tagged
-    `burla-cluster-node`, in a security group opening the node port."""
+    a burla node AMI (built by `burla deploy` / first-run prep, see
+    client/src/burla/_deploy_aws.py), tagged `burla-cluster-node`, in a
+    security group opening the node port."""
 
     def __init__(self):
         self.region = (
@@ -29,17 +30,20 @@ class AWSProvider:
     def _ec2(self, region: str):
         return boto3.client("ec2", region_name=region)
 
-    def _ami_id(self, ec2) -> str:
-        """Newest burla node AMI in this region. Deliberately not filtered by burla
-        version: the AMI is just a warm base image, and nodes git-fetch the code
-        they run at boot, so one AMI serves every version until `burla deploy`
-        rebuilds it for a changed setup script."""
+    def _ami_id(self, ec2, gpu: bool) -> str:
+        """Newest burla node AMI variant (gpu images carry the NVIDIA driver
+        stack) in this region. Deliberately not filtered by burla version: the
+        AMI is just a warm base image, and nodes git-fetch the code they run at
+        boot, so one AMI serves every version until `burla deploy` rebuilds it
+        for a changed setup script."""
         override = os.environ.get("BURLA_NODE_AMI")
         if override:
             return override
+        variant = "gpu" if gpu else "nogpu"
         response = ec2.describe_images(
             Owners=["self"],
             Filters=[
+                {"Name": "name", "Values": [f"burla-node-{variant}-*"]},
                 {"Name": "tag:burla-node-image", "Values": ["true"]},
                 {"Name": "state", "Values": ["available"]},
             ],
@@ -49,7 +53,7 @@ class AWSProvider:
         )
         if not images:
             raise Exception(
-                "No burla node AMI found in this region. "
+                f"No burla {variant} node AMI found in this region. "
                 "Run `burla deploy --cloud aws` to build one, or set BURLA_NODE_AMI."
             )
         return images[0]["ImageId"]
@@ -76,14 +80,8 @@ class AWSProvider:
     ) -> tuple[str, str, str]:
         """Create the EC2 instance, iterating AZs on capacity exhaustion.
         Returns (public_ip, private_ip, availability_zone)."""
-        if num_gpus > 0:
-            raise Exception(
-                "GPU nodes are not supported on AWS yet (the burla node AMI "
-                "does not include GPU drivers)."
-            )
-
         ec2 = self._ec2(region)
-        ami_id = self._ami_id(ec2)
+        ami_id = self._ami_id(ec2, gpu=num_gpus > 0)
         subnets_by_az = self._subnets_by_az(ec2)
         if not subnets_by_az:
             raise Exception(f"No default subnets found in region {region}.")

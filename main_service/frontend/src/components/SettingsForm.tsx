@@ -57,10 +57,20 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
             ? AZURE_CPU_OPTIONS
             : GCP_CPU_OPTIONS;
 
-        // No GPU machines are offered on AWS/Azure yet: their providers reject
-        // GPU nodes until the burla node images ship with NVIDIA drivers.
-        const gpuCpuMap = isAws || isAzure
+        // AWS sells A100s only in 8-GPU machines; sizes mirror
+        // main_service/providers/catalog.py.
+        const AWS_GPU_MAP = {
+            "8x A100 40G": { label: "96vCPU / 1152G RAM", value: "p4d.24xlarge" },
+            "8x A100 80G": { label: "96vCPU / 1152G RAM", value: "p4de.24xlarge" },
+            "1x H100 80G": { label: "16vCPU / 256G RAM", value: "p5.4xlarge" },
+            "8x H100 80G": { label: "192vCPU / 2048G RAM", value: "p5.48xlarge" },
+        };
+        // No GPU machines are offered on Azure yet: its provider rejects GPU
+        // nodes until the burla node image ships with NVIDIA drivers.
+        const gpuCpuMap = isAzure
             ? {}
+            : isAws
+            ? AWS_GPU_MAP
             : {
                   "1x A100 40G": { label: "12vCPU / 85G RAM", value: "a2-highgpu-1g" },
                   "2x A100 40G": { label: "24vCPU / 170G RAM", value: "a2-highgpu-2g" },
@@ -238,9 +248,57 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
             ],
         };
 
-        // AWS regions where each machine family is actually offered
-        // (CPU nodes are m7i.*, GPU mappings come from providers/catalog.py).
+        // AWS regions where each machine family is actually offered, from
+        // `aws ec2 describe-instance-type-offerings` (Aug 2026). CPU nodes are
+        // m7i.*; GPU mappings come from providers/catalog.py. p5.4xlarge and
+        // p5.48xlarge are sold in different region sets, hence two H100 lists.
         const AWS_REGION_OPTIONS = {
+            "A100 40G": [
+                { value: "us-east-1", label: "us-east-1" },
+                { value: "us-east-2", label: "us-east-2" },
+                { value: "us-west-2", label: "us-west-2" },
+                { value: "ca-central-1", label: "ca-central-1" },
+                { value: "sa-east-1", label: "sa-east-1" },
+                { value: "eu-west-1", label: "eu-west-1" },
+                { value: "eu-west-2", label: "eu-west-2" },
+                { value: "eu-central-1", label: "eu-central-1" },
+                { value: "eu-north-1", label: "eu-north-1" },
+                { value: "ap-south-1", label: "ap-south-1" },
+                { value: "ap-northeast-1", label: "ap-northeast-1" },
+                { value: "ap-northeast-2", label: "ap-northeast-2" },
+                { value: "ap-southeast-2", label: "ap-southeast-2" },
+            ],
+            "A100 80G": [
+                { value: "us-east-1", label: "us-east-1" },
+                { value: "us-west-2", label: "us-west-2" },
+                { value: "eu-central-1", label: "eu-central-1" },
+                { value: "ap-northeast-1", label: "ap-northeast-1" },
+                { value: "ap-southeast-1", label: "ap-southeast-1" },
+            ],
+            "H100 80G 1x": [
+                { value: "us-east-1", label: "us-east-1" },
+                { value: "us-east-2", label: "us-east-2" },
+                { value: "us-west-2", label: "us-west-2" },
+                { value: "sa-east-1", label: "sa-east-1" },
+                { value: "eu-west-2", label: "eu-west-2" },
+                { value: "ap-south-1", label: "ap-south-1" },
+                { value: "ap-northeast-1", label: "ap-northeast-1" },
+                { value: "ap-southeast-2", label: "ap-southeast-2" },
+            ],
+            "H100 80G 8x": [
+                { value: "us-east-1", label: "us-east-1" },
+                { value: "us-east-2", label: "us-east-2" },
+                { value: "us-west-1", label: "us-west-1" },
+                { value: "us-west-2", label: "us-west-2" },
+                { value: "ca-central-1", label: "ca-central-1" },
+                { value: "sa-east-1", label: "sa-east-1" },
+                { value: "eu-west-2", label: "eu-west-2" },
+                { value: "eu-north-1", label: "eu-north-1" },
+                { value: "ap-south-1", label: "ap-south-1" },
+                { value: "ap-northeast-1", label: "ap-northeast-1" },
+                { value: "ap-northeast-2", label: "ap-northeast-2" },
+                { value: "ap-southeast-2", label: "ap-southeast-2" },
+            ],
             None: [
                 { value: "us-east-1", label: "us-east-1" },
                 { value: "us-east-2", label: "us-east-2" },
@@ -289,8 +347,15 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
 
         // Helper to determine which region list to use
         function getRegionOptionsForGpu(gpuVariant) {
-            if (isAws) return AWS_REGION_OPTIONS.None;
             if (isAzure) return AZURE_REGION_OPTIONS.None;
+            if (isAws) {
+                if (gpuVariant.includes("A100 40G")) return AWS_REGION_OPTIONS["A100 40G"];
+                if (gpuVariant.includes("A100 80G")) return AWS_REGION_OPTIONS["A100 80G"];
+                if (gpuVariant.includes("H100 80G")) {
+                    return AWS_REGION_OPTIONS[gpusPerVm === 1 ? "H100 80G 1x" : "H100 80G 8x"];
+                }
+                return AWS_REGION_OPTIONS.None;
+            }
             if (gpuVariant === "None") return GCP_REGION_OPTIONS.None;
             if (gpuVariant.includes("A100 40G")) return GCP_REGION_OPTIONS["A100 40G"];
             if (gpuVariant.includes("A100 80G")) return GCP_REGION_OPTIONS["A100 80G"];
@@ -417,7 +482,7 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
                                 <div className="flex flex-col space-y-2">
                                     <div className="flex items-center gap-1">
                                         <label className={labelClass}>GPU</label>
-                                        {(isAws || isAzure) && (
+                                        {isAzure && (
                                             <TooltipProvider>
                                                 <Tooltip>
                                                     <TooltipTrigger asChild>
@@ -425,11 +490,10 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
                                                     </TooltipTrigger>
                                                     <TooltipContent>
                                                         <p>
-                                                            GPUs aren't available on{" "}
-                                                            {isAws ? "AWS" : "Azure"} clusters yet,
-                                                            we're working on it!
+                                                            GPUs aren't available on Azure clusters
+                                                            yet, we're working on it!
                                                             <br />
-                                                            (they work on GCP)
+                                                            (they work on GCP and AWS)
                                                         </p>
                                                     </TooltipContent>
                                                 </Tooltip>
@@ -437,7 +501,7 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
                                         )}
                                     </div>
                                     <Select
-                                        disabled={isAws || isAzure}
+                                        disabled={isAzure}
                                         value={gpuVariant}
                                         onValueChange={(val) => {
                                             setGpuVariant(val);

@@ -204,6 +204,7 @@ main_service/.frontend_last_built_at.txt
 .temp_token.txt
 _worker_service_python_env/*
 _shared_workspace/*
+_uv_cache/*
 _python_version_marker/*
 _node_auth/*
 _local_dev_state/*

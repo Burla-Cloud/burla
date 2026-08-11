@@ -65,6 +65,10 @@ class LocalDockerProvider:
                     "bind": "/opt/burla/image-seed",
                     "mode": "ro",
                 },
+                # Worker env installs cache here (workers bind the node's
+                # /uv_cache); a host bind keeps the cache warm across node
+                # reboots and cluster restarts.
+                f"{os.environ['HOST_PWD']}/_uv_cache": "/uv_cache",
             },
         )
 

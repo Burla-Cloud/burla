@@ -813,6 +813,7 @@ def _run_local_head(
     node_source_ref: str | None = None,
     reload_dir: str | None = None,
     namespace: str = "",
+    preferred_port: int = PREFERRED_HEAD_PORT,
 ) -> str:
     cloud, project_id, aws_region = detect_cloud()
 
@@ -851,7 +852,7 @@ def _run_local_head(
             os.kill(head_state[pid_key], 15)
         sleep(0.2)
 
-    head_port = _free_port(preferred=PREFERRED_HEAD_PORT)
+    head_port = _free_port(preferred=preferred_port)
     tls_port = _free_port()
     # Stable per project so node certs / head certs stay valid across restarts.
     subdomain = head_state.get("subdomain") or f"head-{uuid4().hex[:8]}--{project_id}"
@@ -1085,12 +1086,17 @@ def run_remote_dev_head() -> None:
             lines.append("  Press Ctrl-C to stop it.\n")
         print("\n".join(lines), flush=True)
 
+    # Namespaced by the makefile so every worktree's cluster keeps one stable
+    # URL: `make cluster-info` and `make test` point at it without asking.
+    preferred_port = int(os.environ.get("BURLA_HEAD_PORT", PREFERRED_HEAD_PORT))
+
     _run_local_head(
         detached=False,
         on_ready=announce,
         node_source_ref=branch,
         reload_dir=str(_SOURCE_ROOT / "main_service" / "src"),
         namespace=namespace,
+        preferred_port=preferred_port,
     )
 
 

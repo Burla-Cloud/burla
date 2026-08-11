@@ -149,3 +149,11 @@ the job and its logs are still there.
 
 Verify: watch the dashboard during a job and confirm nodes, job state, and printed output
 appear live. Reload after it finishes and confirm the record and logs remain.
+
+## R16. 1,000-CPU latency
+
+Running a job whose function only calls `print` across 1,000 CPUs completes end-to-end in
+under one second.
+
+Verify: run the job on 1,000 CPUs and measure from calling `remote_parallel_map` until it
+returns. The elapsed time is under one second.

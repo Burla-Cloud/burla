@@ -43,7 +43,7 @@ def my_function(x):
 
 results = remote_parallel_map(my_function, list(range(100)))`;
 
-const MONOKAI_THEME = themes.okaidia;
+const DARK_CODE_THEME = themes.nightOwl;
 const LIGHT_CODE_THEME = themes.github;
 
 interface CopyButtonProps {
@@ -66,7 +66,7 @@ const CopyButton = ({ text, label, iconOnly = false }: CopyButtonProps) => {
             type="button"
             onClick={handleCopy}
             className={cn(
-                "absolute right-2 top-2 z-10 inline-flex items-center justify-center gap-1.5 rounded-md border border-black/10 bg-white/85 text-xs font-medium text-slate-700 shadow-sm backdrop-blur transition-colors hover:bg-white dark:border-white/15 dark:bg-black/25 dark:text-slate-200 dark:hover:bg-black/40",
+                "absolute right-2 top-2 z-10 inline-flex items-center justify-center gap-1.5 rounded-md border border-black/10 bg-white/85 text-xs font-medium text-slate-700 shadow-sm backdrop-blur transition-colors hover:bg-white dark:border-white/15 dark:bg-white/5 dark:text-slate-200 dark:hover:bg-white/10",
                 iconOnly ? "h-8 w-8" : "h-8 px-2.5",
             )}
             aria-label={copied ? `${label} copied` : `Copy ${label}`}
@@ -505,7 +505,7 @@ export const NodesList: React.FC<NodesListProps> = ({
                                                 <li>
                                                     Run this command on your computer to connect
                                                     it to the cluster:
-                                                    <div className="relative mt-3 w-fit min-w-40 rounded-lg border bg-[#f6f8fa] py-3 pl-4 pr-12 font-mono text-sm font-normal text-[#393a34] dark:bg-[#272822] dark:text-[#f8f8f2]">
+                                                    <div className="relative mt-3 w-fit min-w-48 rounded-lg border bg-[#f6f8fa] py-3 pl-4 pr-14 font-mono text-sm font-normal text-[#393a34] dark:bg-[#011627] dark:text-[#d6deeb]">
                                                         <code>burla login</code>
                                                         <CopyButton
                                                             text="burla login"
@@ -517,7 +517,7 @@ export const NodesList: React.FC<NodesListProps> = ({
                                             )}
                                             <li>
                                                 <div>Run some code in the cloud:</div>
-                                                <div className="relative mt-3 overflow-hidden rounded-lg border bg-[#f6f8fa] dark:bg-[#272822]">
+                                                <div className="relative mt-3 overflow-hidden rounded-lg border bg-[#f6f8fa] dark:bg-[#011627]">
                                                     <CopyButton
                                                         text={QUICKSTART_CODE}
                                                         label="Python code"
@@ -525,7 +525,7 @@ export const NodesList: React.FC<NodesListProps> = ({
                                                     <Highlight
                                                         theme={
                                                             theme === "dark"
-                                                                ? MONOKAI_THEME
+                                                                ? DARK_CODE_THEME
                                                                 : LIGHT_CODE_THEME
                                                         }
                                                         code={QUICKSTART_CODE}

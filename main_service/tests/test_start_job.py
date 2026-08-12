@@ -113,7 +113,7 @@ def test_start_job_dynamic_func_ram_writes_raw_setting(
 
     doc = wait_for_fixture(lambda: get_job(job_id), timeout=10)
     assert doc["func_ram"] == "dynamic"
-    assert doc["target_parallelism"] >= 1
+    assert doc["target_parallelism"] == 1
 
 
 def test_start_job_job_doc_includes_burla_client_version(

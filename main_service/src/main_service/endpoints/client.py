@@ -141,8 +141,9 @@ def _select_ready_nodes_from_state(
         deficit = max_parallelism - total_parallelism
         if deficit <= 0:
             break
-        node_parallelism = parallelism_capacity(
-            node_data["machine_type"], func_cpu, func_ram
+        node_parallelism = min(
+            deficit,
+            parallelism_capacity(node_data["machine_type"], func_cpu, func_ram),
         )
         if node_parallelism <= 0:
             continue
@@ -185,31 +186,31 @@ def _grow_if_needed(
     cluster default.
     """
     requested_parallelism = min(n_inputs, max_parallelism)
+    missing_slots = max(0, requested_parallelism - target_parallelism)
+    if missing_slots <= 0:
+        return []
+
     gpu_mt = gpu_machine_type(func_gpu, CLOUD_PROVIDER)
 
     if gpu_mt:
         gpu_slots_per_node = parallelism_capacity(gpu_mt, func_cpu, func_ram)
-        missing_slots = max(0, requested_parallelism - target_parallelism)
-        if missing_slots <= 0:
-            return []
         n_nodes = math.ceil(missing_slots / gpu_slots_per_node)
         node_machine_types = [gpu_mt] * n_nodes
+        parallelism_to_add = missing_slots
         config = _get_cluster_config()
     else:
         func_cpu_for_scheduling = 1 if func_cpu == "dynamic" else int(func_cpu)
         func_ram_for_scheduling = 4 if func_ram == "dynamic" else int(func_ram)
         required_cpus_for_ram = (func_ram_for_scheduling + 3) // 4
         required_cpus_per_call = max(func_cpu_for_scheduling, required_cpus_for_ram)
-        target_cpus = requested_parallelism * required_cpus_per_call
         current_cpus = target_parallelism * required_cpus_per_call
-        missing_cpus = max(0, target_cpus - current_cpus)
-        if missing_cpus <= 0:
-            return []
+        missing_cpus = missing_slots * required_cpus_per_call
 
         max_cpu = LOCAL_DEV_MAX_GROW_CPUS if IN_LOCAL_DEV_MODE else MAX_GROW_CPUS
         max_additional_cpus = max(0, max_cpu - current_cpus)
         num_cpus_to_add = min(missing_cpus, max_additional_cpus)
-        if num_cpus_to_add <= 0:
+        parallelism_to_add = num_cpus_to_add // required_cpus_per_call
+        if parallelism_to_add <= 0:
             return []
 
         config = _get_cluster_config()
@@ -247,6 +248,20 @@ def _grow_if_needed(
 
     node_instance_names = [f"burla-node-{uuid4().hex[:8]}" for _ in node_machine_types]
     containers_override = [{"image": image}] if image else None
+    booting_nodes = []
+    remaining_parallelism = parallelism_to_add
+    for name, machine_type in zip(node_instance_names, node_machine_types):
+        node_parallelism = min(
+            remaining_parallelism,
+            parallelism_capacity(machine_type, func_cpu, func_ram),
+        )
+        booting_nodes.append(
+            {
+                "instance_name": name,
+                "target_parallelism": node_parallelism,
+            }
+        )
+        remaining_parallelism -= node_parallelism
 
     add_background_task(
         _start_nodes,
@@ -259,15 +274,7 @@ def _grow_if_needed(
         containers_override,
         GROW_INACTIVITY_SHUTDOWN_TIME_SEC,
     )
-    return [
-        {
-            "instance_name": name,
-            "target_parallelism": parallelism_capacity(
-                machine_type, func_cpu, func_ram
-            ),
-        }
-        for name, machine_type in zip(node_instance_names, node_machine_types)
-    ]
+    return booting_nodes
 
 
 @router.post("/v1/jobs/{job_id}/start")

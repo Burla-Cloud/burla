@@ -5,8 +5,7 @@ stream.
 Every docs example that talks to a rate-limited API or a database relies on
 `max_parallelism` holding a cap above 1 while more capacity exists, and on
 `generator=True` handing results back as they finish rather than at the end.
-The existing tests only pin `max_parallelism=1` and that a generator eventually
-yields everything.
+With two local nodes, four workers exist but the cap allows only three to run.
 """
 
 from __future__ import annotations
@@ -15,7 +14,7 @@ import pytest
 
 pytestmark = [pytest.mark.e2e, pytest.mark.slow]
 
-CAP = 2
+CAP = 3
 UDF_SECONDS = 2
 N_INPUTS = 12
 
@@ -43,24 +42,33 @@ def _timed_udf_source() -> str:
     )
 
 
-def _run_capped_generator_job(rpm_subprocess) -> dict:
-    # grow=True lets the cluster offer more slots than the cap, so a cap that
-    # was ignored would show up as extra concurrency.
+def _run_capped_generator_job(rpm_subprocess, grow: bool = True) -> dict:
+    # One local node has two workers, so grow=True adds a second node whose
+    # assigned workers must still stop at the global cap.
     result = rpm_subprocess(
         _timed_udf_source(),
         list(range(N_INPUTS)),
         timeout_seconds=300,
         generator=True,
         max_parallelism=CAP,
-        grow=True,
+        grow=grow,
     )
     assert result["ok"], result.get("traceback")
     assert len(result["outputs"]) == N_INPUTS
     return result
 
 
-def test_max_parallelism_caps_concurrency(rpm_subprocess, local_dev_cluster):
+def test_max_parallelism_caps_grown_concurrency(rpm_subprocess, local_dev_cluster):
     result = _run_capped_generator_job(rpm_subprocess)
+    peak = _peak_concurrency(result["outputs"])
+    assert peak <= CAP, f"{peak} calls ran at once with max_parallelism={CAP}"
+
+
+def test_max_parallelism_caps_ready_concurrency(
+    rpm_subprocess, cluster_with_n_nodes
+):
+    cluster_with_n_nodes(2)
+    result = _run_capped_generator_job(rpm_subprocess, grow=False)
     peak = _peak_concurrency(result["outputs"])
     assert peak <= CAP, f"{peak} calls ran at once with max_parallelism={CAP}"
 

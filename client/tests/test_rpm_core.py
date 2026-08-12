@@ -148,23 +148,7 @@ def test_image_mismatch_raises_NoCompatibleNodes(rpm_subprocess, local_dev_clust
     assert "grow=True" in result["exception_message"]
 
 
-# -------------------------------------------------------------------- section 3 (parallelism)
-
-def test_max_parallelism_one_runs_serially(rpm_subprocess, local_dev_cluster):
-    source = (
-        "import time\n"
-        "def test_function(x):\n"
-        "    return (x, time.time())\n"
-    )
-    result = rpm_subprocess(source, list(range(6)), timeout_seconds=60, max_parallelism=1)
-    assert result["ok"]
-    outputs = sorted(result["outputs"], key=lambda t: t[1])
-    # With max_parallelism=1 the timestamps must be monotonically non-decreasing.
-    for a, b in zip(outputs, outputs[1:]):
-        assert a[1] <= b[1] + 0.001
-
-
-# -------------------------------------------------------------------- section 4 (detach)
+# -------------------------------------------------------------------- section 3 (detach)
 
 def test_detach_runs_and_eventually_completes(
     rpm_subprocess, local_dev_cluster, main_http_client, wait_for_fixture

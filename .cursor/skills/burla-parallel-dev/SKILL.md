@@ -79,13 +79,25 @@ current branch**, so:
 `BURLA_NODE_SOURCE_REF` to pin nodes at an already pushed ref (e.g. `dev`) when
 you only care about head-side changes.
 
+## Starting a task
+
+`dev` is the base branch for every task in this repo, whatever branch the
+checkout happens to be on. If it is not on `dev`, stop and tell Jake before
+creating the worktree instead of branching off what is there.
+
 ## Finishing a task
 
+When the work looks done, stop and ask Jake whether to merge. Never merge on
+your own initiative. Once he says yes:
+
 1. Commit the work on the worktree's branch and push it.
-2. Merge the branch into `dev`. `dev` is the integration branch: everything in
-   flight lives there, and it is what a release is cut from.
-3. Stop the cluster (`make stop`) and leave the worktree until it is no longer
-   needed.
+2. Merge the branch into `dev` and push `dev`. `dev` is the integration branch:
+   everything in flight lives there, and it is what a release is cut from.
+3. Stop the cluster with `make stop`, then remove the worktree and delete the
+   branch (locally and on origin). His yes covers all of this, so don't ask
+   again per step.
+
+Until he says yes, the worktree and its cluster stay put.
 
 ## Testing what is on dev
 

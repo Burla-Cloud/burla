@@ -19,7 +19,6 @@ from node_service import (
     INSTANCE_NAME,
     IN_LOCAL_DEV_MODE,
     LOCAL_DEV_NETWORK,
-    NUM_GPUS,
     Logger,
     __version__,
     head_client,
@@ -630,7 +629,8 @@ async def retire_workers_for_pressure(
 
 
 class WorkerClient:
-    def __init__(self, image: str):
+    def __init__(self, image: str, gpu_index: int | None = None):
+        self.gpu_index = gpu_index
         self.container_name = f"worker_{uuid4().hex[:8]}"
         self.container_name += (
             f"--node_{INSTANCE_NAME[11:]}" if IN_LOCAL_DEV_MODE else ""
@@ -687,9 +687,12 @@ class WorkerClient:
             )
         else:
             host_config["CgroupParent"] = "burla-workers.slice"
-            if NUM_GPUS != 0:
+            if self.gpu_index is not None:
+                # One GPU per worker: without pinning, every worker on a
+                # multi-GPU machine (AWS sells A100s only 8-per-VM) sees all
+                # GPUs and user code piles onto GPU 0.
                 host_config["DeviceRequests"] = [
-                    {"Count": -1, "Capabilities": [["gpu"]]}
+                    {"DeviceIDs": [str(self.gpu_index)], "Capabilities": [["gpu"]]}
                 ]
                 host_config["Runtime"] = "nvidia"
             binds.extend(

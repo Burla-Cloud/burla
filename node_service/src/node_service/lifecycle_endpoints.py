@@ -387,8 +387,9 @@ async def reboot_containers(
                 msg = f"Image {image} pulled successfully.\nWaiting for {num_workers} workers to start ..."
                 await logger.log(msg)
 
-                for _ in range(num_workers):
-                    workers.append(WorkerClient(image))
+                for i in range(num_workers):
+                    gpu_index = i if NUM_GPUS != 0 else None
+                    workers.append(WorkerClient(image, gpu_index=gpu_index))
         finally:
             await docker.close()
 

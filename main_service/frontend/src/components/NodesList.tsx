@@ -10,8 +10,10 @@ import {
 } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
-import { ChevronRight, Cpu, ExternalLink, X } from "lucide-react";
+import { Check, ChevronRight, Copy, Cpu, ExternalLink, X } from "lucide-react";
+import { Highlight, themes } from "prism-react-renderer";
 import { cn } from "@/lib/utils";
+import { useTheme } from "@/lib/theme";
 import { BurlaNode, NodeStatus } from "@/types/coreTypes";
 import { AWS_MACHINE_SPECS } from "@/types/constants";
 
@@ -41,6 +43,41 @@ def my_function(x):
 
 results = remote_parallel_map(my_function, list(range(100)))`;
 
+const MONOKAI_THEME = themes.okaidia;
+const LIGHT_CODE_THEME = themes.github;
+
+interface CopyButtonProps {
+    text: string;
+    label: string;
+    iconOnly?: boolean;
+}
+
+const CopyButton = ({ text, label, iconOnly = false }: CopyButtonProps) => {
+    const [copied, setCopied] = useState(false);
+
+    const handleCopy = async () => {
+        await navigator.clipboard.writeText(text);
+        setCopied(true);
+        window.setTimeout(() => setCopied(false), 1500);
+    };
+
+    return (
+        <button
+            type="button"
+            onClick={handleCopy}
+            className={cn(
+                "absolute right-2 top-2 z-10 inline-flex items-center justify-center gap-1.5 rounded-md border border-black/10 bg-white/85 text-xs font-medium text-slate-700 shadow-sm backdrop-blur transition-colors hover:bg-white dark:border-white/15 dark:bg-black/25 dark:text-slate-200 dark:hover:bg-black/40",
+                iconOnly ? "h-8 w-8" : "h-8 px-2.5",
+            )}
+            aria-label={copied ? `${label} copied` : `Copy ${label}`}
+            title={copied ? "Copied" : `Copy ${label}`}
+        >
+            {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+            {!iconOnly && <span>{copied ? "Copied" : "Copy"}</span>}
+        </button>
+    );
+};
+
 export const NodesList: React.FC<NodesListProps> = ({
     nodes,
     showDeleted,
@@ -48,6 +85,7 @@ export const NodesList: React.FC<NodesListProps> = ({
 }) => {
     const [showWelcome, setShowWelcome] = useState(true);
     const isClientHosted = window.__BURLA_CLIENT_HOSTED_MODE__ === true;
+    const { theme } = useTheme();
 
     const [expandedNodeId, setExpandedNodeId] = useState<string | null>(null);
     const [nodeLogs, setNodeLogs] = useState<Record<string, string[]>>({});
@@ -467,16 +505,71 @@ export const NodesList: React.FC<NodesListProps> = ({
                                                 <li>
                                                     Run this command on your computer to connect
                                                     it to the cluster:
-                                                    <pre className="mt-3 w-fit rounded-lg border bg-muted/50 px-4 py-3 text-sm font-normal text-foreground">
+                                                    <div className="relative mt-3 w-fit min-w-40 rounded-lg border bg-[#f6f8fa] py-3 pl-4 pr-12 font-mono text-sm font-normal text-[#393a34] dark:bg-[#272822] dark:text-[#f8f8f2]">
                                                         <code>burla login</code>
-                                                    </pre>
+                                                        <CopyButton
+                                                            text="burla login"
+                                                            label="burla login command"
+                                                            iconOnly
+                                                        />
+                                                    </div>
                                                 </li>
                                             )}
                                             <li>
                                                 <div>Run some code in the cloud:</div>
-                                                <pre className="mt-3 overflow-x-auto rounded-lg border bg-muted/50 p-4 text-sm font-normal leading-6 text-foreground">
-                                                    <code>{QUICKSTART_CODE}</code>
-                                                </pre>
+                                                <div className="relative mt-3 overflow-hidden rounded-lg border bg-[#f6f8fa] dark:bg-[#272822]">
+                                                    <CopyButton
+                                                        text={QUICKSTART_CODE}
+                                                        label="Python code"
+                                                    />
+                                                    <Highlight
+                                                        theme={
+                                                            theme === "dark"
+                                                                ? MONOKAI_THEME
+                                                                : LIGHT_CODE_THEME
+                                                        }
+                                                        code={QUICKSTART_CODE}
+                                                        language="python"
+                                                    >
+                                                        {({
+                                                            className,
+                                                            style,
+                                                            tokens,
+                                                            getLineProps,
+                                                            getTokenProps,
+                                                        }) => (
+                                                            <pre
+                                                                className={cn(
+                                                                    className,
+                                                                    "overflow-x-auto p-4 pr-20 text-sm font-normal leading-6",
+                                                                )}
+                                                                style={{
+                                                                    ...style,
+                                                                    backgroundColor: "transparent",
+                                                                    margin: 0,
+                                                                }}
+                                                            >
+                                                                {tokens.map((line, lineIndex) => (
+                                                                    <div
+                                                                        key={lineIndex}
+                                                                        {...getLineProps({ line })}
+                                                                    >
+                                                                        {line.map(
+                                                                            (token, tokenIndex) => (
+                                                                                <span
+                                                                                    key={tokenIndex}
+                                                                                    {...getTokenProps({
+                                                                                        token,
+                                                                                    })}
+                                                                                />
+                                                                            ),
+                                                                        )}
+                                                                    </div>
+                                                                ))}
+                                                            </pre>
+                                                        )}
+                                                    </Highlight>
+                                                </div>
                                             </li>
                                             <li>
                                                 <a

@@ -14,12 +14,13 @@ from main_service import (
 
 
 def remove_container(docker_client, container_id: str):
-    """Tearing a node down means tearing down its inner docker daemon, which
-    takes docker tens of seconds. Two removals of one node overlap easily in
-    that window (a cluster restart racing the previous restart's cleanup), and
-    docker answers the second with a 409. The container is going away either
-    way, so treat that, and an already-gone container, as success: raising here
-    aborts a whole cluster teardown and leaves the cluster with no nodes."""
+    """The head removes node containers from several places on purpose (each
+    node's delete, plus label sweeps on shutdown and after boots), and the test
+    suite restarts the cluster back to back, so two removals of one container
+    overlap. Docker answers the loser with a 409 ("removal already in
+    progress"). The container is going away either way, so treat that, and an
+    already-gone container, as success: raising here aborts a whole cluster
+    teardown and leaves the cluster with no nodes at all."""
     try:
         docker_client.remove_container(container_id, force=True)
     except docker.errors.NotFound:
@@ -34,6 +35,16 @@ def _cluster_volume(docker_client, name: str) -> str:
     full_name = f"burla-{CLUSTER_NAME}-{name}"
     docker_client.create_volume(name=full_name, labels={"burla-cluster": CLUSTER_NAME})
     return full_name
+
+
+def _shared_uv_cache_volume(docker_client) -> str:
+    """One uv cache for every burla cluster on this machine (uv is built for
+    concurrent use). Labeled with its own key so `make stop` leaves it alone:
+    emptying the cache is what made the first post-stop test run re-download
+    every wheel at once, which is exactly the load spike that wedged nodes.
+    `make stop-all` reclaims it."""
+    docker_client.create_volume(name="burla-uv-cache", labels={"burla-uv-cache": "1"})
+    return "burla-uv-cache"
 
 
 def _ensure_node_image(docker_client, image: str):
@@ -71,14 +82,13 @@ class LocalDockerProvider:
         # 2min assign-job budget). The test suite replaces nodes constantly.
         # Keyed by port, this cluster's node slot: ports are handed out from a
         # fixed base, so a replacement reuses the store of the node it replaces
-        # and two live nodes never share one. The uv cache feeds those installs
-        # and is safe to share cluster-wide.
+        # and two live nodes never share one.
         # These are volumes and not host binds because a host bind on macOS is
         # virtiofs, and two nodes installing multi-GB envs across it at once
         # stall each other long enough to look dead to the head.
         inner_docker_store = _cluster_volume(docker_client, f"docker-{port}")
         worker_python_env = _cluster_volume(docker_client, f"worker-env-{port}")
-        uv_cache = _cluster_volume(docker_client, "uv-cache")
+        uv_cache = _shared_uv_cache_volume(docker_client)
         host_config = docker_client.create_host_config(
             # Privileged so the node can run its own dockerd for its workers.
             privileged=True,

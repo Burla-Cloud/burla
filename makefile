@@ -107,9 +107,11 @@ node-logs:
 # Remove this checkout's cluster containers. Filtered by label so other
 # checkouts' clusters on the same docker daemon are left alone. Cluster state
 # lives inside the main_service process, so there is nothing else to clean up.
-# The volumes are the nodes' inner docker image stores (~1GB each); they are
-# deliberately kept when a node is replaced, so stopping the cluster is what
-# reclaims them.
+# The volumes are the nodes' inner docker image stores and worker python envs
+# (GBs each); they deliberately survive node replacement, so stopping the
+# cluster is what reclaims them. The machine-wide uv cache (`burla-uv-cache`)
+# survives even this: emptying it makes the next run's env installs re-download
+# everything at once, which is heavy enough to wedge nodes. `stop-all` gets it.
 stop:
 	set -e; \
 	pids=$$(lsof -ti tcp:$(BURLA_HEAD_PORT) -sTCP:LISTEN 2>/dev/null || true); \
@@ -127,6 +129,7 @@ stop-all:
 	if [ -n "$$ids" ]; then docker rm -f -v $$ids >/dev/null; fi; \
 	vols=$$(docker volume ls -q --filter label=burla-cluster); \
 	if [ -n "$$vols" ]; then docker volume rm $$vols >/dev/null; fi; \
+	docker volume rm burla-uv-cache >/dev/null 2>&1 || true; \
 	echo "Removed every burla dev cluster on this machine."
 
 

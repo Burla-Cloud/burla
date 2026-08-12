@@ -80,19 +80,17 @@ def _shutdown_cluster(logger: Logger):
 def _taken_local_dev_node_ports():
     """Ports this cluster is already using. Node ports are published on the host
     and the client reaches nodes at localhost:<port>, so each cluster gets its
-    own block starting at LOCAL_DEV_NODE_PORT_BASE. Live containers count as
-    well as live state: a node deleted a moment ago can still hold its host port
-    binding while docker tears it down."""
+    own block starting at LOCAL_DEV_NODE_PORT_BASE. The state field covers a
+    node from the moment Node.start records it (BOOTING nodes have no host yet);
+    live containers cover a node deleted a moment ago that still holds its host
+    port binding while docker tears it down."""
     import docker
 
     active_statuses = ("READY", "BOOTING", "RUNNING")
     ports = set()
     for node in cluster_state.list_nodes():
-        if node.get("status") not in active_statuses:
-            continue
-        port = str(node.get("host") or "").rsplit(":", 1)[-1]
-        if port.isdigit():
-            ports.add(int(port))
+        if node.get("status") in active_statuses and node.get("port"):
+            ports.add(node["port"])
 
     docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
     containers = docker_client.containers(
@@ -188,22 +186,13 @@ def _start_nodes(
     executor.shutdown(wait=True)
     node_instance_names = [result for result in exec_results if result is not None]
 
-    # kill any local containers that shouldn't be running anymore
-    if IN_LOCAL_DEV_MODE and n_nodes_to_add is None:
-        import docker
-
-        docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
-        node_ids = [name[11:] for name in node_instance_names]
-        # Scoped to this cluster's members: an unfiltered sweep would delete
-        # every other local-dev cluster's containers on this docker daemon.
-        containers = docker_client.containers(
-            all=True, filters={"label": f"burla-cluster-member={CLUSTER_NAME}"}
-        )
-        for container in containers:
-            name = container["Names"][0]
-            if not any([id_ in name for id_ in node_ids]):
-                docker_client.remove_container(container["Id"], force=True)
-
+    # There used to be a sweep here removing every cluster-member container this
+    # call didn't just boot. It existed to clean up sibling-mode leftover worker
+    # containers, which don't exist anymore (workers live inside their node),
+    # and it killed live nodes: restarts run as background tasks and arrive back
+    # to back from the test fixtures, and the earlier restart's sweep landed
+    # after the later restart's nodes had booted and taken jobs, deleting them
+    # mid-job. Shutdown already sweeps this cluster's containers by label.
     return node_instance_names
 
 

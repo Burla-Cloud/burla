@@ -257,6 +257,7 @@ remote-dev:
 	BURLA_ENVIRONMENT=test \
 	BURLA_CLOUD=$${BURLA_CLOUD:-aws} \
 	BURLA_CLUSTER_NAME=$(BURLA_CLUSTER_NAME) \
+	BURLA_HEAD_PORT=$(BURLA_HEAD_PORT) \
 	uv run --project $(PROJECT_ABS) --group dev python -m burla._remote_dev
 
 kill-kernels:

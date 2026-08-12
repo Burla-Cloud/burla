@@ -20,7 +20,12 @@ export default {
     extend: {
       fontFamily: {
         sans: ["Inter", "sans-serif"],
-        
+        mono: ['"IBM Plex Mono"', "ui-monospace", "SFMono-Regular", "monospace"],
+        // The brand wordmark font, used only by the sidebar logo lockup.
+        logo: ["Poppins", "system-ui", "sans-serif"],
+      },
+      letterSpacing: {
+        eyebrow: "0.28em",
       },
       colors: {
         border: "hsl(var(--border))",

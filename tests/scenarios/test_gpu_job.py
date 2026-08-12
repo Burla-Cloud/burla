@@ -19,11 +19,14 @@ pytestmark = [pytest.mark.e2e, pytest.mark.slow]
 def test_func_gpu_job_runs_on_a_gpu_node(
     rpm_subprocess, local_dev_cluster, main_http_client
 ):
-    if os.environ.get("BURLA_TEST_GPU") != "1":
+    requested_gpu = os.environ.get("BURLA_TEST_GPU")
+    if not requested_gpu:
         pytest.skip(
             "GPU nodes cost money and local-dev nodes are containers with no GPU; "
-            "set BURLA_TEST_GPU=1 against a remote-dev cluster to run this"
+            "set BURLA_TEST_GPU=1 (or =H100 etc, the cheapest machine differs "
+            "per cloud) against a remote-dev cluster to run this"
         )
+    func_gpu = "A100" if requested_gpu == "1" else requested_gpu
 
     source = (
         "import subprocess\n"
@@ -36,7 +39,7 @@ def test_func_gpu_job_runs_on_a_gpu_node(
         "    return result.stdout.strip()\n"
     )
     result = rpm_subprocess(
-        source, [0], timeout_seconds=1200, func_gpu="A100", func_cpu=4, grow=True
+        source, [0], timeout_seconds=1200, func_gpu=func_gpu, func_cpu=4, grow=True
     )
     assert result["ok"], result.get("traceback")
     assert result["outputs"][0], "nvidia-smi reported no GPU inside the worker"

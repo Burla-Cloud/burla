@@ -17,7 +17,6 @@ from node_service import (
     SELF,
     BURLA_CLUSTER_NAME,
     IN_LOCAL_DEV_MODE,
-    NUM_GPUS,
     Logger,
     __version__,
     head_client,
@@ -44,8 +43,8 @@ OOM_KILL_MARKER_PREFIX = "__burla_oom_kill__:"
 # where that env dir lives behind Docker Desktop and an extra layer of NAT, this legitimately
 # takes minutes.
 WORKER_BOOT_TIMEOUT_SECONDS = 180
-DYNAMIC_RAM_MAX_NODE_MEMORY_USED_FRACTION = 0.90
-DYNAMIC_RAM_TARGET_NODE_MEMORY_USED_FRACTION = 0.85
+DYNAMIC_RAM_MAX_WORKER_MEMORY_USED_FRACTION = 0.97
+DYNAMIC_RAM_TARGET_WORKER_MEMORY_USED_FRACTION = 0.92
 DYNAMIC_RAM_MONITOR_INTERVAL_SECONDS = 0.25
 DYNAMIC_RAM_STARTUP_MONITOR_INTERVAL_SECONDS = 0.05
 DYNAMIC_RAM_STARTUP_MONITOR_SECONDS = 30
@@ -126,6 +125,41 @@ WORKERS_CGROUP_SLICE = "burla-workers.slice"
 NODE_SERVICE_CGROUP_SLICE = "burla-node-service.slice"
 
 
+def _workers_cgroup_slice_dir(worker):
+    # systemd nests slices by dash-splitting their names (burla-workers.slice
+    # lives at /sys/fs/cgroup/burla.slice/burla-workers.slice), so resolve the
+    # slice's real directory from a worker's own cgroup path instead of
+    # guessing it.
+    worker_cgroup = Path(f"/proc/{worker.worker_host_pid}/cgroup").read_text()
+    for line in worker_cgroup.splitlines():
+        cgroup_path = line.split(":", 2)[2]
+        if WORKERS_CGROUP_SLICE in cgroup_path:
+            segments = cgroup_path.strip("/").split("/")
+            slice_depth = segments.index(WORKERS_CGROUP_SLICE) + 1
+            return Path("/sys/fs/cgroup", *segments[:slice_depth])
+    return None
+
+
+def _workers_memory_limit_bytes(worker) -> int:
+    """How much memory the kernel actually lets the workers use.
+
+    The VM startup script caps burla-workers.slice at MemTotal minus
+    node_service's reservation (see NODE_SERVICE_RESERVED_MEMORY_GB in
+    main_service/node.py), so on nodes below ~40GiB that cap sits under any
+    trigger keyed to MemTotal: the cgroup OOM-kills a worker before shedding
+    could ever fire.
+    """
+    slice_dir = _workers_cgroup_slice_dir(worker)
+    memory_max = None
+    if slice_dir is not None and (slice_dir / "memory.max").exists():
+        memory_max = (slice_dir / "memory.max").read_text().strip()
+    if memory_max is None or memory_max == "max":
+        # Isolation isn't active; verify_worker_cgroup_isolation already logged
+        # that as an ERROR, and physical RAM is the only real ceiling left.
+        return psutil.virtual_memory().total
+    return int(memory_max)
+
+
 async def verify_worker_cgroup_isolation(workers: list, logger: Logger):
     """The VM startup script (see main_service/node.py) puts node_service and
     the workers in systemd slices so user load can never starve node_service.
@@ -147,10 +181,6 @@ async def verify_worker_cgroup_isolation(workers: list, logger: Logger):
             f"node_service runs outside {NODE_SERVICE_CGROUP_SLICE} "
             f"(cgroup: {node_cgroup.strip()!r})"
         )
-    # systemd nests slices by dash-splitting their names (burla-workers.slice
-    # lives at /sys/fs/cgroup/burla.slice/burla-workers.slice), so resolve the
-    # slice's real directory from a worker's own cgroup path instead of
-    # guessing it.
     slice_dir = None
     for worker in workers:
         worker_cgroup = Path(f"/proc/{worker.worker_host_pid}/cgroup").read_text()
@@ -160,13 +190,7 @@ async def verify_worker_cgroup_isolation(workers: list, logger: Logger):
                 f"(cgroup: {worker_cgroup.strip()!r})"
             )
         elif slice_dir is None:
-            for line in worker_cgroup.splitlines():
-                cgroup_path = line.split(":", 2)[2]
-                if WORKERS_CGROUP_SLICE in cgroup_path:
-                    segments = cgroup_path.strip("/").split("/")
-                    slice_depth = segments.index(WORKERS_CGROUP_SLICE) + 1
-                    slice_dir = Path("/sys/fs/cgroup", *segments[:slice_depth])
-                    break
+            slice_dir = _workers_cgroup_slice_dir(worker)
 
     memory_max = cpu_weight = None
     if slice_dir is not None and not (slice_dir / "memory.max").exists():
@@ -210,6 +234,7 @@ async def verify_worker_cgroup_isolation(workers: list, logger: Logger):
 
 async def dynamic_ram_monitor_loop():
     started_at = time.perf_counter()
+    worker_memory_limit_bytes = None
     while SELF["dynamic_func_ram"]:
         startup_window = (
             time.perf_counter() - started_at < DYNAMIC_RAM_STARTUP_MONITOR_SECONDS
@@ -223,6 +248,8 @@ async def dynamic_ram_monitor_loop():
         active_workers = _active_dynamic_workers()
         if not active_workers:
             return
+        if worker_memory_limit_bytes is None:
+            worker_memory_limit_bytes = _workers_memory_limit_bytes(active_workers[0])
 
         worker_memory = []
         for worker in active_workers:
@@ -233,19 +260,18 @@ async def dynamic_ram_monitor_loop():
         if not worker_memory:
             continue
 
-        node_memory_total_bytes = psutil.virtual_memory().total
         active_worker_memory_bytes = sum(rss_bytes for rss_bytes, _ in worker_memory)
         active_worker_memory_fraction = (
-            active_worker_memory_bytes / node_memory_total_bytes
+            active_worker_memory_bytes / worker_memory_limit_bytes
         )
-        if active_worker_memory_fraction < DYNAMIC_RAM_MAX_NODE_MEMORY_USED_FRACTION:
+        if active_worker_memory_fraction < DYNAMIC_RAM_MAX_WORKER_MEMORY_USED_FRACTION:
             continue
 
         if len(worker_memory) <= 1:
             continue
 
         target_used_bytes = int(
-            node_memory_total_bytes * DYNAMIC_RAM_TARGET_NODE_MEMORY_USED_FRACTION
+            worker_memory_limit_bytes * DYNAMIC_RAM_TARGET_WORKER_MEMORY_USED_FRACTION
         )
         bytes_to_free = max(0, active_worker_memory_bytes - target_used_bytes)
         running_worker_memory = [
@@ -625,7 +651,8 @@ async def retire_workers_for_pressure(
 
 
 class WorkerClient:
-    def __init__(self, image: str):
+    def __init__(self, image: str, gpu_index: int | None = None):
+        self.gpu_index = gpu_index
         self.container_name = f"worker_{uuid4().hex[:8]}"
         self.port = None
         self.image = image
@@ -657,8 +684,13 @@ class WorkerClient:
         }
 
         host_config["CgroupParent"] = "burla-workers.slice"
-        if NUM_GPUS != 0:
-            host_config["DeviceRequests"] = [{"Count": -1, "Capabilities": [["gpu"]]}]
+        if self.gpu_index is not None:
+            # One GPU per worker: without pinning, every worker on a
+            # multi-GPU machine (AWS sells A100s only 8-per-VM) sees all
+            # GPUs and user code piles onto GPU 0.
+            host_config["DeviceRequests"] = [
+                {"DeviceIDs": [str(self.gpu_index)], "Capabilities": [["gpu"]]}
+            ]
             host_config["Runtime"] = "nvidia"
         binds.extend(
             [

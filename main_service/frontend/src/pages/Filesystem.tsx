@@ -13,17 +13,8 @@ import { DialogUtility } from "@syncfusion/ej2-popups";
 import { X } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
-import "@syncfusion/ej2-base/styles/material.css";
-import "@syncfusion/ej2-buttons/styles/material.css";
-import "@syncfusion/ej2-inputs/styles/material.css";
-import "@syncfusion/ej2-popups/styles/material.css";
-import "@syncfusion/ej2-icons/styles/material.css";
-import "@syncfusion/ej2-navigations/styles/material.css";
-import "@syncfusion/ej2-layouts/styles/material.css";
-import "@syncfusion/ej2-grids/styles/material.css";
-import "@syncfusion/ej2-splitbuttons/styles/material.css";
-import "@syncfusion/ej2-dropdowns/styles/material.css";
-import "@syncfusion/ej2-react-filemanager/styles/material.css";
+import { useTheme } from "@/lib/theme";
+import { applySyncfusionTheme } from "@/lib/syncfusion-theme";
 
 type ActiveUploadState = {
     name: string;
@@ -524,6 +515,11 @@ function relativePathForFile(fileInfo: FileInfo): string {
 }
 
 export default function Filesystem() {
+    const { theme } = useTheme();
+    React.useEffect(() => {
+        applySyncfusionTheme(theme);
+    }, [theme]);
+
     const fmRef = React.useRef<FileManagerComponent | null>(null);
     const [pageIndex, setPageIndex] = React.useState(0);
     const [totalCount, setTotalCount] = React.useState(0);
@@ -1682,10 +1678,10 @@ export default function Filesystem() {
                 <div className="space-y-8 flex-1">
                     {showWelcome && (
                         <div className="spotlight-surface rounded-xl my-0">
-                            <Card className="w-full relative rounded-xl shadow-lg shadow-black/5 bg-white/90 backdrop-blur">
+                            <Card className="w-full relative rounded-xl shadow-lg shadow-black/5 bg-card/90 backdrop-blur">
                                 <button
                                     onClick={handleDismissWelcome}
-                                    className="absolute top-2 right-2 p-1 hover:bg-gray-100 rounded-full"
+                                    className="absolute top-2 right-2 p-1 hover:bg-accent rounded-full"
                                     aria-label="Dismiss welcome message"
                                 >
                                     <X className="h-6 w-6" />
@@ -1696,7 +1692,7 @@ export default function Filesystem() {
                                     </CardTitle>
                                 </CardHeader>
                                 <CardContent className="space-y-3">
-                                    <p className="text-gray-700">
+                                    <p className="text-foreground/85">
                                         <ul className="list-disc pl-6 space-y-1 text-left">
                                             <li>
                                                 Any files uploaded here will appear in "
@@ -1714,7 +1710,7 @@ export default function Filesystem() {
                         </div>
                     )}
 
-                    <div className="relative rounded-lg border border-gray-200 bg-white shadow-sm filesystem-shell">
+                    <div className="relative rounded-lg border border-border bg-card shadow-sm filesystem-shell">
                         <FileManagerComponent
                             view="Details"
                             ref={fmRef}
@@ -1762,7 +1758,7 @@ export default function Filesystem() {
                         </FileManagerComponent>
 
                         {(totalCount > PAGE_SIZE || hasMore) && (
-                            <div className="flex items-center justify-between px-4 py-2 border-t border-gray-200 text-sm text-gray-600">
+                            <div className="flex items-center justify-between px-4 py-2 border-t border-border text-sm text-muted-foreground">
                                 <div>
                                     Page {pageIndex + 1} of {displayTotal}
                                 </div>
@@ -1771,8 +1767,8 @@ export default function Filesystem() {
                                         type="button"
                                         className={`px-2 py-1 border rounded transition-colors ${
                                             isPrevDisabled
-                                                ? "bg-gray-100 text-gray-400 border-gray-300"
-                                                : "bg-white text-gray-800 border-gray-300 hover:bg-gray-50"
+                                                ? "bg-muted text-muted-foreground/60 border-border"
+                                                : "bg-card text-foreground/90 border-border hover:bg-accent"
                                         }`}
                                         onClick={() => handlePageChange("prev")}
                                         disabled={isPrevDisabled}
@@ -1786,8 +1782,8 @@ export default function Filesystem() {
                                         type="button"
                                         className={`px-2 py-1 border rounded transition-colors ${
                                             isNextDisabled
-                                                ? "bg-gray-100 text-gray-400 border-gray-300"
-                                                : "bg-white text-gray-800 border-gray-300 hover:bg-gray-50"
+                                                ? "bg-muted text-muted-foreground/60 border-border"
+                                                : "bg-card text-foreground/90 border-border hover:bg-accent"
                                         }`}
                                         onClick={() => handlePageChange("next")}
                                         disabled={isNextDisabled}
@@ -1802,11 +1798,11 @@ export default function Filesystem() {
                         )}
 
                         {batchDownloadState !== "idle" && (
-                            <div className="absolute inset-0 z-30 flex items-center justify-center bg-slate-900/45 backdrop-blur-sm">
-                                <div className="pointer-events-auto relative flex w-full max-w-xl flex-col items-center gap-6 rounded-3xl border border-slate-200 bg-white px-8 py-8 text-slate-800 shadow-xl shadow-slate-900/10">
+                            <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+                                <div className="pointer-events-auto relative flex w-full max-w-xl flex-col items-center gap-6 rounded-3xl border border-border bg-card px-8 py-8 text-foreground/90 shadow-xl shadow-black/10">
                                     <button
                                         type="button"
-                                        className="absolute right-5 top-5 rounded-full p-2 text-slate-500 transition hover:bg-slate-100 hover:text-slate-800"
+                                        className="absolute right-5 top-5 rounded-full p-2 text-muted-foreground transition hover:bg-accent hover:text-foreground"
                                         aria-label="Cancel download"
                                         onClick={handleCancelBatchDownload}
                                         disabled={batchDownloadState === "starting"}
@@ -1816,12 +1812,12 @@ export default function Filesystem() {
                                     <span
                                         className="inline-flex h-10 w-10 animate-spin rounded-full border-[3px]"
                                         style={{
-                                            borderColor: "rgba(15, 23, 42, 0.12)",
+                                            borderColor: "hsl(var(--border))",
                                             borderTopColor: "hsl(var(--brand))",
                                         }}
                                         aria-hidden="true"
                                     />
-                                    <span className="text-base font-semibold tracking-tight text-slate-700 text-center">
+                                    <span className="text-base font-semibold tracking-tight text-foreground/85 text-center">
                                         {batchDownloadState === "preparing"
                                             ? "Preparing download ..."
                                             : "Starting download ..."}
@@ -1831,10 +1827,10 @@ export default function Filesystem() {
                         )}
 
                         {activeUpload && (
-                            <div className="absolute inset-0 z-20 flex items-center justify-center bg-slate-900/45 backdrop-blur-sm">
-                                <div className="pointer-events-auto relative w-full max-w-2xl rounded-2xl bg-white/95 p-8 shadow-2xl">
+                            <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+                                <div className="pointer-events-auto relative w-full max-w-2xl rounded-2xl bg-card/95 p-8 shadow-2xl">
                                     <div className="flex items-start justify-between gap-6">
-                                        <p className="flex-1 text-base font-semibold text-gray-700 truncate">
+                                        <p className="flex-1 text-base font-semibold text-foreground/85 truncate">
                                             {activeUpload.state === "uploading"
                                                 ? `Uploading: ${activeUpload.name}`
                                                 : activeUpload.name}
@@ -1842,7 +1838,7 @@ export default function Filesystem() {
                                         {activeUpload.state === "uploading" && (
                                             <button
                                                 type="button"
-                                                className="-mr-2 -mt-2 p-2 text-gray-500 transition hover:bg-gray-100 hover:text-gray-800 rounded-full"
+                                                className="-mr-2 -mt-2 p-2 text-muted-foreground transition hover:bg-accent hover:text-foreground rounded-full"
                                                 aria-label="Cancel upload"
                                                 onClick={handleCancelUpload}
                                             >
@@ -1850,7 +1846,7 @@ export default function Filesystem() {
                                             </button>
                                         )}
                                     </div>
-                                    <div className="mt-5 h-4 w-full overflow-hidden rounded-full bg-gray-200">
+                                    <div className="mt-5 h-4 w-full overflow-hidden rounded-full bg-secondary">
                                         <div
                                             className="h-full rounded-full"
                                             style={{
@@ -1876,7 +1872,7 @@ export default function Filesystem() {
                                             }}
                                         />
                                     </div>
-                                    <p className="mt-4 text-xs font-medium text-gray-500">
+                                    <p className="mt-4 text-xs font-medium text-muted-foreground">
                                         {activeUpload.state === "uploading"
                                             ? `${formatBytes(
                                                   activeUpload.uploadedBytes

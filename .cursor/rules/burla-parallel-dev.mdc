@@ -8,6 +8,10 @@ alwaysApply: true
 For Burla tasks, never edit the primary checkout. Create or reopen a linked
 worktree for the task and edit there.
 
+In this repo the base branch is always `dev`, overriding the "branch off
+whatever branch you're on" default. If the checkout is on some other branch when
+a task starts, stop and tell Jake before creating the worktree.
+
 One worktree gets one dev cluster. Everything that would otherwise be shared
 (docker network, container labels, head port, node ports, head state, relay
 subdomain, EC2 node tags) is namespaced by the worktree name automatically, so
@@ -32,6 +36,8 @@ In remote-dev, node VMs run the worktree's current branch from GitHub, so
 `node_service` / `worker_server.py` changes must be committed and pushed before
 they reach a node. `main_service` changes are always live in both modes.
 
-When a task is done, push its branch and merge it into `dev`, then stop the
-cluster. Keep the worktree until it is no longer needed; if it is dirty, commit
-the work on its branch with a clear WIP message rather than discarding it.
+When the work looks done, ask Jake whether to merge; never merge unprompted.
+Once he says yes: push the branch, merge it into `dev`, push `dev`, then
+`make stop` and remove the worktree and branch. Until he says yes the worktree
+stays; if it is dirty, commit the work on its branch with a clear WIP message
+rather than discarding it.

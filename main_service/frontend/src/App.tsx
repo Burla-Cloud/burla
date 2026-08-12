@@ -20,7 +20,7 @@ const Layout = () => {
   const [saving, setSaving] = useState(false);
 
   return (
-    <div className="flex h-screen w-full overflow-hidden bg-gray-50">
+    <div className="flex h-screen w-full overflow-hidden bg-background">
       <ProfilePicture />
       <div className="shrink-0">
         <Sidebar disabled={saving} />

@@ -11,11 +11,11 @@ interface ClusterStatusCardProps {
 }
 
 const statusConfig = {
-  ON:         { color: "bg-green-500",  text: "On",        pulse: false },
-  OFF:        { color: "bg-gray-500",   text: "Off",       pulse: false },
-  REBOOTING:  { color: "bg-yellow-500", text: "Rebooting", pulse: true  },
-  BOOTING:    { color: "bg-yellow-500", text: "Starting",  pulse: true  },
-  STOPPING:   { color: "bg-yellow-500", text: "Stopping",  pulse: true  },
+  ON:         { color: "bg-emerald-500 dark:bg-emerald-400", text: "On",        pulse: false },
+  OFF:        { color: "bg-muted-foreground/50",             text: "Off",       pulse: false },
+  REBOOTING:  { color: "bg-amber-400",                       text: "Rebooting", pulse: true  },
+  BOOTING:    { color: "bg-amber-400",                       text: "Starting",  pulse: true  },
+  STOPPING:   { color: "bg-amber-400",                       text: "Stopping",  pulse: true  },
 };
 
 export const ClusterStatusCard = ({
@@ -42,7 +42,7 @@ export const ClusterStatusCard = ({
                 "animate-pulse": config.pulse,
               })}
             />
-            <span className="text-[1.14rem] text-gray-800 font-medium">
+            <span className="text-[1.14rem] text-foreground font-medium">
               {config.text}
             </span>
           </div>
@@ -53,7 +53,7 @@ export const ClusterStatusCard = ({
               showStats ? "max-w-[1000px] opacity-100" : "max-w-0 opacity-0"
             )}
           >
-            <span className="text-[1.04rem] font-medium text-gray-700 leading-tight whitespace-nowrap">
+            <span className="text-[1.04rem] font-medium text-foreground/80 leading-tight whitespace-nowrap">
               {summary}
             </span>
           </div>

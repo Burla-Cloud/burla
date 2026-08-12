@@ -12,6 +12,7 @@ import os
 import shutil
 import sys
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from time import sleep, time
 from urllib.parse import urlparse
 
@@ -174,15 +175,52 @@ TimeoutStartSec=10
 WantedBy=shutdown.target
 EOF
 systemctl enable burla-shutdown-hook
+"""
 
+# Driver stack comes from Ubuntu's archive, all built from one SRU cycle so
+# the kernel modules (precompiled + signed for this exact aws kernel, no
+# DKMS, so no GPU is needed to build this image), userspace libs, and fabric
+# manager stay version-locked. FM matters: NVSwitch machines (p4d.*,
+# p5.48xlarge) refuse to run CUDA unless a fabric manager exactly matching
+# the driver is running. NVIDIA's own CUDA repo can't serve this: it dropped
+# classic fabricmanager packaging after driver branch 575 (580+ only ships
+# Blackwell's nvlink5). GL/X libs are skipped (headless), decode/encode are
+# kept so containers requesting the `video` capability still start. The
+# toolkit (not in Ubuntu's archive) registers the `nvidia` docker runtime
+# the workers' host_config asks for.
+_GPU_AMI_EXTRA_SETUP = """
+apt-get install -y \
+  linux-modules-nvidia-580-server-$(uname -r) \
+  nvidia-headless-no-dkms-580-server \
+  nvidia-utils-580-server \
+  libnvidia-decode-580-server \
+  libnvidia-encode-580-server \
+  nvidia-fabricmanager-580
+curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+curl -fsSL https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' > /etc/apt/sources.list.d/nvidia-container-toolkit.list
+apt-get update
+apt-get install -y nvidia-container-toolkit
+nvidia-ctk runtime configure --runtime=docker
+systemctl enable nvidia-fabricmanager
+"""
+
+_AMI_SETUP_FINISH = """
 # Powering off signals the installer that setup is complete.
 shutdown -h now
 """
 
-# The AMI only bakes docker, uv, and a warm node_service venv; nodes git-fetch the
-# code they actually run at boot. So it is keyed by this script's content rather
-# than by the burla version: releasing must never trigger a 10-minute rebuild.
-NODE_AMI_HASH = hashlib.sha256(_NODE_AMI_SETUP_SCRIPT.encode()).hexdigest()[:12]
+
+def _node_ami_setup_script(gpu: bool) -> str:
+    gpu_part = _GPU_AMI_EXTRA_SETUP if gpu else ""
+    return _NODE_AMI_SETUP_SCRIPT + gpu_part + _AMI_SETUP_FINISH
+
+
+# The AMIs only bake docker, uv, a warm node_service venv (+ NVIDIA drivers for
+# the gpu variant); nodes git-fetch the code they actually run at boot. So each
+# is keyed by its script's content rather than by the burla version: releasing
+# must never trigger a 10-minute rebuild.
+def _node_ami_hash(gpu: bool) -> str:
+    return hashlib.sha256(_node_ami_setup_script(gpu).encode()).hexdigest()[:12]
 
 
 def _aws(cmd: str, parse_json: bool = True, raise_error: bool = True):
@@ -550,32 +588,28 @@ def _latest_ubuntu_ami(region) -> str:
     )
 
 
-def _ensure_node_ami(spinner, region, node_profile) -> str:
-    """Build the burla node AMI (docker + git repo + uv + mount-s3) if this region
-    has no AMI matching the current setup script. Takes ~10 minutes, and only
-    happens when that script changes, not on every release."""
-    existing = _aws(
+def _existing_node_ami(region: str, gpu: bool) -> str | None:
+    variant = "gpu" if gpu else "nogpu"
+    return _aws(
         f"ec2 describe-images --region {region} --owners self "
-        f"--filters Name=tag:burla-node-image,Values=true "
-        f"Name=tag:burla-node-image-hash,Values={NODE_AMI_HASH} "
+        f"--filters Name=name,Values=burla-node-{variant}-* "
+        f"Name=tag:burla-node-image,Values=true "
+        f"Name=tag:burla-node-image-hash,Values={_node_ami_hash(gpu)} "
         f"Name=state,Values=available "
         f'--query "sort_by(Images, &CreationDate)[-1].ImageId" --output json',
         raise_error=False,
     )
-    if existing:
-        spinner.text = f"Node AMI ... using existing {existing}."
-        spinner.ok("✓")
-        return existing
 
-    spinner.text = "Building node AMI (takes ~10 minutes, only when the image changes) ... "
-    spinner.start()
 
+def _build_node_ami(region: str, node_profile, gpu: bool) -> str:
+    variant = "gpu" if gpu else "nogpu"
+    ami_hash = _node_ami_hash(gpu)
     base_ami = _latest_ubuntu_ami(region)
     # The builder only apt-gets and clones a public repo, so client-hosted
     # mode (node_profile=None, no IAM permissions) builds it profile-less.
     profile_arg = f"--iam-instance-profile Name={node_profile} " if node_profile else ""
     with tempfile.NamedTemporaryFile("w", suffix=".sh") as user_data_file:
-        user_data_file.write(_NODE_AMI_SETUP_SCRIPT)
+        user_data_file.write(_node_ami_setup_script(gpu))
         user_data_file.flush()
         instance = _aws(
             f"ec2 run-instances --region {region} --image-id {base_ami} "
@@ -585,7 +619,7 @@ def _ensure_node_ami(spinner, region, node_profile) -> str:
             f'\'[{{"DeviceName":"/dev/sda1","Ebs":{{"VolumeSize":20,"VolumeType":"gp3"}}}}]\' '
             f"--user-data file://{user_data_file.name} "
             f"--tag-specifications "
-            f"'ResourceType=instance,Tags=[{{Key=Name,Value=burla-ami-builder}}]'"
+            f"'ResourceType=instance,Tags=[{{Key=Name,Value=burla-ami-builder-{variant}}}]'"
         )
     builder_id = instance["Instances"][0]["InstanceId"]
 
@@ -608,21 +642,21 @@ def _ensure_node_ami(spinner, region, node_profile) -> str:
                 break
             sleep(15)
         if state != "stopped":
-            spinner.fail("✗")
             raise Exception(
-                f"AMI builder instance {builder_id} never stopped (state={state}). "
-                "Check its console output, then terminate it and re-run deploy."
+                f"AMI builder instance {builder_id} ({variant}) never stopped "
+                f"(state={state}). Check its console output, then terminate it "
+                "and re-run deploy."
             )
 
         image = _aws(
             f"ec2 create-image --region {region} --instance-id {builder_id} "
-            f'--name "burla-node-nogpu-{NODE_AMI_HASH}-{int(time())}" --output json'
+            f'--name "burla-node-{variant}-{ami_hash}-{int(time())}" --output json'
         )
         ami_id = image["ImageId"]
         run_command(
             f"aws ec2 create-tags --region {region} --resources {ami_id} "
             f"--tags Key=burla-node-image,Value=true "
-            f"Key=burla-node-image-hash,Value={NODE_AMI_HASH} "
+            f"Key=burla-node-image-hash,Value={ami_hash} "
             f"Key=burla-version,Value={__version__}"
         )
         run_command(
@@ -633,10 +667,40 @@ def _ensure_node_ami(spinner, region, node_profile) -> str:
             f"aws ec2 terminate-instances --region {region} --instance-ids {builder_id}",
             raise_error=False,
         )
-
-    spinner.text = f"Building node AMI ... Done ({ami_id})."
-    spinner.ok("✓")
     return ami_id
+
+
+def _ensure_node_ami(spinner, region, node_profile):
+    """Build the burla node AMIs (docker + git repo + uv + mount-s3, plus a
+    variant with NVIDIA drivers for GPU nodes) if this region has no AMI
+    matching the current setup scripts. Takes ~10 minutes, and only happens
+    when a script changes, not on every release."""
+    missing = [gpu for gpu in (False, True) if not _existing_node_ami(region, gpu)]
+    if not missing:
+        spinner.text = "Node AMIs ... using existing."
+        spinner.ok("✓")
+        return
+
+    variants = ", ".join("gpu" if gpu else "nogpu" for gpu in missing)
+    spinner.text = (
+        f"Building node AMI(s): {variants} "
+        "(takes ~10 minutes, only when the image changes) ... "
+    )
+    spinner.start()
+
+    with ThreadPoolExecutor(max_workers=len(missing)) as pool:
+        futures = [pool.submit(_build_node_ami, region, node_profile, g) for g in missing]
+    # the with-block waits for every build; surface the first failure after all
+    # builders have terminated so none is left running.
+    for future in futures:
+        try:
+            future.result()
+        except BaseException:
+            spinner.fail("✗")
+            raise
+
+    spinner.text = f"Building node AMI(s): {variants} ... Done."
+    spinner.ok("✓")
 
 
 def _run_head_update(region: str, instance_id: str, commands: list[str]):

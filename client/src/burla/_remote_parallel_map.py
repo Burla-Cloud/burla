@@ -476,7 +476,7 @@ def remote_parallel_map(
     func_ram: FuncRam = "dynamic",
     func_gpu: Optional[FuncGpu] = None,
     image: Optional[str] = None,
-    grow: bool = True,
+    grow: bool = False,
     max_parallelism: Optional[int] = None,
     detach: bool = False,
     generator: bool = False,
@@ -521,7 +521,7 @@ def remote_parallel_map(
             version (e.g. `python:3.12`) so new nodes can run your pickled function.
         grow (bool, optional):
             If True, adds nodes to the cluster (grows) to complete the job as quickly
-            as possible. Adds up to 2560 cpus. Defaults to True.
+            as possible. Adds up to 2560 cpus. Defaults to False.
         max_parallelism (int, optional):
             The maximum number of `function_` instances allowed to be running at the same time.
             Defaults to the number of provided inputs.

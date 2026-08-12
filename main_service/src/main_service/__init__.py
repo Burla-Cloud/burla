@@ -537,7 +537,11 @@ def dashboard():
     html = (STATIC_DIR / "index.html").read_text()
     filesystem_enabled = bool((history.get_cluster_config() or {}).get("gcs_bucket_name"))
     inject = f'<script>window.__SYNCFUSION_LICENSE_KEY__ = "{SYNCFUSION_LICENSE_KEY}";'
-    inject += f"window.__BURLA_FILESYSTEM_ENABLED__ = {json.dumps(filesystem_enabled)};</script>"
+    inject += f"window.__BURLA_FILESYSTEM_ENABLED__ = {json.dumps(filesystem_enabled)};"
+    inject += (
+        f"window.__BURLA_CLIENT_HOSTED_MODE__ = "
+        f"{json.dumps(IN_CLIENT_HOSTED_MODE)};</script>"
+    )
     return HTMLResponse(
         html.replace("</head>", f"{inject}</head>"),
         headers={"Cache-Control": "no-store"},

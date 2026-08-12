@@ -10,10 +10,16 @@ import {
 } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
-import { Cpu, X, ChevronRight } from "lucide-react";
+import { ChevronRight, Cpu, ExternalLink, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { BurlaNode, NodeStatus } from "@/types/coreTypes";
 import { AWS_MACHINE_SPECS } from "@/types/constants";
+
+declare global {
+    interface Window {
+        __BURLA_CLIENT_HOSTED_MODE__?: boolean;
+    }
+}
 
 interface NodesListProps {
     nodes: BurlaNode[];
@@ -27,12 +33,21 @@ const PAGE_SIZE = 15;
 
 const ACTIVE_STATUSES = new Set<string>(["RUNNING", "READY", "BOOTING"]);
 
+const QUICKSTART_CODE = `from burla import remote_parallel_map
+
+def my_function(x):
+    print(f"processing input {x} on a machine in the cloud")
+    return x * 2
+
+results = remote_parallel_map(my_function, list(range(100)))`;
+
 export const NodesList: React.FC<NodesListProps> = ({
     nodes,
     showDeleted,
     onShowDeletedChange,
 }) => {
     const [showWelcome, setShowWelcome] = useState(true);
+    const isClientHosted = window.__BURLA_CLIENT_HOSTED_MODE__ === true;
 
     const [expandedNodeId, setExpandedNodeId] = useState<string | null>(null);
     const [nodeLogs, setNodeLogs] = useState<Record<string, string[]>>({});
@@ -422,7 +437,7 @@ export const NodesList: React.FC<NodesListProps> = ({
                                         <h2 className="text-xl font-semibold text-primary">
                                             Two minute quickstart:
                                         </h2>
-                                        <ol className="list-decimal pl-6 mt-2 space-y-2 text-base font-medium text-foreground/85">
+                                        <ol className="list-decimal pl-6 mt-2 space-y-5 text-base font-medium text-foreground/85">
                                             <li>
                                                 Hit the flashing{" "}
                                                 <span
@@ -448,22 +463,30 @@ export const NodesList: React.FC<NodesListProps> = ({
                                                     👉
                                                 </span>
                                             </li>
+                                            {!isClientHosted && (
+                                                <li>
+                                                    Run this command on your computer to connect
+                                                    it to the cluster:
+                                                    <pre className="mt-3 w-fit rounded-lg border bg-muted/50 px-4 py-3 text-sm font-normal text-foreground">
+                                                        <code>burla login</code>
+                                                    </pre>
+                                                </li>
+                                            )}
                                             <li>
-                                                Run this three-step{" "}
+                                                <div>Run some code in the cloud:</div>
+                                                <pre className="mt-3 overflow-x-auto rounded-lg border bg-muted/50 p-4 text-sm font-normal leading-6 text-foreground">
+                                                    <code>{QUICKSTART_CODE}</code>
+                                                </pre>
+                                            </li>
+                                            <li>
                                                 <a
-                                                    href="https://colab.research.google.com/drive/1bR8Gpa85gqJi7_9uKdcJDX9_WG0tuVmG?usp=sharing"
+                                                    href="https://burla.dev/docs/examples"
                                                     target="_blank"
                                                     rel="noopener noreferrer"
                                                     className="inline-flex items-center gap-1 text-primary hover:underline font-medium"
                                                 >
-                                                    Google Colab notebook
-                                                    <span
-                                                        role="img"
-                                                        aria-label="link"
-                                                        className="text-lg"
-                                                    >
-                                                        🔗
-                                                    </span>
+                                                    Explore more examples
+                                                    <ExternalLink className="h-4 w-4" />
                                                 </a>
                                             </li>
                                         </ol>

@@ -84,7 +84,6 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
                   "2x H100 80G": { label: "52vCPU / 468G RAM", value: "a3-highgpu-2g" },
                   "4x H100 80G": { label: "104vCPU / 936G RAM", value: "a3-highgpu-4g" },
                   "8x H100 80G": { label: "208vCPU / 1872G RAM", value: "a3-highgpu-8g" },
-                  "8x H200 141G": { label: "224vCPU / 2952G RAM", value: "a3-ultragpu-8g" },
               };
 
         // Build variant -> supported counts (e.g., "A100 40G" -> [1,2,4,8,16])
@@ -211,17 +210,6 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
                 { value: "europe-west1", label: "europe‑west1" },
                 { value: "asia-northeast1", label: "asia‑northeast1" },
                 { value: "asia-southeast1", label: "asia‑southeast1" },
-            ],
-            "H200 141G": [
-                { value: "us-central1", label: "us‑central1" },
-                { value: "us-south1", label: "us‑south1" },
-                { value: "us-east4", label: "us‑east4" },
-                { value: "us-east1", label: "us‑east1" },
-                { value: "us-west1", label: "us‑west1" },
-                { value: "europe-west4", label: "europe‑west4" },
-                { value: "europe-west1", label: "europe‑west1" },
-                { value: "asia-south2", label: "asia‑south2" },
-                { value: "asia-south1", label: "asia‑south1" },
             ],
             None: [
                 { value: "us-central1", label: "us‑central1" },
@@ -360,7 +348,6 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
             if (gpuVariant.includes("A100 40G")) return GCP_REGION_OPTIONS["A100 40G"];
             if (gpuVariant.includes("A100 80G")) return GCP_REGION_OPTIONS["A100 80G"];
             if (gpuVariant.includes("H100 80G")) return GCP_REGION_OPTIONS["H100 80G"];
-            if (gpuVariant.includes("H200 141G")) return GCP_REGION_OPTIONS["H200 141G"];
             return GCP_REGION_OPTIONS.None;
         }
 

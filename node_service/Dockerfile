@@ -63,7 +63,7 @@ ENV PATH="/root/.local/bin:${PATH}"
 
 # install Python 3.13 using uv and symlink to system python
 RUN uv python install 3.13 && \
-    ln -sf "$(uv python find 3.13)/python" /usr/local/bin/python3 && \
+    ln -sf "$(uv python find 3.13)" /usr/local/bin/python3 && \
     ln -sf /usr/local/bin/python3 /usr/local/bin/python && \
     ln -sf /usr/local/bin/python3 /usr/bin/python3
 

@@ -43,12 +43,12 @@ const GCP_MACHINE_MAPPING: Record<string, VmType> = {
   "m7i.16xlarge": "CPU",
 
   // Azure
-  Standard_D2s_v6: "CPU",
-  Standard_D4s_v6: "CPU",
-  Standard_D8s_v6: "CPU",
-  Standard_D16s_v6: "CPU",
-  Standard_D32s_v6: "CPU",
-  Standard_D64s_v6: "CPU",
+  Standard_D2as_v5: "CPU",
+  Standard_D4as_v5: "CPU",
+  Standard_D8as_v5: "CPU",
+  Standard_D16as_v5: "CPU",
+  Standard_D32as_v5: "CPU",
+  Standard_D64as_v5: "CPU",
 };
 
 const GCP_MACHINE_PRICING_MAPPING: Record<
@@ -94,12 +94,12 @@ const GCP_MACHINE_PRICING_MAPPING: Record<
   "m7i.16xlarge": { type: "CPU", on_demand_price: 3.2256 },
 
   // Azure on-demand (eastus)
-  Standard_D2s_v6: { type: "CPU", on_demand_price: 0.101 },
-  Standard_D4s_v6: { type: "CPU", on_demand_price: 0.202 },
-  Standard_D8s_v6: { type: "CPU", on_demand_price: 0.403 },
-  Standard_D16s_v6: { type: "CPU", on_demand_price: 0.806 },
-  Standard_D32s_v6: { type: "CPU", on_demand_price: 1.613 },
-  Standard_D64s_v6: { type: "CPU", on_demand_price: 3.226 },
+  Standard_D2as_v5: { type: "CPU", on_demand_price: 0.086 },
+  Standard_D4as_v5: { type: "CPU", on_demand_price: 0.172 },
+  Standard_D8as_v5: { type: "CPU", on_demand_price: 0.344 },
+  Standard_D16as_v5: { type: "CPU", on_demand_price: 0.688 },
+  Standard_D32as_v5: { type: "CPU", on_demand_price: 1.376 },
+  Standard_D64as_v5: { type: "CPU", on_demand_price: 2.752 },
 };
 
 // AWS machine specs for cluster-status displays (mirrors main_service/providers/catalog.py).

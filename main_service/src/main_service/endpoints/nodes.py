@@ -14,18 +14,33 @@ cluster token. These replace every node -> Firestore write and watch:
 """
 
 import asyncio
+from hmac import compare_digest
+from time import time
 
-from fastapi import APIRouter, Request, Depends, HTTPException
-
-from main_service import relay_fqdn
-from main_service import get_logger, get_add_background_task_function
-from main_service import cluster_state, history
+from fastapi import APIRouter, Depends, HTTPException, Request
 from main_service.helpers import Logger
 from main_service.node import Node
 from main_service.providers import get_provider
-from main_service.transport_tls import cluster_ca_pem, sign_node_csr
+from main_service.transport_tls import cluster_ca_pem, node_auth_token, sign_node_csr
 
-router = APIRouter()
+from main_service import (
+    CLOUD_PROVIDER,
+    CLUSTER_ID_TOKEN,
+    IN_CLIENT_HOSTED_MODE,
+    cluster_state,
+    get_add_background_task_function,
+    get_logger,
+    history,
+    relay_fqdn,
+)
+
+
+def _require_node_auth(request: Request):
+    if request.headers.get("Authorization") != f"Bearer {CLUSTER_ID_TOKEN}":
+        raise HTTPException(status_code=401, detail="Node authentication required")
+
+
+router = APIRouter(dependencies=[Depends(_require_node_auth)])
 
 _NODE_STATE_FIELDS = (
     "status",
@@ -59,6 +74,27 @@ async def push_node_state(instance_name: str, request: Request):
         "reserved_for_job": merged.get("reserved_for_job"),
         "job": cluster_state.job_view(job_id) if job_id else None,
     }
+    if CLOUD_PROVIDER == "azure" and IN_CLIENT_HOSTED_MODE:
+        from main_service.providers.azure import (
+            DELETE_LEASE_REFRESH_SEC,
+            azure_delete_lease,
+        )
+
+        lease_expires_at = body.get("delete_lease_expires_at")
+        if (
+            lease_expires_at is not None
+            and lease_expires_at - time() <= DELETE_LEASE_REFRESH_SEC
+        ):
+            supplied_token = request.headers.get("X-Burla-Node-Token", "")
+            if not compare_digest(supplied_token, node_auth_token(instance_name)):
+                raise HTTPException(
+                    status_code=403, detail="Node token required for Azure lease"
+                )
+            lease = await asyncio.to_thread(
+                azure_delete_lease, instance_name, merged.get("zone")
+            )
+            if lease["expires_at"] > lease_expires_at:
+                response["delete_lease"] = lease
     return response
 
 
@@ -71,7 +107,7 @@ async def push_node_logs(instance_name: str, request: Request):
 @router.post("/v1/nodes/{instance_name}/certificate")
 async def issue_node_certificate(instance_name: str, request: Request):
     node = cluster_state.get_node(instance_name)
-    if node is None or not node.get("public_ip") or not node.get("private_ip"):
+    if node is None or not node.get("private_ip"):
         raise HTTPException(status_code=409, detail="Node addresses are not registered")
     body = await request.json()
     # The client connects to the node's relay hostname, so the cert needs it

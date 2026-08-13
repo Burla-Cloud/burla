@@ -1,25 +1,25 @@
-import sys
-import os
-import json
 import asyncio
+import json
+import logging as python_logging
+import os
+import sys
 import threading
 import traceback
-import aiohttp
-import logging as python_logging
-from uuid import uuid4
-from time import time, sleep
-from typing import Callable
-from pathlib import Path
 from contextlib import asynccontextmanager
+from pathlib import Path
+from time import sleep, time
+from typing import Callable
 from urllib.parse import urlparse
+from uuid import uuid4
 
-from fastapi.responses import Response, FileResponse, HTMLResponse, RedirectResponse
-from fastapi import FastAPI, Request, BackgroundTasks, Depends, status
-from fastapi.staticfiles import StaticFiles
+import aiohttp
+from fastapi import BackgroundTasks, Depends, FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from starlette.middleware.sessions import SessionMiddleware
-from starlette.datastructures import UploadFile
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
+from fastapi.staticfiles import StaticFiles
 from jinja2 import Environment, FileSystemLoader
+from starlette.datastructures import UploadFile
+from starlette.middleware.sessions import SessionMiddleware
 
 CURRENT_BURLA_VERSION = "1.6.2"
 MIN_COMPATIBLE_CLIENT_VERSION = "1.6.2"
@@ -54,8 +54,9 @@ LOCAL_DEV_NODE_PORT_BASE = int(os.environ.get("LOCAL_DEV_NODE_PORT_BASE", 8080))
 # The default way Burla runs: main_service lives inside the `burla` pip
 # package on the user's machine (started by `remote_parallel_map` or
 # `burla dashboard`), boots real cloud VMs with the user's own credentials,
-# and is reachable by nodes through the relay. No head VM, no service
-# accounts, no buckets - see client/src/burla/_local_head.py.
+# and is reachable by nodes through the relay. Azure nodes receive a
+# short-lived deletion token because guest poweroff keeps billing there.
+# No head VM, service accounts, or buckets: see client/src/burla/_local_head.py.
 IN_CLIENT_HOSTED_MODE = os.environ.get("IN_CLIENT_HOSTED_MODE") == "True"
 
 # The owner's real backend credentials (from burla_credentials.json). Local
@@ -175,6 +176,7 @@ if not IN_LOCAL_DEV_MODE:
 
     ensure_cluster_tls(urlparse(MAIN_SERVICE_URL_FOR_NODES).hostname)
 
+
 # Bucket FUSE-mounted at /workspace/shared in every container (GCS on GCP,
 # S3 on AWS). Empty/unset disables the shared filesystem entirely - the
 # default in client-hosted mode so users need zero storage permissions.
@@ -192,7 +194,7 @@ def _default_shared_workspace_bucket():
 _DEFAULT_MACHINE_TYPES = {
     "gcp": "n4-standard-4",
     "aws": "m7i.2xlarge",
-    "azure": "Standard_D8s_v6",
+    "azure": "Standard_D8as_v5",
 }
 
 
@@ -232,8 +234,12 @@ elif CLOUD_PROVIDER == "azure":
     migrated = False
     for node_spec in cluster_config["Nodes"]:
         machine_type = node_spec["machine_type"]
-        if machine_type.startswith("Standard_D") and machine_type.endswith("s_v5"):
-            node_spec["machine_type"] = machine_type.removesuffix("s_v5") + "s_v6"
+        if (
+            machine_type.startswith("Standard_D")
+            and "as_v" not in machine_type
+            and machine_type.endswith(("s_v5", "s_v6", "s_v7"))
+        ):
+            node_spec["machine_type"] = machine_type.split("s_v", 1)[0] + "as_v5"
             migrated = True
     if migrated:
         history.save_cluster_config(cluster_config)
@@ -246,7 +252,7 @@ if IN_LOCAL_DEV_MODE:
     LOCAL_DEV_CONFIG["Nodes"][0]["machine_type"] = {
         "gcp": "n4-standard-2",
         "aws": "m7i.large",
-        "azure": "Standard_D2s_v6",
+        "azure": "Standard_D2as_v5",
     }[CLOUD_PROVIDER]
     # One node by default: several of these clusters run side by side on one
     # laptop, and each node is a container that spawns a worker per core.
@@ -350,14 +356,14 @@ def get_add_background_task_function(
     return add_logged_background_task
 
 
+from main_service.endpoints.client import router as client_router
 from main_service.endpoints.cluster_lifecycle import router as cluster_lifecycle_router
 from main_service.endpoints.cluster_views import router as cluster_views_router
-from main_service.endpoints.usage import router as usage_router
-from main_service.endpoints.settings import router as settings_router
 from main_service.endpoints.jobs import router as jobs_router
-from main_service.endpoints.storage import router as storage_router
-from main_service.endpoints.client import router as client_router
 from main_service.endpoints.nodes import router as nodes_router
+from main_service.endpoints.settings import router as settings_router
+from main_service.endpoints.storage import router as storage_router
+from main_service.endpoints.usage import router as usage_router
 
 
 async def _dashboard_lease_loop():
@@ -378,7 +384,10 @@ async def _stopped_instance_reaper_loop():
 
     provider = get_provider()
     while True:
-        await asyncio.to_thread(provider.delete_stopped_instances)
+        try:
+            await asyncio.to_thread(provider.delete_stopped_instances)
+        except Exception as error:
+            print(f"Stopped-instance cleanup failed: {error}")
         await asyncio.sleep(60)
 
 
@@ -405,9 +414,9 @@ async def lifespan(app: FastAPI):
                 return True
 
         if frontend_built_successfully():
-            print(f"Successfully rebuilt frontend.")
+            print("Successfully rebuilt frontend.")
         else:
-            print(f"FAILED to rebuild frontend?, check logs with `Cmd + Shift + U`.")
+            print("FAILED to rebuild frontend?, check logs with `Cmd + Shift + U`.")
 
     cluster_state.set_event_loop(asyncio.get_running_loop())
     cluster_state.load_from_history()
@@ -535,7 +544,9 @@ SYNCFUSION_LICENSE_KEY = os.environ.get("SYNCFUSION_LICENSE_KEY", "")
 @app.get("/filesystem")
 def dashboard():
     html = (STATIC_DIR / "index.html").read_text()
-    filesystem_enabled = bool((history.get_cluster_config() or {}).get("gcs_bucket_name"))
+    filesystem_enabled = bool(
+        (history.get_cluster_config() or {}).get("gcs_bucket_name")
+    )
     inject = f'<script>window.__SYNCFUSION_LICENSE_KEY__ = "{SYNCFUSION_LICENSE_KEY}";'
     inject += f"window.__BURLA_FILESYSTEM_ENABLED__ = {json.dumps(filesystem_enabled)};</script>"
     return HTMLResponse(

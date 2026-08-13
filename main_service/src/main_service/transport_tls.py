@@ -1,3 +1,5 @@
+import hashlib
+import hmac
 import ipaddress
 import os
 from datetime import datetime, timedelta, timezone
@@ -169,8 +171,16 @@ def cluster_ca_pem() -> str:
     return CA_CERT_PATH.read_text()
 
 
+def node_auth_token(instance_name: str) -> str:
+    return hmac.new(
+        CA_KEY_PATH.read_bytes(),
+        f"burla-node:{instance_name}".encode(),
+        hashlib.sha256,
+    ).hexdigest()
+
+
 def sign_node_csr(
-    csr_pem: str, public_ip: str, private_ip: str, dns_names=()
+    csr_pem: str, public_ip: str | None, private_ip: str, dns_names=()
 ) -> str:
     csr = x509.load_pem_x509_csr(csr_pem.encode())
     if not csr.is_signature_valid:
@@ -181,7 +191,7 @@ def sign_node_csr(
         csr.public_key(),
         issuer_key,
         issuer_cert,
-        [public_ip, private_ip],
+        [address for address in (public_ip, private_ip) if address],
         7,
         dns_names=dns_names,
     )

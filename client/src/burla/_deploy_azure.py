@@ -1,17 +1,5 @@
-"""
-`burla deploy --cloud=azure`.
+"""`burla deploy --cloud=azure`."""
 
-Mirrors the AWS deploy: managed identities + roles, network, a blob
-shared-workspace container, a node managed image (the Azure twin of the AWS
-AMI), and one small always-on head VM running main_service.
-
-Everything lives in one resource group (`burla`). Azure has no cross-cloud
-equivalent of "credential-less VM that terminates on poweroff", so unlike AWS
-every node VM carries the `burla-node` user-assigned identity, whose custom
-role only allows deleting burla resources (see providers/azure.py).
-"""
-
-import hashlib
 import json
 import shutil
 import subprocess
@@ -24,19 +12,24 @@ from urllib.parse import urlparse
 import requests
 
 from burla import _BURLA_BACKEND_URL, _BURLA_NODE_SOURCE_REF, __version__
-from burla._helpers import run_command, VerboseCalledProcessError
+from burla._azure_images import (
+    NODE_IMAGE_HASH,
+    NODE_IMAGE_SETUP_SCRIPT,
+    PUBLIC_IMAGE_REGIONS,
+)
 from burla._deploy import (
+    FRP_VERSION,
     RELAY_HOST,
     RELAY_SERVER_ADDR,
     RELAY_SERVER_PORT,
-    FRP_VERSION,
     head_install_spec,
 )
+from burla._helpers import VerboseCalledProcessError, run_command
 from burla._reporting import log_telemetry
 
 RESOURCE_GROUP = "burla"
 HEAD_VM_SIZE = "Standard_B2s"
-IMAGE_BUILDER_VM_SIZE = "Standard_D2s_v6"
+IMAGE_BUILDER_VM_SIZE = "Standard_D2s_v7"
 UBUNTU_IMAGE_URN = "Canonical:0001-com-ubuntu-server-jammy:22_04-lts-gen2:latest"
 NODE_SELF_DELETE_ROLE = "Burla Node Self Delete"
 SHARED_WORKSPACE_CONTAINER = "shared-workspace"
@@ -70,11 +63,63 @@ def _azure_region() -> str:
 
     region = os.environ.get("AZURE_REGION")
     if region:
+        region = region.lower().replace(" ", "")
+        if region not in PUBLIC_IMAGE_REGIONS:
+            raise RuntimeError(
+                f"Burla's public Azure image is unavailable in {region}."
+            )
+        return region
+    subnet_id = os.environ.get("AZURE_SUBNET_ID")
+    if subnet_id:
+        parts = subnet_id.strip("/").split("/")
+        vnet_index = parts.index("virtualNetworks")
+        vnet_id = "/" + "/".join(parts[: vnet_index + 2])
+        result = subprocess.run(
+            [
+                "az",
+                "network",
+                "vnet",
+                "show",
+                "--ids",
+                vnet_id,
+                "--query",
+                "location",
+                "--output",
+                "tsv",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip())
+        region = result.stdout.strip()
+        if region not in PUBLIC_IMAGE_REGIONS:
+            raise RuntimeError(
+                f"Burla's public Azure image is unavailable in {region}."
+            )
         return region
     configured = _az("config get defaults.location", raise_error=False)
-    if configured and configured.get("value"):
-        return configured["value"]
-    return "eastus"
+    configured_region = configured.get("value") if configured else None
+    vnets = _az("network vnet list", raise_error=False) or []
+    candidates = []
+    for vnet in sorted(vnets, key=lambda item: item["id"]):
+        for subnet in vnet.get("subnets") or []:
+            has_outbound_access = (
+                subnet.get("defaultOutboundAccess") is not False
+                or subnet.get("natGateway") is not None
+            )
+            if (
+                not subnet.get("delegations")
+                and has_outbound_access
+                and vnet["location"] in PUBLIC_IMAGE_REGIONS
+            ):
+                candidates.append(vnet["location"])
+    if configured_region in candidates:
+        return configured_region
+    if candidates:
+        return candidates[0]
+    return configured_region or "eastus"
 
 
 def _azure_ownership_payload() -> dict:
@@ -97,10 +142,7 @@ def _storage_account_name(subscription_id: str) -> str:
     return f"burla{subscription_id.replace('-', '')[:16]}"
 
 
-# ------------------------------------------------------------------ prep
-# Everything below is idempotent and shared with client-hosted mode
-# (_prepare_azure in _local_head.py), which needs the same network, node
-# identity, and node image before it can boot its first VM.
+# ------------------------------------------------------------------ deployed-cluster prep
 
 
 def register_resource_providers():
@@ -181,7 +223,7 @@ def _ensure_role_assignment(principal_id: str, role: str, scope: str):
     a few seconds to become assignable (PrincipalNotFound)."""
     for attempt in range(6):
         result = run_command(
-            f'az role assignment create --assignee-object-id {principal_id} '
+            f"az role assignment create --assignee-object-id {principal_id} "
             f'--assignee-principal-type ServicePrincipal --role "{role}" '
             f'--scope "{scope}"',
             raise_error=False,
@@ -233,68 +275,6 @@ def ensure_node_identity(subscription_id: str) -> dict:
 
 # ------------------------------------------------------------------ node image
 
-_NODE_IMAGE_SETUP_SCRIPT = """#!/bin/bash
-set -euxo pipefail
-export DEBIAN_FRONTEND=noninteractive
-apt-get update
-apt-get install -y docker.io git jq curl psmisc build-essential fuse3
-systemctl enable docker
-
-# blobfuse2 (mounts the shared-workspace container at /workspace/shared)
-curl -fsSL https://packages.microsoft.com/config/ubuntu/22.04/packages-microsoft-prod.deb -o /tmp/pms.deb
-dpkg -i /tmp/pms.deb
-apt-get update
-apt-get install -y blobfuse2
-grep -q '^user_allow_other' /etc/fuse.conf || echo user_allow_other >> /etc/fuse.conf
-
-# uv + python 3.13 (mirrors the AWS/GCP node images)
-curl -LsSf https://astral.sh/uv/install.sh | sh
-export PATH="/root/.local/bin:$PATH"
-uv python install 3.13
-ln -sf "$(uv python find 3.13)/python" /usr/local/bin/python3 || true
-ln -sf /usr/local/bin/python3 /usr/local/bin/python || true
-
-# node_service repo + pre-warmed venv so node boots are fast
-mkdir -p /opt && cd /opt
-git clone --depth 1 --branch main https://github.com/Burla-Cloud/burla.git --no-checkout
-cd burla
-git sparse-checkout init --cone
-git sparse-checkout set node_service client
-git checkout main
-uv venv /opt/burla/.venv --python 3.13 --seed
-echo 'export UV_PROJECT_ENVIRONMENT=/opt/burla/.venv' >> /root/.bashrc
-UV_PROJECT_ENVIRONMENT=/opt/burla/.venv uv pip install ./node_service cloudpickle tblib
-
-# Azure has no shutdown-script metadata like GCE; this unit tells the
-# node_service the VM is going away (spot eviction, manual stop).
-cat > /etc/systemd/system/burla-shutdown-hook.service <<'EOF'
-[Unit]
-Description=Tell burla node_service this VM is shutting down
-DefaultDependencies=no
-Before=shutdown.target
-
-[Service]
-Type=oneshot
-ExecStart=/usr/bin/curl -s -X POST http://localhost:8081/shutdown
-TimeoutStartSec=10
-
-[Install]
-WantedBy=shutdown.target
-EOF
-systemctl enable burla-shutdown-hook
-
-# Generalize so a managed image can be captured from this VM; powering off
-# signals the installer that setup is complete.
-waagent -deprovision+user -force
-shutdown -h now
-"""
-
-# The image only bakes docker, uv, and a warm node_service venv; nodes
-# git-fetch the code they actually run at boot. So it is keyed by this
-# script's content rather than by the burla version: releasing must never
-# trigger a 10-minute rebuild.
-NODE_IMAGE_HASH = hashlib.sha256(_NODE_IMAGE_SETUP_SCRIPT.encode()).hexdigest()[:12]
-
 
 def _throwaway_ssh_key(directory: str) -> str:
     """Azure VMs require an admin SSH key; nobody ever logs into burla VMs,
@@ -308,9 +288,7 @@ def _throwaway_ssh_key(directory: str) -> str:
 
 
 def ensure_node_image(spinner, region: str) -> str:
-    """Build the burla node managed image (docker + git repo + uv + blobfuse2)
-    if this region has no image matching the current setup script. Takes ~10
-    minutes, and only happens when that script changes, not on every release."""
+    """Maintainer helper used by scripts/publish_azure_image.py."""
     images = (
         _az(f"image list --resource-group {RESOURCE_GROUP}", raise_error=False) or []
     )
@@ -328,22 +306,21 @@ def ensure_node_image(spinner, region: str) -> str:
     spinner.start()
 
     builder_name = f"burla-image-builder-{int(time())}"
-    with tempfile.TemporaryDirectory() as tmp:
-        custom_data_path = Path(tmp) / "setup.sh"
-        custom_data_path.write_text(_NODE_IMAGE_SETUP_SCRIPT)
-        public_key_path = _throwaway_ssh_key(tmp)
-        run_command(
-            f"az vm create --resource-group {RESOURCE_GROUP} --name {builder_name} "
-            f"--location {region} --image {UBUNTU_IMAGE_URN} "
-            f"--size {IMAGE_BUILDER_VM_SIZE} --admin-username burla "
-            f"--ssh-key-values {public_key_path} "
-            f"--vnet-name burla-{region} --subnet nodes --nsg '' "
-            f"--public-ip-sku Standard "
-            f"--os-disk-delete-option Delete --nic-delete-option Delete "
-            f"--custom-data {custom_data_path}"
-        )
-
     try:
+        with tempfile.TemporaryDirectory() as tmp:
+            custom_data_path = Path(tmp) / "setup.sh"
+            custom_data_path.write_text(NODE_IMAGE_SETUP_SCRIPT)
+            public_key_path = _throwaway_ssh_key(tmp)
+            run_command(
+                f"az vm create --resource-group {RESOURCE_GROUP} "
+                f"--name {builder_name} --location {region} "
+                f"--image {UBUNTU_IMAGE_URN} --size {IMAGE_BUILDER_VM_SIZE} "
+                f"--admin-username burla --ssh-key-values {public_key_path} "
+                f"--vnet-name burla-{region} --subnet nodes --nsg '' "
+                f"--public-ip-sku Standard --os-disk-delete-option Delete "
+                f"--nic-delete-option Delete --custom-data {custom_data_path}"
+            )
+
         # Azure's apt mirror has been observed serving packages at ~50 KB/s;
         # two hours comfortably covers even that.
         deadline = time() + 7200
@@ -351,8 +328,8 @@ def ensure_node_image(spinner, region: str) -> str:
         while time() < deadline:
             power_state = _az(
                 f"vm get-instance-view --resource-group {RESOURCE_GROUP} "
-                f"--name {builder_name} --query \"instanceView.statuses"
-                '[?starts_with(code, \'PowerState/\')].code | [0]" --output tsv',
+                f'--name {builder_name} --query "instanceView.statuses'
+                "[?starts_with(code, 'PowerState/')].code | [0]\" --output tsv",
                 parse_json=False,
                 raise_error=False,
             )
@@ -379,8 +356,7 @@ def ensure_node_image(spinner, region: str) -> str:
             # group's home region, which fails when nodes run elsewhere.
             f"--location {region} "
             f"--source {builder_name} --hyper-v-generation V2 "
-            f"--tags burla-node-image=true burla-node-image-hash={NODE_IMAGE_HASH} "
-            f"burla-version={__version__}"
+            f"--tags burla-node-image=true burla-node-image-hash={NODE_IMAGE_HASH}"
         )
     finally:
         run_command(
@@ -394,6 +370,25 @@ def ensure_node_image(spinner, region: str) -> str:
             f"--name {builder_name}PublicIP",
             raise_error=False,
         )
+        run_command(
+            f"az network nic delete --resource-group {RESOURCE_GROUP} "
+            f"--name {builder_name}VMNic",
+            raise_error=False,
+        )
+        disk_names = (
+            _az(
+                f"disk list --resource-group {RESOURCE_GROUP} "
+                f"--query \"[?starts_with(name, '{builder_name}')].name\"",
+                raise_error=False,
+            )
+            or []
+        )
+        for disk_name in disk_names:
+            run_command(
+                f"az disk delete --resource-group {RESOURCE_GROUP} "
+                f"--name {disk_name} --yes",
+                raise_error=False,
+            )
 
     spinner.text = f"Building node image ... Done ({image_name})."
     spinner.ok("✓")
@@ -450,7 +445,7 @@ def _head_setup_commands(
             f'-e BURLA_RELAY_SERVER_PORT="{RELAY_SERVER_PORT}" '
             f'-e BURLA_NODE_SOURCE_REF="{node_source_ref}" '
             "python:3.13 "
-            f"sh -c 'pip install --no-cache-dir \"{install_spec}\" "
+            f'sh -c \'pip install --no-cache-dir "{install_spec}" '
             "&& exec python -m uvicorn main_service:app "
             "--host 127.0.0.1 --port 5001 --workers 1 --timeout-keep-alive 60'"
         ),
@@ -524,7 +519,9 @@ def deploy_azure(spinner):
     # (burla-node-xxxxxxxx--azure-<36 char guid>) is exactly the 63-char DNS
     # limit, so nothing may ever be added to this format.
     project_id = f"azure-{subscription_id}"
-    spinner.text = f"Checking for az CLI ... Using subscription {account_name} in {region}."
+    spinner.text = (
+        f"Checking for az CLI ... Using subscription {account_name} in {region}."
+    )
     spinner.ok("✓")
     log_telemetry("Installer has az CLI and is logged in.", project_id=project_id)
 
@@ -533,16 +530,15 @@ def deploy_azure(spinner):
     register_resource_providers()
     ensure_resource_group(region)
     ensure_network(region)
-    spinner.text = "Preparing subscription (providers, resource group, network) ... Done."
+    spinner.text = (
+        "Preparing subscription (providers, resource group, network) ... Done."
+    )
     spinner.ok("✓")
 
     storage_account = _storage_account_name(subscription_id)
     _create_storage(spinner, storage_account, region)
-    node_identity, head_identity = _create_identities(
-        spinner, subscription_id, storage_account
-    )
+    _, head_identity = _create_identities(spinner, subscription_id, storage_account)
     cluster_id_token = _register_cluster_and_save_token(spinner, project_id, region)
-    ensure_node_image(spinner, region)
     dashboard_url = _deploy_head_vm(
         spinner,
         project_id,
@@ -565,12 +561,12 @@ def deploy_azure(spinner):
     save_deployed_cluster_config("azure", project_id, cluster_id_token, dashboard_url)
 
     msg = f"\nSuccessfully deployed Burla v{__version__} on Azure!\n"
-    msg += f"Quickstart:\n"
+    msg += "Quickstart:\n"
     msg += f"  1. Open your new cluster dashboard: {dashboard_url}\n"
-    msg += f'  2. Hit "⏻ Start" to boot some machines.\n'
-    msg += f"  3. Run `burla login` to connect your laptop to the cluster.\n"
-    msg += f"  4. Import and call `remote_parallel_map`!\n\n"
-    msg += f"Don't hesitate to E-Mail jake@burla.dev, thank you for using Burla!"
+    msg += '  2. Hit "⏻ Start" to boot some machines.\n'
+    msg += "  3. Run `burla login` to connect your laptop to the cluster.\n"
+    msg += "  4. Import and call `remote_parallel_map`!\n\n"
+    msg += "Don't hesitate to E-Mail jake@burla.dev, thank you for using Burla!"
     spinner.write(msg)
 
     log_telemetry("Burla successfully deployed on Azure!", project_id=project_id)
@@ -753,8 +749,8 @@ def _deploy_head_vm(
     if existing:
         power_state = _az(
             f"vm get-instance-view --resource-group {RESOURCE_GROUP} "
-            f"--name {head_name} --query \"instanceView.statuses"
-            '[?starts_with(code, \'PowerState/\')].code | [0]" --output tsv',
+            f'--name {head_name} --query "instanceView.statuses'
+            "[?starts_with(code, 'PowerState/')].code | [0]\" --output tsv",
             parse_json=False,
             raise_error=False,
         )

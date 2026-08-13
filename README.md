@@ -63,6 +63,9 @@ account and region selected by your AWS CLI.
 pip install burla
 ```
 
+AWS uses the default VPC. Set `AWS_SUBNET_ID` and `AWS_SECURITY_GROUP_ID` only
+when you need to choose existing network resources.
+
 That's the whole setup. If you can boot a VM in your cloud account, you can use Burla: no service accounts, buckets, firewall rules, or IAM changes are needed.
 
 To use Google Cloud instead, select it once and Burla will use the active
@@ -81,6 +84,9 @@ burla config set cloud azure
 az account set --subscription <subscription-id>
 ```
 
+Azure uses an existing outbound-capable subnet. Set `AZURE_SUBNET_ID` only when
+you need to choose a specific one.
+
 ```python
 from burla import remote_parallel_map
 
@@ -92,9 +98,10 @@ results = remote_parallel_map(my_function, list(range(1000)))
 ```
 
 The first `remote_parallel_map` call starts Burla's cluster coordinator on your
-machine automatically. The VMs carry no credentials and shut themselves down
-when idle. Run `burla dashboard` to open that coordinator without restarting it.
-If none is running, the command starts one in the foreground and streams its
+machine automatically. VMs shut themselves down when idle; client-hosted Azure
+nodes receive a short-lived deletion token because guest poweroff does not stop
+Azure billing. Run `burla dashboard` to open that coordinator without restarting
+it. If none is running, the command starts one in the foreground and streams its
 logs until you press Ctrl-C.
 
 **Deploying for a team (optional):** `burla deploy` moves the coordinator and dashboard onto a small always-on VM so teammates can share one cluster. The job history and settings from your machine's coordinator move with it, so the deployed dashboard picks up where your local one left off. This is the only step that requires elevated permissions (service-account and IAM setup); the exact list is in the [CLI reference](https://docs.burla.dev/cli-reference). After deploying, teammates connect with `burla login`.

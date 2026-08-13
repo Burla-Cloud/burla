@@ -5,16 +5,19 @@ import tempfile
 
 from time import time
 
+import requests
 from fastapi import APIRouter, Depends, HTTPException, Request
 from concurrent.futures import ThreadPoolExecutor
 
 from main_service import (
+    IN_CLIENT_HOSTED_MODE,
     IN_LOCAL_DEV_MODE,
     CLOUD_PROVIDER,
     CLUSTER_ID_TOKEN,
     CLUSTER_NAME,
     LOCAL_DEV_CONFIG,
     LOCAL_DEV_NODE_PORT_BASE,
+    MAIN_SERVICE_URL_FOR_NODES,
     get_logger,
     get_add_background_task_function,
 )
@@ -22,6 +25,7 @@ from main_service import cluster_state, history
 from main_service.node import Container, Node
 from main_service.providers import get_provider
 from main_service.helpers import Logger, log_telemetry
+from main_service.transport_tls import CA_CERT_PATH, TLS_DIR
 
 router = APIRouter()
 MAX_GROW_CPUS = 2560
@@ -107,6 +111,33 @@ def _get_cluster_config():
     if IN_LOCAL_DEV_MODE:
         return LOCAL_DEV_CONFIG
     return history.get_cluster_config()
+
+
+def verify_nodes_can_reach_head():
+    """A client-hosted head is reachable by nodes only through the relay
+    tunnel, and a dead tunnel is invisible from in here: VMs boot, retry an
+    unreachable hostname until the boot timeout reaps them, and never manage
+    to report an error anywhere. One round trip through the relay before
+    booting anything turns that into an immediate, actionable error.
+
+    Callers on the event loop must run this in a thread: the verification
+    request arrives back through this same server."""
+    if not IN_CLIENT_HOSTED_MODE:
+        return
+    url = f"{MAIN_SERVICE_URL_FOR_NODES}/version"
+    headers = {"Authorization": f"Bearer {CLUSTER_ID_TOKEN}"}
+    try:
+        response = requests.get(url, headers=headers, verify=str(CA_CERT_PATH), timeout=5)
+        response.raise_for_status()
+    except requests.exceptions.RequestException as error:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"Nodes cannot reach this machine through the Burla relay "
+                f"(GET {url} failed: {error}). Refusing to boot VMs that could "
+                f"never connect. Tunnel log: {TLS_DIR.parent / 'frpc.log'}"
+            ),
+        )
 
 
 @router.post("/v1/local-dev/node-quantity/{quantity}")
@@ -244,6 +275,7 @@ def restart_cluster(
     logger: Logger = Depends(get_logger),
     add_background_task=Depends(get_add_background_task_function),
 ):
+    verify_nodes_can_reach_head()
     _mark_running_jobs_with_lifecycle_event(
         "cluster_restarted", "The cluster was restarted."
     )

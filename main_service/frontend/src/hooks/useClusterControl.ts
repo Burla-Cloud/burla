@@ -18,10 +18,17 @@ export const useClusterControl = () => {
 
             if (!response.ok) {
                 setClusterStatus(null);
+                let description = "Failed to start the cluster. Please try again.";
+                try {
+                    const body = await response.json();
+                    if (typeof body?.detail === "string") description = body.detail;
+                } catch {
+                    // non-JSON error body; keep the generic message
+                }
                 toast({
                     variant: "destructive",
                     title: "Error",
-                    description: "Failed to start the cluster. Please try again.",
+                    description,
                 });
                 return false;
             }

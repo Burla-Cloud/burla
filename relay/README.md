@@ -24,22 +24,14 @@ the relay because it runs outside the cloud network. Deployed AWS clusters use
 Burla's group-to-group security group rules. Dev clusters point at a test relay
 via `BURLA_RELAY_HOST` (see the makefile).
 
-## Deploy (Burla-operated)
+## Deployments
 
-One VM per region, in a Burla-owned project/account:
-
-```bash
-# GCP:
-./deploy_relay.sh --project burla-prod --region us-central1 \
-    --subdomain-host relay.burla.dev
-# AWS:
-./deploy_relay_aws.sh --profile burla-prod --region us-east-1 \
-    --subdomain-host relay.burla.dev
-```
-
-Then create the printed DNS records (`*.relay.burla.dev` and apex A records).
-Local stack for development: `docker compose up` (see `e2e/run_e2e.sh` for the
-end-to-end test).
+**The prod relay is live**: `relay.burla.dev` (EC2 `burla-relay` in the
+burla-prod AWS account, us-east-1, elastic IP 100.57.81.195, validating tokens
+against backend.burla.dev). DNS is two static A records in the burla.dev zone
+at Namecheap: `relay` and `*.relay`, both pointing at the elastic IP. The IP
+never changes across redeploys (the elastic IP is tagged `burla-relay` and
+reused), so DNS is one-time setup.
 
 **The test relay is live**: `relay.test-clusters.burla.dev` (EC2 `burla-relay`
 in the burla-test AWS account, elastic IP 35.174.220.176, validating tokens
@@ -48,22 +40,48 @@ against test.backend.burla.dev). Its DNS lives in the Route53 zone for
 needed. Dev clusters point at it via `BURLA_RELAY_HOST` (the makefile's
 remote-dev default).
 
+### Deploying / updating
+
+Every GitHub release re-runs `deploy_relay_aws.sh` against burla-prod (the
+`deploy-relay` job in `.github/workflows/pypi-on-release.yml`, authenticated
+via the GitHub OIDC role `burla-relay-deployer` in burla-prod). The script
+fingerprints everything the VM derives from this repo (auth plugin, frps.toml,
+frp version, backend URL, instance type) and tags the instance with it: a
+relay already running the current config is left alone, so the job is a no-op
+unless something under `relay/` changed. When it did change, a replacement VM
+boots first and the elastic IP moves only once the new frps accepts
+connections, so live tunnels see a seconds-long blip and frpc's retry loop
+reconnects them.
+
+Manual run (same script CI uses):
+
+```bash
+# AWS (prod):
+./deploy_relay_aws.sh --profile burla-prod --region us-east-1 \
+    --subdomain-host relay.burla.dev
+# GCP (no deployment exists; script predates the AWS one):
+./deploy_relay.sh --project burla-prod --region us-central1 \
+    --subdomain-host relay.burla.dev
+```
+
+Local stack for development: `docker compose up` (see `e2e/run_e2e.sh` for the
+end-to-end test).
+
 ## Remaining integration points outside this repo
 
-1. **DNS**: wildcard `*.relay.burla.dev` A record per relay IP.
-2. **Backend**: `POST /v1/clusters/{project_id}/dashboard` now receives an
+1. **Backend**: `POST /v1/clusters/{project_id}/dashboard` now receives an
    optional `"dashboard_url"` field in relay mode; store and return it from
    `GET .../dashboard_url` so `burla login` sends clients to the relay URL.
    (Token validation needs nothing new: the plugin authenticates cluster
    tokens with `GET /v1/clusters/{project_id}/dashboard_url` - a 409
    "registered but no dashboard" response must count as valid, since
    client-hosted clusters never register a dashboard.)
-3. **Let's Encrypt rate limits**: each deployed cluster head requests a cert
+2. **Let's Encrypt rate limits**: each deployed cluster head requests a cert
    for `head--<project-id>.relay.burla.dev`. burla.dev is one registered domain, so
    the default 50 certs/week cap applies; request a rate-limit increase before
    this exceeds ~40 new clusters/week. (Client-hosted heads use cluster-CA
    certs, not ACME, so they don't count against this.)
-4. **Backend, for multi-machine token recovery**: the cluster token now lives
+3. **Backend, for multi-machine token recovery**: the cluster token now lives
    in Burla's local state dir instead of Secret Manager/SSM. A user's second
    machine gets credentials via `burla login`, but recovering the *cluster*
    token (e.g. laptop wiped) currently requires support. A

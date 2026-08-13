@@ -63,7 +63,9 @@ def get_cloud() -> str:
         return override.lower()
     if SETTINGS_PATH.exists():
         return json.loads(SETTINGS_PATH.read_text())["cloud"]
-    return "aws"
+    from burla._cloud_select import choose_cloud
+
+    return choose_cloud()
 
 
 def set_config(key: str, value: str) -> str:

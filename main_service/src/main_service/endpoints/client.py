@@ -50,6 +50,7 @@ from main_service.endpoints.cluster_lifecycle import (
     MAX_GROW_CPUS,
     _get_cluster_config,
     _start_nodes,
+    verify_nodes_can_reach_head,
 )
 
 router = APIRouter()
@@ -428,6 +429,10 @@ async def start_job(
     # --- grow, if requested and short on capacity ---
     booting_nodes: list[dict] = []
     if grow:
+        if min(n_inputs, max_parallelism) > target_parallelism:
+            # In a thread because the verification request arrives back
+            # through this same event loop.
+            await asyncio.to_thread(verify_nodes_can_reach_head)
         booting_nodes = _grow_if_needed(
             target_parallelism=target_parallelism,
             n_inputs=n_inputs,

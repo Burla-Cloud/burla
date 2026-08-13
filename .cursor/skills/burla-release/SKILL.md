@@ -45,6 +45,12 @@ refuses to publish unless:
 Then it builds the frontend + wheel and `uv publish`es to PyPI. Nothing else
 gates a release.
 
+The same workflow then redeploys the prod relay (`deploy-relay` job,
+`relay/deploy_relay_aws.sh` against burla-prod via the `burla-relay-deployer`
+OIDC role). The script fingerprints the relay config and no-ops unless
+something under `relay/` changed, so this needs no per-release attention
+beyond checking the job passed.
+
 > Hard-break caveat: the CI requires `MIN_COMPATIBLE_CLIENT_VERSION == tag`, so
 > every release currently rejects all older clients. `bump_version.py` follows
 > this by default. To ship a non-breaking release you must first loosen that CI

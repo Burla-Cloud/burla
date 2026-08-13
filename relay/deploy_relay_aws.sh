@@ -1,12 +1,18 @@
 #!/bin/bash
-# Deploys one Burla relay VM (frps + auth plugin) to an AWS account.
-# Run once per region; point *.<subdomain-host> and <subdomain-host> at the
-# printed elastic IP.
+# Deploys (or updates) one Burla relay VM (frps + auth plugin) in an AWS
+# account. Safe to run unconditionally (release CI does): the relay config is
+# fingerprinted, and a relay already running the current config is left alone.
+# When the config changed, a replacement VM is booted first and the elastic IP
+# only moves once the new frps is accepting connections, so tunnels see a
+# seconds-long blip rather than minutes of downtime. Point *.<subdomain-host>
+# and <subdomain-host> at the printed elastic IP (one-time DNS setup).
 #
 # Usage:
-#   ./deploy_relay_aws.sh --profile burla-test --region us-east-1 \
-#       --subdomain-host test.relay.burla.dev \
-#       [--backend-url https://test.backend.burla.dev] [--instance-type t3.small]
+#   ./deploy_relay_aws.sh --region us-east-1 --subdomain-host relay.burla.dev \
+#       [--profile burla-prod] [--backend-url https://backend.burla.dev] \
+#       [--instance-type t3.small]
+#
+# Without --profile the default AWS credential chain is used (CI role).
 set -euo pipefail
 
 PROFILE=""
@@ -26,23 +32,13 @@ while [[ $# -gt 0 ]]; do
     *) echo "Unknown argument: $1" >&2; exit 1 ;;
     esac
 done
-[[ -n "$PROFILE" && -n "$SUBDOMAIN_HOST" ]] || {
-    echo "Required: --profile, --subdomain-host" >&2
+[[ -n "$SUBDOMAIN_HOST" ]] || {
+    echo "Required: --subdomain-host" >&2
     exit 1
 }
 
-AWS() { aws --profile "$PROFILE" --region "$REGION" "$@"; }
+AWS() { aws ${PROFILE:+--profile "$PROFILE"} --region "$REGION" "$@"; }
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-EXISTING=$(AWS ec2 describe-instances \
-    --filters "Name=tag:Name,Values=burla-relay" \
-    "Name=instance-state-name,Values=pending,running,stopping,stopped" \
-    --query "Reservations[0].Instances[0].InstanceId" --output text)
-if [[ "$EXISTING" != "None" && -n "$EXISTING" ]]; then
-    echo "A burla-relay instance already exists: $EXISTING" >&2
-    echo "Terminate it first to redeploy (user-data only runs on first boot)." >&2
-    exit 1
-fi
 
 SG_ID=$(AWS ec2 describe-security-groups \
     --filters "Name=group-name,Values=burla-relay" \
@@ -108,18 +104,66 @@ docker run -d --restart=always --network=host --name=burla-relay-frps \\
 FOOTER
 } > "$USER_DATA"
 
+# The user-data embeds everything the VM's behavior derives from (plugin code,
+# frps config, frp version, backend URL, subdomain host), so its hash + the
+# instance type decide whether the running relay is already up to date. The
+# AMI is deliberately not included: the "current Ubuntu" alias changes every
+# few weeks and would churn the relay for nothing (unattended-upgrades patches
+# the running VM).
+FINGERPRINT=$(cat "$USER_DATA" <(echo "$INSTANCE_TYPE") \
+    | openssl dgst -sha256 -r | cut -c1-16)
+
+OLD_INSTANCE=$(AWS ec2 describe-instances \
+    --filters "Name=tag:Name,Values=burla-relay" \
+    "Name=instance-state-name,Values=pending,running,stopping,stopped" \
+    --query "Reservations[0].Instances[0].InstanceId" --output text)
+[[ "$OLD_INSTANCE" == "None" ]] && OLD_INSTANCE=""
+if [[ -n "$OLD_INSTANCE" ]]; then
+    OLD_FINGERPRINT=$(AWS ec2 describe-tags \
+        --filters "Name=resource-id,Values=$OLD_INSTANCE" \
+        "Name=key,Values=burla-relay-fingerprint" \
+        --query "Tags[0].Value" --output text)
+    if [[ "$OLD_FINGERPRINT" == "$FINGERPRINT" ]]; then
+        echo "Relay $OLD_INSTANCE already runs this config (fingerprint $FINGERPRINT)."
+        exit 0
+    fi
+    echo "Relay $OLD_INSTANCE runs old config; replacing it."
+fi
+
 INSTANCE_ID=$(AWS ec2 run-instances \
     --image-id "$AMI_ID" \
     --instance-type "$INSTANCE_TYPE" \
     --security-group-ids "$SG_ID" \
     --user-data "file://$USER_DATA" \
-    --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=burla-relay}]" \
+    --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=burla-relay},{Key=burla-relay-fingerprint,Value=$FINGERPRINT}]" \
     --query "Instances[0].InstanceId" --output text)
 
 AWS ec2 wait instance-exists --instance-ids "$INSTANCE_ID" 2>/dev/null || true
 AWS ec2 wait instance-running --instance-ids "$INSTANCE_ID"
+
+# Wait for frps to accept connections on the new VM's temporary public IP
+# before pointing the elastic IP (i.e. live tunnels) at it.
+BOOT_IP=$(AWS ec2 describe-instances --instance-ids "$INSTANCE_ID" \
+    --query "Reservations[0].Instances[0].PublicIpAddress" --output text)
+echo "Waiting for frps on $BOOT_IP:7000 (docker install takes a few minutes) ..."
+for attempt in $(seq 1 120); do
+    if python3 -c "import socket; socket.create_connection(('$BOOT_IP', 7000), 3)" 2>/dev/null; then
+        break
+    fi
+    if [[ "$attempt" == 120 ]]; then
+        echo "frps never came up on $INSTANCE_ID; leaving the old relay in place." >&2
+        exit 1
+    fi
+    sleep 5
+done
+
 AWS ec2 associate-address --instance-id "$INSTANCE_ID" \
     --allocation-id "$ALLOCATION_ID" --allow-reassociation >/dev/null
+
+if [[ -n "$OLD_INSTANCE" ]]; then
+    AWS ec2 terminate-instances --instance-ids "$OLD_INSTANCE" >/dev/null
+    echo "Terminated old relay $OLD_INSTANCE."
+fi
 
 echo ""
 echo "Relay instance $INSTANCE_ID deployed. Point DNS at the elastic IP:"

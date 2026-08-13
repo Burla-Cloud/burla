@@ -71,3 +71,23 @@ jobs:
 
       - name: Publish to PyPI
         run: uv publish --directory ./client --check-url https://pypi.org/simple/burla/ --token "${{ secrets.PYPI_TOKEN }}"
+
+  # The prod relay's entire config (frps version + config, auth plugin,
+  # backend URL) ships from this repo, so every release re-runs the deploy
+  # script against burla-prod. The script fingerprints that config and no-ops
+  # when the running relay already matches, so this only replaces the relay VM
+  # when something under relay/ actually changed.
+  deploy-relay:
+    needs: release
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::018789813546:role/burla-relay-deployer
+          aws-region: us-east-1
+      - run: ./relay/deploy_relay_aws.sh --region us-east-1 --subdomain-host relay.burla.dev

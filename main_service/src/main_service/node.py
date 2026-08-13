@@ -502,11 +502,20 @@ class Node:
         openssl req -new -key "$TLS_DIR/node.key" -subj "/CN=$NODE_NAME" \\
             -out "$TLS_DIR/node.csr"
         csr_payload=$(jq -n --rawfile csr "$TLS_DIR/node.csr" '{{"csr":$csr}}')
+        # Bounded: an unreachable head (dead relay tunnel, bad DNS) must fail
+        # loudly in the serial console instead of retrying until the head's
+        # boot timeout reaps this VM with no visible cause anywhere.
+        cert_attempts=0
         until cert_response=$(curl --fail --silent --show-error \\
             --cacert "$TLS_DIR/ca.pem" \\
             -X POST "$HEAD_URL/v1/nodes/$NODE_NAME/certificate" \\
             -H "$AUTH_HEADER" -H "Content-Type: application/json" \\
             -d "$csr_payload"); do
+            cert_attempts=$((cert_attempts + 1))
+            if [ "$cert_attempts" -ge 120 ]; then
+                echo "Giving up: the head at $HEAD_URL was unreachable for $cert_attempts attempts."
+                false
+            fi
             sleep 1
         done
         echo "$cert_response" | jq -r .certificate > "$TLS_DIR/node.pem"

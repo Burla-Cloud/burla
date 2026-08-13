@@ -157,3 +157,24 @@ under one second.
 
 Verify: run the job on 1,000 CPUs and measure from calling `remote_parallel_map` until it
 returns. The elapsed time is under one second.
+
+## R17. AWS first run
+
+With an AWS identity that can describe, launch, tag, and terminate EC2 instances but
+cannot create security groups or machine images, `burla dashboard` opens locally and a
+job runs on AWS without creating either resource.
+
+Verify: clear Burla's local state, assume a role that denies security-group and AMI
+creation, run `burla dashboard`, then run a job. The job returns correctly and the
+account has no Burla-owned security groups or AMIs.
+
+## R18. Azure first run
+
+With Azure Virtual Machine Contributor access to an existing outbound-capable subnet,
+`burla dashboard` opens locally without creating cloud resources, and a job runs without
+creating networks, images, identities, roles, or provider registrations. If the local
+head disappears, every node stops billing without outside intervention.
+
+Verify: clear Burla's local state, use an identity limited to Virtual Machine Contributor,
+run `burla dashboard`, then run a job. Kill the local head while a node is running and
+confirm the node is deleted before its short-lived cloud credential expires.

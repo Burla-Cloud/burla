@@ -1,35 +1,37 @@
-import sys
-import json
 import base64
-import requests
+import json
+import sys
 import textwrap
 import traceback
-from dataclasses import dataclass, asdict
-from requests.exceptions import ConnectionError, ConnectTimeout, HTTPError, Timeout
+from dataclasses import asdict, dataclass
 from time import sleep, time
-from uuid import uuid4
 from typing import Optional
+from uuid import uuid4
+
+import requests
+from requests.exceptions import ConnectionError, ConnectTimeout, HTTPError, Timeout
 
 from main_service import (
-    PROJECT_ID,
     BURLA_BACKEND_URL,
-    IN_LOCAL_DEV_MODE,
-    IN_CLIENT_HOSTED_MODE,
-    CURRENT_BURLA_VERSION,
-    NODE_SOURCE_REF,
-    MAIN_SERVICE_URL_FOR_NODES,
-    CLUSTER_ID_TOKEN,
-    SELF_DELETE_GUEST_ATTRIBUTE,
     BURLA_RELAY_SERVER_ADDR,
     BURLA_RELAY_SERVER_PORT,
+    CLOUD_PROVIDER,
+    CLUSTER_ID_TOKEN,
+    CURRENT_BURLA_VERSION,
     FRP_VERSION,
+    IN_CLIENT_HOSTED_MODE,
+    IN_LOCAL_DEV_MODE,
+    MAIN_SERVICE_URL_FOR_NODES,
+    NODE_SOURCE_REF,
+    PROJECT_ID,
+    SELF_DELETE_GUEST_ATTRIBUTE,
+    cluster_state,
     relay_fqdn,
 )
-from main_service import cluster_state
 from main_service.helpers import Logger, format_traceback
-from main_service.providers import get_provider, InstanceDeletedMidBoot
+from main_service.providers import InstanceDeletedMidBoot, get_provider
 from main_service.providers.catalog import machine_spec
-from main_service.transport_tls import CA_CERT_PATH, cluster_ca_pem
+from main_service.transport_tls import CA_CERT_PATH, cluster_ca_pem, node_auth_token
 
 
 @dataclass
@@ -185,10 +187,13 @@ class Node:
                         needs_cloud_credentials=self._filesystem_enabled(),
                     )
                 )
-                # Clients reach the node through the relay on 443; nodes and
-                # the head still talk to each other directly over the VPC.
+                # Client-hosted AWS and Azure peers use the relay so an
+                # existing security group needs no inbound rule.
                 self.host = f"https://{relay_fqdn(self.instance_name)}"
-                self.peer_host = f"https://{self.private_ip}:{self.port}"
+                if IN_CLIENT_HOSTED_MODE and CLOUD_PROVIDER in ("aws", "azure"):
+                    self.peer_host = self.host
+                else:
+                    self.peer_host = f"https://{self.private_ip}:{self.port}"
 
             # The node polls its state-push responses for `host` and won't mark
             # itself READY until it appears.
@@ -232,7 +237,6 @@ class Node:
         return self
 
     def delete(self):
-        # FAILED nodes keep their status so the doc remains visible for debugging.
         cluster_state.update_node(
             self.instance_name, {"status": "DELETED", "ended_at": time()}
         )
@@ -296,6 +300,121 @@ class Node:
                 self.sync_bucket_name
             )
 
+        azure_delete_lease_script = ""
+        if IN_CLIENT_HOSTED_MODE and CLOUD_PROVIDER == "azure":
+            azure_delete_lease_script = """
+        cat > /usr/local/bin/burla-azure-delete-lease <<'PY'
+        #!/usr/bin/python3
+        import json
+        import os
+        import ssl
+        import time
+        import urllib.error
+        import urllib.request
+        from pathlib import Path
+
+        lease_path = Path("/etc/burla/azure-delete-lease.json")
+        head_url = os.environ["BURLA_HEAD_URL"]
+        auth_header = os.environ["BURLA_AUTH_HEADER"]
+        node_name = os.environ["BURLA_NODE_NAME"]
+        node_token = os.environ["BURLA_NODE_AUTH_TOKEN"]
+        head_context = ssl.create_default_context(cafile="/etc/burla/tls/ca.pem")
+
+        def install_lease(lease):
+            temporary_path = lease_path.with_suffix(".daemon.tmp")
+            descriptor = os.open(
+                temporary_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600
+            )
+            os.fchmod(descriptor, 0o600)
+            with os.fdopen(descriptor, "w") as lease_file:
+                json.dump(lease, lease_file)
+            os.replace(temporary_path, lease_path)
+
+        def refresh_lease(lease):
+            body = json.dumps(
+                {"delete_lease_expires_at": lease["expires_at"]}
+            ).encode()
+            request = urllib.request.Request(
+                f"{head_url}/v1/nodes/{node_name}/state",
+                data=body,
+                headers={
+                    "Authorization": f"Bearer {auth_header}",
+                    "Content-Type": "application/json",
+                    "X-Burla-Node-Token": node_token,
+                },
+                method="PUT",
+            )
+            try:
+                with urllib.request.urlopen(
+                    request, timeout=10, context=head_context
+                ) as response:
+                    refreshed = json.load(response).get("delete_lease")
+                if refreshed and refreshed["expires_at"] > lease["expires_at"]:
+                    install_lease(refreshed)
+                    return True, True
+                return False, True
+            except urllib.error.HTTPError:
+                return False, True
+            except urllib.error.URLError:
+                return False, False
+
+        while True:
+            if not lease_path.exists():
+                time.sleep(1)
+                continue
+            lease = json.loads(lease_path.read_text())
+            delay = lease["delete_at"] - time.time()
+            if delay > 0:
+                time.sleep(min(delay, 15))
+                continue
+            refreshed, head_reachable = refresh_lease(lease)
+            if refreshed:
+                continue
+            if head_reachable and time.time() < lease["expires_at"] - 30:
+                time.sleep(5)
+                continue
+            url = (
+                f"https://management.azure.com{lease['vm_id']}"
+                "?api-version=2024-07-01&forceDeletion=true"
+            )
+            request = urllib.request.Request(
+                url,
+                headers={"Authorization": f"Bearer {lease['access_token']}"},
+                method="DELETE",
+            )
+            try:
+                with urllib.request.urlopen(request, timeout=30) as response:
+                    response.read()
+                time.sleep(30)
+            except urllib.error.HTTPError as error:
+                if error.code == 404:
+                    raise SystemExit(0)
+                time.sleep(5)
+            except urllib.error.URLError:
+                time.sleep(5)
+        PY
+        chmod 700 /usr/local/bin/burla-azure-delete-lease
+        cat > /etc/systemd/system/burla-azure-delete-lease.service <<EOF
+        [Unit]
+        After=network-online.target
+        Wants=network-online.target
+
+        [Service]
+        Environment="BURLA_HEAD_URL=$HEAD_URL"
+        Environment="BURLA_AUTH_HEADER=${AUTH_HEADER#Authorization: Bearer }"
+        Environment="BURLA_NODE_NAME=$NODE_NAME"
+        Environment="BURLA_NODE_AUTH_TOKEN=$NODE_AUTH_TOKEN"
+        ExecStart=/usr/bin/python3 /usr/local/bin/burla-azure-delete-lease
+        Restart=on-failure
+        RestartSec=5
+
+        [Install]
+        WantedBy=multi-user.target
+        EOF
+        systemctl daemon-reload
+        systemctl enable --now burla-azure-delete-lease
+        """
+
         subdomain = f"{self.instance_name}--{PROJECT_ID}"
         frp_dir = f"frp_{FRP_VERSION}_linux_amd64"
         frp_url = (
@@ -347,10 +466,12 @@ class Node:
         HEAD_URL="{MAIN_SERVICE_URL_FOR_NODES}"
         AUTH_HEADER="Authorization: Bearer {CLUSTER_ID_TOKEN}"
         NODE_NAME="{self.instance_name}"
+        NODE_AUTH_TOKEN="{node_auth_token(self.instance_name)}"
         TLS_DIR="/etc/burla/tls"
         mkdir -p "$TLS_DIR" /etc/burla/caddy
         echo "{ca_pem_b64}" | base64 -d > "$TLS_DIR/ca.pem"
         cat /etc/ssl/certs/ca-certificates.crt "$TLS_DIR/ca.pem" > "$TLS_DIR/ca-bundle.pem"
+        {azure_delete_lease_script}
 
         report_log() {{
             payload=$(jq -n --arg msg "$1" --arg ts "$(date +%s)" \\
@@ -398,7 +519,7 @@ class Node:
         mkdir -p /workspace/shared
         {mount_script}
 
-        # make uv work, this is an oopsie from when building the disk image:
+        # uv is installed under root's user-level paths in the node images.
         export PATH="/root/.cargo/bin:$PATH"
         export PATH="/root/.local/bin:$PATH"
 
@@ -499,6 +620,7 @@ class Node:
             --setenv=RESERVED_FOR_JOB="$RESERVED_FOR_JOB" \\
             --setenv=MAIN_SERVICE_URL="$MAIN_SERVICE_URL" \\
             --setenv=CLUSTER_ID_TOKEN="$CLUSTER_ID_TOKEN" \\
+            --setenv=BURLA_NODE_AUTH_TOKEN="$NODE_AUTH_TOKEN" \\
             --setenv=BURLA_BACKEND_URL="$BURLA_BACKEND_URL" \\
             --setenv=CLUSTER_CA_PATH="$TLS_DIR/ca.pem" \\
             --setenv=NODE_TLS_KEY_PATH="$TLS_DIR/node.key" \\

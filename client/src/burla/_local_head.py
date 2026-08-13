@@ -6,9 +6,10 @@ as a detached subprocess using the code vendored inside this package. The
 explicit `burla dashboard` command reuses that service when healthy or runs it
 in the foreground. Both modes also start an frpc tunnel so node VMs can reach
 the head through the relay. Node VMs are booted with the user's own cloud
-credentials and carry none of their own, so the only permissions needed are
-"can boot VMs". `burla deploy` remains the upgrade path to an always-on, shared
-head VM.
+credentials. Azure nodes receive one short-lived delete lease because guest
+poweroff does not stop Azure compute billing. The only cloud permission needed
+is "can boot VMs". `burla deploy` remains the upgrade path to an always-on,
+shared head VM.
 """
 
 import configparser
@@ -238,6 +239,34 @@ def _ownership_payload(cloud: str, region: str | None) -> dict:
     return _gcp_ownership_payload()
 
 
+def _azure_resource_group() -> str | None:
+    configured_group = os.environ.get("AZURE_RESOURCE_GROUP")
+    if configured_group:
+        return configured_group
+    configured_subnet = os.environ.get("AZURE_SUBNET_ID")
+    if configured_subnet:
+        parts = configured_subnet.strip("/").split("/")
+        return parts[parts.index("resourceGroups") + 1]
+
+    default_group = subprocess.run(
+        [
+            "az",
+            "config",
+            "get",
+            "defaults.group",
+            "--query",
+            "value",
+            "--output",
+            "tsv",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if default_group.returncode == 0 and default_group.stdout.strip():
+        return default_group.stdout.strip()
+    return None
+
+
 # ------------------------------------------------------------------ token
 
 
@@ -254,7 +283,9 @@ def save_cluster_token(project_id: str, token: str):
     token_path.chmod(0o600)
 
 
-def get_or_register_cluster_token(cloud: str, project_id: str, aws_region: str | None) -> str:
+def get_or_register_cluster_token(
+    cloud: str, project_id: str, aws_region: str | None
+) -> str:
     token = read_saved_cluster_token(project_id)
     if token:
         return token
@@ -276,10 +307,21 @@ def get_or_register_cluster_token(cloud: str, project_id: str, aws_region: str |
     if response.status_code in (403, 409):
         command = None
         if cloud == "gcp":
-            secret = os.environ.get("BURLA_CLUSTER_TOKEN_SECRET", "burla-cluster-id-token")
-            command = ["gcloud", "secrets", "versions", "access", "latest", f"--secret={secret}"]
+            secret = os.environ.get(
+                "BURLA_CLUSTER_TOKEN_SECRET", "burla-cluster-id-token"
+            )
+            command = [
+                "gcloud",
+                "secrets",
+                "versions",
+                "access",
+                "latest",
+                f"--secret={secret}",
+            ]
         elif cloud == "aws":
-            parameter = os.environ.get("BURLA_CLUSTER_TOKEN_PARAMETER", "/burla/cluster-id-token")
+            parameter = os.environ.get(
+                "BURLA_CLUSTER_TOKEN_PARAMETER", "/burla/cluster-id-token"
+            )
             command = [
                 *("aws", "ssm", "get-parameter", "--region", aws_region),
                 *("--name", parameter, "--with-decryption"),
@@ -385,7 +427,9 @@ def _frpc_download_url() -> tuple[str, str]:
     machine = platform.machine().lower()
     arch = "arm64" if machine in ("arm64", "aarch64") else "amd64"
     system = platform.system().lower()
-    operating_system = {"darwin": "darwin", "linux": "linux", "windows": "windows"}[system]
+    operating_system = {"darwin": "darwin", "linux": "linux", "windows": "windows"}[
+        system
+    ]
     extension = "zip" if operating_system == "windows" else "tar.gz"
     directory = f"frp_{FRP_VERSION}_{operating_system}_{arch}"
     url = (
@@ -509,55 +553,6 @@ def _head_matches(
         return False
 
 
-def _prepare_aws(project_id: str, aws_region: str):
-    """First-run AWS prep a laptop head needs before booting nodes: internal
-    security groups + the node AMI. Both are plain EC2 operations."""
-    from yaspin import yaspin
-
-    from burla._deploy_aws import _create_security_groups, _ensure_node_ami
-
-    marker = _state_dir(project_id) / f"aws_prepped_{__version__}"
-    if marker.exists():
-        return
-    with yaspin() as spinner:
-        _create_security_groups(spinner, aws_region)
-        _ensure_node_ami(spinner, aws_region, node_profile=None)
-    marker.write_text("done")
-
-
-def _prepare_azure(project_id: str, region: str):
-    """First-run Azure prep a laptop head needs before booting nodes:
-    resource providers, the burla resource group + network, the burla-node
-    identity (nodes must be able to delete themselves on Azure), and the node
-    image. Creating the identity's role needs Owner on the subscription once;
-    afterwards Contributor is enough to run clusters."""
-    from yaspin import yaspin
-
-    from burla._deploy_azure import (
-        ensure_network,
-        ensure_node_identity,
-        ensure_node_image,
-        ensure_resource_group,
-        register_resource_providers,
-    )
-
-    marker = _state_dir(project_id) / f"azure_prepped_{__version__}"
-    if marker.exists():
-        return
-    subscription_id = project_id.removeprefix("azure-")
-    with yaspin() as spinner:
-        spinner.text = "Preparing Azure subscription ... "
-        spinner.start()
-        register_resource_providers()
-        ensure_resource_group(region)
-        ensure_network(region)
-        ensure_node_identity(subscription_id)
-        spinner.text = "Preparing Azure subscription ... Done."
-        spinner.ok("✓")
-        ensure_node_image(spinner, region)
-    marker.write_text("done")
-
-
 def ensure_local_head() -> str:
     """Starts (or reuses) a detached main_service and returns its URL."""
     return _run_local_head(detached=True)
@@ -580,8 +575,10 @@ def running_head_url() -> str | None:
     head_state = json.loads(head_state_path.read_text())
     url = head_state.get("url")
     saved_token = read_saved_cluster_token(project_id)
-    if url and saved_token and _head_matches(
-        url, project_id, saved_token, expected_namespace="default"
+    if (
+        url
+        and saved_token
+        and _head_matches(url, project_id, saved_token, expected_namespace="default")
     ):
         if not _pid_alive(head_state.get("frpc_pid")):
             _respawn_frpc(state_dir, head_state)
@@ -826,8 +823,12 @@ def _run_local_head(
 
     url = head_state.get("url")
     saved_token = read_saved_cluster_token(project_id)
-    if url and saved_token and _head_matches(
-        url, project_id, saved_token, expected_namespace=head_namespace
+    if (
+        url
+        and saved_token
+        and _head_matches(
+            url, project_id, saved_token, expected_namespace=head_namespace
+        )
     ):
         if not _pid_alive(head_state.get("frpc_pid")):
             _respawn_frpc(state_dir, head_state)
@@ -837,10 +838,6 @@ def _run_local_head(
 
     cluster_token = get_or_register_cluster_token(cloud, project_id, aws_region)
     ensure_user_authorized(cloud, project_id, cluster_token)
-    if cloud == "aws":
-        _prepare_aws(project_id, aws_region)
-    if cloud == "azure":
-        _prepare_azure(project_id, aws_region)
 
     from burla import CONFIG_PATH
 
@@ -887,12 +884,16 @@ def _run_local_head(
     if cloud == "azure":
         environment["AZURE_SUBSCRIPTION_ID"] = project_id.removeprefix("azure-")
         environment["AZURE_REGION"] = aws_region
-        environment["AZURE_RESOURCE_GROUP"] = "burla"
+        resource_group = _azure_resource_group()
+        if resource_group:
+            environment["AZURE_RESOURCE_GROUP"] = resource_group
     extra_pythonpath = _main_service_pythonpath()
     if extra_pythonpath:
         existing = environment.get("PYTHONPATH")
         environment["PYTHONPATH"] = (
-            f"{extra_pythonpath}{os.pathsep}{existing}" if existing else extra_pythonpath
+            f"{extra_pythonpath}{os.pathsep}{existing}"
+            if existing
+            else extra_pythonpath
         )
 
     head_process = _spawn_head(
@@ -939,9 +940,7 @@ def _run_local_head(
             state_dir,
             detached=False,
         )
-        frpc_process = _respawn_frpc(
-            state_dir, head_state, cluster_token=cluster_token
-        )
+        frpc_process = _respawn_frpc(state_dir, head_state, cluster_token=cluster_token)
         if on_ready:
             on_ready(url, True)
         return_code = head_process.wait()
@@ -1029,7 +1028,9 @@ def run_local_dev_head() -> None:
     if extra_pythonpath:
         existing = environment.get("PYTHONPATH")
         environment["PYTHONPATH"] = (
-            f"{extra_pythonpath}{os.pathsep}{existing}" if existing else extra_pythonpath
+            f"{extra_pythonpath}{os.pathsep}{existing}"
+            if existing
+            else extra_pythonpath
         )
 
     head_port = os.environ.get("PORT", str(PREFERRED_HEAD_PORT))

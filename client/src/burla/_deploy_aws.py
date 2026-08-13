@@ -2,11 +2,10 @@
 `burla deploy --cloud=aws`.
 
 Mirrors the GCP deploy: IAM roles, security groups, an S3 shared-workspace
-bucket, a node AMI (the EC2 twin of the GCP disk image), and one small
-always-on head EC2 instance running main_service.
+bucket, and one small always-on head EC2 instance running main_service.
+Node VMs use Burla's public regional AMIs.
 """
 
-import hashlib
 import json
 import os
 import shutil
@@ -19,14 +18,17 @@ from urllib.parse import urlparse
 import requests
 
 from burla import _BURLA_BACKEND_URL, _BURLA_NODE_SOURCE_REF, __version__
-from burla._helpers import run_command, VerboseCalledProcessError
+from burla._aws_amis import node_ami_hash as _node_ami_hash
+from burla._aws_amis import node_ami_name_prefix, public_node_ami_id
+from burla._aws_amis import node_ami_setup_script as _node_ami_setup_script
 from burla._deploy import (
+    FRP_VERSION,
     RELAY_HOST,
     RELAY_SERVER_ADDR,
     RELAY_SERVER_PORT,
-    FRP_VERSION,
     head_install_spec,
 )
+from burla._helpers import VerboseCalledProcessError, run_command
 from burla._reporting import log_telemetry
 
 HEAD_INSTANCE_TYPE = "t3.small"
@@ -75,7 +77,7 @@ def _head_setup_commands(
             f'-e BURLA_RELAY_SERVER_PORT="{RELAY_SERVER_PORT}" '
             f'-e BURLA_NODE_SOURCE_REF="{node_source_ref}" '
             "python:3.13 "
-            f"sh -c 'pip install --no-cache-dir \"{install_spec}\" "
+            f'sh -c \'pip install --no-cache-dir "{install_spec}" '
             "&& exec python -m uvicorn main_service:app "
             "--host 127.0.0.1 --port 5001 --workers 1 --timeout-keep-alive 60'"
         ),
@@ -129,100 +131,6 @@ def _head_setup_commands(
     ]
 
 
-_NODE_AMI_SETUP_SCRIPT = """#!/bin/bash
-set -euxo pipefail
-export DEBIAN_FRONTEND=noninteractive
-apt-get update
-apt-get install -y docker.io git jq curl psmisc build-essential
-systemctl enable docker
-
-# mountpoint-s3 (mounts the shared-workspace bucket at /workspace/shared)
-curl -fsSL https://s3.amazonaws.com/mountpoint-s3-release/latest/x86_64/mount-s3.deb -o /tmp/mount-s3.deb
-apt-get install -y /tmp/mount-s3.deb
-
-# uv + python 3.13 (mirrors the GCP disk image)
-curl -LsSf https://astral.sh/uv/install.sh | sh
-export PATH="/root/.local/bin:$PATH"
-uv python install 3.13
-ln -sf "$(uv python find 3.13)/python" /usr/local/bin/python3 || true
-ln -sf /usr/local/bin/python3 /usr/local/bin/python || true
-
-# node_service repo + pre-warmed venv so node boots are fast
-mkdir -p /opt && cd /opt
-git clone --depth 1 --branch main https://github.com/Burla-Cloud/burla.git --no-checkout
-cd burla
-git sparse-checkout init --cone
-git sparse-checkout set node_service client
-git checkout main
-uv venv /opt/burla/.venv --python 3.13 --seed
-echo 'export UV_PROJECT_ENVIRONMENT=/opt/burla/.venv' >> /root/.bashrc
-UV_PROJECT_ENVIRONMENT=/opt/burla/.venv uv pip install ./node_service cloudpickle tblib
-
-# EC2 has no shutdown-script metadata like GCE; this unit tells the
-# node_service the VM is going away (spot interruption, manual stop).
-cat > /etc/systemd/system/burla-shutdown-hook.service <<'EOF'
-[Unit]
-Description=Tell burla node_service this VM is shutting down
-DefaultDependencies=no
-Before=shutdown.target
-
-[Service]
-Type=oneshot
-ExecStart=/usr/bin/curl -s -X POST http://localhost:8081/shutdown
-TimeoutStartSec=10
-
-[Install]
-WantedBy=shutdown.target
-EOF
-systemctl enable burla-shutdown-hook
-"""
-
-# Driver stack comes from Ubuntu's archive, all built from one SRU cycle so
-# the kernel modules (precompiled + signed for this exact aws kernel, no
-# DKMS, so no GPU is needed to build this image), userspace libs, and fabric
-# manager stay version-locked. FM matters: NVSwitch machines (p4d.*,
-# p5.48xlarge) refuse to run CUDA unless a fabric manager exactly matching
-# the driver is running. NVIDIA's own CUDA repo can't serve this: it dropped
-# classic fabricmanager packaging after driver branch 575 (580+ only ships
-# Blackwell's nvlink5). GL/X libs are skipped (headless), decode/encode are
-# kept so containers requesting the `video` capability still start. The
-# toolkit (not in Ubuntu's archive) registers the `nvidia` docker runtime
-# the workers' host_config asks for.
-_GPU_AMI_EXTRA_SETUP = """
-apt-get install -y \
-  linux-modules-nvidia-580-server-$(uname -r) \
-  nvidia-headless-no-dkms-580-server \
-  nvidia-utils-580-server \
-  libnvidia-decode-580-server \
-  libnvidia-encode-580-server \
-  nvidia-fabricmanager-580
-curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
-curl -fsSL https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' > /etc/apt/sources.list.d/nvidia-container-toolkit.list
-apt-get update
-apt-get install -y nvidia-container-toolkit
-nvidia-ctk runtime configure --runtime=docker
-systemctl enable nvidia-fabricmanager
-"""
-
-_AMI_SETUP_FINISH = """
-# Powering off signals the installer that setup is complete.
-shutdown -h now
-"""
-
-
-def _node_ami_setup_script(gpu: bool) -> str:
-    gpu_part = _GPU_AMI_EXTRA_SETUP if gpu else ""
-    return _NODE_AMI_SETUP_SCRIPT + gpu_part + _AMI_SETUP_FINISH
-
-
-# The AMIs only bake docker, uv, a warm node_service venv (+ NVIDIA drivers for
-# the gpu variant); nodes git-fetch the code they actually run at boot. So each
-# is keyed by its script's content rather than by the burla version: releasing
-# must never trigger a 10-minute rebuild.
-def _node_ami_hash(gpu: bool) -> str:
-    return hashlib.sha256(_node_ami_setup_script(gpu).encode()).hexdigest()[:12]
-
-
 def _aws(cmd: str, parse_json: bool = True, raise_error: bool = True):
     result = run_command(f"aws {cmd}", raise_error=raise_error)
     if result.returncode != 0:
@@ -262,10 +170,9 @@ def deploy_aws(spinner):
 
     bucket_name = f"{project_id}-burla-shared-workspace"
     _create_s3_bucket(spinner, bucket_name, region)
-    node_profile = _create_iam(spinner, account_id, bucket_name)
+    _create_iam(spinner, account_id, bucket_name)
     _, head_sg_id = _create_security_groups(spinner, region)
     cluster_id_token = _register_cluster_and_save_token(spinner, project_id, region)
-    _ensure_node_ami(spinner, region, node_profile)
 
     from burla._deploy import _snapshot_local_history, _upload_local_history
 
@@ -307,12 +214,12 @@ def deploy_aws(spinner):
     save_deployed_cluster_config("aws", project_id, cluster_id_token, dashboard_url)
 
     msg = f"\nSuccessfully deployed Burla v{__version__} on AWS!\n"
-    msg += f"Quickstart:\n"
+    msg += "Quickstart:\n"
     msg += f"  1. Open your new cluster dashboard: {dashboard_url}\n"
-    msg += f'  2. Hit "⏻ Start" to boot some machines.\n'
-    msg += f"  3. Run `burla login` to connect your laptop to the cluster.\n"
-    msg += f"  4. Import and call `remote_parallel_map`!\n\n"
-    msg += f"Don't hesitate to E-Mail jake@burla.dev, thank you for using Burla!"
+    msg += '  2. Hit "⏻ Start" to boot some machines.\n'
+    msg += "  3. Run `burla login` to connect your laptop to the cluster.\n"
+    msg += "  4. Import and call `remote_parallel_map`!\n\n"
+    msg += "Don't hesitate to E-Mail jake@burla.dev, thank you for using Burla!"
     spinner.write(msg)
 
     log_telemetry("Burla successfully deployed on AWS!", project_id=project_id)
@@ -362,7 +269,7 @@ def _create_s3_bucket(spinner, bucket_name, region):
     spinner.ok("✓")
 
 
-def _create_role_with_policy(role_name, policy, account_id):
+def _create_role_with_policy(role_name, policy):
     trust = {
         "Version": "2012-10-17",
         "Statement": [
@@ -422,7 +329,7 @@ def _create_iam(spinner, account_id, bucket_name):
         "Version": "2012-10-17",
         "Statement": [{"Effect": "Allow", "Action": "s3:*", "Resource": bucket_arns}],
     }
-    _create_role_with_policy("burla-node", node_policy, account_id)
+    _create_role_with_policy("burla-node", node_policy)
 
     head_policy = {
         "Version": "2012-10-17",
@@ -458,7 +365,7 @@ def _create_iam(spinner, account_id, bucket_name):
             {"Effect": "Allow", "Action": "s3:*", "Resource": bucket_arns},
         ],
     }
-    _create_role_with_policy("burla-main-service", head_policy, account_id)
+    _create_role_with_policy("burla-main-service", head_policy)
     run_command(
         "aws iam attach-role-policy --role-name burla-main-service "
         "--policy-arn arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
@@ -468,7 +375,6 @@ def _create_iam(spinner, account_id, bucket_name):
     sleep(10)
     spinner.text = "Creating IAM roles ... Done."
     spinner.ok("✓")
-    return "burla-node"
 
 
 def _get_or_create_security_group(name, description, region):
@@ -530,13 +436,23 @@ def _aws_ownership_payload(region: str) -> dict:
         "get_caller_identity",
         ExpiresIn=60,
     )
-    ec2_dry_run_url = boto3.client("ec2", region_name=region).generate_presigned_url(
-        "create_security_group",
-        Params={
-            "Description": "Burla ownership check",
-            "GroupName": "burla-ownership-check",
-            "DryRun": True,
-        },
+    ec2 = boto3.client("ec2", region_name=region)
+    run_instances_params = {
+        "ImageId": public_node_ami_id(ec2, gpu=False),
+        "InstanceType": "m7i.large",
+        "MinCount": 1,
+        "MaxCount": 1,
+        "DryRun": True,
+    }
+    subnet_id = os.environ.get("AWS_SUBNET_ID")
+    if subnet_id:
+        run_instances_params["SubnetId"] = subnet_id
+    security_group_id = os.environ.get("AWS_SECURITY_GROUP_ID")
+    if security_group_id:
+        run_instances_params["SecurityGroupIds"] = [security_group_id]
+    ec2_dry_run_url = ec2.generate_presigned_url(
+        "run_instances",
+        Params=run_instances_params,
         ExpiresIn=60,
     )
     return {
@@ -601,20 +517,16 @@ def _existing_node_ami(region: str, gpu: bool) -> str | None:
     )
 
 
-def _build_node_ami(region: str, node_profile, gpu: bool) -> str:
+def _build_node_ami(region: str, gpu: bool) -> str:
     variant = "gpu" if gpu else "nogpu"
     ami_hash = _node_ami_hash(gpu)
     base_ami = _latest_ubuntu_ami(region)
-    # The builder only apt-gets and clones a public repo, so client-hosted
-    # mode (node_profile=None, no IAM permissions) builds it profile-less.
-    profile_arg = f"--iam-instance-profile Name={node_profile} " if node_profile else ""
     with tempfile.NamedTemporaryFile("w", suffix=".sh") as user_data_file:
         user_data_file.write(_node_ami_setup_script(gpu))
         user_data_file.flush()
         instance = _aws(
             f"ec2 run-instances --region {region} --image-id {base_ami} "
             f"--instance-type {AMI_BUILDER_INSTANCE_TYPE} "
-            f"{profile_arg}"
             f"--block-device-mappings "
             f'\'[{{"DeviceName":"/dev/sda1","Ebs":{{"VolumeSize":20,"VolumeType":"gp3"}}}}]\' '
             f"--user-data file://{user_data_file.name} "
@@ -650,14 +562,13 @@ def _build_node_ami(region: str, node_profile, gpu: bool) -> str:
 
         image = _aws(
             f"ec2 create-image --region {region} --instance-id {builder_id} "
-            f'--name "burla-node-{variant}-{ami_hash}-{int(time())}" --output json'
+            f'--name "{node_ami_name_prefix(gpu)}-{int(time())}" --output json'
         )
         ami_id = image["ImageId"]
         run_command(
             f"aws ec2 create-tags --region {region} --resources {ami_id} "
             f"--tags Key=burla-node-image,Value=true "
-            f"Key=burla-node-image-hash,Value={ami_hash} "
-            f"Key=burla-version,Value={__version__}"
+            f"Key=burla-node-image-hash,Value={ami_hash}"
         )
         run_command(
             f"aws ec2 wait image-available --region {region} --image-ids {ami_id}"
@@ -670,11 +581,8 @@ def _build_node_ami(region: str, node_profile, gpu: bool) -> str:
     return ami_id
 
 
-def _ensure_node_ami(spinner, region, node_profile):
-    """Build the burla node AMIs (docker + git repo + uv + mount-s3, plus a
-    variant with NVIDIA drivers for GPU nodes) if this region has no AMI
-    matching the current setup scripts. Takes ~10 minutes, and only happens
-    when a script changes, not on every release."""
+def _ensure_node_ami(spinner, region):
+    """Maintainer helper used by scripts/publish_aws_amis.py."""
     missing = [gpu for gpu in (False, True) if not _existing_node_ami(region, gpu)]
     if not missing:
         spinner.text = "Node AMIs ... using existing."
@@ -689,7 +597,7 @@ def _ensure_node_ami(spinner, region, node_profile):
     spinner.start()
 
     with ThreadPoolExecutor(max_workers=len(missing)) as pool:
-        futures = [pool.submit(_build_node_ami, region, node_profile, g) for g in missing]
+        futures = [pool.submit(_build_node_ami, region, gpu) for gpu in missing]
     # the with-block waits for every build; surface the first failure after all
     # builders have terminated so none is left running.
     for future in futures:

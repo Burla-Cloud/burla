@@ -43,12 +43,18 @@ def _seed_running_job(main_http_client, job_id: str, n_inputs: int = 1) -> None:
 
 def _push_job_logs(main_http_client, job_id: str, documents: list[dict]) -> None:
     """Same endpoint JobLogWriter on the nodes uses to persist UDF logs."""
-    resp = main_http_client.post(f"/v1/jobs/{job_id}/logs:batch", json={"documents": documents})
+    resp = main_http_client.post(
+        f"/v1/jobs/{job_id}/logs:batch", json={"documents": documents}
+    )
     assert resp.status_code == 200, resp.text
 
 
 def test_stop_job_writes_dashboard_canceled(
-    main_http_client, local_dev_cluster, isolated_job_id, cleanup_job, get_job,
+    main_http_client,
+    local_dev_cluster,
+    isolated_job_id,
+    cleanup_job,
+    get_job,
     wait_for_fixture,
 ):
     job_id = cleanup_job(isolated_job_id())
@@ -62,7 +68,10 @@ def test_stop_job_writes_dashboard_canceled(
 
 
 def test_stop_job_writes_log_entry(
-    main_http_client, local_dev_cluster, isolated_job_id, cleanup_job,
+    main_http_client,
+    local_dev_cluster,
+    isolated_job_id,
+    cleanup_job,
     wait_for_fixture,
 ):
     job_id = cleanup_job(isolated_job_id())
@@ -88,7 +97,11 @@ def test_result_stats_404_when_missing(main_http_client, local_dev_cluster):
 
 
 def test_logged_input_indexes_returns_sorted_unique(
-    main_http_client, local_dev_cluster, isolated_job_id, cleanup_job
+    main_http_client,
+    node_push_client,
+    local_dev_cluster,
+    isolated_job_id,
+    cleanup_job,
 ):
     job_id = cleanup_job(isolated_job_id())
     documents = [
@@ -100,7 +113,7 @@ def test_logged_input_indexes_returns_sorted_unique(
         }
         for idx, err in [(0, False), (5, True), (3, False), (5, False)]
     ]
-    _push_job_logs(main_http_client, job_id, documents)
+    _push_job_logs(node_push_client, job_id, documents)
     time.sleep(0.5)
 
     resp = main_http_client.get(f"/v1/jobs/{job_id}/logged-input-indexes")
@@ -111,11 +124,15 @@ def test_logged_input_indexes_returns_sorted_unique(
 
 
 def test_job_logs_returns_logs_for_index(
-    main_http_client, local_dev_cluster, isolated_job_id, cleanup_job
+    main_http_client,
+    node_push_client,
+    local_dev_cluster,
+    isolated_job_id,
+    cleanup_job,
 ):
     job_id = cleanup_job(isolated_job_id())
     _push_job_logs(
-        main_http_client,
+        node_push_client,
         job_id,
         [
             {

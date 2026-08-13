@@ -17,11 +17,12 @@ Hostname convention (enforced by `auth_plugin.py`):
   the default mode). The relay accepts only these exact shapes, preventing
   project IDs containing `--` from colliding with another project's tunnels.
 
-Only client-facing traffic rides the relay. Node-to-node input transfers,
-head-to-node status polls, and node-to-head state pushes stay inside the VPC
-(on GCP this relies on the default network's `default-allow-internal` rule;
-on AWS the installer creates group-to-group security group rules). Dev
-clusters point at a test relay via `BURLA_RELAY_HOST` (see the makefile).
+Node-to-node input transfers stay inside the VPC except on client-hosted AWS and
+Azure, where they use the relay so existing networks need no inbound rule. A
+deployed head also uses the VPC for node traffic, while a client-hosted head uses
+the relay because it runs outside the cloud network. Deployed AWS clusters use
+Burla's group-to-group security group rules. Dev clusters point at a test relay
+via `BURLA_RELAY_HOST` (see the makefile).
 
 ## Deploy (Burla-operated)
 

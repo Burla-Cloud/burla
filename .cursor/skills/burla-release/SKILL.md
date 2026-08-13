@@ -100,7 +100,15 @@ uncommitted reaches the test cluster. Push first.
    aws sts get-caller-identity      # confirm this is the test account
    ```
 
-4. Deploy from the isolated test environment (test backend, test relay, node ref
+4. Publish or reuse the Burla-owned CPU and GPU AMIs for the current setup
+   recipe. This never builds in the customer or test account:
+
+   ```bash
+   PYTHONPATH=client/src uv run --project client \
+     python scripts/publish_aws_amis.py --profile burla-prod
+   ```
+
+5. Deploy from the isolated test environment (test backend, test relay, node ref
    `dev`, separate credentials):
 
    ```bash
@@ -109,13 +117,12 @@ uncommitted reaches the test cluster. Push first.
    burla deploy --cloud=aws
    ```
 
-5. Confirm it is really running dev-branch code. `burla deploy` already polls
+6. Confirm it is really running dev-branch code. `burla deploy` already polls
    `/version` and fails if it does not match the local client, so also open the
    dashboard and check it renders rather than serving a blank page.
 
-The first deploy into a fresh region spends ~10 minutes building the node AMI.
 To redeploy after new commits, push to `dev` and run `burla deploy --cloud=aws`
-again: it shuts the existing cluster down and restarts the head on the new code.
+again. It shuts the existing cluster down and restarts the head on the new code.
 
 ## "Release it [as X.Y.Z]" (the release)
 
@@ -138,6 +145,17 @@ feature, patch = fix) based on `git log origin/main..dev`, and confirm it.
    git pull --ff-only origin dev
    PREV=$(git rev-parse origin/main)
    git log --oneline "$PREV"..dev          # this is what ships
+   ```
+
+   Ensure the current AWS and Azure node-image recipes are public in every
+   supported region before the release becomes installable:
+
+   ```bash
+   PYTHONPATH=client/src uv run --project client \
+     python scripts/publish_aws_amis.py --profile burla-prod
+   PYTHONPATH=client/src uv run --project client \
+     python scripts/publish_azure_image.py \
+       --subscription-id 4af05bed-f09b-4897-9372-37f35df962ba
    ```
 
 2. Bump every version location, refresh the uv locks, and rebuild the dashboard

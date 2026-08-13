@@ -1,23 +1,23 @@
+import asyncio
+import inspect
+import json
+import logging as python_logging
 import os
 import sys
-import json
-import inspect
-import asyncio
 import traceback
 from collections import deque
-from pathlib import Path
-from uuid import uuid4
-from time import time
-from typing import Callable
-import logging as python_logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 from threading import Event
+from time import monotonic, time
+from typing import Callable
+from uuid import uuid4
 
 import aiohttp
-from fastapi import FastAPI, Request, BackgroundTasks, Depends
+from fastapi import BackgroundTasks, Depends, FastAPI, Request
 from fastapi.responses import Response
-from starlette.requests import ClientDisconnect
 from starlette.datastructures import UploadFile
+from starlette.requests import ClientDisconnect
 
 __version__ = "1.6.2"
 PROJECT_ID = os.environ["PROJECT_ID"]
@@ -52,8 +52,9 @@ INSTANCE_N_CPUS = 2 if IN_LOCAL_DEV_MODE else os.cpu_count()
 # remote_parallel_map call finds its creds without a prior `burla login`.
 NODE_AUTH_DIR = Path("/opt/burla/node_auth")
 NODE_AUTH_CREDENTIALS_PATH = NODE_AUTH_DIR / "burla_credentials.json"
+AZURE_DELETE_LEASE_PATH = Path("/etc/burla/azure-delete-lease.json")
 
-from node_service.helpers import ResultsEndpointFilter, Logger, SizedQueue
+from node_service.helpers import Logger, ResultsEndpointFilter, SizedQueue
 
 # Upper bound on how many UDF log documents we'll buffer in memory
 # between /results polls. If the client stops polling this caps
@@ -115,6 +116,7 @@ def REINIT_SELF(SELF):
     SELF["client_contact_last_1s"] = True
     SELF["job_view"] = None
     SELF["host"] = None
+    SELF["delete_lease_expires_at"] = 0
     # How long the head has been unreachable, per the state-push loop. Drives
     # orphan self-deletion (see ORPHANED_SHUTDOWN_TIME_SEC).
     SELF["head_unreachable_sec"] = 0
@@ -187,13 +189,15 @@ def get_add_background_task_function(
     return add_logged_background_task
 
 
-from node_service.helpers import Logger, format_traceback
 from node_service import head_client
+from node_service.helpers import Logger, format_traceback
 from node_service.job_endpoints import router as job_endpoints_router
 from node_service.lifecycle_endpoints import (
     reboot_containers,
-    router as lifecycle_endpoints_router,
     watch_reservation,
+)
+from node_service.lifecycle_endpoints import (
+    router as lifecycle_endpoints_router,
 )
 
 
@@ -202,8 +206,7 @@ def _poweroff_self():
     instance terminates itself (InstanceInitiatedShutdownBehavior=terminate);
     on GCP it stops, billing only its disk until a head reaps it
     (delete_stopped_instances). On Azure a stopped VM still bills for compute,
-    so this is only the fallback behind `_delete_self_via_azure` - the Azure
-    reaper deletes whatever ends up merely stopped."""
+    so this runs only after the managed identity and short-lived delete lease."""
     import subprocess
 
     subprocess.Popen(["systemctl", "poweroff"])
@@ -251,14 +254,13 @@ async def _mark_self_delete_requested():
 
 async def _delete_self_via_cloud_api() -> bool:
     """Delete this instance outright, using whatever instance credentials
-    this VM carries: the GCP service account on shared-filesystem clusters,
-    or the burla-node managed identity every Azure node has (an Azure VM
-    can't stop billing by powering off, so self-deletion is the only clean
-    exit when the head is gone). Uses the metadata server's token, so it
-    needs no SDK and no static credentials."""
+    this VM carries: a GCP service account, a deployed Azure cluster's managed
+    identity, or a client-hosted Azure cluster's short-lived delete lease."""
     if await _delete_self_via_gcp():
         return True
-    return await _delete_self_via_azure()
+    if await _delete_self_via_azure():
+        return True
+    return await _delete_self_via_azure_lease()
 
 
 async def _delete_self_via_gcp() -> bool:
@@ -328,6 +330,24 @@ async def _delete_self_via_azure() -> bool:
         return False
 
 
+async def _delete_self_via_azure_lease() -> bool:
+    if not AZURE_DELETE_LEASE_PATH.exists():
+        return False
+    lease = json.loads(AZURE_DELETE_LEASE_PATH.read_text())
+    url = (
+        f"https://management.azure.com{lease['vm_id']}"
+        "?api-version=2024-07-01&forceDeletion=true"
+    )
+    headers = {"Authorization": f"Bearer {lease['access_token']}"}
+    try:
+        timeout = aiohttp.ClientTimeout(total=15)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.delete(url, headers=headers) as response:
+                return response.status < 300 or response.status == 404
+    except Exception:
+        return False
+
+
 async def _shutdown_self():
     """Get this VM fully deleted, escalating through whatever is reachable.
 
@@ -342,7 +362,9 @@ async def _shutdown_self():
         await _delete_self_via_cloud_api()
     finally:
         await _mark_self_delete_requested()
-        _poweroff_self()
+        # The lease daemon must stay alive until Azure confirms deletion.
+        if not AZURE_DELETE_LEASE_PATH.exists():
+            _poweroff_self()
 
 
 # If the head stays unreachable this long, the node assumes it's orphaned (the
@@ -394,10 +416,12 @@ async def _state_push_loop(logger: Logger):
     carries `host` and the job signal set down. Replaces this service's
     firestore writes and its per-job on_snapshot watch."""
     consecutive_failures = 0
+    head_unreachable_since = None
     while True:
         await asyncio.sleep(STATE_PUSH_INTERVAL_SEC)
         if SELF["SHUTTING_DOWN"]:
             continue
+        attempt_started_at = monotonic()
         try:
             # Progress only counts once the job watcher is live; registering
             # it earlier would leave a stale progress entry behind if the
@@ -408,6 +432,7 @@ async def _state_push_loop(logger: Logger):
                 include_job_progress=watcher_active,
             )
             consecutive_failures = 0
+            head_unreachable_since = None
             SELF["head_unreachable_sec"] = 0
             SELF["host"] = view.get("host")
             reservation = view.get("reserved_for_job")
@@ -436,11 +461,13 @@ async def _state_push_loop(logger: Logger):
                 head_client.apply_job_signals(view.get("job"))
         except Exception as e:
             consecutive_failures += 1
+            if head_unreachable_since is None:
+                head_unreachable_since = attempt_started_at
             # The head being briefly down (restart/redeploy) is survivable -
             # nodes keep working and re-sync on the next successful push.
             if consecutive_failures in (1, 10, 60):
                 print(f"state push to head failed ({consecutive_failures}x): {e}")
-            head_gone_sec = consecutive_failures * STATE_PUSH_INTERVAL_SEC
+            head_gone_sec = int(monotonic() - head_unreachable_since)
             SELF["head_unreachable_sec"] = head_gone_sec
             # No head means nobody is coming to collect results or delete this
             # VM, so being mid-job is not a reason to stay alive.
@@ -712,27 +739,13 @@ async def log_and_time_requests(request: Request, call_next):
         ("/results", "/ack_transfer", "/get_inputs")
     )
 
-    logger = Logger(request)
-    # Don't use this ^ (except in `get_add_background_task_function`) because it forwards to the
-    # head's log store and that can't be turned off without affecting other class instances
-    # currently because they all share a python logger.
-
     try:
         response = await call_next(request)
     except RuntimeError as e:
         # Thrown when client disconnects during request, cannot be caught elsewhere
-        if not "No response returned." in str(e):
-            raise e
+        if "No response returned." not in str(e):
+            raise
         response = Response(status_code=499, content="Client disconnected.")
-
-    # ensure background tasks are availabe:
-    has_background_tasks = getattr(response, "background") is not None
-    response.background = (
-        response.background if has_background_tasks else BackgroundTasks()
-    )
-    add_background_task = get_add_background_task_function(
-        response.background, logger=logger
-    )
 
     # Log response
     is_non_2xx_response = response.status_code < 200 or response.status_code >= 300
@@ -744,7 +757,8 @@ async def log_and_time_requests(request: Request, call_next):
         response_text = body.decode("utf-8", errors="ignore")
         print(f"non-2xx status response: {response.status_code}: {response_text}")
 
-        async def body_stream():  #  <- it has to be ugly like this :(
+        # Logging consumed Starlette's iterator, so the response needs a replacement.
+        async def body_stream():
             yield body
 
         response.body_iterator = body_stream()

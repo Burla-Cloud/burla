@@ -1,16 +1,17 @@
 import base64
+import json
 import os
-from time import sleep
+import threading
+from time import time
 
 from azure.core.exceptions import HttpResponseError, ResourceNotFoundError
 from azure.identity import DefaultAzureCredential
 from azure.mgmt.compute import ComputeManagementClient
 from azure.mgmt.network import NetworkManagementClient
+from burla._azure_images import public_node_image_id
 
-from main_service import CLUSTER_NAME
+from main_service import CLUSTER_NAME, IN_CLIENT_HOSTED_MODE, cluster_state
 from main_service.providers import NoCapacity
-
-RESOURCE_GROUP = os.environ.get("AZURE_RESOURCE_GROUP", "burla")
 
 # Allocation errors worth reporting as NoCapacity; anything else is a real
 # error. Quota errors (OperationNotAllowed) are deliberately excluded: waiting
@@ -26,6 +27,67 @@ _CAPACITY_ERROR_CODES = (
 # Fixed container inside the shared-workspace storage account; the config's
 # single bucket-name string holds only the storage account name on Azure.
 SHARED_WORKSPACE_CONTAINER = "shared-workspace"
+
+_instance_resource_groups: dict[str, str] = {}
+_credential = None
+_shutdown_token = None
+_shutdown_token_lock = threading.Lock()
+DELETE_LEASE_REFRESH_SEC = 4 * 60
+_DELETE_LEASE_EXECUTION_SEC = 2 * 60
+
+
+def _default_credential():
+    global _credential
+    if _credential is None:
+        _credential = DefaultAzureCredential()
+    return _credential
+
+
+def _resource_group_from_id(resource_id: str) -> str:
+    parts = resource_id.strip("/").split("/")
+    return parts[parts.index("resourceGroups") + 1]
+
+
+def _azure_delete_lease(instance_name: str, resource_group: str) -> dict:
+    """A short-lived caller token gives an orphan a bounded deletion window.
+
+    Azure ARM tokens cannot be downscoped. The token stays root-only on the
+    user's own VM and expires in about an hour.
+    """
+    global _shutdown_token
+    with _shutdown_token_lock:
+        if (
+            _shutdown_token is None
+            or _shutdown_token.expires_on - time() <= DELETE_LEASE_REFRESH_SEC
+        ):
+            _shutdown_token = _default_credential().get_token(
+                "https://management.azure.com/.default"
+            )
+        token = _shutdown_token
+
+    subscription_id = os.environ["AZURE_SUBSCRIPTION_ID"]
+    vm_id = (
+        f"/subscriptions/{subscription_id}/resourceGroups/{resource_group}"
+        f"/providers/Microsoft.Compute/virtualMachines/{instance_name}"
+    )
+    return {
+        "access_token": token.token,
+        "delete_at": token.expires_on - _DELETE_LEASE_EXECUTION_SEC,
+        "expires_at": token.expires_on,
+        "vm_id": vm_id,
+    }
+
+
+def azure_delete_lease(instance_name: str, saved_resource_group: str | None) -> dict:
+    resource_group = _instance_resource_groups.get(instance_name)
+    if resource_group is None:
+        provider = AzureProvider()
+        resource_group = provider._instance_resource_group(
+            instance_name, saved_resource_group
+        )
+    if resource_group is None:
+        raise ResourceNotFoundError(f"Azure VM {instance_name} was not found.")
+    return _azure_delete_lease(instance_name, resource_group)
 
 
 def _ssh_public_key() -> str:
@@ -51,52 +113,75 @@ _cached_ssh_public_key = None
 
 
 class AzureProvider:
-    """Azure twin of the AWS/GCP providers. Nodes are VMs built from the burla
-    node managed image (see client/src/burla/_deploy_azure.py), tagged
-    `burla-cluster-node`, in the `burla` resource group.
-
-    Every node carries the `burla-node` user-assigned identity: unlike AWS
-    (poweroff terminates) and GCP (guest attribute + head reaper), a guest
-    poweroff on Azure leaves the VM in a "stopped" state that still bills for
-    compute, so nodes must call the ARM API to delete themselves when the head
-    is gone. The identity's role only allows deleting VMs/NICs/IPs/disks
-    inside the burla resource group.
-    """
+    """Azure VMs launched from Burla's public Community Gallery image."""
 
     def __init__(self):
         self.subscription_id = os.environ["AZURE_SUBSCRIPTION_ID"]
-        self.region = os.environ.get("AZURE_REGION", "eastus")
-        credential = DefaultAzureCredential()
+        self.resource_group = os.environ.get("AZURE_RESOURCE_GROUP")
+        self.subnet_id = os.environ.get("AZURE_SUBNET_ID")
+        credential = _default_credential()
         self.compute = ComputeManagementClient(credential, self.subscription_id)
         self.network = NetworkManagementClient(credential, self.subscription_id)
 
-    def _resource_id(self, provider: str, type_name: str, name: str) -> str:
+    def _resource_id(
+        self, resource_group: str, provider: str, type_name: str, name: str
+    ) -> str:
         return (
-            f"/subscriptions/{self.subscription_id}/resourceGroups/{RESOURCE_GROUP}"
+            f"/subscriptions/{self.subscription_id}/resourceGroups/{resource_group}"
             f"/providers/{provider}/{type_name}/{name}"
         )
 
-    def _image_id(self, region: str) -> str:
-        """Newest burla node managed image in this region. Like the AWS AMI it
-        is just a warm base image (nodes git-fetch the code they run at boot),
-        so it is not keyed by burla version."""
-        override = os.environ.get("BURLA_NODE_IMAGE")
-        if override:
-            return override
-        images = [
-            image
-            for image in self.compute.images.list_by_resource_group(RESOURCE_GROUP)
-            if (image.tags or {}).get("burla-node-image") == "true"
-            and image.location == region
-            and image.provisioning_state == "Succeeded"
-        ]
-        if not images:
+    def _image_reference(self, region: str) -> dict:
+        image_id = os.environ.get("BURLA_NODE_IMAGE") or public_node_image_id(region)
+        if image_id.lower().startswith("/communitygalleries/"):
+            return {"communityGalleryImageId": image_id}
+        return {"id": image_id}
+
+    def _placement(self, region: str) -> tuple[str, str]:
+        if self.subnet_id:
+            network_resource_group = _resource_group_from_id(self.subnet_id)
+            parts = self.subnet_id.strip("/").split("/")
+            vnet_name = parts[parts.index("virtualNetworks") + 1]
+            vnet = self.network.virtual_networks.get(network_resource_group, vnet_name)
+            if vnet.location.lower() != region.lower():
+                raise Exception(
+                    f"Azure subnet {self.subnet_id} is in {vnet.location}, "
+                    f"but AZURE_REGION is {region}."
+                )
+            resource_group = self.resource_group or network_resource_group
+            return resource_group, self.subnet_id
+
+        candidates = []
+        for vnet in self.network.virtual_networks.list_all():
+            if vnet.location.lower() != region.lower():
+                continue
+            for subnet in vnet.subnets or []:
+                has_outbound_access = (
+                    subnet.default_outbound_access is not False
+                    or subnet.nat_gateway is not None
+                )
+                if not subnet.delegations and has_outbound_access:
+                    candidates.append(subnet.id)
+
+        if not candidates:
             raise Exception(
-                f"No burla node image found in region {region}. "
-                "Run `burla deploy --cloud azure` to build one, or set BURLA_NODE_IMAGE."
+                f"No accessible Azure subnet was found in {region}. "
+                "Set AZURE_SUBNET_ID to an existing outbound-capable subnet."
             )
-        # Image names end in a unix timestamp, so newest sorts last.
-        return sorted(images, key=lambda image: image.name)[-1].id
+
+        def preference(subnet_id: str) -> tuple[int, str]:
+            value = subnet_id.lower()
+            if f"/virtualnetworks/burla-{region.lower()}/subnets/nodes" in value:
+                return 0, value
+            if value.endswith("/subnets/default"):
+                return 1, value
+            if value.endswith("/subnets/nodes"):
+                return 2, value
+            return 3, value
+
+        subnet_id = min(candidates, key=preference)
+        resource_group = self.resource_group or _resource_group_from_id(subnet_id)
+        return resource_group, subnet_id
 
     def create_instance(
         self,
@@ -111,43 +196,57 @@ class AzureProvider:
         shutdown_script: str,
         on_log,
         needs_cloud_credentials: bool = False,
-    ) -> tuple[str, str, str]:
-        """Create the VM (regional allocation; Azure spreads across zones
-        itself). Returns (public_ip, private_ip, region)."""
+    ) -> tuple[str | None, str, str]:
+        """Returns (public_ip, private_ip, resource_group)."""
         if num_gpus > 0:
             raise Exception(
                 "GPU nodes are not supported on Azure yet (the burla node image "
                 "does not include GPU drivers)."
             )
+        if IN_CLIENT_HOSTED_MODE and needs_cloud_credentials:
+            raise Exception("Azure shared workspaces require a deployed Burla cluster.")
 
-        try:
-            subnet = self.network.subnets.get(RESOURCE_GROUP, f"burla-{region}", "nodes")
-        except ResourceNotFoundError:
-            raise Exception(
-                f"Burla's network in region {region} was not found. "
-                "Run `burla deploy --cloud azure` (or boot once via the client) to create it."
+        resource_group, subnet_id = self._placement(region)
+        _instance_resource_groups[instance_name] = resource_group
+        if IN_CLIENT_HOSTED_MODE:
+            lease = _azure_delete_lease(instance_name, resource_group)
+            lease_b64 = base64.b64encode(json.dumps(lease).encode()).decode()
+            startup_script = startup_script.replace(
+                "set -Eeuo pipefail\n",
+                "set -Eeuo pipefail\n"
+                "mkdir -p /etc/burla\n"
+                "install -m 600 /dev/null /etc/burla/azure-delete-lease.json\n"
+                f'echo "{lease_b64}" | base64 -d '
+                "> /etc/burla/azure-delete-lease.json\n",
+                1,
             )
-
-        image_id = self._image_id(region)
         on_log(f"Attempting to provision {machine_type} in region: {region}")
 
         # All request bodies are raw ARM JSON (camelCase + properties
         # envelope): the SDK passes dicts through to the wire unconverted.
         tags = {"burla-cluster-node": "true", "burla-cluster-id": CLUSTER_NAME}
-        public_ip_poller = self.network.public_ip_addresses.begin_create_or_update(
-            RESOURCE_GROUP,
-            f"{instance_name}-pip",
-            {
-                "location": region,
-                "sku": {"name": "Standard"},
-                "properties": {"publicIPAllocationMethod": "Static"},
-                "tags": tags,
-            },
-        )
-        public_ip = public_ip_poller.result()
 
+        public_ip = None
+        if not IN_CLIENT_HOSTED_MODE:
+            public_ip = self.network.public_ip_addresses.begin_create_or_update(
+                resource_group,
+                f"{instance_name}-pip",
+                {
+                    "location": region,
+                    "sku": {"name": "Standard"},
+                    "properties": {"publicIPAllocationMethod": "Static"},
+                    "tags": tags,
+                },
+            ).result()
+
+        ip_configuration = {"subnet": {"id": subnet_id}}
+        if public_ip is not None:
+            ip_configuration["publicIPAddress"] = {
+                "id": public_ip.id,
+                "properties": {"deleteOption": "Delete"},
+            }
         nic_poller = self.network.network_interfaces.begin_create_or_update(
-            RESOURCE_GROUP,
+            resource_group,
             f"{instance_name}-nic",
             {
                 "location": region,
@@ -156,14 +255,7 @@ class AzureProvider:
                     "ipConfigurations": [
                         {
                             "name": "primary",
-                            "properties": {
-                                "subnet": {"id": subnet.id},
-                                "publicIPAddress": {
-                                    "id": public_ip.id,
-                                    # Deleting the NIC takes the IP with it.
-                                    "properties": {"deleteOption": "Delete"},
-                                },
-                            },
+                            "properties": ip_configuration,
                         }
                     ]
                 },
@@ -174,7 +266,7 @@ class AzureProvider:
         vm_properties = {
             "hardwareProfile": {"vmSize": machine_type},
             "storageProfile": {
-                "imageReference": {"id": image_id},
+                "imageReference": self._image_reference(region),
                 "osDisk": {
                     "createOption": "FromImage",
                     # The Ubuntu 22.04 base image has a 30 GB OS disk and
@@ -216,23 +308,24 @@ class AzureProvider:
             # Several dev clusters boot nodes into one subscription, so every
             # destructive lookup filters on the cluster tag.
             "tags": tags,
-            # Self-deletion identity (see class docstring). The same identity
-            # carries the shared-workspace storage role, so unlike AWS/GCP it
-            # is attached whether or not the filesystem is enabled.
-            "identity": {
+            "properties": vm_properties,
+        }
+        if not IN_CLIENT_HOSTED_MODE:
+            vm_parameters["identity"] = {
                 "type": "UserAssigned",
                 "userAssignedIdentities": {
                     self._resource_id(
-                        "Microsoft.ManagedIdentity", "userAssignedIdentities", "burla-node"
+                        resource_group,
+                        "Microsoft.ManagedIdentity",
+                        "userAssignedIdentities",
+                        "burla-node",
                     ): {}
                 },
-            },
-            "properties": vm_properties,
-        }
+            }
 
         try:
             vm_poller = self.compute.virtual_machines.begin_create_or_update(
-                RESOURCE_GROUP, instance_name, vm_parameters
+                resource_group, instance_name, vm_parameters
             )
             vm_poller.result()
         except HttpResponseError as error:
@@ -249,12 +342,81 @@ class AzureProvider:
             f"Successfully provisioned {machine_type} in region: {region}\n"
             "Waiting for startup script ..."
         )
-        return public_ip.ip_address, private_ip, region
+        public_ip_address = public_ip.ip_address if public_ip is not None else None
+        return public_ip_address, private_ip, resource_group
+
+    def _instance_resource_group(
+        self, instance_name: str, saved_resource_group: str | None
+    ) -> str | None:
+        if instance_name in _instance_resource_groups:
+            return _instance_resource_groups[instance_name]
+
+        # Heads upgraded from 1.6.2 persisted an Azure region in `zone`, while
+        # new heads persist the resource group. Validate the saved value before
+        # using it so legacy nodes still get deleted from their real group.
+        candidates = dict.fromkeys(
+            candidate
+            for candidate in (saved_resource_group, self.resource_group, "burla")
+            if candidate
+        )
+        for resource_group in candidates:
+            resources = (
+                (
+                    self.compute.virtual_machines.get,
+                    instance_name,
+                ),
+                (
+                    self.network.network_interfaces.get,
+                    f"{instance_name}-nic",
+                ),
+                (
+                    self.network.public_ip_addresses.get,
+                    f"{instance_name}-pip",
+                ),
+            )
+            for get_resource, resource_name in resources:
+                try:
+                    get_resource(resource_group, resource_name)
+                    _instance_resource_groups[instance_name] = resource_group
+                    return resource_group
+                except ResourceNotFoundError:
+                    pass
+
+        vms = (
+            self.compute.virtual_machines.list(self.resource_group)
+            if self.resource_group
+            else self.compute.virtual_machines.list_all()
+        )
+        for vm in vms:
+            if vm.name == instance_name:
+                resource_group = _resource_group_from_id(vm.id)
+                _instance_resource_groups[instance_name] = resource_group
+                return resource_group
+        resources = (
+            (
+                self.network.network_interfaces.list_all(),
+                f"{instance_name}-nic",
+            ),
+            (
+                self.network.public_ip_addresses.list_all(),
+                f"{instance_name}-pip",
+            ),
+        )
+        for items, resource_name in resources:
+            for resource in items:
+                if resource.name == resource_name:
+                    resource_group = _resource_group_from_id(resource.id)
+                    _instance_resource_groups[instance_name] = resource_group
+                    return resource_group
+        return None
 
     def delete_instance(self, instance_name: str, zone: str | None = None):
+        resource_group = self._instance_resource_group(instance_name, zone)
+        if resource_group is None:
+            return
         try:
             poller = self.compute.virtual_machines.begin_delete(
-                RESOURCE_GROUP, instance_name, force_deletion=True
+                resource_group, instance_name, force_deletion=True
             )
             poller.result()
         except ResourceNotFoundError:
@@ -264,37 +426,36 @@ class AzureProvider:
         # leaves the NIC/IP behind - sweep those directly.
         try:
             self.network.network_interfaces.begin_delete(
-                RESOURCE_GROUP, f"{instance_name}-nic"
+                resource_group, f"{instance_name}-nic"
             ).result()
         except ResourceNotFoundError:
             pass
         try:
             self.network.public_ip_addresses.begin_delete(
-                RESOURCE_GROUP, f"{instance_name}-pip"
+                resource_group, f"{instance_name}-pip"
             ).result()
         except ResourceNotFoundError:
             pass
+        _instance_resource_groups.pop(instance_name, None)
 
     def delete_stopped_instances(self):
-        """Nodes delete themselves through the ARM API (their identity exists
-        for exactly this), so a healthy self-delete leaves nothing behind.
-        This sweeps the failure mode where that call never landed and the node
-        fell back to poweroff: on Azure that leaves the VM "stopped" but NOT
-        deallocated, which still bills for compute.
-
-        Deallocated VMs are left alone: a guest can't deallocate, so that
-        state only comes from a person stopping the VM via the portal/CLI, and
-        deleting those would destroy a user's node behind their back.
-        Deliberately not scoped to this cluster, like the GCP reaper: a
-        stopped burla node wants to be gone no matter which head notices.
-        """
-        for vm in self.compute.virtual_machines.list(RESOURCE_GROUP):
+        """Sweep Burla nodes whose in-VM deletion could not finish."""
+        vms = (
+            self.compute.virtual_machines.list(self.resource_group)
+            if self.resource_group
+            else self.compute.virtual_machines.list_all()
+        )
+        for vm in vms:
             if not vm.name.startswith("burla-node-"):
                 continue
-            if (vm.tags or {}).get("burla-cluster-node") != "true":
+            tags = vm.tags or {}
+            if tags.get("burla-cluster-node") != "true":
                 continue
+            if tags.get("burla-cluster-id") != CLUSTER_NAME:
+                continue
+            resource_group = _resource_group_from_id(vm.id)
             instance_view = self.compute.virtual_machines.instance_view(
-                RESOURCE_GROUP, vm.name
+                resource_group, vm.name
             )
             power_states = [
                 status.code
@@ -302,7 +463,39 @@ class AzureProvider:
                 if status.code and status.code.startswith("PowerState/")
             ]
             if "PowerState/stopped" in power_states:
-                self.delete_instance(vm.name)
+                self.delete_instance(vm.name, resource_group)
+
+        for nic in self.network.network_interfaces.list_all():
+            tags = nic.tags or {}
+            if (
+                not nic.name.startswith("burla-node-")
+                or not nic.name.endswith("-nic")
+                or tags.get("burla-cluster-node") != "true"
+                or tags.get("burla-cluster-id") != CLUSTER_NAME
+                or nic.virtual_machine is not None
+            ):
+                continue
+            instance_name = nic.name.removesuffix("-nic")
+            node = cluster_state.get_node(instance_name)
+            if node and node.get("status") == "BOOTING":
+                continue
+            self.delete_instance(instance_name, _resource_group_from_id(nic.id))
+
+        for public_ip in self.network.public_ip_addresses.list_all():
+            tags = public_ip.tags or {}
+            if (
+                not public_ip.name.startswith("burla-node-")
+                or not public_ip.name.endswith("-pip")
+                or tags.get("burla-cluster-node") != "true"
+                or tags.get("burla-cluster-id") != CLUSTER_NAME
+                or public_ip.ip_configuration is not None
+            ):
+                continue
+            instance_name = public_ip.name.removesuffix("-pip")
+            node = cluster_state.get_node(instance_name)
+            if node and node.get("status") == "BOOTING":
+                continue
+            self.delete_instance(instance_name, _resource_group_from_id(public_ip.id))
 
     def mount_shared_workspace_script(self, bucket_name: str) -> str:
         # bucket_name is the storage account; blobfuse2 authenticates with the

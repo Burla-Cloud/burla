@@ -13,9 +13,6 @@ database to inspect.
 from __future__ import annotations
 
 import base64
-import contextlib
-import io
-import json
 import multiprocessing as mp
 import os
 import queue
@@ -24,10 +21,9 @@ import socket
 import ssl
 import sys
 import time
-import traceback
 import uuid
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any, Callable
 
 import pytest
 
@@ -530,6 +526,24 @@ def main_http_client(burla_auth_headers):
         yield client
 
 
+@pytest.fixture
+def node_push_client(main_http_client, local_dev_cluster):
+    import httpx
+    from burla._local_head import read_saved_cluster_token
+
+    project_id = main_http_client.get("/version").json()["project"]
+    cluster_token = read_saved_cluster_token(project_id)
+    if not cluster_token:
+        pytest.fail(f"No saved cluster token for {project_id}")
+
+    with httpx.Client(
+        base_url=DASHBOARD_URL,
+        timeout=30,
+        headers={"Authorization": f"Bearer {cluster_token}"},
+    ) as client:
+        yield client
+
+
 @pytest.fixture(scope="session")
 def main_async_client():
     import asyncio
@@ -557,7 +571,7 @@ def burla_auth_headers() -> dict[str, str]:
     user's `burla login` credentials.
     """
     try:
-        from burla._auth import get_auth_headers, AuthException
+        from burla._auth import AuthException, get_auth_headers
     except Exception as e:
         pytest.skip(f"burla not importable: {e}")
 

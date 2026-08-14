@@ -802,7 +802,11 @@ async def log_and_time_requests(request: Request, call_next):
 
     response = await call_next(request)
 
-    if not IN_LOCAL_DEV_MODE and not is_chatty_client_path(request.url.path):
+    # Client-hosted and local-dev heads share a developer's terminal, where
+    # uvicorn's access log already covers each request; these custom lines are
+    # for head VMs, whose stdout goes to journald/docker instead.
+    on_head_vm = not IN_LOCAL_DEV_MODE and not IN_CLIENT_HOSTED_MODE
+    if on_head_vm and not is_chatty_client_path(request.url.path):
 
         response_contains_background_tasks = getattr(response, "background") is not None
         if not response_contains_background_tasks:

@@ -7,8 +7,6 @@ export type ErrorToastDetail = {
     message: string;
     // Shell command that fixes the problem, rendered as a copyable chip.
     command?: string;
-    // Raw underlying error, rendered small and muted for debugging.
-    error?: string;
 };
 
 const CommandChip = ({ command }: { command: string }) => {
@@ -33,7 +31,7 @@ const CommandChip = ({ command }: { command: string }) => {
                 title={copied ? "Copied" : "Copy"}
             >
                 {copied ? (
-                    <Check className="h-3.5 w-3.5 text-emerald-500" />
+                    <Check className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-500" />
                 ) : (
                     <Copy className="h-3.5 w-3.5" />
                 )}
@@ -44,7 +42,7 @@ const CommandChip = ({ command }: { command: string }) => {
 
 const ErrorToastContent = ({ detail }: { detail: ErrorToastDetail }) => (
     <div className="flex gap-3">
-        <AlertCircle className="mt-px h-5 w-5 shrink-0 text-red-400" />
+        <AlertCircle className="mt-px h-5 w-5 shrink-0 text-red-500 dark:text-red-400" />
         <div className="min-w-0 flex-1">
             <p className="text-sm font-semibold leading-5 text-foreground">{detail.title}</p>
             <p className="mt-1 break-words text-sm leading-relaxed text-muted-foreground">
@@ -54,14 +52,6 @@ const ErrorToastContent = ({ detail }: { detail: ErrorToastDetail }) => (
                 <div className="mt-2.5">
                     <CommandChip command={detail.command} />
                 </div>
-            )}
-            {detail.error && (
-                <p
-                    className="mt-2 truncate font-mono text-[11px] leading-4 text-muted-foreground/60"
-                    title={detail.error}
-                >
-                    {detail.error}
-                </p>
             )}
         </div>
     </div>

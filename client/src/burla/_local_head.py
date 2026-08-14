@@ -1,18 +1,18 @@
 """
 Client-hosted mode: runs main_service on this machine instead of a head VM.
 
-This is the default way Burla runs. `remote_parallel_map` starts main_service
-as a detached subprocess using the code vendored inside this package. The
-explicit `burla dashboard` command reuses that service when healthy or runs it
-in the foreground. Both modes also start an frpc tunnel so node VMs can reach
-the head through the relay. Node VMs are booted with the user's own cloud
-credentials. Azure nodes receive one short-lived delete lease because guest
-poweroff does not stop Azure compute billing. The only cloud permission needed
-is "can boot VMs". `burla deploy` remains the upgrade path to an always-on,
-shared head VM.
+This is the default way Burla runs. `remote_parallel_map` and `burla dashboard`
+start main_service as a detached subprocess using the code vendored inside this
+package. The dashboard command follows that subprocess's logs until Ctrl-C.
+Both modes also start an frpc tunnel so node VMs can reach the head through the
+relay. Node VMs are booted with the user's own cloud credentials. Azure nodes
+receive one short-lived delete lease because guest poweroff does not stop Azure
+compute billing. The only cloud permission needed is "can boot VMs". `burla
+deploy` remains the upgrade path to an always-on, shared head VM.
 """
 
 import configparser
+import fcntl
 import json
 import os
 import platform
@@ -27,9 +27,11 @@ import tarfile
 import tempfile
 import zipfile
 from collections.abc import Callable
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from time import sleep, time
+from urllib.parse import urlparse
 from uuid import uuid4
 
 import requests
@@ -86,6 +88,23 @@ def _head_state_dir(project_id: str, namespace: str = "") -> Path:
         directory = directory / f"cluster-{namespace}"
         directory.mkdir(parents=True, exist_ok=True)
     return directory
+
+
+@contextmanager
+def _head_lifecycle_lock(state_dir: Path):
+    # Dashboard attachment and job teardown run in separate processes; one must
+    # finish claiming or stopping a head before the other inspects ownership.
+    with open(state_dir / "lifecycle.lock", "w") as lock_file:
+        fcntl.flock(lock_file, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file, fcntl.LOCK_UN)
+
+
+def _dashboard_owns_head(state_dir: Path, head_pid: int) -> bool:
+    owner_path = state_dir / "dashboard.owner"
+    return owner_path.exists() and owner_path.read_text() == str(head_pid)
 
 
 # ------------------------------------------------------------------ cloud
@@ -493,7 +512,7 @@ subdomain = "{subdomain}"
 # ------------------------------------------------------------------ head process
 
 
-def _free_port(preferred: int | None = None) -> int:
+def _free_port(preferred: int | None = None, required: bool = False) -> int:
     # SO_REUSEADDR matches how uvicorn binds, so a just-killed head's
     # TIME_WAIT socket doesn't push us off the preferred port.
     if preferred is not None:
@@ -503,7 +522,8 @@ def _free_port(preferred: int | None = None) -> int:
                 probe.bind(("127.0.0.1", preferred))
                 return preferred
             except OSError:
-                pass
+                if required:
+                    raise LocalHeadError(f"Port {preferred} is already in use.")
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         return probe.getsockname()[1]
@@ -590,6 +610,7 @@ def running_head_url() -> str | None:
 class HeadHandle:
     url: str
     owned: bool  # True only for a head this process started (and must stop).
+    pid: int | None = None
     # True when the head outlives this machine: a deployed cluster, or one the
     # caller explicitly pointed at via BURLA_CLUSTER_DASHBOARD_URL (dev
     # clusters). Local ad hoc heads die with this machine, so background jobs
@@ -635,7 +656,11 @@ def acquire_head_for_job(for_background_job: bool = False) -> HeadHandle:
         raise DetachRequiresDeployedCluster()
 
     if handle is None:
-        handle = HeadHandle(url=ensure_local_head(), owned=True)
+        url = ensure_local_head()
+        _, project_id, _ = detect_cloud()
+        head_state_path = _head_state_dir(project_id) / "head.json"
+        pid = json.loads(head_state_path.read_text())["head_pid"]
+        handle = HeadHandle(url=url, owned=True, pid=pid)
     return handle
 
 
@@ -661,17 +686,19 @@ def release_head(handle: HeadHandle):
     except Exception:
         return
 
-    _shutdown_cluster_via_head(handle.url, project_id)
+    state_dir = _head_state_dir(project_id)
+    head_state_path = state_dir / "head.json"
+    with _head_lifecycle_lock(state_dir):
+        if _dashboard_owns_head(state_dir, handle.pid):
+            return
+        if not head_state_path.exists():
+            return
+        head_state = json.loads(head_state_path.read_text())
+        if head_state.get("head_pid") != handle.pid:
+            return
 
-    head_state_path = _head_state_dir(project_id) / "head.json"
-    if not head_state_path.exists():
-        return
-    head_state = json.loads(head_state_path.read_text())
-    head_pid = head_state.get("head_pid")
-    frpc_pid = head_state.get("frpc_pid")
-    _terminate_pid(head_pid)
-    _terminate_pid(frpc_pid)
-    _clear_process_state(head_state_path, head_pid, frpc_pid)
+        _shutdown_cluster_via_head(handle.url, project_id)
+        _stop_recorded_head(head_state_path, handle.pid)
 
 
 def _shutdown_cluster_via_head(url: str, project_id: str):
@@ -760,15 +787,18 @@ def resume_history_migration(project_id: str, head_url: str):
 def finish_history_migration(project_id: str):
     """The deployed cluster owns the history now: stop the local head so
     nothing writes to the migrated database afterwards."""
-    head_state_path = _head_state_dir(project_id) / "head.json"
-    if not head_state_path.exists():
-        return
-    head_state = json.loads(head_state_path.read_text())
-    head_pid = head_state.get("head_pid")
-    frpc_pid = head_state.get("frpc_pid")
-    _terminate_pid(head_pid)
-    _terminate_pid(frpc_pid)
-    _clear_process_state(head_state_path, head_pid, frpc_pid)
+    state_dir = _head_state_dir(project_id)
+    head_state_path = state_dir / "head.json"
+    with _head_lifecycle_lock(state_dir):
+        (state_dir / "dashboard.owner").unlink(missing_ok=True)
+        if not head_state_path.exists():
+            return
+        head_state = json.loads(head_state_path.read_text())
+        head_pid = head_state.get("head_pid")
+        frpc_pid = head_state.get("frpc_pid")
+        _terminate_pid(head_pid)
+        _terminate_pid(frpc_pid)
+        _clear_process_state(head_state_path, head_pid, frpc_pid)
 
 
 def _reap(pid: int):
@@ -797,11 +827,192 @@ def _terminate_pid(pid: int | None):
         sleep(0.1)
 
 
+def _pause_job_admission(url: str, project_id: str) -> bool:
+    cluster_token = read_saved_cluster_token(project_id)
+    response = requests.post(
+        f"{url}/v1/cluster/pause_job_admission",
+        headers={"Authorization": f"Bearer {cluster_token}"},
+        timeout=5,
+    )
+    if response.status_code == 409:
+        return False
+    response.raise_for_status()
+    return True
+
+
+def _resume_job_admission(url: str, project_id: str):
+    cluster_token = read_saved_cluster_token(project_id)
+    try:
+        response = requests.post(
+            f"{url}/v1/cluster/resume_job_admission",
+            headers={"Authorization": f"Bearer {cluster_token}"},
+            timeout=5,
+        )
+        response.raise_for_status()
+    except requests.RequestException:
+        pass
+
+
+def _head_exit_status(head_pid: int) -> tuple[bool, int | None]:
+    try:
+        exited_pid, status = os.waitpid(head_pid, os.WNOHANG)
+    except ChildProcessError:
+        return not _pid_alive(head_pid), None
+    if exited_pid:
+        return True, os.waitstatus_to_exitcode(status)
+    return False, None
+
+
+def _stream_head_log(log_path: Path, offset: int, head_pid: int) -> int | None:
+    with open(log_path, errors="replace") as head_log:
+        head_log.seek(offset)
+        while True:
+            exited, exit_code = _head_exit_status(head_pid)
+            if exited:
+                break
+            line = head_log.readline()
+            if line:
+                sys.stderr.write(line)
+                sys.stderr.flush()
+            else:
+                sleep(0.1)
+        for line in head_log:
+            sys.stderr.write(line)
+        sys.stderr.flush()
+    return exit_code
+
+
+def _wait_for_head_exit(head_pid: int) -> int | None:
+    while True:
+        exited, exit_code = _head_exit_status(head_pid)
+        if exited:
+            return exit_code
+        sleep(0.1)
+
+
+def _recorded_head_pid(head_state_path: Path) -> int | None:
+    if not head_state_path.exists():
+        return None
+    return json.loads(head_state_path.read_text()).get("head_pid")
+
+
+def _stop_recorded_head(head_state_path: Path, head_pid: int):
+    head_state = json.loads(head_state_path.read_text())
+    if head_state.get("head_pid") != head_pid:
+        return
+    frpc_pid = head_state.get("frpc_pid")
+    _terminate_pid(head_pid)
+    _terminate_pid(frpc_pid)
+    _clear_process_state(head_state_path, head_pid, frpc_pid)
+
+
 def run_local_head_for_dashboard(
     on_ready: Callable[[str, bool], None] | None = None,
+    port: int | None = None,
 ) -> None:
-    """Reuse a healthy head or run one here until it exits or Ctrl-C."""
-    _run_local_head(detached=False, on_ready=on_ready)
+    """Attach to a detached local head until it exits or the user presses Ctrl-C."""
+    if port is not None:
+        if type(port) is not int:
+            raise LocalHeadError("Dashboard port must be an integer.")
+        if not 1 <= port <= 65535:
+            raise LocalHeadError("Dashboard port must be between 1 and 65535.")
+
+    _, project_id, _ = detect_cloud()
+    state_dir = _head_state_dir(project_id)
+    head_state_path = state_dir / "head.json"
+    owner_path = state_dir / "dashboard.owner"
+    log_path = state_dir / "head.log"
+    log_offset = log_path.stat().st_size if log_path.exists() else 0
+    preferred_port = port if port is not None else PREFERRED_HEAD_PORT
+
+    # A job that originally started this process must relinquish cleanup before
+    # the dashboard attaches, or its normal teardown can kill the shared service.
+    with _head_lifecycle_lock(state_dir):
+        initial_head_pid = _recorded_head_pid(head_state_path)
+        previous_owner = owner_path.read_text() if owner_path.exists() else None
+        if initial_head_pid is not None:
+            owner_path.write_text(str(initial_head_pid))
+    try:
+        url = _run_local_head(
+            detached=True,
+            preferred_port=preferred_port,
+            require_preferred_port=port is not None,
+        )
+        with _head_lifecycle_lock(state_dir):
+            head_state = json.loads(head_state_path.read_text())
+            head_pid = head_state.get("head_pid")
+            if head_pid is None:
+                raise LocalHeadError("Burla's local service process is missing.")
+            logs_to_file = bool(head_state.get("logs_to_file"))
+            owner_path.write_text(str(head_pid))
+    except KeyboardInterrupt:
+        with _head_lifecycle_lock(state_dir):
+            current_head_pid = _recorded_head_pid(head_state_path)
+            if current_head_pid is not None and current_head_pid != initial_head_pid:
+                _stop_recorded_head(head_state_path, current_head_pid)
+            if previous_owner is None:
+                owner_path.unlink(missing_ok=True)
+            else:
+                owner_path.write_text(previous_owner)
+        return
+    except Exception:
+        with _head_lifecycle_lock(state_dir):
+            current_head_pid = _recorded_head_pid(head_state_path)
+            if current_head_pid is not None and current_head_pid != initial_head_pid:
+                _stop_recorded_head(head_state_path, current_head_pid)
+            if previous_owner is None:
+                owner_path.unlink(missing_ok=True)
+            else:
+                owner_path.write_text(previous_owner)
+        raise
+
+    try:
+        if on_ready:
+            on_ready(url, True)
+        if logs_to_file:
+            exit_code = _stream_head_log(log_path, log_offset, head_pid)
+        else:
+            print(
+                "Dashboard logs remain in the terminal that started this process.",
+                file=sys.stderr,
+            )
+            exit_code = _wait_for_head_exit(head_pid)
+    except KeyboardInterrupt:
+        try:
+            admission_paused = _pause_job_admission(url, project_id)
+        except requests.RequestException:
+            _resume_job_admission(url, project_id)
+            print(
+                f"\nCould not confirm whether a job is running. "
+                f"The dashboard will keep running at {url}."
+            )
+            return
+        if not admission_paused:
+            print(f"\nA Burla job is still running. The dashboard will keep running at {url}.")
+            return
+        with _head_lifecycle_lock(state_dir):
+            if _dashboard_owns_head(state_dir, head_pid):
+                owner_path.unlink()
+            _stop_recorded_head(head_state_path, head_pid)
+        return
+    except Exception:
+        with _head_lifecycle_lock(state_dir):
+            if head_pid != initial_head_pid:
+                _stop_recorded_head(head_state_path, head_pid)
+            if previous_owner is None:
+                owner_path.unlink(missing_ok=True)
+            else:
+                owner_path.write_text(previous_owner)
+        raise
+
+    with _head_lifecycle_lock(state_dir):
+        if _dashboard_owns_head(state_dir, head_pid):
+            owner_path.unlink()
+        _stop_recorded_head(head_state_path, head_pid)
+    if exit_code is None:
+        raise LocalHeadError("Burla's local service exited unexpectedly.")
+    if exit_code != 0:
+        raise LocalHeadError(f"Burla's local service exited with status {exit_code}.")
 
 
 def _run_local_head(
@@ -811,6 +1022,7 @@ def _run_local_head(
     reload_dir: str | None = None,
     namespace: str = "",
     preferred_port: int = PREFERRED_HEAD_PORT,
+    require_preferred_port: bool = False,
 ) -> str:
     cloud, project_id, aws_region = detect_cloud()
 
@@ -830,6 +1042,11 @@ def _run_local_head(
             url, project_id, saved_token, expected_namespace=head_namespace
         )
     ):
+        if require_preferred_port and urlparse(url).port != preferred_port:
+            raise LocalHeadError(
+                f"Burla dashboard is already running at {url}. "
+                "Stop it before choosing a different port."
+            )
         if not _pid_alive(head_state.get("frpc_pid")):
             _respawn_frpc(state_dir, head_state)
         if on_ready:
@@ -845,11 +1062,12 @@ def _run_local_head(
 
     # Stale processes from an old version/session die before their ports are reused.
     for pid_key in ("head_pid", "frpc_pid"):
-        if _pid_alive(head_state.get(pid_key)):
-            os.kill(head_state[pid_key], 15)
-        sleep(0.2)
+        _terminate_pid(head_state.get(pid_key))
 
-    head_port = _free_port(preferred=preferred_port)
+    head_port = _free_port(
+        preferred=preferred_port,
+        required=require_preferred_port,
+    )
     tls_port = _free_port()
     # Stable per project so node certs / head certs stay valid across restarts.
     subdomain = head_state.get("subdomain") or f"head-{uuid4().hex[:8]}--{project_id}"
@@ -913,6 +1131,7 @@ def _run_local_head(
         "tls_port": tls_port,
         "project_id": project_id,
         "cloud": cloud,
+        "logs_to_file": detached,
     }
     head_state_path.write_text(json.dumps(head_state))
 

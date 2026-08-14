@@ -215,11 +215,11 @@ def version():
     print(__version__)
 
 
-def dashboard():
-    """Open the dashboard for the cluster this machine uses."""
+def dashboard(port: int | None = None):
+    """Open the dashboard. Local dashboards use port 5001 unless overridden."""
     import webbrowser
 
-    from burla._local_head import run_local_head_for_dashboard
+    from burla._local_head import LocalHeadError, run_local_head_for_dashboard
 
     def open_dashboard(url: str, is_foreground: bool):
         print(f"Burla dashboard is running at {url}")
@@ -227,11 +227,15 @@ def dashboard():
             print("Press Ctrl-C to stop it.")
         webbrowser.open(url)
 
-    existing_url = _existing_cluster_dashboard_url()
-    if existing_url:
-        open_dashboard(existing_url, False)
+    remote_url = (
+        _pinned_cluster_url or _env_dashboard_url() or _deployed_dashboard_url()
+    )
+    if remote_url:
+        if port is not None:
+            raise LocalHeadError("--port can only be used with a local dashboard.")
+        open_dashboard(remote_url, False)
         return
-    run_local_head_for_dashboard(on_ready=open_dashboard)
+    run_local_head_for_dashboard(on_ready=open_dashboard, port=port)
 
 
 def init_cli():

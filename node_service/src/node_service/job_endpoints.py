@@ -20,7 +20,7 @@ from node_service import (
     get_request_files,
     head_client,
 )
-from node_service.helpers import Logger
+from node_service.helpers import Logger, debug_log
 from node_service.job_watcher import job_watcher_logged
 from node_service.worker_client import (
     READD_PRESSURE_COOLDOWN_SECONDS,
@@ -167,7 +167,6 @@ async def trade_slots(
     requesting_node: str = Query(...),
     slots_requested: int = Query(...),
     trade_id: str = Query(...),
-    logger: Logger = Depends(get_logger),
 ):
     """A ring neighbor that could productively run more workers than it owns
     asks this node for slots. Grant what this node is using worst: slots with
@@ -244,9 +243,12 @@ async def trade_slots(
         }
 
     if granted:
-        await logger.log(
-            f"Traded {granted} slots to {requesting_node} "
-            f"({SELF['target_parallelism']} remaining on this node)."
+        await debug_log(
+            "slots_traded",
+            to=requesting_node,
+            requested=slots_requested,
+            granted=granted,
+            target_now=SELF["target_parallelism"],
         )
     return {"slots_granted": granted}
 

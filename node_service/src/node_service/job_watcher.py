@@ -20,7 +20,7 @@ from node_service import (
     REINIT_SELF,
     head_client,
 )
-from node_service.helpers import Logger, format_traceback
+from node_service.helpers import Logger, debug_log, format_traceback
 from node_service.lifecycle_endpoints import reboot_containers
 from node_service.worker_client import (
     CPU_PRESSURE_FILE,
@@ -51,6 +51,10 @@ OVERSUBSCRIBE_MAX_WORKERS_PER_CPU = 2
 PEER_RECHECK_INTERVAL_SEC = 30
 # How long a node can make no progress before it logs its input accounting.
 STALL_REPORT_INTERVAL_SEC = 10
+# Cadence of the slot_state debug event: a continuous record of this node's
+# slot ledger, so post-mortems can read a timeseries instead of replaying
+# every change event.
+SLOT_STATE_LOG_INTERVAL_SEC = 60
 
 SEC_NEIGHBOR_HAD_NO_INPUTS = 0
 
@@ -309,20 +313,24 @@ async def _slot_trade_loop(session, logger, node_ids_expected):
                 response.raise_for_status()
                 granted = int((await response.json()).get("slots_granted") or 0)
         except Exception as error:
-            error_name = type(error).__name__
-            await logger.log(
-                f"Slot trade with {neighbor_id} failed: {error_name}: {error}",
-                "WARNING",
+            await debug_log(
+                "trade_failed",
+                neighbor=neighbor_id,
+                requested=want,
+                error=f"{type(error).__name__}: {error}",
             )
             continue
 
         SELF["slot_trade_id"] = None
         if granted:
             SELF["target_parallelism"] += granted
-            await logger.log(
-                f"Acquired {granted} slots from {neighbor_id} "
-                f"(now {SELF['target_parallelism']}); adding workers."
-            )
+        await debug_log(
+            "trade_result",
+            neighbor=neighbor_id,
+            requested=want,
+            granted=granted,
+            target_now=SELF["target_parallelism"],
+        )
 
 
 async def _push_progress() -> dict:
@@ -370,6 +378,7 @@ async def _job_watcher(
     last_loop_at = time()
     last_progress_at = time()
     last_progress_result_count = 0
+    last_slot_state_logged_at = 0.0
     while not SELF["job_watcher_stop_event"].is_set():
 
         SELF["current_parallelism"] = sum(
@@ -456,9 +465,10 @@ async def _job_watcher(
                 # request instead of booting a second set of machines.
                 if SELF["replacement_request_id"] is None:
                     SELF["replacement_request_id"] = uuid4().hex
+                request_id = SELF["replacement_request_id"]
                 try:
                     response = await head_client.request_replacement_nodes(
-                        SELF["current_job"], deficit, SELF["replacement_request_id"]
+                        SELF["current_job"], deficit, request_id
                     )
                     SELF["replacement_request_id"] = None
                     SELF["replacement_deficit_since"] = None
@@ -469,17 +479,34 @@ async def _job_watcher(
                         f"Handed {slots_booted} slots lost to pressure "
                         f"retirement to replacement node(s) {booted}."
                     )
+                    await debug_log(
+                        "replacement_booted",
+                        request_id=request_id,
+                        deficit=deficit,
+                        slots_booted=slots_booted,
+                        booted=booted,
+                        target_now=SELF["target_parallelism"],
+                    )
                 except aiohttp.ClientResponseError as e:
                     if e.status == 409:
                         # Grow budget exhausted (or job no longer grow=True):
                         # permanent for this job, stop asking.
                         SELF["replacement_refused"] = True
                         SELF["replacement_request_id"] = None
-                    msg = f"Replacement node request refused/failed: {e.status}"
-                    await logger.log(msg, severity="WARNING")
+                    await debug_log(
+                        "replacement_request_failed",
+                        request_id=request_id,
+                        deficit=deficit,
+                        status=e.status,
+                        refused_permanently=SELF["replacement_refused"],
+                    )
                 except Exception as e:
-                    msg = f"Replacement node request failed: {type(e).__name__}: {e}"
-                    await logger.log(msg, severity="WARNING")
+                    await debug_log(
+                        "replacement_request_failed",
+                        request_id=request_id,
+                        deficit=deficit,
+                        error=f"{type(e).__name__}: {e}",
+                    )
 
         # Push progress immediately on meaningful changes; the 1s loop covers
         # the steady state.
@@ -498,6 +525,20 @@ async def _job_watcher(
             last_results_update_time = time()
             last_reported_result_count = current_num_results
 
+        # Continuous slot-ledger record: target/alive/queued as a timeseries,
+        # so a failed run's forensics are a query instead of replaying every
+        # change event.
+        if time() - last_slot_state_logged_at > SLOT_STATE_LOG_INTERVAL_SEC:
+            last_slot_state_logged_at = time()
+            await debug_log(
+                "slot_state",
+                target=SELF["target_parallelism"],
+                alive_workers=sum(not w.retired for w in SELF["workers"]),
+                busy_workers=SELF["current_parallelism"],
+                queued_inputs=remaining_inputs,
+                results=SELF["num_results_received"],
+            )
+
         # A job that stops advancing is only diagnosable if you can see where
         # its inputs went: this node's queue, a parked transfer, or a worker.
         if current_num_results != last_progress_result_count:
@@ -505,19 +546,18 @@ async def _job_watcher(
             last_progress_at = time()
         elif time() - last_progress_at > STALL_REPORT_INTERVAL_SEC:
             last_progress_at = time()
-            await logger.log(
-                f"No new results for {STALL_REPORT_INTERVAL_SEC}s: "
-                f"queued_inputs={SELF['inputs_queue'].qsize()} "
-                f"inputs_in_transfer={pending_transfer_count} "
-                f"transfers={list(SELF['pending_transfers'])} "
-                f"busy_workers={SELF['current_parallelism']} "
-                f"results_produced={current_num_results} "
-                f"queued_results={SELF['results_queue'].qsize()} "
-                f"queued_result_bytes={SELF['results_queue'].size_bytes} "
-                f"unacked_result_batch={not pending_results_empty} "
-                f"workers={[(w.is_idle, w.retired) for w in SELF['workers']]} "
-                f"all_inputs_uploaded={SELF['all_inputs_uploaded']}",
-                severity="WARNING",
+            await debug_log(
+                "stall",
+                queued_inputs=SELF["inputs_queue"].qsize(),
+                inputs_in_transfer=pending_transfer_count,
+                transfers=list(SELF["pending_transfers"]),
+                busy_workers=SELF["current_parallelism"],
+                results_produced=current_num_results,
+                queued_results=SELF["results_queue"].qsize(),
+                queued_result_bytes=SELF["results_queue"].size_bytes,
+                unacked_result_batch=not pending_results_empty,
+                workers=[(w.is_idle, w.retired) for w in SELF["workers"]],
+                all_inputs_uploaded=SELF["all_inputs_uploaded"],
             )
 
         client_disconnected = False

@@ -312,6 +312,7 @@ def update_job(
         if new_status == "COMPLETED" and job.get("status") != "RUNNING":
             updates.pop("status")
             new_status = None
+        became_failed = new_status == "FAILED" and job.get("status") != "FAILED"
         job.update(updates)
         if append_fail_reason is not None:
             reasons = job.setdefault("fail_reason", [])
@@ -329,6 +330,17 @@ def update_job(
     for node in released_nodes:
         _publish(_node_event_queues, {"deleted": False, **node})
     _publish(_job_event_queues, {"job_id": job_id, **_job_summary(snapshot)})
+
+    if became_failed:
+        # Lazy import: helpers imports from the main_service package, which
+        # is mid-initialization when this module is first imported.
+        from main_service.helpers import ship_job_debug_logs
+
+        threading.Thread(
+            target=ship_job_debug_logs,
+            args=(job_id, snapshot.get("fail_reason")),
+            daemon=True,
+        ).start()
     return True
 
 

@@ -107,7 +107,17 @@ async def push_node_state(instance_name: str, request: Request):
 @router.post("/v1/nodes/{instance_name}/logs:batch")
 async def push_node_logs(instance_name: str, request: Request):
     body = await request.json()
-    await asyncio.to_thread(cluster_state.add_node_logs, instance_name, body["logs"])
+    # Same pipe, two sinks: entries carrying a "debug" payload are structured
+    # engineering events (never user-visible), everything else is the
+    # user-facing node-log story.
+    debug_entries = [
+        {**log["debug"], "ts": log.get("ts")} for log in body["logs"] if log.get("debug")
+    ]
+    user_logs = [log for log in body["logs"] if not log.get("debug")]
+    if debug_entries:
+        await asyncio.to_thread(history.add_debug_logs, instance_name, debug_entries)
+    if user_logs:
+        await asyncio.to_thread(cluster_state.add_node_logs, instance_name, user_logs)
 
 
 @router.post("/v1/nodes/{instance_name}/certificate")
@@ -231,6 +241,26 @@ async def boot_replacement_nodes(
     logger.log(
         f"Booting {len(planned)} replacement node(s) {names} covering "
         f"{slots_booted} slots for job {job_id} (requested by {requesting_node})."
+    )
+    # The head's side of the transaction, in the same flight recorder as the
+    # nodes' events: records the plan and the budget spent on it.
+    updated_job = cluster_state.get_job(job_id) or {}
+    await asyncio.to_thread(
+        history.add_debug_logs,
+        "head",
+        [
+            {
+                "job_id": job_id,
+                "event": "replacement_planned",
+                "fields": {
+                    "requested_by": requesting_node,
+                    "request_id": request_id,
+                    "missing_slots": missing_slots,
+                    "booted": planned,
+                    "grow_cpus_remaining": updated_job.get("grow_cpus_remaining"),
+                },
+            }
+        ],
     )
     return {"booted": planned, "slots_booted": slots_booted}
 

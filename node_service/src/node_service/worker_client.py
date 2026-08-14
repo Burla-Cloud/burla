@@ -21,6 +21,7 @@ from node_service import (
     __version__,
     head_client,
 )
+from node_service.helpers import debug_log
 
 # Sized so node_service's buffering fits inside its own memory reservation
 # (NODE_SERVICE_RESERVED_MEMORY_GB, 4GB on real VMs): workers own the rest of
@@ -410,10 +411,7 @@ async def _boot_readded_worker():
             asyncio.create_task(
                 worker._remove_retired_container(worker.container_id)
             )
-        await Logger().log(
-            f"Failed to boot re-added worker: {type(e).__name__}: {e}",
-            severity="WARNING",
-        )
+        await debug_log("worker_readd_failed", error=f"{type(e).__name__}: {e}")
         return
 
     if template is not None:

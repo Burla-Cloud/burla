@@ -51,6 +51,31 @@ def log_telemetry(message, severity="INFO", **kwargs):
         pass
 
 
+def ship_job_debug_logs(job_id: str, fail_reason):
+    """A job failed: send its debug-event trail to Burla's telemetry backend
+    so customer failures are diagnosable without asking anyone for files.
+    Best-effort, bounded, same kill switch as all other telemetry. Blocking:
+    callers run it in a thread."""
+    if os.environ.get("DISABLE_BURLA_TELEMETRY") == "True":
+        return
+    from main_service import history
+
+    try:
+        events = history.debug_logs_for_job(job_id)
+        if not events:
+            return
+        payload = {
+            "project_id": PROJECT_ID,
+            "job_id": job_id,
+            "fail_reason": fail_reason,
+            "events": events,
+        }
+        url = f"{BURLA_BACKEND_URL}/v1/telemetry/debug_logs"
+        requests.post(url, json=payload, timeout=5)
+    except Exception:
+        pass
+
+
 def parse_version(version_str: str) -> tuple[int, ...]:
     """Tuple-compare-friendly version parse. Assumes MAJOR.MINOR.PATCH."""
     return tuple(int(part) for part in version_str.split("."))

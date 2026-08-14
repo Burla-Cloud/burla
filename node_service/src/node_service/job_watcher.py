@@ -26,6 +26,7 @@ from node_service.worker_client import (
     CPU_PRESSURE_FILE,
     READD_MAX_CPU_STALL_FRACTION,
     READD_MAX_WORKER_MEMORY_USED_FRACTION,
+    READD_PRESSURE_COOLDOWN_SECONDS,
     _read_cpu_stall_usec,
     _workers_memory_limit_bytes,
 )
@@ -238,6 +239,16 @@ async def _slot_trade_loop(session, logger, node_ids_expected):
         if SELF["target_parallelism"] <= 0:
             return  # traded out; this node is on its way off the job
         if not SELF["all_inputs_uploaded"]:
+            continue
+        # A node that just shed workers under pressure has no business
+        # acquiring more capacity (mirrors the re-add cooldown, and stops
+        # a freshly-degraded node from instantly reclaiming the slot it
+        # donated).
+        recently_pressured = (
+            time() - SELF["last_pressure_retirement_at"]
+            < READD_PRESSURE_COOLDOWN_SECONDS
+        )
+        if recently_pressured:
             continue
         alive_workers = [w for w in SELF["workers"] if not w.retired]
         # A deficit is the re-add / replacement paths' problem, not trading's.

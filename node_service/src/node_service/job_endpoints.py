@@ -1,6 +1,7 @@
 import json
 import pickle
 from datetime import datetime, timezone
+from time import time
 from typing import Optional
 from uuid import uuid4
 
@@ -22,6 +23,7 @@ from node_service import (
 from node_service.helpers import Logger
 from node_service.job_watcher import job_watcher_logged
 from node_service.worker_client import (
+    READD_PRESSURE_COOLDOWN_SECONDS,
     cpu_pressure_monitor_loop,
     dynamic_ram_monitor_loop,
     dynamic_worker_readd_loop,
@@ -186,10 +188,18 @@ async def trade_slots(
         granted = 0
 
         # Unbacked slots: a live neighbor is a faster, cheaper home for them
-        # than the replacement VM they would otherwise become. Never trade
-        # them while a replacement request may be in flight for the same
-        # slots (that would duplicate them).
-        if SELF["replacement_request_id"] is None:
+        # than the replacement VM they would otherwise become. Only donate
+        # them while recently pressured, i.e. while this node's own re-add
+        # loop is blocked from filling them; otherwise two unpressured hungry
+        # nodes bounce the same slot back and forth faster than either can
+        # boot a worker for it (observed). Never trade them while a
+        # replacement request may be in flight for the same slots (that
+        # would duplicate them).
+        recently_pressured = (
+            time() - SELF["last_pressure_retirement_at"]
+            < READD_PRESSURE_COOLDOWN_SECONDS
+        )
+        if recently_pressured and SELF["replacement_request_id"] is None:
             unbacked = max(0, SELF["target_parallelism"] - len(alive_workers))
             granted += min(slots_requested, unbacked)
 

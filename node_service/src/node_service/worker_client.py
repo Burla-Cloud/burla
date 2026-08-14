@@ -420,9 +420,10 @@ async def _boot_readded_worker():
         SELF["workers"].remove(template)
     SELF["workers"].append(worker)
     new_parallelism = len(_active_dynamic_workers())
+    reason = "pressure subsided" if template is not None else "acquired slots"
     await Logger().log(
         f"Node parallelism increased from {new_parallelism - 1} to "
-        f"{new_parallelism}: pressure subsided, re-added a worker.",
+        f"{new_parallelism}: {reason}, added a worker.",
         job_id=SELF["current_job"],
         old_parallelism=new_parallelism - 1,
         new_parallelism=new_parallelism,

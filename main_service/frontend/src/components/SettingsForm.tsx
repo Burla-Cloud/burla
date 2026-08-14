@@ -21,6 +21,7 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
     ({ onChange }, ref) => {
         const { settings, setSettings } = useSettings();
         const users = settings.users ?? [];
+        const isClientHosted = window.__BURLA_CLIENT_HOSTED_MODE__ === true;
         const [newUser, setNewUser] = useState("");
         const isAws = settings.cloudProvider === "aws";
         const isAzure = settings.cloudProvider === "azure";
@@ -651,6 +652,7 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
                             </div>
                         </div>
 
+                        {!isClientHosted && (
                         <div className="space-y-2">
                             <h2 className="text-xl font-semibold text-primary">Authorized Users</h2>
                             <div>
@@ -704,6 +706,7 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
                                 ))}
                             </div>
                         </div>
+                        )}
                     </CardContent>
                 </Card>
             </div>

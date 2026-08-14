@@ -155,6 +155,76 @@ async def ack_transfer(
     return Response(status_code=200)
 
 
+@router.post("/jobs/{job_id}/trade_slots")
+async def trade_slots(
+    job_id: str = Path(...),
+    requesting_node: str = Query(...),
+    slots_requested: int = Query(...),
+    trade_id: str = Query(...),
+    logger: Logger = Depends(get_logger),
+):
+    """A ring neighbor that could productively run more workers than it owns
+    asks this node for slots. Grant what this node is using worst: slots with
+    no live worker behind them (pressure-retired capacity), then slots backed
+    by idle workers once the local queue is drained (retiring an idle worker
+    loses nothing - it holds no input). Slots are conserved: the requester
+    adds exactly what this node gives up. A node drained to zero slots
+    finishes its part of the job and frees its machine (packing).
+
+    Replaying the same trade_id returns the original grant instead of
+    granting twice, so a requester that never saw the response can retry.
+    """
+    if job_id != SELF["current_job"]:
+        return Response("job not found", status_code=404)
+
+    previous = SELF["slot_trades_granted"].get(requesting_node)
+    if previous and previous["trade_id"] == trade_id:
+        return {"slots_granted": previous["slots_granted"]}
+
+    async with SELF["dynamic_retire_lock"]:
+        alive_workers = [w for w in SELF["workers"] if not w.retired]
+        granted = 0
+
+        # Unbacked slots: a live neighbor is a faster, cheaper home for them
+        # than the replacement VM they would otherwise become. Never trade
+        # them while a replacement request may be in flight for the same
+        # slots (that would duplicate them).
+        if SELF["replacement_request_id"] is None:
+            unbacked = max(0, SELF["target_parallelism"] - len(alive_workers))
+            granted += min(slots_requested, unbacked)
+
+        queue_drained = (
+            SELF["inputs_queue"].qsize() == 0 and SELF["all_inputs_uploaded"]
+        )
+        if queue_drained:
+            idle_workers = [
+                w for w in alive_workers if w.is_idle and w.current_input is None
+            ]
+            idle_to_give = idle_workers[: max(0, slots_requested - granted)]
+            for worker in idle_to_give:
+                worker.retired = True
+                SELF["reboot_containers_after_job"] = True
+                # The task is parked on inputs_queue.get(); left alive it
+                # would swallow (and lose) the next input to arrive.
+                if worker.process_inputs_task is not None:
+                    worker.process_inputs_task.cancel()
+                await worker.retire_for_pressure()
+            granted += len(idle_to_give)
+
+        SELF["target_parallelism"] -= granted
+        SELF["slot_trades_granted"][requesting_node] = {
+            "trade_id": trade_id,
+            "slots_granted": granted,
+        }
+
+    if granted:
+        await logger.log(
+            f"Traded {granted} slots to {requesting_node} "
+            f"({SELF['target_parallelism']} remaining on this node)."
+        )
+    return {"slots_granted": granted}
+
+
 @router.post("/jobs/{job_id}/inputs")
 async def upload_inputs(
     job_id: str = Path(...),

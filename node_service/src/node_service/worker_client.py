@@ -386,16 +386,22 @@ async def cpu_pressure_monitor_loop():
 
 
 async def _boot_readded_worker():
-    """Boot one fresh worker container to replace a retired one and hand it
-    the retained function. Retirement deletes the worker's container, so
+    """Boot one fresh worker container toward this node's slot count and hand
+    it the retained function. Retirement deletes the worker's container, so
     recovering capacity means booting a new container, not reviving the old
-    one. The retired worker it replaces leaves SELF["workers"] so the list's
-    length keeps meaning "intended capacity"."""
+    one. A replaced retired worker leaves SELF["workers"] so the list's
+    length keeps meaning "intended capacity"; with no retired worker to
+    replace, the deficit came from slots acquired in a trade, and the new
+    worker oversubscribes the machine (CPU nodes only - the trade loop never
+    runs on GPU nodes)."""
     retired_workers = [worker for worker in SELF["workers"] if worker.retired]
-    # A deficit implies at least one retired worker: targets only shrink by
-    # slot transfer, and workers only leave the pool by retiring.
-    template = retired_workers[0]
-    worker = WorkerClient(template.image, gpu_index=template.gpu_index)
+    if retired_workers:
+        template = retired_workers[0]
+        image, gpu_index = template.image, template.gpu_index
+    else:
+        template = None
+        image, gpu_index = SELF["workers"][0].image, None
+    worker = WorkerClient(image, gpu_index=gpu_index)
     try:
         await worker.boot()
         await worker.load_function(SELF["function_pkl"])
@@ -410,7 +416,8 @@ async def _boot_readded_worker():
         )
         return
 
-    SELF["workers"].remove(template)
+    if template is not None:
+        SELF["workers"].remove(template)
     SELF["workers"].append(worker)
     new_parallelism = len(_active_dynamic_workers())
     await Logger().log(

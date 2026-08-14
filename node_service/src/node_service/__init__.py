@@ -82,6 +82,10 @@ def REINIT_SELF(SELF):
     SELF["replacement_request_id"] = None
     SELF["last_replacement_request_at"] = 0.0
     SELF["replacement_refused"] = False
+    # Pairwise slot trading with ring neighbors (see job_watcher.py).
+    SELF["slot_trades_granted"] = {}
+    SELF["slot_trade_id"] = None
+    SELF["last_slot_trade_attempt_at"] = 0.0
     SELF["job_watcher_stop_event"] = Event()
     SELF[
         "job_watcher_stop_event"

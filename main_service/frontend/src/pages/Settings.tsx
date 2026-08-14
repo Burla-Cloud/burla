@@ -27,7 +27,7 @@ import {
 const SettingsPage = () => {
   const navigate = useNavigate();
   const location = useLocation();
-  const { settings, setSettings } = useSettings();
+  const { settings, loading, error } = useSettings();
   const { saveSettings } = useSaveSettings();
 
   const { saving, setSaving } = useOutletContext<{
@@ -35,8 +35,6 @@ const SettingsPage = () => {
     setSaving: React.Dispatch<React.SetStateAction<boolean>>;
   }>();
 
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [showExitDialog, setShowExitDialog] = useState(false);
 
@@ -53,21 +51,10 @@ const SettingsPage = () => {
   }, [location.search]);
 
   useEffect(() => {
-    const fetchSettings = async () => {
-      try {
-        const res = await fetch("/v1/settings", { credentials: "include" });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json();
-        setSettings((prev) => ({ ...prev, ...data }));
-      } catch {
-        setError("Could not load settings");
-        toast({ title: "Failed to load settings", variant: "destructive" });
-      } finally {
-        setLoading(false);
-      }
-    };
-    fetchSettings();
-  }, [setSettings]);
+    if (error) {
+      toast({ title: "Failed to load settings", variant: "destructive" });
+    }
+  }, [error]);
 
   useEffect(() => {
     const warn = (e: BeforeUnloadEvent) => {

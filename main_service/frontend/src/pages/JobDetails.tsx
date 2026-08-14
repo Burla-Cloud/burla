@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { useJobs } from "@/contexts/JobsContext";
 import JobLogs from "@/components/JobLogs";
 import { Button } from "@/components/ui/button";
-import { Check, ChevronRight, Copy, PowerOff } from "lucide-react";
+import { ChevronRight, PowerOff } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
 import { StatusBadge, jobStatusBadge } from "@/components/StatusBadge";
 
@@ -27,32 +27,6 @@ const Fact = ({ label, value }: { label: string; value: React.ReactNode }) => (
         <div className="mt-1 text-sm leading-snug text-foreground">{value}</div>
     </div>
 );
-
-const CopyId = ({ id }: { id: string }) => {
-    const [copied, setCopied] = useState(false);
-
-    const handleCopy = async () => {
-        await navigator.clipboard.writeText(id);
-        setCopied(true);
-        window.setTimeout(() => setCopied(false), 1500);
-    };
-
-    return (
-        <button
-            type="button"
-            onClick={handleCopy}
-            className="group inline-flex min-w-0 items-center gap-1.5 rounded-md px-1.5 py-0.5 -mx-1.5 font-mono text-xs text-muted-foreground transition-colors duration-150 hover:bg-accent hover:text-foreground"
-            title={copied ? "Copied" : "Copy job ID"}
-        >
-            <span className="truncate">{id}</span>
-            {copied ? (
-                <Check className="h-3 w-3 shrink-0 text-emerald-600 dark:text-emerald-400" />
-            ) : (
-                <Copy className="h-3 w-3 shrink-0 opacity-0 transition-opacity duration-150 group-hover:opacity-100" />
-            )}
-        </button>
-    );
-};
 
 const JobDetails = () => {
     const jobId = useParams<{ jobId: string }>().jobId!;
@@ -294,9 +268,6 @@ const JobDetails = () => {
                                 {job.function_name ?? "Unknown"}
                             </h1>
                             <StatusBadge tone={badge.tone} label={badge.label} pulse={badge.pulse} />
-                        </div>
-                        <div className="mt-1">
-                            <CopyId id={job.id} />
                         </div>
                     </div>
                     <Button

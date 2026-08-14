@@ -343,6 +343,62 @@ async def _execute_job(
                 )
             )
         )
+
+    async def _discover_replacement_nodes():
+        """Nodes can ask the head to boot replacements for workers they
+        permanently lost to CPU/RAM pressure. Only this client can hand those
+        new machines the job (it holds the pickled function), so poll the
+        head for unknown nodes reserved for this job and fold them into the
+        job exactly like a node that was booting at job start."""
+        known_names = {n.instance_name for n in nodes}
+        while True:
+            await asyncio.sleep(3)
+            try:
+                job_nodes = await client.get_job_nodes(job_id)
+            except Exception:
+                continue  # head briefly unreachable; scaling just pauses
+            for node_data in job_nodes:
+                name = node_data["instance_name"]
+                target = int(node_data.get("target_parallelism") or 0)
+                if name in known_names:
+                    continue
+                known_names.add(name)
+                if node_data.get("status") not in ("BOOTING", "READY") or target <= 0:
+                    continue
+                new_node = Node.from_booting(
+                    instance_name=name,
+                    target_parallelism=target,
+                    session=node_session,
+                    client=client,
+                    spinner=spinner,
+                )
+                new_node.late_join = True
+                nodes.append(new_node)
+                # Appended in lockstep so the main loop's zip(node_tasks,
+                # nodes) failure scan stays aligned.
+                node_tasks.append(
+                    create_task(
+                        new_node.execute_job(
+                            job_id=job_id,
+                            background=background,
+                            n_inputs=n_inputs,
+                            packages=packages,
+                            func_cpu=func_cpu,
+                            func_ram=func_ram,
+                            start_time=start_time,
+                            function_pkl=function_pkl,
+                            udf_error_event=udf_error_event,
+                            inputs_with_indicies=inputs_with_indicies,
+                            return_queue=return_queue,
+                            nodes=nodes,
+                            assigned_node_ids=[n.instance_name for n in nodes],
+                            first_chunk_barrier=None,
+                        )
+                    )
+                )
+
+    discovery_task = create_task(_discover_replacement_nodes())
+    session_stack.callback(discovery_task.cancel)
     try:
         ping_process = None
         pinged_hosts: tuple = ()

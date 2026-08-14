@@ -285,6 +285,9 @@ class Node:
         self.started_booting_at = time()
         self.auth_headers = get_auth_headers()
         self.removed_reason = ""
+        # Mid-job replacement nodes are opportunistic extras: one failing to
+        # boot must not fail the job like a node promised at job start does.
+        self.late_join = False
         self.spinner_compatible_print = lambda msg: (
             safe_spinner_write(spinner, msg) if spinner else safe_print(msg)
         )
@@ -634,6 +637,11 @@ class Node:
                         break
                     await asyncio.sleep(random.uniform(2, 6))
             if self.state != "READY":
+                if self.late_join and self.state == "FAILED":
+                    # It never held the job or any inputs, so losing it is
+                    # harmless; the job keeps running on the other nodes.
+                    self.state = "REMOVED"
+                    self.removed_reason = "replacement node failed to boot"
                 return
 
         if packages:

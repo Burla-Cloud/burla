@@ -101,6 +101,7 @@ class Node:
         disk_size: Optional[int] = None,
         instance_name: Optional[str] = None,
         reserved_for_job: Optional[str] = None,
+        target_parallelism: Optional[int] = None,
     ):
         self = cls.__new__(cls)
         self.logger = logger
@@ -154,6 +155,9 @@ class Node:
                 "zone": None,
                 "current_job": None,
                 "reserved_for_job": reserved_for_job,
+                # Slots this reserved node covers; the client reads it from
+                # `GET /v1/jobs/{id}/nodes` to size the job assignment.
+                "target_parallelism": target_parallelism,
             },
         )
 

@@ -140,6 +140,25 @@ async def get_peers(job_id: str) -> dict:
         return await response.json()
 
 
+async def request_replacement_nodes(
+    job_id: str, missing_slots: int, request_id: str
+) -> dict:
+    """Ask the head to boot machines covering slots this node permanently
+    lost to pressure retirement. Returns {"booted": [...], "slots_booted"}.
+    `request_id` makes retries after a lost response safe (the head replays
+    the original plan instead of booting again)."""
+    session = _get_session()
+    url = f"{MAIN_SERVICE_URL}/v1/jobs/{job_id}/replacement_nodes"
+    body = {
+        "requesting_node": INSTANCE_NAME,
+        "missing_slots": missing_slots,
+        "request_id": request_id,
+    }
+    async with session.post(url, json=body, headers=_HEADERS) as response:
+        response.raise_for_status()
+        return await response.json()
+
+
 async def post_node_logs(logs: list[dict]):
     session = _get_session()
     url = f"{MAIN_SERVICE_URL}/v1/nodes/{INSTANCE_NAME}/logs:batch"

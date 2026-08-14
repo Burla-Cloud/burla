@@ -313,6 +313,9 @@ async def execute(
     SELF["workers"] = workers_to_assign
     SELF["idle_workers"] = workers_to_leave_idle
     SELF["current_parallelism"] = 0
+    # Slot count: what this node actually runs, not what was requested
+    # (fewer compatible workers than requested parallelism shrinks it).
+    SELF["target_parallelism"] = len(workers_to_assign)
     SELF["dynamic_func_ram"] = request_json["func_ram"] == "dynamic"
     SELF["dynamic_func_cpu"] = request_json["func_cpu"] == "dynamic"
     SELF["reboot_containers_after_job"] = False

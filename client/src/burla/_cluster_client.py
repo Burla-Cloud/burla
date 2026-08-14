@@ -174,6 +174,12 @@ class ClusterClient:
     async def get_job(self, job_id: str) -> Optional[dict]:
         return await self._request("GET", f"/v1/jobs/{job_id}")
 
+    async def get_job_nodes(self, job_id: str) -> list[dict]:
+        """Nodes running or reserved for this job; polled during a job to
+        discover mid-job replacement nodes this client must assign."""
+        response = await self._request("GET", f"/v1/jobs/{job_id}/nodes")
+        return (response or {}).get("nodes", [])
+
     async def patch_job(
         self,
         job_id: str,

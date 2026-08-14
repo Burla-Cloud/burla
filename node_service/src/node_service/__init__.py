@@ -73,6 +73,15 @@ def REINIT_SELF(SELF):
     SELF["results_queue"] = SizedQueue()
     SELF["current_job"] = None
     SELF["current_parallelism"] = 0
+    # This node's slot count for the current job: how many parallel calls it
+    # owes the job. Set at assignment; shrinks when slots transfer to a
+    # replacement node. Sum over all nodes never exceeds the job's approved
+    # parallelism (slot conservation).
+    SELF["target_parallelism"] = 0
+    SELF["replacement_deficit_since"] = None
+    SELF["replacement_request_id"] = None
+    SELF["last_replacement_request_at"] = 0.0
+    SELF["replacement_refused"] = False
     SELF["job_watcher_stop_event"] = Event()
     SELF[
         "job_watcher_stop_event"

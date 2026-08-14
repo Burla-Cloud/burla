@@ -23,6 +23,11 @@ CLIENT_CONTACT_TIMEOUT_SEC = 5
 ACK_RETRY_TIMEOUT_SEC = 600
 ACK_RETRY_DELAY_SEC = 15
 WORKER_CLEANUP_TIMEOUT_SEC = 120
+# How long a worker deficit must persist before this node asks the head to
+# boot replacement machines for it. Long enough for transient pressure to
+# clear and for un-retiring to win when the machine recovers on its own.
+REPLACEMENT_DEFICIT_WINDOW_SEC = 60
+REPLACEMENT_RETRY_SEC = 60
 # The set of nodes on a job changes rarely, so re-asking the head is cheap to do
 # seldom. Matches the client's wait before it hands a booting node the job.
 PEER_RECHECK_INTERVAL_SEC = 30
@@ -68,11 +73,13 @@ async def _input_steal_loop(session, logger, job_started_at, node_ids_expected):
     should_steal = lambda: SELF["all_inputs_uploaded"] and (
         time() - job_started_at > 10
     )
-    neighbor_id, neighbor_host, nodes_might_join = await get_neighbor(node_ids_expected)
-    if not (neighbor_id or nodes_might_join):
-        return
+    # Replacement nodes can join the ring at any point in the job, so the
+    # peer list is re-checked on an interval for the whole job instead of
+    # only while initially-expected nodes are still booting. last_peer_check
+    # starts at 0 so the first active tick fetches the initial neighbor.
+    neighbor_id, neighbor_host, nodes_might_join = None, None, True
     neighbor_had_no_inputs_at = None
-    last_peer_check = time()
+    last_peer_check = 0.0
 
     while not SELF["job_watcher_stop_event"].is_set():
         await asyncio.sleep(1)
@@ -81,13 +88,18 @@ async def _input_steal_loop(session, logger, job_started_at, node_ids_expected):
             await asyncio.sleep(1)
             continue
 
-        if nodes_might_join and (time() - last_peer_check > PEER_RECHECK_INTERVAL_SEC):
+        if time() - last_peer_check > PEER_RECHECK_INTERVAL_SEC:
             last_peer_check = time()
-            neighbor_id, neighbor_host, nodes_might_join = await get_neighbor(
-                node_ids_expected
-            )
-            if not (neighbor_id or nodes_might_join):
-                return
+            try:
+                neighbor_id, neighbor_host, nodes_might_join = await get_neighbor(
+                    node_ids_expected
+                )
+            except Exception:
+                # Head briefly unreachable: keep the current neighbor and let
+                # the next interval retry, instead of silently killing
+                # stealing for the rest of the job (this task's exceptions
+                # are never observed).
+                pass
 
         if not neighbor_id:
             continue
@@ -259,6 +271,68 @@ async def _job_watcher(
         client_contact_last_1s = client_contact_last_1s or active_request
         contact_flag_changed = client_contact_last_1s != SELF["client_contact_last_1s"]
         SELF["client_contact_last_1s"] = client_contact_last_1s
+
+        # --- replacement requester ------------------------------------
+        # Pressure retirement permanently shrinks this node's worker pool
+        # (until un-retiring recovers it). A deficit that persists while
+        # queued work exists means this machine cannot run the slots it owes
+        # the job, so hand them to a fresh machine. All policy lives here;
+        # the head only executes the boot. Slots are conserved: on success
+        # this node's target shrinks by exactly what was booted. A connected
+        # client is required because only it can assign the job (it holds
+        # the pickled function).
+        alive_workers = sum(not worker.retired for worker in SELF["workers"])
+        deficit = SELF["target_parallelism"] - alive_workers
+        wants_replacement = (
+            deficit > 0
+            and job_view.get("grow")
+            and not SELF["replacement_refused"]
+            and remaining_inputs > alive_workers
+            and client_contact_last_1s
+        )
+        if not wants_replacement:
+            SELF["replacement_deficit_since"] = None
+        else:
+            if SELF["replacement_deficit_since"] is None:
+                SELF["replacement_deficit_since"] = time()
+            deficit_sustained = (
+                time() - SELF["replacement_deficit_since"]
+                > REPLACEMENT_DEFICIT_WINDOW_SEC
+            )
+            retry_ok = (
+                time() - SELF["last_replacement_request_at"] > REPLACEMENT_RETRY_SEC
+            )
+            if deficit_sustained and retry_ok:
+                SELF["last_replacement_request_at"] = time()
+                # The id lives from the first send attempt until a response
+                # is seen, so a retry after a lost response replays the same
+                # request instead of booting a second set of machines.
+                if SELF["replacement_request_id"] is None:
+                    SELF["replacement_request_id"] = uuid4().hex
+                try:
+                    response = await head_client.request_replacement_nodes(
+                        SELF["current_job"], deficit, SELF["replacement_request_id"]
+                    )
+                    SELF["replacement_request_id"] = None
+                    SELF["replacement_deficit_since"] = None
+                    slots_booted = int(response.get("slots_booted") or 0)
+                    SELF["target_parallelism"] -= slots_booted
+                    booted = [n["instance_name"] for n in response.get("booted", [])]
+                    await logger.log(
+                        f"Handed {slots_booted} slots lost to pressure "
+                        f"retirement to replacement node(s) {booted}."
+                    )
+                except aiohttp.ClientResponseError as e:
+                    if e.status == 409:
+                        # Grow budget exhausted (or job no longer grow=True):
+                        # permanent for this job, stop asking.
+                        SELF["replacement_refused"] = True
+                        SELF["replacement_request_id"] = None
+                    msg = f"Replacement node request refused/failed: {e.status}"
+                    await logger.log(msg, severity="WARNING")
+                except Exception as e:
+                    msg = f"Replacement node request failed: {type(e).__name__}: {e}"
+                    await logger.log(msg, severity="WARNING")
 
         # Push progress immediately on meaningful changes; the 1s loop covers
         # the steady state.

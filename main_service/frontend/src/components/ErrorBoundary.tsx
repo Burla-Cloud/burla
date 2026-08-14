@@ -25,7 +25,7 @@ class ErrorBoundary extends Component<Props, State> {
             return (
                 <div className="min-h-screen bg-background text-foreground pt-10 text-center">
                     <div className="mb-5 flex justify-center">
-                        <BrandLockup linked={false} />
+                        <BrandLockup />
                     </div>
                     <h2 className="text-lg font-semibold">Oops! Something went wrong.</h2>
                     <p>Please try refreshing the page.</p>

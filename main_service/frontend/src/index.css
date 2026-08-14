@@ -683,28 +683,6 @@
     0 0 22px rgba(150, 221, 240, 0.16);
 }
 
-/* The lockup's trailing block blinks like a shell cursor on hover; class is
-   added/removed by BrandLockup so the full sequence plays out. */
-@keyframes logo-caret-blink {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0;
-  }
-}
-
-.logo-caret-blink {
-  animation: logo-caret-blink 0.75s steps(1, end) 4;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .logo-caret-blink {
-    animation: none;
-  }
-}
-
 /* Subtle table row slide-in */
 @keyframes rowIn {
   from {

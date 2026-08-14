@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { Moon, Sun, User } from "lucide-react";
+import { LogOut, Moon, Sun, User } from "lucide-react";
 import { useTheme, Theme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 
@@ -13,7 +13,6 @@ export default function ProfilePicture() {
     const [isOpen, setIsOpen] = useState<boolean>(false);
     const containerRef = useRef<HTMLDivElement>(null);
     const { theme, setTheme } = useTheme();
-    const firstName = userName?.split(" ")[0] || "";
 
     useEffect(() => {
         const fetchUserInfo = async () => {
@@ -58,9 +57,9 @@ export default function ProfilePicture() {
             onClick={() => setTheme(value)}
             aria-pressed={theme === value}
             className={cn(
-                "flex flex-1 items-center justify-center gap-1.5 rounded-[8px] px-2 py-1.5 font-mono text-xs transition-colors",
+                "flex flex-1 items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium transition-colors duration-150",
                 theme === value
-                    ? "bg-card text-foreground border border-border shadow-sm"
+                    ? "border border-border bg-card text-foreground shadow-sm"
                     : "text-muted-foreground hover:text-foreground",
             )}
         >
@@ -70,12 +69,12 @@ export default function ProfilePicture() {
     );
 
     return (
-        <div ref={containerRef} className="fixed top-6 right-6 z-50">
+        <div ref={containerRef} className="fixed right-5 top-5 z-50">
             {profilePicUrl ? (
                 <img
                     src={profilePicUrl}
                     alt="User profile"
-                    className="h-9 w-9 rounded-full border-2 border-border shadow-md object-cover cursor-pointer"
+                    className="h-8 w-8 cursor-pointer rounded-full border border-border object-cover shadow-sm"
                     onClick={() => setIsOpen(!isOpen)}
                 />
             ) : (
@@ -83,32 +82,39 @@ export default function ProfilePicture() {
                     type="button"
                     aria-label="Account menu"
                     onClick={() => setIsOpen(!isOpen)}
-                    className="flex h-9 w-9 items-center justify-center rounded-full border border-border bg-card text-muted-foreground shadow-md transition-colors hover:border-primary/60 hover:text-foreground"
+                    className="flex h-8 w-8 items-center justify-center rounded-full border border-border bg-card text-muted-foreground shadow-sm transition-colors duration-150 hover:text-foreground"
                 >
                     <User className="h-4 w-4" />
                 </button>
             )}
 
             {isOpen && (
-                <div className="absolute top-full mt-2 right-0 z-50 bg-popover border border-border rounded-xl shadow-lg px-4 py-4 w-56">
-                    {profilePicUrl && (
-                        <div className="text-center pt-2">
-                            <img
-                                src={profilePicUrl}
-                                alt="User profile large"
-                                className="h-20 w-20 rounded-full mx-auto object-cover"
-                            />
-                            <p className="mt-2 font-semibold text-foreground">Hi {firstName} !</p>
-                            <p className="text-sm text-muted-foreground mt-1">
-                                logged in as {userEmail}
-                            </p>
-                            <hr className="border-t border-border mt-6 mb-4" />
+                <div className="absolute right-0 top-full z-50 mt-2 w-60 rounded-xl border border-border bg-popover p-1.5 shadow-lg">
+                    {userName && (
+                        <div className="flex items-center gap-3 px-2.5 py-2.5">
+                            {profilePicUrl && (
+                                <img
+                                    src={profilePicUrl}
+                                    alt=""
+                                    className="h-8 w-8 rounded-full object-cover"
+                                />
+                            )}
+                            <div className="min-w-0">
+                                <p className="truncate text-sm font-medium text-foreground">
+                                    {userName}
+                                </p>
+                                <p className="truncate text-xs text-muted-foreground">
+                                    {userEmail}
+                                </p>
+                            </div>
                         </div>
                     )}
 
-                    <div className="flex items-center justify-between gap-3">
-                        <span className="text-sm text-muted-foreground">Theme</span>
-                        <div className="flex flex-1 rounded-[10px] bg-muted/80 p-1">
+                    {userName && <div className="mx-2.5 my-1 h-px bg-border" />}
+
+                    <div className="flex items-center justify-between gap-3 px-2.5 py-2">
+                        <span className="text-[13px] text-muted-foreground">Theme</span>
+                        <div className="flex flex-1 rounded-lg bg-muted/80 p-0.5">
                             {themeOption("light", "Light", Sun)}
                             {themeOption("dark", "Dark", Moon)}
                         </div>
@@ -116,41 +122,13 @@ export default function ProfilePicture() {
 
                     {profilePicUrl && (
                         <>
-                            <hr className="border-t border-border mt-4 mb-2" />
+                            <div className="mx-2.5 my-1 h-px bg-border" />
                             <button
                                 onClick={handleLogout}
-                                className="flex items-center w-full text-left px-2 py-1 hover:bg-accent rounded-md"
+                                className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[13px] font-medium text-foreground transition-colors duration-150 hover:bg-accent"
                             >
-                                <svg
-                                    xmlns="http://www.w3.org/2000/svg"
-                                    className="h-5 w-5 text-muted-foreground mr-2 stroke-current"
-                                    fill="none"
-                                    viewBox="0 0 24 24"
-                                    stroke="currentColor"
-                                >
-                                    <path
-                                        strokeLinecap="round"
-                                        strokeLinejoin="round"
-                                        strokeWidth="2"
-                                        d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"
-                                    />
-                                    <polyline
-                                        strokeLinecap="round"
-                                        strokeLinejoin="round"
-                                        strokeWidth="2"
-                                        points="16 17 21 12 16 7"
-                                    />
-                                    <line
-                                        strokeLinecap="round"
-                                        strokeLinejoin="round"
-                                        strokeWidth="2"
-                                        x1="21"
-                                        y1="12"
-                                        x2="9"
-                                        y2="12"
-                                    />
-                                </svg>
-                                <span className="text-sm text-foreground">Log out</span>
+                                <LogOut className="h-4 w-4 text-muted-foreground" />
+                                Log out
                             </button>
                         </>
                     )}

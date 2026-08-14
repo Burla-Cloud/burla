@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from "react";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useLogsContext } from "@/contexts/LogsContext";
 import { VariableSizeList as List } from "react-window";
 import { Switch } from "@/components/ui/switch";
@@ -501,9 +502,9 @@ const JobLogs = ({
     return (
       <div className="mt-4 mb-4 flex flex-col">
         <div className="flex items-center justify-between mb-3">
-          <h2 className="text-lg font-semibold text-primary">Logs</h2>
+          <h2 className="text-base font-semibold text-foreground">Logs</h2>
         </div>
-        <div className="text-[14.5px] text-foreground/90 text-center p-4">
+        <div className="p-4 text-center text-sm text-muted-foreground">
           Logs are hidden on small screens.
         </div>
       </div>
@@ -512,8 +513,8 @@ const JobLogs = ({
 
   const iconBtnClass = (disabled: boolean) =>
     disabled
-      ? "h-8 w-8 grid place-items-center rounded-md border border-border bg-card opacity-50 cursor-default"
-      : "h-8 w-8 grid place-items-center rounded-md border border-border bg-card hover:bg-accent active:bg-accent/80";
+      ? "flex h-7 w-7 items-center justify-center rounded-md border border-border bg-card text-muted-foreground opacity-50 cursor-default"
+      : "flex h-7 w-7 items-center justify-center rounded-md border border-border bg-card text-muted-foreground shadow-sm transition-colors duration-150 hover:bg-muted/60 hover:text-foreground";
   const failedPosition = Math.max(0, activeFailedIndexes.indexOf(selectedIndex));
   let failedProgressLabel = effectiveFailedCount.toLocaleString();
   if (effectiveFailedCount === 0) failedProgressLabel = "0";
@@ -524,17 +525,17 @@ const JobLogs = ({
   }
   const failedPillClass =
     effectiveFailedCount === 0
-      ? "border-border bg-card text-foreground/90"
-      : "border-destructive/30 bg-destructive/10 text-foreground/90";
+      ? "border-border bg-muted/70 text-muted-foreground"
+      : "border-destructive/25 bg-destructive/10 text-destructive";
   const isHasLogsLoading = showIndexesWithLogsOnly && stepperDisabled;
 
   return (
-    <div className="mt-0 mb-0 flex flex-col flex-1 min-h-0 text-[14.5px] font-normal text-foreground/90">
-      <div className="flex flex-1 min-h-0 flex-col rounded-lg border border-border bg-card shadow-sm overflow-hidden">
-        <div className="flex items-center justify-between gap-3 border-b border-border bg-muted/50 px-3 py-1.5">
-          <div className="flex items-center gap-2.5">
-            <label className="text-[13px] tabular-nums whitespace-nowrap flex items-center gap-1.5">
-              <span>Index</span>
+    <div className="mt-0 mb-0 flex flex-col flex-1 min-h-0 text-sm text-foreground">
+      <div className="flex flex-1 min-h-0 flex-col overflow-hidden rounded-xl border border-border bg-card shadow-sm">
+        <div className="flex items-center justify-between gap-3 border-b border-border/70 bg-muted/40 px-3 py-2">
+          <div className="flex items-center gap-3">
+            <label className="flex items-center gap-1.5 whitespace-nowrap text-[13px] tabular-nums text-muted-foreground">
+              <span>Input</span>
               <input
                 type="number"
                 min={0}
@@ -550,15 +551,15 @@ const JobLogs = ({
                   event.preventDefault();
                   goToCustomIndex();
                 }}
-                className="h-8 rounded-md border border-border bg-card px-1 text-[14.5px] font-normal tabular-nums text-foreground/90 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                style={{ width: `${Math.max(2, totalIndexesCountDigits) + 1}ch` }}
+                className="h-7 rounded-md border border-input bg-card px-1.5 text-center text-[13px] tabular-nums text-foreground shadow-sm transition-[border-color,box-shadow] duration-150 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none focus-visible:border-primary/70 focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-primary/15"
+                style={{ width: `${Math.max(2, totalIndexesCountDigits) + 2}ch` }}
                 aria-label="Current index"
                 disabled={isHasLogsSyncing}
               />
               <span>of {totalLabel}</span>
             </label>
 
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1">
               <button
                 type="button"
                 onClick={goPrev}
@@ -567,7 +568,7 @@ const JobLogs = ({
                 aria-label="Previous input"
                 title="Previous"
               >
-                <span className="text-[14.5px]">{`<`}</span>
+                <ChevronLeft className="h-3.5 w-3.5" />
               </button>
 
               <button
@@ -580,13 +581,13 @@ const JobLogs = ({
                 aria-label="Next input"
                 title="Next"
               >
-                <span className="text-[14.5px]">{`>`}</span>
+                <ChevronRight className="h-3.5 w-3.5" />
               </button>
             </div>
 
-            <div className="h-6 w-px bg-border" aria-hidden="true" />
+            <div className="h-4 w-px bg-border" aria-hidden="true" />
 
-            <label className="flex items-center gap-2 text-[13px] select-none">
+            <label className="flex select-none items-center gap-2 text-[13px] text-muted-foreground">
               <Switch
                 checked={showIndexesWithLogsOnly}
                 onCheckedChange={(checked) => {
@@ -605,14 +606,14 @@ const JobLogs = ({
                   }
                 }}
                 disabled={(logsOnlyIndexes.length === 0 && !showIndexesWithLogsOnly) || showFailedOnly}
-                className="scale-75 origin-left disabled:cursor-default"
+                className="disabled:cursor-default"
               />
               <span className="whitespace-nowrap">Has logs</span>
             </label>
 
-            <div className="h-6 w-px bg-border" aria-hidden="true" />
+            <div className="h-4 w-px bg-border" aria-hidden="true" />
 
-            <label className="flex items-center gap-2 text-[13px] select-none">
+            <label className="flex select-none items-center gap-2 text-[13px] text-muted-foreground">
               <Switch
                 checked={showFailedOnly}
                 onCheckedChange={(checked) => {
@@ -626,11 +627,11 @@ const JobLogs = ({
                   }
                 }}
                 disabled={effectiveFailedCount === 0 || showIndexesWithLogsOnly}
-                className="scale-75 origin-left disabled:cursor-default"
+                className="disabled:cursor-default"
               />
               <span className="whitespace-nowrap">Failed only</span>
               <span
-                className={`ml-1 inline-flex items-center rounded-full border px-2.5 py-1 text-[14.5px] tabular-nums ${failedPillClass}`}
+                className={`inline-flex items-center rounded-md border px-1.5 py-0.5 text-xs font-medium tabular-nums leading-none ${failedPillClass}`}
               >
                 {failedProgressLabel}
               </span>
@@ -639,32 +640,32 @@ const JobLogs = ({
           </div>
         </div>
 
-      <div className="flex-1 min-h-0 relative font-mono text-[13px] font-normal text-foreground/90 bg-card">
+      <div className="flex-1 min-h-0 relative bg-card font-mono text-xs text-foreground/90">
         {isHasLogsLoading && !isPageLoading && (
           <div className="absolute inset-0 z-20 flex items-center justify-center bg-card/75">
-            <div className="flex flex-col items-center text-foreground/90">
+            <div className="flex flex-col items-center text-muted-foreground">
               <div
-                className="h-6 w-6 rounded-full border-2 border-border border-t-primary animate-spin"
+                className="h-5 w-5 rounded-full border-2 border-border border-t-primary animate-spin"
                 role="status"
                 aria-label="Loading logs"
               />
-              <div className="mt-2 text-[13px]">Loading logs…</div>
+              <div className="mt-2 font-sans text-[13px]">Loading logs…</div>
             </div>
           </div>
         )}
         {isPageLoading ? (
           <div ref={containerRef} className="h-full w-full flex items-center justify-center">
-            <div className="flex flex-col items-center text-foreground/90">
+            <div className="flex flex-col items-center text-muted-foreground">
               <div
-                className="h-6 w-6 rounded-full border-2 border-border border-t-primary animate-spin"
+                className="h-5 w-5 rounded-full border-2 border-border border-t-primary animate-spin"
                 role="status"
                 aria-label="Loading logs"
               />
-              <div className="mt-2 text-[13px]">Loading logs…</div>
+              <div className="mt-2 font-sans text-[13px]">Loading logs…</div>
             </div>
           </div>
         ) : (
-          <div ref={containerRef} className="text-[13px] h-full relative">
+          <div ref={containerRef} className="text-xs h-full relative">
             {isLoadingOlderLogs && (
               <div className="absolute top-0 left-0 right-0 z-10 flex items-center justify-center gap-2 border-b border-border bg-card/95 py-2">
                 <div
@@ -672,7 +673,7 @@ const JobLogs = ({
                   role="status"
                   aria-label="Loading older logs"
                 />
-                <span className="text-[13px] text-foreground/90">Loading older logs…</span>
+                <span className="font-sans text-[13px] text-muted-foreground">Loading older logs…</span>
               </div>
             )}
             <List
@@ -716,12 +717,12 @@ const JobLogs = ({
                       role="separator"
                       aria-label={`Logs for ${row.label}`}
                     >
-                      <div className="w-full flex items-center gap-3 select-none">
-                        <div className="h-px w-full bg-border" aria-hidden="true" />
-                        <span className="shrink-0 text-center text-[13px] font-normal tracking-tight text-foreground/90">
+                      <div className="flex w-full select-none items-center gap-3">
+                        <div className="h-px w-full bg-border/70" aria-hidden="true" />
+                        <span className="shrink-0 text-center font-sans text-xs font-medium text-muted-foreground">
                           {row.label}
                         </span>
-                        <div className="h-px w-full bg-border" aria-hidden="true" />
+                        <div className="h-px w-full bg-border/70" aria-hidden="true" />
                       </div>
                     </div>
                   );
@@ -729,13 +730,15 @@ const JobLogs = ({
 
                 if (row.type === "empty") {
                   return (
-                    <div key={row.key} style={style} className="px-4 py-4">
+                    <div
+                      key={row.key}
+                      style={style}
+                      className="px-4 py-4 font-sans text-[13px] text-muted-foreground"
+                    >
                       {row.label}
                     </div>
                   );
                 }
-
-                const background = index % 2 === 0 ? "bg-muted/40" : "";
 
                 return (
                   <div key={row.key} style={style}>
@@ -748,9 +751,9 @@ const JobLogs = ({
                           setSizeForKey(row.id, h, index);
                         });
                       }}
-                      className={`grid grid-cols-[8rem,1fr] gap-2 px-4 py-2 border-t border-border transition ${background}`}
+                      className="grid grid-cols-[6.5rem,1fr] gap-3 border-t border-border/50 px-4 py-1.5 leading-5"
                     >
-                      <div className="text-left tabular-nums">
+                      <div className="select-none text-left tabular-nums text-muted-foreground">
                         {formatTime(row.logTimestamp)}
                       </div>
                       <div className="whitespace-pre-wrap break-words">{row.message}</div>

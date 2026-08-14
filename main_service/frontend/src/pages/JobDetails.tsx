@@ -1,10 +1,11 @@
-import { useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import { useEffect, useRef, useState } from "react";
 import { useJobs } from "@/contexts/JobsContext";
 import JobLogs from "@/components/JobLogs";
 import { Button } from "@/components/ui/button";
-import { PowerOff } from "lucide-react";
+import { Check, ChevronRight, Copy, PowerOff } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
+import { StatusBadge, jobStatusBadge } from "@/components/StatusBadge";
 
 type JobResultStats = {
     n_inputs: number;
@@ -20,20 +21,38 @@ type JobDoc = {
     func_gpu?: string | null;
 };
 
-const Fact = ({
-    label,
-    value,
-    span = 1,
-}: {
-    label: string;
-    value: React.ReactNode;
-    span?: number;
-}) => (
-    <div className="min-w-0" style={{ gridColumn: `span ${span} / span ${span}` }}>
+const Fact = ({ label, value }: { label: string; value: React.ReactNode }) => (
+    <div className="min-w-0">
         <div className="eyebrow">{label}</div>
-        <div className="mt-1.5 text-[14.5px] leading-snug text-foreground">{value}</div>
+        <div className="mt-1 text-sm leading-snug text-foreground">{value}</div>
     </div>
 );
+
+const CopyId = ({ id }: { id: string }) => {
+    const [copied, setCopied] = useState(false);
+
+    const handleCopy = async () => {
+        await navigator.clipboard.writeText(id);
+        setCopied(true);
+        window.setTimeout(() => setCopied(false), 1500);
+    };
+
+    return (
+        <button
+            type="button"
+            onClick={handleCopy}
+            className="group inline-flex min-w-0 items-center gap-1.5 rounded-md px-1.5 py-0.5 -mx-1.5 font-mono text-xs text-muted-foreground transition-colors duration-150 hover:bg-accent hover:text-foreground"
+            title={copied ? "Copied" : "Copy job ID"}
+        >
+            <span className="truncate">{id}</span>
+            {copied ? (
+                <Check className="h-3 w-3 shrink-0 text-emerald-600 dark:text-emerald-400" />
+            ) : (
+                <Copy className="h-3 w-3 shrink-0 opacity-0 transition-opacity duration-150 group-hover:opacity-100" />
+            )}
+        </button>
+    );
+};
 
 const JobDetails = () => {
     const jobId = useParams<{ jobId: string }>().jobId!;
@@ -92,42 +111,18 @@ const JobDetails = () => {
     const formatStartedAt = (date?: Date): string => {
         if (!date) return "—";
         const tz = userTimeZone || Intl.DateTimeFormat().resolvedOptions().timeZone;
+        const monthDay = date.toLocaleDateString("en-US", {
+            timeZone: tz,
+            month: "short",
+            day: "numeric",
+        });
         const time = date.toLocaleTimeString("en-US", {
             timeZone: tz,
             hour: "numeric",
             minute: "2-digit",
             hour12: true,
         });
-        const monthDay = date.toLocaleDateString("en-US", {
-            timeZone: tz,
-            month: "short",
-            day: "numeric",
-        });
-        return `${time}, ${monthDay}`;
-    };
-    const defaultBadge = "border-border bg-muted text-muted-foreground";
-    const getStatusBadgeClass = (status: string | null) => {
-        const statusClasses: Record<string, string> = {
-            PENDING: defaultBadge,
-            RUNNING:
-                "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-300/30 dark:bg-amber-300/10 dark:text-amber-300",
-            FAILED: "border-destructive/30 bg-destructive/10 text-destructive",
-            CANCELED: "border-destructive/30 bg-destructive/10 text-destructive",
-            COMPLETED:
-                "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-300/30 dark:bg-emerald-300/10 dark:text-emerald-300",
-        };
-        return status ? statusClasses[status] || defaultBadge : defaultBadge;
-    };
-
-    const getStatusDotClass = (status: string | null) => {
-        const statusDotClasses: Record<string, string> = {
-            PENDING: "bg-muted-foreground/60",
-            RUNNING: "bg-amber-400",
-            FAILED: "bg-destructive",
-            CANCELED: "bg-destructive",
-            COMPLETED: "bg-emerald-500 dark:bg-emerald-400",
-        };
-        return status ? statusDotClasses[status] || "bg-muted-foreground/60" : "bg-muted-foreground/60";
+        return `${monthDay}, ${time}`;
     };
 
     const stopJob = async () => {
@@ -233,24 +228,16 @@ const JobDetails = () => {
         };
     }, [jobId, job?.status]);
 
-    if (!job) {
+    if (!job || isStatsLoading) {
         return (
-            <div className="flex-1 flex flex-col items-center justify-center px-12 pt-10">
-                <h1 className="text-2xl font-semibold text-muted-foreground">Loading job...</h1>
-            </div>
-        );
-    }
-
-    if (isStatsLoading) {
-        return (
-            <div className="flex-1 flex flex-col items-center justify-center px-12 pt-10">
+            <div className="flex flex-1 flex-col items-center justify-center">
                 <div className="inline-flex items-center gap-3 text-muted-foreground">
                     <div
-                        className="h-6 w-6 rounded-full border-2 border-border border-t-primary animate-spin"
+                        className="h-5 w-5 animate-spin rounded-full border-2 border-border border-t-primary"
                         role="status"
-                        aria-label="Loading job result stats"
+                        aria-label="Loading job details"
                     />
-                    <h1 className="text-2xl font-semibold text-muted-foreground">Loading job details...</h1>
+                    <span className="text-sm">Loading job…</span>
                 </div>
             </div>
         );
@@ -258,13 +245,13 @@ const JobDetails = () => {
 
     if (statsLoadError || !stats) {
         return (
-            <div className="flex-1 flex flex-col items-center justify-center px-12 pt-10">
-                <h1 className="text-2xl font-semibold text-destructive">
+            <div className="flex flex-1 flex-col items-center justify-center text-center">
+                <p className="text-sm font-medium text-foreground">
                     Failed to load job result stats
-                </h1>
+                </p>
                 <button
                     onClick={() => window.location.reload()}
-                    className="mt-4 text-primary underline underline-offset-2"
+                    className="mt-2 text-[13px] font-medium text-primary hover:underline"
                 >
                     Retry
                 </button>
@@ -273,51 +260,59 @@ const JobDetails = () => {
     }
 
     const safeFailedCount = Math.max(0, stats.n_failed);
-    const succeededCount = Math.max(0, stats.n_results);
+    // n_results counts every finished call, including failed ones.
+    const finishedCount = Math.max(0, stats.n_results);
+    const succeededCount = Math.max(0, finishedCount - safeFailedCount);
     const remainingCount = Math.max(0, stats.n_inputs - succeededCount - safeFailedCount);
     const succeededPct = stats.n_inputs ? (succeededCount / stats.n_inputs) * 100 : 0;
     const failedPct = stats.n_inputs ? (safeFailedCount / stats.n_inputs) * 100 : 0;
     const remainingPct = stats.n_inputs ? (remainingCount / stats.n_inputs) * 100 : 0;
 
-    return (
-        <div className="flex flex-col flex-1 min-h-0 px-12 pt-0">
-            <div className="max-w-6xl mx-auto w-full flex flex-col flex-1 min-h-0">
-                <div className="mb-3 rounded-lg border border-border bg-card px-6 py-5">
-                    <div className="flex flex-row items-start justify-between gap-4">
-                        <div className="min-w-0">
-                            <div className="flex items-center gap-3 flex-wrap">
-                                <h1 className="text-[24px] font-semibold tracking-tight text-foreground truncate">
-                                    {job.function_name ?? "Unknown"}
-                                </h1>
-                                <span
-                                    className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 font-mono text-[12.5px] font-medium ${getStatusBadgeClass(job.status)}`}
-                                >
-                                    <span className={`h-2 w-2 rounded-full ${getStatusDotClass(job.status)}`} />
-                                    <span>{(job.status ?? "UNKNOWN").toLowerCase().replace(/^./, c => c.toUpperCase())}</span>
-                                </span>
-                            </div>
-                            <div className="mt-1.5 font-mono text-[13px] text-muted-foreground truncate">
-                                {job.id}
-                            </div>
-                        </div>
-                        {(() => {
-                            const canStop = job?.status === "RUNNING" || job?.status === "PENDING";
-                            return (
-                                <Button
-                                    variant={canStop ? "destructive" : "outline"}
-                                    size="sm"
-                                    className="h-9 shrink-0"
-                                    onClick={stopJob}
-                                    disabled={isStopping || !canStop}
-                                >
-                                    <PowerOff className="mr-2 h-3.5 w-3.5" />
-                                    Stop
-                                </Button>
-                            );
-                        })()}
-                    </div>
+    const badge = jobStatusBadge(job.status);
+    const canStop = job.status === "RUNNING" || job.status === "PENDING";
 
-                    <div className="mt-5 pt-5 border-t border-border/60 grid grid-cols-2 sm:grid-cols-3 gap-x-8 gap-y-5">
+    return (
+        <div className="flex flex-1 flex-col min-h-0 min-w-0">
+            <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col min-h-0">
+                {/* Breadcrumb */}
+                <nav className="flex items-center gap-1 text-[13px] text-muted-foreground">
+                    <Link
+                        to="/jobs"
+                        className="rounded font-medium transition-colors duration-150 hover:text-foreground"
+                    >
+                        Jobs
+                    </Link>
+                    <ChevronRight className="h-3.5 w-3.5" />
+                    <span className="truncate font-mono text-xs">{job.id}</span>
+                </nav>
+
+                {/* Title row */}
+                <div className="mt-3 flex flex-wrap items-start justify-between gap-x-6 gap-y-3 pb-5">
+                    <div className="min-w-0">
+                        <div className="flex items-center gap-3">
+                            <h1 className="truncate font-mono text-xl font-semibold tracking-tight text-foreground">
+                                {job.function_name ?? "Unknown"}
+                            </h1>
+                            <StatusBadge tone={badge.tone} label={badge.label} pulse={badge.pulse} />
+                        </div>
+                        <div className="mt-1">
+                            <CopyId id={job.id} />
+                        </div>
+                    </div>
+                    <Button
+                        variant="outline-destructive"
+                        onClick={stopJob}
+                        disabled={isStopping || !canStop}
+                        className="shrink-0"
+                    >
+                        <PowerOff />
+                        Stop job
+                    </Button>
+                </div>
+
+                {/* Details + progress */}
+                <div className="mb-4 rounded-xl border border-border bg-card shadow-sm">
+                    <div className="grid grid-cols-2 gap-x-8 gap-y-4 px-5 py-4 sm:grid-cols-3 lg:grid-cols-6">
                         <Fact
                             label="Started"
                             value={
@@ -329,7 +324,7 @@ const JobDetails = () => {
                         <Fact
                             label="Image"
                             value={
-                                <span className="font-mono text-[13px] break-all">
+                                <span className="break-all font-mono text-[13px]">
                                     {jobDoc?.image ?? (jobDoc ? "default" : "—")}
                                 </span>
                             }
@@ -343,7 +338,7 @@ const JobDetails = () => {
                             }
                         />
                         <Fact
-                            label="Function CPU"
+                            label="CPU / call"
                             value={
                                 <span className="tabular-nums">
                                     {jobDoc?.func_cpu != null ? `${jobDoc.func_cpu} vCPU` : "—"}
@@ -351,83 +346,77 @@ const JobDetails = () => {
                             }
                         />
                         <Fact
-                            label="Function RAM"
+                            label="RAM / call"
                             value={
                                 <span className="tabular-nums">
                                     {jobDoc?.func_ram != null ? `${jobDoc.func_ram} GB` : "—"}
                                 </span>
                             }
                         />
-                        <Fact
-                            label="Function GPU"
-                            value={jobDoc?.func_gpu ?? (jobDoc ? "None" : "—")}
-                        />
+                        <Fact label="GPU / call" value={jobDoc?.func_gpu ?? (jobDoc ? "None" : "—")} />
                     </div>
-                </div>
 
-                <div className="mb-3 rounded-lg border border-border bg-card px-4 py-3">
-                    <div className="flex items-end justify-between gap-6">
-                        <div>
-                            <div className="mt-0.5 text-[14.5px] tabular-nums text-foreground/90">
-                                {succeededCount.toLocaleString()}
-                                <span className="mx-1.5">/</span>
-                                <span>
-                                    {stats.n_inputs.toLocaleString()}
+                    <div className="border-t border-border/70 px-5 py-4">
+                        <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2">
+                            <span className="text-sm tabular-nums text-foreground">
+                                <span className="font-semibold">
+                                    {finishedCount.toLocaleString()}
                                 </span>
-                                <span className="ml-2">
-                                    Function calls complete.
+                                <span className="text-muted-foreground">
+                                    {" "}
+                                    / {stats.n_inputs.toLocaleString()} function calls complete
+                                </span>
+                            </span>
+
+                            <div className="flex flex-wrap items-center gap-4 text-[13px] text-muted-foreground">
+                                <span className="inline-flex items-center gap-1.5">
+                                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 dark:bg-emerald-400" />
+                                    Succeeded
+                                    <span className="tabular-nums text-foreground">
+                                        {succeededCount.toLocaleString()}
+                                    </span>
+                                </span>
+                                <span className="inline-flex items-center gap-1.5">
+                                    <span className="h-1.5 w-1.5 rounded-full bg-destructive" />
+                                    Failed
+                                    <span className="tabular-nums text-foreground">
+                                        {safeFailedCount.toLocaleString()}
+                                    </span>
+                                </span>
+                                <span className="inline-flex items-center gap-1.5">
+                                    <span className="h-1.5 w-1.5 rounded-full bg-amber-400" />
+                                    Remaining
+                                    <span className="tabular-nums text-foreground">
+                                        {remainingCount.toLocaleString()}
+                                    </span>
                                 </span>
                             </div>
                         </div>
 
-                        <div className="flex flex-wrap items-center justify-end gap-5 text-[14.5px] text-foreground/90">
-                            <span className="inline-flex items-center gap-1.5">
-                                <span className="h-2 w-2 rounded-full bg-emerald-500 dark:bg-emerald-400" />
-                                <span>Success</span>
-                                <span className="tabular-nums">
-                                    {succeededCount.toLocaleString()}
-                                </span>
-                            </span>
-                            <span className="inline-flex items-center gap-1.5">
-                                <span className="h-2 w-2 rounded-full bg-destructive" />
-                                <span>Failed</span>
-                                <span className="tabular-nums">
-                                    {safeFailedCount.toLocaleString()}
-                                </span>
-                            </span>
-                            <span className="inline-flex items-center gap-1.5">
-                                <span className="h-2 w-2 rounded-full bg-amber-400" />
-                                <span>Remaining</span>
-                                <span className="tabular-nums">
-                                    {remainingCount.toLocaleString()}
-                                </span>
-                            </span>
-                        </div>
-                    </div>
-
-                    <div className="mt-2 h-2.5 w-full overflow-hidden rounded-full bg-secondary">
-                        <div className="flex h-full w-full">
-                            <div
-                                className="h-full bg-emerald-500 dark:bg-emerald-400 transition-all"
-                                style={{ width: `${succeededPct}%` }}
-                                aria-hidden="true"
-                            />
-                            <div
-                                className="h-full bg-destructive transition-all"
-                                style={{ width: `${failedPct}%` }}
-                                aria-hidden="true"
-                            />
-                            <div
-                                className="h-full bg-amber-400 transition-all"
-                                style={{ width: `${remainingPct}%` }}
-                                aria-hidden="true"
-                            />
+                        <div className="mt-2.5 h-1.5 w-full overflow-hidden rounded-full bg-secondary">
+                            <div className="flex h-full w-full">
+                                <div
+                                    className="h-full bg-emerald-500 transition-all dark:bg-emerald-400"
+                                    style={{ width: `${succeededPct}%` }}
+                                    aria-hidden="true"
+                                />
+                                <div
+                                    className="h-full bg-destructive transition-all"
+                                    style={{ width: `${failedPct}%` }}
+                                    aria-hidden="true"
+                                />
+                                <div
+                                    className="h-full bg-amber-400 transition-all"
+                                    style={{ width: `${remainingPct}%` }}
+                                    aria-hidden="true"
+                                />
+                            </div>
                         </div>
                     </div>
                 </div>
 
-                {/* Logs Section */}
-                <div className="flex-1 min-h-0 flex flex-col">
+                {/* Logs */}
+                <div className="flex flex-1 flex-col min-h-0">
                     <JobLogs
                         jobId={job.id}
                         jobStatus={job.status}

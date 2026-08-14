@@ -3,92 +3,93 @@
 @tailwind utilities;
 
 @layer base {
-  /* Light "sky" theme: white/ice surfaces, navy ink, the site's blue as accent. */
+  /* Light theme: calm near-neutral chrome (a whisper of the brand's cool cast),
+     white surfaces, slate ink, Burla's teal reserved for actions and links. */
   :root {
     color-scheme: light;
 
-    --background: 200 50% 98%;
-    --foreground: 206 50% 11%;
+    --background: 210 30% 98%;
+    --foreground: 215 28% 15%;
 
     --card: 0 0% 100%;
-    --card-foreground: 206 50% 11%;
+    --card-foreground: 215 28% 15%;
 
     --popover: 0 0% 100%;
-    --popover-foreground: 206 50% 11%;
+    --popover-foreground: 215 28% 15%;
 
-    --brand: 193 56% 38%;
+    --brand: 193 56% 36%;
     --primary: var(--brand);
-    --primary-foreground: 197 60% 97%;
+    --primary-foreground: 197 60% 98%;
 
-    --secondary: 199 40% 94%;
-    --secondary-foreground: 206 45% 15%;
+    --secondary: 210 24% 95%;
+    --secondary-foreground: 215 25% 20%;
 
-    --muted: 199 40% 94%;
-    --muted-foreground: 205 18% 42%;
+    --muted: 210 24% 95%;
+    --muted-foreground: 215 14% 44%;
 
-    --accent: 196 45% 91%;
-    --accent-foreground: 206 45% 15%;
+    --accent: 207 28% 93%;
+    --accent-foreground: 215 25% 20%;
 
-    --destructive: 6 78% 50%;
-    --destructive-foreground: 197 60% 97%;
+    --destructive: 6 74% 47%;
+    --destructive-foreground: 0 0% 100%;
 
-    --border: 200 30% 88%;
-    --input: 200 30% 88%;
+    --border: 213 22% 89%;
+    --input: 213 20% 85%;
     --ring: 193 56% 38%;
 
     --radius: 0.5rem;
 
-    --sidebar-background: 202 45% 96%;
-    --sidebar-foreground: 206 30% 25%;
+    --sidebar-background: 210 28% 97%;
+    --sidebar-foreground: 215 16% 38%;
     --sidebar-primary: var(--brand);
     --sidebar-primary-foreground: 0 0% 98%;
-    --sidebar-accent: 199 40% 91%;
-    --sidebar-accent-foreground: 206 45% 15%;
-    --sidebar-border: 200 30% 88%;
+    --sidebar-accent: 209 24% 92%;
+    --sidebar-accent-foreground: 215 25% 20%;
+    --sidebar-border: 213 22% 89%;
     --sidebar-ring: var(--brand);
   }
 
-  /* Dark "space" theme, softened: burla.dev's navy/cyan/ice/coral hues with
-     surfaces a step lighter than the site so dense tables stay readable. */
+  /* Dark "space" theme: burla.dev's navy/cyan/ice hues, flattened so dense
+     tables stay readable and chrome stays quiet. */
   .dark {
     color-scheme: dark;
 
-    --background: 207 45% 10%;
-    --foreground: 197 60% 97%;
+    --background: 208 42% 9%;
+    --foreground: 197 50% 96%;
 
-    --card: 206 40% 14%;
-    --card-foreground: 197 60% 97%;
+    --card: 207 38% 13%;
+    --card-foreground: 197 50% 96%;
 
-    --popover: 206 40% 15%;
-    --popover-foreground: 197 60% 97%;
+    --popover: 207 38% 14%;
+    --popover-foreground: 197 50% 96%;
 
-    --brand: 191 58% 68%;
+    --brand: 191 55% 66%;
     --primary: var(--brand);
-    --primary-foreground: 207 60% 7%;
+    --primary-foreground: 208 60% 8%;
 
-    --secondary: 205 35% 20%;
-    --secondary-foreground: 197 60% 97%;
+    --secondary: 206 32% 18%;
+    --secondary-foreground: 197 50% 96%;
 
-    --muted: 206 35% 18%;
-    --muted-foreground: 202 28% 76%;
+    --muted: 206 32% 17%;
+    --muted-foreground: 203 20% 71%;
 
-    --accent: 203 40% 22%;
-    --accent-foreground: 197 60% 97%;
+    --destructive: 6 88% 69%;
+    --destructive-foreground: 208 60% 8%;
 
-    --destructive: 8 100% 71%;
-    --destructive-foreground: 207 60% 7%;
+    --accent: 204 34% 20%;
+    --accent-foreground: 197 50% 96%;
 
-    --border: 199 30% 26%;
-    --input: 199 30% 26%;
-    --ring: 191 58% 68%;
+    --border: 204 28% 21%;
+    --input: 204 28% 26%;
+    --ring: 191 55% 66%;
 
-    --sidebar-background: 208 45% 8%;
-    --sidebar-foreground: 202 25% 80%;
+    --sidebar-background: 209 44% 7%;
+    --sidebar-foreground: 202 20% 76%;
     --sidebar-primary: var(--brand);
-    --sidebar-primary-foreground: 207 60% 7%;
-    --sidebar-accent: 204 40% 16%;
-    --sidebar-accent-foreground: 197 60% 97%;
-    --sidebar-border: 202 35% 17%;
+    --sidebar-primary-foreground: 208 60% 8%;
+    --sidebar-accent: 205 36% 15%;
+    --sidebar-accent-foreground: 197 50% 96%;
+    --sidebar-border: 204 32% 15%;
     --sidebar-ring: var(--brand);
   }
 }
@@ -101,6 +102,8 @@
   body {
     @apply bg-background text-foreground;
     font-family: 'Inter', sans-serif;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
   }
 
   .dark ::selection {
@@ -110,9 +113,9 @@
 }
 
 @layer components {
-  /* Small mono uppercase label, borrowed from burla.dev */
+  /* Small uppercase label used for fact/detail labels */
   .eyebrow {
-    @apply font-mono text-[11px] font-medium uppercase tracking-eyebrow text-muted-foreground;
+    @apply text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground;
   }
 
   .filesystem-filemanager .e-upload-dialog,
@@ -126,7 +129,7 @@
     overflow: hidden;
     border: none;
     font-family: 'Inter', sans-serif !important;
-    font-size: 1rem;
+    font-size: 0.875rem;
   }
 
   .filesystem-filemanager .e-fe-overlay,
@@ -431,9 +434,9 @@
   .filesystem-shell .e-toolbar .e-tbar-btn-text .e-tbar-btn-text
   {
     font-family: 'Inter', sans-serif !important;
-    font-size: 1rem !important;
-    font-weight: 600 !important;
-    padding: 0.4rem 0.75rem !important;
+    font-size: 0.8125rem !important;
+    font-weight: 500 !important;
+    padding: 0.4rem 0.6rem !important;
     line-height: 1.35 !important;
     color: hsl(var(--foreground) / 0.85) !important;
   }
@@ -441,8 +444,8 @@
   .filesystem-shell .e-toolbar .e-toolbar-item .e-tbar-btn-text,
   .filesystem-shell .e-toolbar .e-toolbar-item .e-tbar-btn-text span {
     font-family: 'Inter', sans-serif !important;
-    font-size: 1rem !important;
-    font-weight: 600 !important;
+    font-size: 0.8125rem !important;
+    font-weight: 500 !important;
     line-height: 1.35 !important;
     color: hsl(var(--foreground) / 0.85) !important;
   }
@@ -453,10 +456,10 @@
   .filesystem-shell .e-grid .e-rowcell .e-fe-size,
   .filesystem-shell .e-treeview .e-list-text
   {
-    font-size: 0.94rem;
+    font-size: 0.875rem;
     color: hsl(var(--foreground) / 0.92);
-    padding-top: 0.75rem !important;
-    padding-bottom: 0.75rem !important;
+    padding-top: 0.65rem !important;
+    padding-bottom: 0.65rem !important;
   }
 
   .filesystem-shell .e-grid .e-rowcell .e-fe-date,
@@ -466,14 +469,16 @@
   .filesystem-shell .e-grid .e-rowcell .e-fe-date-value,
   .filesystem-shell .e-grid .e-rowcell .e-fe-date-value *
   {
-    font-size: 0.94rem !important;
-    color: hsl(var(--foreground) / 0.92) !important;
+    font-size: 0.875rem !important;
+    color: hsl(var(--foreground) / 0.8) !important;
   }
 
   .filesystem-shell .e-grid .e-gridheader .e-headercelldiv,
   .filesystem-shell .e-grid .e-gridheader .e-headercelldiv *
   {
-    font-size: 0.94rem !important;
+    font-size: 0.75rem !important;
+    font-weight: 500 !important;
+    color: hsl(var(--muted-foreground)) !important;
   }
 
   .filesystem-shell .e-grid .e-gridheader .e-headercell .e-headercelldiv,
@@ -550,13 +555,13 @@
   .filesystem-shell .e-toolbar .e-icons::before,
   .filesystem-shell .e-toolbar .e-btn-icon::before
   {
-    font-size: 1.1rem !important;
+    font-size: 0.95rem !important;
     line-height: 1 !important;
     color: hsl(var(--muted-foreground)) !important;
 }
 
   .filesystem-shell .e-toolbar .e-btn-icon {
-    margin-right: 0.5rem !important;
+    margin-right: 0.4rem !important;
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -568,14 +573,14 @@
     background: transparent !important;
     border: none !important;
     box-shadow: none !important;
-    border-radius: 1rem;
+    border-radius: 0.5rem;
     height: auto;
-    min-height: 2.4rem;
-    min-width: 2.4rem;
+    min-height: 2.1rem;
+    min-width: 2.1rem;
     display: inline-flex;
     align-items: center;
     transition: background-color 120ms ease, border-color 120ms ease;
-    padding: 0 0.8rem !important;
+    padding: 0 0.6rem !important;
   }
 
   .filesystem-shell .e-toolbar .e-btn.e-tbar-btn:hover,
@@ -601,74 +606,11 @@
   }
 
   .filesystem-filemanager .e-address .e-addressbar-ul .e-list-text {
-    font-size: 1.08rem !important;
+    font-size: 0.875rem !important;
     color: hsl(var(--muted-foreground)) !important;
     font-weight: 500 !important;
     line-height: 1.45 !important;
   }
-}
-
-/* Start button glow pulse, in the current theme's accent */
-@keyframes glowPulse {
-  0% {
-    box-shadow: 0 0 0 0 hsl(var(--primary) / 0.35), 0 0 16px hsl(var(--primary) / 0.65);
-  }
-  50% {
-    box-shadow: 0 0 0 8px hsl(var(--primary) / 0.14), 0 0 28px hsl(var(--primary) / 0.95);
-  }
-  100% {
-    box-shadow: 0 0 0 0 hsl(var(--primary) / 0.14), 0 0 16px hsl(var(--primary) / 0.65);
-  }
-}
-
-.glow-pulse {
-  animation: glowPulse 1.6s ease-in-out infinite;
-}
-
-/* Spotlight surface: soft elevation, gradient hairline, subtle radial wash */
-.spotlight-surface {
-  position: relative;
-  border-radius: 0.75rem; /* ~12px matches rounded-xl */
-  box-shadow: 0 20px 40px -24px rgba(0, 0, 0, 0.45), 0 8px 20px -16px rgba(0, 0, 0, 0.25);
-  isolation: isolate; /* ensure ::after can sit behind */
-}
-
-.spotlight-surface::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  padding: 1px; /* hairline thickness */
-  box-sizing: border-box;
-  background: conic-gradient(
-    from 0deg,
-    hsl(var(--primary) / 0.25),
-    hsl(var(--primary) / 0.08),
-    hsl(var(--primary) / 0.25)
-  );
-  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
-  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  mask-composite: exclude;
-  pointer-events: none;
-  opacity: 0.3;
-}
-
-.spotlight-surface::after {
-  content: "";
-  position: absolute;
-  inset: -12% -10% -18% -10%;
-  border-radius: inherit;
-  background: radial-gradient(
-    900px circle at 50% -10%,
-    hsl(var(--primary) / 0.12),
-    hsl(var(--primary) / 0.06),
-    transparent 60%
-  );
-  z-index: -1; /* sit behind content */
-  pointer-events: none;
-  filter: blur(12px);
-  opacity: 0.15; /* even subtler */
 }
 
 /* Lockup only: a lit top edge and a short extrusion below give the wordmark
@@ -681,20 +623,4 @@
     0 2px 1px rgba(2, 12, 18, 0.38),
     0 3px 6px rgba(0, 0, 0, 0.34),
     0 0 22px rgba(150, 221, 240, 0.16);
-}
-
-/* Subtle table row slide-in */
-@keyframes rowIn {
-  from {
-    opacity: 0;
-    transform: translateY(6px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-.animate-row-in {
-  animation: rowIn 300ms ease-out both;
 }

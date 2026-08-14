@@ -1,9 +1,9 @@
 import React, { useState, useImperativeHandle, forwardRef } from "react";
 import { useSettings } from "@/contexts/SettingsContext";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { InfoIcon } from "lucide-react";
+import { InfoIcon, X } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
     Select,
@@ -178,7 +178,7 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
             onChange();
           };
 
-        const labelClass = "block text-sm font-medium text-muted-foreground mb-1";
+        const labelClass = "block text-[13px] font-medium text-foreground";
 
         // --- REGION LOGIC ---
         // Region lists for each GPU type
@@ -381,335 +381,312 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
         );
 
         return (
-            <div className="space-y-12 overflow-hidden max-w-6xl mx-auto w-full">
-                <Card className="w-full">
-                    <CardContent className="space-y-12 pt-6">
-                        <div className="space-y-2">
-                            <h2 className="text-xl font-semibold text-primary">Container Image</h2>
-                            <div className="grid grid-cols-1 gap-4">
-                                <div>
-                                    <div className="flex items-center gap-1">
-                                        <label className={labelClass}>Image URI</label>
-                                        <TooltipProvider>
-                                            <Tooltip>
-                                                <TooltipTrigger asChild>
-                                                    <InfoIcon className="h-4 w-4 text-muted-foreground/70 hover:text-muted-foreground cursor-help -mt-2" />
-                                                </TooltipTrigger>
-                                                <TooltipContent>
-                                                    <p>
-                                                        URI of the Docker image to run your code
-                                                        inside.
-                                                        <br />
-                                                        This can be any image, as long as it has
-                                                        Python installed.
-                                                        <br />
-                                                        Private images are pulled using the host
-                                                        VM's service account credentials.
-                                                    </p>
-                                                </TooltipContent>
-                                            </Tooltip>
-                                        </TooltipProvider>
-                                    </div>
-                                    <Input
-                                        className="w-full h-9.5"
-                                        value={settings.containerImage}
-                                        onChange={(e) =>
-                                            handleInputChange("containerImage", e.target.value)
-                                        }
-                                    />
-                                </div>
-                            </div>
+            <Card className="w-full divide-y divide-border/70">
+                <section className="px-5 py-5">
+                    <h2 className="text-sm font-semibold text-foreground">Container image</h2>
+                    <p className="mt-0.5 text-[13px] text-muted-foreground">
+                        The Docker image your code runs inside.
+                    </p>
+                    <div className="mt-4 max-w-2xl">
+                        <div className="mb-1.5 flex items-center gap-1.5">
+                            <label className={labelClass}>Image URI</label>
+                            <TooltipProvider>
+                                <Tooltip>
+                                    <TooltipTrigger asChild>
+                                        <InfoIcon className="h-3.5 w-3.5 cursor-help text-muted-foreground/70 hover:text-muted-foreground" />
+                                    </TooltipTrigger>
+                                    <TooltipContent>
+                                        <p>
+                                            This can be any image, as long as it has Python
+                                            installed. Private images are pulled using the host
+                                            VM's service account credentials.
+                                        </p>
+                                    </TooltipContent>
+                                </Tooltip>
+                            </TooltipProvider>
+                        </div>
+                        <Input
+                            className="w-full font-mono text-[13px]"
+                            value={settings.containerImage}
+                            onChange={(e) => handleInputChange("containerImage", e.target.value)}
+                        />
+                    </div>
+                </section>
+
+                <section className="px-5 py-5">
+                    <h2 className="text-sm font-semibold text-foreground">Virtual machines</h2>
+                    <p className="mt-0.5 text-[13px] text-muted-foreground">
+                        The machines booted when the cluster starts.
+                    </p>
+
+                    <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-4">
+                        {/* Quantity */}
+                        <div>
+                            <label className={`${labelClass} mb-1.5`}>Quantity</label>
+                            <Input
+                                type="text"
+                                inputMode="numeric"
+                                className="w-full"
+                                value={settings.machineQuantity || ""}
+                                onChange={(e) => {
+                                    const digits = e.target.value.replace(/\D/g, "");
+                                    const num = digits === "" ? 0 : parseInt(digits, 10);
+                                    handleInputChange("machineQuantity", num);
+                                }}
+                                onBlur={(e) => {
+                                    const val = parseInt(e.target.value, 10);
+                                    if (val < 1) {
+                                        handleInputChange("machineQuantity", 1);
+                                    } else if (val > 1000) {
+                                        handleInputChange("machineQuantity", 1000);
+                                    }
+                                }}
+                            />
                         </div>
 
-                        <div className="space-y-4">
-                            <h2 className="text-xl font-semibold text-primary">Virtual Machines</h2>
-
-                            {/* First row: four equal columns */}
-                            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                                {/* Quantity */}
-                                <div className="flex flex-col space-y-2">
-                                    <label className={labelClass}>Quantity</label>
-                                    <Input
-                                        type="text"
-                                        inputMode="numeric"
-                                        className="h-9.5 w-full"
-                                        value={settings.machineQuantity || ""}
-                                        onChange={(e) => {
-                                            const digits = e.target.value.replace(/\D/g, "");
-                                            const num = digits === "" ? 0 : parseInt(digits, 10);
-                                            handleInputChange("machineQuantity", num);
-                                        }}
-                                        onBlur={(e) => {
-                                            const val = parseInt(e.target.value, 10);
-                                            if (val < 1) {
-                                                handleInputChange("machineQuantity", 1);
-                                            } else if (val > 1000) {
-                                                handleInputChange("machineQuantity", 1000);
-                                            }
-                                        }}
-                                    />
-                                </div>
-
-                                {/* CPU / RAM */}
-                                <div className="flex flex-col space-y-2">
-                                    <label className={labelClass}>vCPU / RAM</label>
-                                    <Select
-                                        disabled={gpuVariant !== "None"}
-                                        value={
-                                            gpuVariant === "None"
-                                                ? cpuChoice
-                                                : gpuCpuMap[`${gpusPerVm}x ${gpuVariant}`].value
-                                        }
-                                        onValueChange={(val) => {
-                                            setCpuChoice(val);
-                                            setSettings((prev) => ({ ...prev, machineType: val }));
-                                            onChange();
-                                        }}
-                                    >
-                                        <SelectTrigger className="w-full h-9.5">
-                                            <SelectValue />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                            {(gpuVariant === "None"
-                                                ? cpuOptions
-                                                : [gpuCpuMap[`${gpusPerVm}x ${gpuVariant}`]]
-                                            ).map((o) => (
-                                                <SelectItem key={o.value} value={o.value}>
-                                                    {o.label}
-                                                </SelectItem>
-                                            ))}
-                                        </SelectContent>
-                                    </Select>                           
-                                </div>
-
-                                {/* GPU */}
-                                <div className="flex flex-col space-y-2">
-                                    <div className="flex items-center gap-1">
-                                        <label className={labelClass}>GPU</label>
-                                        {isAzure && (
-                                            <TooltipProvider>
-                                                <Tooltip>
-                                                    <TooltipTrigger asChild>
-                                                        <InfoIcon className="h-4 w-4 text-amber-500 hover:text-amber-600 cursor-help -mt-2" />
-                                                    </TooltipTrigger>
-                                                    <TooltipContent>
-                                                        <p>
-                                                            GPUs aren't available on Azure clusters
-                                                            yet, we're working on it!
-                                                            <br />
-                                                            (they work on GCP and AWS)
-                                                        </p>
-                                                    </TooltipContent>
-                                                </Tooltip>
-                                            </TooltipProvider>
-                                        )}
-                                    </div>
-                                    <Select
-                                        disabled={isAzure}
-                                        value={gpuVariant}
-                                        onValueChange={(val) => {
-                                            setGpuVariant(val);
-                                            if (val === "None") {
-                                                setGpusPerVm(1);
-                                            } else {
-                                                const counts = VARIANT_INFO[val];
-                                                setGpusPerVm(counts[0]);
-                                            }
-                                        }}
-                                    >
-                                        <SelectTrigger className="w-full h-9.5">
-                                            <SelectValue />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                            {gpuVariants.map((model) => (
-                                                <SelectItem key={model} value={model}>
-                                                    {model}
-                                                </SelectItem>
-                                            ))}
-                                        </SelectContent>
-                                    </Select>
-                                </div>
-
-                                {/* GPUs per VM */}
-                                <div className="flex flex-col space-y-2">
-                                    <label className={labelClass}>GPUs per VM</label>
-                                    <Select
-                                        disabled={
-                                            gpuVariant === "None" ||
-                                            // only one size sold (e.g. AWS A100s): nothing to choose
-                                            VARIANT_INFO[gpuVariant].length === 1
-                                        }
-                                        value={gpuVariant === "None" ? "-" : gpusPerVm.toString()}
-                                        onValueChange={(val) => setGpusPerVm(parseInt(val, 10))}
-                                    >
-                                        <SelectTrigger className="w-full h-9.5">
-                                            <SelectValue>
-                                                {gpuVariant === "None" ? "-" : gpusPerVm.toString()}
-                                            </SelectValue>
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                            {(gpuVariant === "None"
-                                                ? []
-                                                : VARIANT_INFO[gpuVariant]
-                                            ).map((n) => (
-                                                <SelectItem key={n} value={n.toString()}>
-                                                    {n}
-                                                </SelectItem>
-                                            ))}
-                                        </SelectContent>
-                                    </Select>
-                                </div>
-                            </div>
-
-                            {/* Second row: two equal columns */}
-                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-6">
-                                {/* Disk Size */}
-                                <div className="flex flex-col space-y-2">
-                                    <label className={labelClass}>Disk Size (GB)</label>
-                                    <Input
-                                        type="text"
-                                        inputMode="numeric"
-                                        className="w-full h-9.5"
-                                        value={settings.diskSize || ""}
-                                        onChange={(e) => {
-                                            const digits = e.target.value.replace(/\D/g, "");
-                                            const num = digits === "" ? 0 : parseInt(digits, 10);
-                                            handleInputChange("diskSize", num);
-                                        }}
-                                        onBlur={(e) => {
-                                            const val = parseInt(e.target.value, 10);
-                                            if (val < 10) {
-                                                handleInputChange("diskSize", 10);
-                                            } else if (val > 2000) {
-                                                handleInputChange("diskSize", 2000);
-                                            }
-                                        }}
-                                    />
-                                </div>
-
-                                {/* Region Dropdown */}
-                                <div className="flex flex-col space-y-2">
-                                    <label className={labelClass}>
-                                        {isAws
-                                            ? "AWS Region"
-                                            : isAzure
-                                            ? "Azure Region"
-                                            : "GCP Region"}
-                                    </label>
-                                    <Select
-                                        value={settings.gcpRegion || ""}
-                                        onValueChange={(val) => handleInputChange("gcpRegion", val)}
-                                    >
-                                        <SelectTrigger
-                                            className={`w-full h-9.5 ${
-                                                !isRegionValid
-                                                    ? "border-destructive focus:ring-destructive ring-2"
-                                                    : ""
-                                            }`}
-                                        >
-                                            <SelectValue />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                            {regionOptions.map((region) => (
-                                                <SelectItem key={region.value} value={region.value}>
-                                                    {region.label}
-                                                </SelectItem>
-                                            ))}
-                                        </SelectContent>
-                                    </Select>
-                                    {!isRegionValid && (
-                                        <span className="text-xs text-destructive mt-1">
-                                            Please select a region from dropdown
-                                        </span>
-                                    )}
-                                </div>
-
-                                {/* Inactivity Timeout */}
-                                <div className="flex flex-col space-y-2">
-                                    <label className={labelClass}>
-                                        Inactivity Timeout (minutes)
-                                    </label>
-                                    <Input
-                                        type="text"
-                                        inputMode="numeric"
-                                        className="w-full h-9.5"
-                                        value={settings.inactivityTimeout ?? ""}
-                                        onChange={(e) => {
-                                            const digits = e.target.value.replace(/\D/g, "");
-                                            const num = digits === "" ? 0 : parseInt(digits, 10);
-                                            handleInputChange("inactivityTimeout", num);
-                                        }}
-                                        onBlur={(e) => {
-                                            const val = parseInt(e.target.value, 10);
-                                            if (val < 0) {
-                                                handleInputChange("inactivityTimeout", 0);
-                                            } else if (val > 1440) {
-                                                handleInputChange("inactivityTimeout", 1440);
-                                            }
-                                        }}
-                                    />
-                                </div>
-                            </div>
+                        {/* CPU / RAM */}
+                        <div>
+                            <label className={`${labelClass} mb-1.5`}>vCPU / RAM</label>
+                            <Select
+                                disabled={gpuVariant !== "None"}
+                                value={
+                                    gpuVariant === "None"
+                                        ? cpuChoice
+                                        : gpuCpuMap[`${gpusPerVm}x ${gpuVariant}`].value
+                                }
+                                onValueChange={(val) => {
+                                    setCpuChoice(val);
+                                    setSettings((prev) => ({ ...prev, machineType: val }));
+                                    onChange();
+                                }}
+                            >
+                                <SelectTrigger className="w-full">
+                                    <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    {(gpuVariant === "None"
+                                        ? cpuOptions
+                                        : [gpuCpuMap[`${gpusPerVm}x ${gpuVariant}`]]
+                                    ).map((o) => (
+                                        <SelectItem key={o.value} value={o.value}>
+                                            {o.label}
+                                        </SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
                         </div>
 
-                        {!isClientHosted && (
-                        <div className="space-y-2">
-                            <h2 className="text-xl font-semibold text-primary">Authorized Users</h2>
-                            <div>
-                                <div className="flex items-center gap-1">
-                                    <label className={labelClass}>Add User Email</label>
+                        {/* GPU */}
+                        <div>
+                            <div className="mb-1.5 flex items-center gap-1.5">
+                                <label className={labelClass}>GPU</label>
+                                {isAzure && (
                                     <TooltipProvider>
                                         <Tooltip>
                                             <TooltipTrigger asChild>
-                                                <InfoIcon className="h-4 w-4 text-muted-foreground/70 hover:text-muted-foreground cursor-help -mt-2" />
+                                                <InfoIcon className="h-3.5 w-3.5 cursor-help text-amber-500 hover:text-amber-600" />
                                             </TooltipTrigger>
                                             <TooltipContent>
                                                 <p>
-                                                    Google accounts authorized to use this
-                                                    deployment.
+                                                    GPUs aren't available on Azure clusters yet,
+                                                    we're working on it! (they work on GCP and AWS)
                                                 </p>
                                             </TooltipContent>
                                         </Tooltip>
                                     </TooltipProvider>
-                                </div>
-                                <form
-                                    onSubmit={(e) => {
-                                        e.preventDefault();
-                                        addUser();
-                                    }}
-                                    className="flex gap-2 w-full"
-                                >
-                                    <Input
-                                        className="w-full h-9.5"
-                                        value={newUser}
-                                        onChange={(e) => setNewUser(e.target.value)}
-                                    />
-                                    <Button type="button" onClick={addUser} variant="secondary">
-                                        Add
-                                    </Button>
-                                </form>
+                                )}
                             </div>
-                            <div className="flex flex-wrap gap-2">
-                            {users.map((user) => (
-                                    <span
+                            <Select
+                                disabled={isAzure}
+                                value={gpuVariant}
+                                onValueChange={(val) => {
+                                    setGpuVariant(val);
+                                    if (val === "None") {
+                                        setGpusPerVm(1);
+                                    } else {
+                                        const counts = VARIANT_INFO[val];
+                                        setGpusPerVm(counts[0]);
+                                    }
+                                }}
+                            >
+                                <SelectTrigger className="w-full">
+                                    <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    {gpuVariants.map((model) => (
+                                        <SelectItem key={model} value={model}>
+                                            {model}
+                                        </SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+                        </div>
+
+                        {/* GPUs per VM */}
+                        <div>
+                            <label className={`${labelClass} mb-1.5`}>GPUs per VM</label>
+                            <Select
+                                disabled={
+                                    gpuVariant === "None" ||
+                                    // only one size sold (e.g. AWS A100s): nothing to choose
+                                    VARIANT_INFO[gpuVariant].length === 1
+                                }
+                                value={gpuVariant === "None" ? "-" : gpusPerVm.toString()}
+                                onValueChange={(val) => setGpusPerVm(parseInt(val, 10))}
+                            >
+                                <SelectTrigger className="w-full">
+                                    <SelectValue>
+                                        {gpuVariant === "None" ? "-" : gpusPerVm.toString()}
+                                    </SelectValue>
+                                </SelectTrigger>
+                                <SelectContent>
+                                    {(gpuVariant === "None" ? [] : VARIANT_INFO[gpuVariant]).map(
+                                        (n) => (
+                                            <SelectItem key={n} value={n.toString()}>
+                                                {n}
+                                            </SelectItem>
+                                        ),
+                                    )}
+                                </SelectContent>
+                            </Select>
+                        </div>
+                    </div>
+
+                    <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-3">
+                        {/* Disk Size */}
+                        <div>
+                            <label className={`${labelClass} mb-1.5`}>Disk size (GB)</label>
+                            <Input
+                                type="text"
+                                inputMode="numeric"
+                                className="w-full"
+                                value={settings.diskSize || ""}
+                                onChange={(e) => {
+                                    const digits = e.target.value.replace(/\D/g, "");
+                                    const num = digits === "" ? 0 : parseInt(digits, 10);
+                                    handleInputChange("diskSize", num);
+                                }}
+                                onBlur={(e) => {
+                                    const val = parseInt(e.target.value, 10);
+                                    if (val < 10) {
+                                        handleInputChange("diskSize", 10);
+                                    } else if (val > 2000) {
+                                        handleInputChange("diskSize", 2000);
+                                    }
+                                }}
+                            />
+                        </div>
+
+                        {/* Region Dropdown */}
+                        <div>
+                            <label className={`${labelClass} mb-1.5`}>
+                                {isAws ? "AWS region" : isAzure ? "Azure region" : "GCP region"}
+                            </label>
+                            <Select
+                                value={settings.gcpRegion || ""}
+                                onValueChange={(val) => handleInputChange("gcpRegion", val)}
+                            >
+                                <SelectTrigger
+                                    className={`w-full ${
+                                        !isRegionValid
+                                            ? "border-destructive/60 ring-[3px] ring-destructive/15"
+                                            : ""
+                                    }`}
+                                >
+                                    <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    {regionOptions.map((region) => (
+                                        <SelectItem key={region.value} value={region.value}>
+                                            {region.label}
+                                        </SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+                            {!isRegionValid && (
+                                <span className="mt-1.5 block text-xs text-destructive">
+                                    Please select a region from the dropdown
+                                </span>
+                            )}
+                        </div>
+
+                        {/* Inactivity Timeout */}
+                        <div>
+                            <label className={`${labelClass} mb-1.5`}>
+                                Inactivity timeout (minutes)
+                            </label>
+                            <Input
+                                type="text"
+                                inputMode="numeric"
+                                className="w-full"
+                                value={settings.inactivityTimeout ?? ""}
+                                onChange={(e) => {
+                                    const digits = e.target.value.replace(/\D/g, "");
+                                    const num = digits === "" ? 0 : parseInt(digits, 10);
+                                    handleInputChange("inactivityTimeout", num);
+                                }}
+                                onBlur={(e) => {
+                                    const val = parseInt(e.target.value, 10);
+                                    if (val < 0) {
+                                        handleInputChange("inactivityTimeout", 0);
+                                    } else if (val > 1440) {
+                                        handleInputChange("inactivityTimeout", 1440);
+                                    }
+                                }}
+                            />
+                        </div>
+                    </div>
+                </section>
+
+                {!isClientHosted && (
+                    <section className="px-5 py-5">
+                        <h2 className="text-sm font-semibold text-foreground">Authorized users</h2>
+                        <p className="mt-0.5 text-[13px] text-muted-foreground">
+                            Google accounts authorized to use this deployment.
+                        </p>
+
+                        <form
+                            onSubmit={(e) => {
+                                e.preventDefault();
+                                addUser();
+                            }}
+                            className="mt-4 flex w-full max-w-2xl gap-2"
+                        >
+                            <Input
+                                className="w-full"
+                                placeholder="name@example.com"
+                                value={newUser}
+                                onChange={(e) => setNewUser(e.target.value)}
+                            />
+                            <Button type="button" onClick={addUser} variant="outline">
+                                Add
+                            </Button>
+                        </form>
+
+                        {users.length > 0 && (
+                            <ul className="mt-4 max-w-2xl divide-y divide-border/70 rounded-lg border border-border">
+                                {users.map((user) => (
+                                    <li
                                         key={user}
-                                        className="bg-secondary border border-border text-secondary-foreground px-2 py-1 rounded-md flex items-center gap-1"
+                                        className="flex items-center justify-between gap-3 px-3.5 py-2.5"
                                     >
-                                        {user}
+                                        <span className="min-w-0 truncate text-sm text-foreground">
+                                            {user}
+                                        </span>
                                         <button
                                             onClick={() => removeUser(user)}
-                                            className="text-muted-foreground hover:text-foreground text-xl leading-none"
+                                            className="rounded-md p-1 text-muted-foreground transition-colors duration-150 hover:bg-accent hover:text-foreground"
+                                            aria-label={`Remove ${user}`}
                                         >
-                                            ×
+                                            <X className="h-3.5 w-3.5" />
                                         </button>
-                                    </span>
+                                    </li>
                                 ))}
-                            </div>
-                        </div>
+                            </ul>
                         )}
-                    </CardContent>
-                </Card>
-            </div>
+                    </section>
+                )}
+            </Card>
         );
     }
 );

@@ -10,88 +10,33 @@ import {
 } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
-import { Check, ChevronRight, Copy, Cpu, ExternalLink, X } from "lucide-react";
-import { Highlight, themes } from "prism-react-renderer";
+import { ChevronRight, Server } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useTheme } from "@/lib/theme";
 import { BurlaNode, NodeStatus } from "@/types/coreTypes";
-import { AWS_MACHINE_SPECS } from "@/types/constants";
-
-declare global {
-    interface Window {
-        __BURLA_CLIENT_HOSTED_MODE__?: boolean;
-    }
-}
+import { StatusBadge, nodeStatusBadge } from "@/components/StatusBadge";
+import { TablePagination } from "@/components/TablePagination";
+import { extractCpuCount, parseGpuDisplay, parseRamDisplay } from "@/lib/machineSpecs";
 
 interface NodesListProps {
     nodes: BurlaNode[];
+    loading: boolean;
     showDeleted: boolean;
     onShowDeletedChange: (show: boolean) => void;
 }
-
-type NodeStatusLike = NodeStatus | string | null | undefined;
 
 const PAGE_SIZE = 15;
 
 const ACTIVE_STATUSES = new Set<string>(["RUNNING", "READY", "BOOTING"]);
 
-const QUICKSTART_CODE = `from burla import remote_parallel_map
-
-def my_function(x):
-    print(f"processing input {x} on a machine in the cloud")
-    return x * 2
-
-results = remote_parallel_map(my_function, list(range(100)))`;
-
-const DARK_CODE_THEME = themes.nightOwl;
-const LIGHT_CODE_THEME = themes.github;
-
-interface CopyButtonProps {
-    text: string;
-    label: string;
-    iconOnly?: boolean;
-}
-
-const CopyButton = ({ text, label, iconOnly = false }: CopyButtonProps) => {
-    const [copied, setCopied] = useState(false);
-
-    const handleCopy = async () => {
-        await navigator.clipboard.writeText(text);
-        setCopied(true);
-        window.setTimeout(() => setCopied(false), 1500);
-    };
-
-    return (
-        <button
-            type="button"
-            onClick={handleCopy}
-            className={cn(
-                "absolute right-2 top-2 z-10 inline-flex items-center justify-center gap-1.5 rounded-md border border-black/10 bg-white/85 text-xs font-medium text-slate-700 shadow-sm backdrop-blur transition-colors hover:bg-white dark:border-white/15 dark:bg-white/5 dark:text-slate-200 dark:hover:bg-white/10",
-                iconOnly ? "h-8 w-8" : "h-8 px-2.5",
-            )}
-            aria-label={copied ? `${label} copied` : `Copy ${label}`}
-            title={copied ? "Copied" : `Copy ${label}`}
-        >
-            {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-            {!iconOnly && <span>{copied ? "Copied" : "Copy"}</span>}
-        </button>
-    );
-};
-
 export const NodesList: React.FC<NodesListProps> = ({
     nodes,
+    loading,
     showDeleted,
     onShowDeletedChange,
 }) => {
-    const [showWelcome, setShowWelcome] = useState(true);
-    const isClientHosted = window.__BURLA_CLIENT_HOSTED_MODE__ === true;
-    const { theme } = useTheme();
-
     const [expandedNodeId, setExpandedNodeId] = useState<string | null>(null);
     const [nodeLogs, setNodeLogs] = useState<Record<string, string[]>>({});
     const [logsLoading, setLogsLoading] = useState<Record<string, boolean>>({});
-
-    const didMountRef = useRef(false);
 
     const [page, setPage] = useState(0);
 
@@ -104,131 +49,6 @@ export const NodesList: React.FC<NodesListProps> = ({
 
     // UX: when switching showDeleted on, show loader until first deleted page returns
     const [showDeletedHydrating, setShowDeletedHydrating] = useState(false);
-
-    useEffect(() => {
-        const isWelcomeHidden =
-            typeof window !== "undefined" &&
-            localStorage.getItem("welcomeMessageHidden") === "true";
-        setShowWelcome(!isWelcomeHidden);
-    }, []);
-
-    const handleDismissWelcome = () => {
-        setShowWelcome(false);
-        try {
-            localStorage.setItem("welcomeMessageHidden", "true");
-        } catch {
-            // ignore
-        }
-        window.dispatchEvent(new CustomEvent("welcomeVisibilityChanged", { detail: false }));
-    };
-
-    const getStatusClass = (nodeStatus: NodeStatusLike) => {
-        const statusClasses: Record<string, string> = {
-            READY: "bg-emerald-500 dark:bg-emerald-400",
-            RUNNING: "bg-emerald-500 dark:bg-emerald-400 animate-pulse",
-            BOOTING: "bg-amber-400 animate-pulse",
-            STOPPING: "bg-muted-foreground/40 animate-pulse",
-            FAILED: "bg-destructive",
-            DELETED: "bg-destructive",
-        };
-
-        const key = typeof nodeStatus === "string" ? nodeStatus.toUpperCase() : "";
-        return cn(
-            "w-2 h-2 rounded-full",
-            key ? (statusClasses[key] ?? "bg-muted-foreground/40") : "bg-muted-foreground/40",
-        );
-    };
-
-    const extractCpuCount = (type: string): number | null => {
-        const awsSpec = AWS_MACHINE_SPECS[type.toLowerCase()];
-        if (awsSpec) return awsSpec.cpus;
-
-        const azureMatch = type.toLowerCase().match(/^standard_d(\d+)s_v6$/);
-        if (azureMatch) return parseInt(azureMatch[1], 10);
-
-        const customMatch = type.match(/^custom-(\d+)-/);
-        if (customMatch) return parseInt(customMatch[1], 10);
-
-        const standardMatch = type.match(/-(\d+)$/);
-        if (standardMatch) return parseInt(standardMatch[1], 10);
-
-        const gpuMatch = type.match(/^(a\d-(highgpu|ultragpu|megagpu|edgegpu))-([\d]+)g$/);
-        if (gpuMatch) {
-            const family = gpuMatch[1];
-            const gpus = parseInt(gpuMatch[3], 10);
-
-            const cpuTable: Record<string, Record<number, number>> = {
-                "a2-highgpu": { 1: 12, 2: 24, 4: 48, 8: 96 },
-                "a2-ultragpu": { 1: 12, 2: 24, 4: 48, 8: 96 },
-                "a2-megagpu": { 16: 96 },
-                "a3-highgpu": { 1: 26, 2: 52, 4: 104, 8: 208 },
-                "a3-ultragpu": { 8: 224 },
-                "a3-edgegpu": { 8: 208 },
-            };
-
-            const cpus = cpuTable[family]?.[gpus];
-            if (cpus) return cpus;
-        }
-
-        return null;
-    };
-
-    const parseGpuDisplay = (type: string): string => {
-        const lower = type.toLowerCase();
-
-        const awsSpec = AWS_MACHINE_SPECS[lower];
-        if (awsSpec) return awsSpec.gpu ?? "-";
-
-        const gpuPatterns: { prefix: string; model: string; vram: string }[] = [
-            { prefix: "a2-highgpu-", model: "A100", vram: "40G" },
-            { prefix: "a2-ultragpu-", model: "A100", vram: "80G" },
-            { prefix: "a2-megagpu-", model: "A100", vram: "40G" },
-            { prefix: "a3-highgpu-", model: "H100", vram: "80G" },
-            { prefix: "a3-ultragpu-", model: "H200", vram: "141G" },
-        ];
-
-        for (const { prefix, model, vram } of gpuPatterns) {
-            if (lower.startsWith(prefix)) {
-                const countMatch = lower.match(/-(\d+)g$/);
-                if (countMatch) {
-                    const count = parseInt(countMatch[1], 10);
-                    return `${count}x ${model} ${vram}`;
-                }
-            }
-        }
-
-        return "-";
-    };
-
-    const parseRamDisplay = (type: string): string => {
-        const lower = type.toLowerCase();
-
-        const awsSpec = AWS_MACHINE_SPECS[lower];
-        if (awsSpec) return awsSpec.ram;
-
-        if (lower.startsWith("n4-standard-") || lower.startsWith("standard_d")) {
-            const cpu = extractCpuCount(type);
-            if (cpu !== null) return `${cpu * 4}G`;
-        }
-
-        const ramTable: Record<string, Record<number, string>> = {
-            "a2-highgpu": { 1: "85G", 2: "170G", 4: "340G", 8: "680G", 16: "1360G" },
-            "a2-ultragpu": { 1: "170G", 2: "340G", 4: "680G", 8: "1360G" },
-            "a2-megagpu": { 16: "1360G" },
-            "a3-highgpu": { 1: "234G", 2: "468G", 4: "936G", 8: "1872G" },
-            "a3-ultragpu": { 8: "2952G" },
-        };
-
-        const match = lower.match(/^(a\d-(highgpu|ultragpu|megagpu|edgegpu))-([\d]+)g$/);
-        if (match) {
-            const family = match[1];
-            const count = parseInt(match[3], 10);
-            const sizes = ramTable[family];
-            if (sizes && sizes[count]) return sizes[count];
-        }
-
-        return "-";
-    };
 
     // logs SSE
     useEffect(() => {
@@ -439,10 +259,6 @@ export const NodesList: React.FC<NodesListProps> = ({
         return () => controller.abort();
     }, [showDeleted, deletedOffset, deletedLimit]);
 
-    useEffect(() => {
-        didMountRef.current = true;
-    }, []);
-
     const displayNodes = useMemo(() => {
         if (!showDeleted) return activeSlice;
         return [...activeSlice, ...deletedSlice];
@@ -452,309 +268,147 @@ export const NodesList: React.FC<NodesListProps> = ({
     const noCombinedNodes =
         showDeleted && !showDeletedHydrating && !deletedLoading && displayNodes.length === 0;
 
-    const handleShowDeletedChange = (value: boolean) => {
-        onShowDeletedChange(value);
-    };
+    const isBusy = showDeletedHydrating || (showDeleted && deletedLoading);
 
     return (
-        <div className="space-y-6 [scrollbar-gutter:stable_both-edges]">
-            {showWelcome && (
-                <div className="spotlight-surface rounded-xl mt-4 mb-8">
-                    <Card className="w-full relative rounded-xl shadow-lg shadow-black/5 bg-card/90 backdrop-blur">
-                        <button
-                            onClick={handleDismissWelcome}
-                            className="absolute top-2 right-2 p-1 hover:bg-accent rounded-full"
-                            aria-label="Dismiss welcome message"
-                        >
-                            <X className="h-6 w-6" />
-                        </button>
-                        <CardContent className="space-y-6 pt-6">
-                            <div className="grid grid-cols-1 gap-4">
-                                <div className="space-y-4">
-                                    <div className="mb-1">
-                                        <h2 className="text-xl font-semibold text-primary">
-                                            Two minute quickstart:
-                                        </h2>
-                                        <ol className="list-decimal pl-6 mt-2 space-y-5 text-base font-medium text-foreground/85">
-                                            <li>
-                                                Hit the flashing{" "}
-                                                <span
-                                                    className="font-semibold text-foreground bg-secondary"
-                                                    style={{
-                                                        borderRadius: "0.36rem",
-                                                        padding: "0.11em 0.44em",
-                                                        display: "inline-block",
-                                                    }}
-                                                >
-                                                    <span
-                                                        style={{
-                                                            fontWeight: 700,
-                                                            letterSpacing: "-0.04em",
-                                                        }}
-                                                    >
-                                                        ⏻
-                                                    </span>{" "}
-                                                    Start
-                                                </span>{" "}
-                                                button to boot some computers{" "}
-                                                <span className="inline-block -rotate-45 text-xl">
-                                                    👉
-                                                </span>
-                                            </li>
-                                            {!isClientHosted && (
-                                                <li>
-                                                    Run this command on your computer to connect
-                                                    it to the cluster:
-                                                    <div className="relative mt-3 w-fit min-w-48 rounded-lg border bg-[#f6f8fa] py-3 pl-4 pr-14 font-mono text-sm font-normal text-[#393a34] dark:bg-[#011627] dark:text-[#d6deeb]">
-                                                        <code>burla login</code>
-                                                        <CopyButton
-                                                            text="burla login"
-                                                            label="burla login command"
-                                                            iconOnly
-                                                        />
-                                                    </div>
-                                                </li>
-                                            )}
-                                            <li>
-                                                <div>Run some code in the cloud:</div>
-                                                <div className="relative mt-3 overflow-hidden rounded-lg border bg-[#f6f8fa] dark:bg-[#011627]">
-                                                    <CopyButton
-                                                        text={QUICKSTART_CODE}
-                                                        label="Python code"
-                                                    />
-                                                    <Highlight
-                                                        theme={
-                                                            theme === "dark"
-                                                                ? DARK_CODE_THEME
-                                                                : LIGHT_CODE_THEME
-                                                        }
-                                                        code={QUICKSTART_CODE}
-                                                        language="python"
-                                                    >
-                                                        {({
-                                                            className,
-                                                            style,
-                                                            tokens,
-                                                            getLineProps,
-                                                            getTokenProps,
-                                                        }) => (
-                                                            <pre
-                                                                className={cn(
-                                                                    className,
-                                                                    "overflow-x-auto p-4 pr-20 text-sm font-normal leading-6",
-                                                                )}
-                                                                style={{
-                                                                    ...style,
-                                                                    backgroundColor: "transparent",
-                                                                    margin: 0,
-                                                                }}
-                                                            >
-                                                                {tokens.map((line, lineIndex) => (
-                                                                    <div
-                                                                        key={lineIndex}
-                                                                        {...getLineProps({ line })}
-                                                                    >
-                                                                        {line.map(
-                                                                            (token, tokenIndex) => (
-                                                                                <span
-                                                                                    key={tokenIndex}
-                                                                                    {...getTokenProps({
-                                                                                        token,
-                                                                                    })}
-                                                                                />
-                                                                            ),
-                                                                        )}
-                                                                    </div>
-                                                                ))}
-                                                            </pre>
-                                                        )}
-                                                    </Highlight>
-                                                </div>
-                                            </li>
-                                            <li>
-                                                <a
-                                                    href="https://burla.dev/docs/examples"
-                                                    target="_blank"
-                                                    rel="noopener noreferrer"
-                                                    className="inline-flex items-center gap-1 text-primary hover:underline font-medium"
-                                                >
-                                                    Explore more examples
-                                                    <ExternalLink className="h-4 w-4" />
-                                                </a>
-                                            </li>
-                                        </ol>
-                                    </div>
-                                </div>
+        <Card>
+            <CardHeader className="flex-row items-center justify-between space-y-0 border-b border-border/70 px-5 py-4">
+                <CardTitle>Nodes</CardTitle>
+                <label className="flex cursor-pointer select-none items-center gap-2 text-[13px] text-muted-foreground">
+                    Show deleted
+                    <Switch checked={showDeleted} onCheckedChange={onShowDeletedChange} />
+                </label>
+            </CardHeader>
+
+            <CardContent className="p-0">
+                {loading ? (
+                    <div className="space-y-3 px-5 py-4">
+                        {[...Array(3)].map((_, i) => (
+                            <div key={i} className="flex items-center gap-6">
+                                <Skeleton className="h-5 w-16 rounded-md" />
+                                <Skeleton className="h-4 w-40" />
+                                <Skeleton className="h-4 w-24" />
+                                <Skeleton className="h-4 w-10" />
+                                <Skeleton className="h-4 w-10" />
                             </div>
-                        </CardContent>
-                    </Card>
-                </div>
-            )}
-
-            <Card className="w-full">
-                <CardHeader className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                    <CardTitle className="text-xl font-semibold text-primary">Nodes</CardTitle>
-                    <div className="flex items-center gap-2 text-sm text-muted-foreground sm:ml-auto">
-                        <span>Show deleted nodes</span>
-                        <Switch
-                            checked={showDeleted}
-                            onCheckedChange={handleShowDeletedChange}
-                            className="scale-90"
-                        />
+                        ))}
                     </div>
-                </CardHeader>
+                ) : isBusy ? (
+                    <div className="flex justify-center py-12">
+                        <div className="h-5 w-5 animate-spin rounded-full border-2 border-border border-t-primary" />
+                    </div>
+                ) : (
+                    <>
+                        {deletedError && showDeleted && (
+                            <div className="mx-5 my-4 rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+                                {deletedError}
+                            </div>
+                        )}
 
-                <CardContent>
-                    {showDeletedHydrating || (showDeleted && deletedLoading) ? (
-                        <div className="flex justify-center py-10">
-                            <div className="w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin" />
-                        </div>
-                    ) : (
-                        <>
-                            {noActiveNodes && !showDeleted && (
-                                <div className="border-2 border-dashed rounded-lg p-8 text-center text-muted-foreground">
-                                    <div className="text-sm">
-                                        Zero nodes running, hit{" "}
-                                        <span className="font-semibold">Start</span> to launch some.
-                                    </div>
-                                    <div className="mt-6 space-y-2">
-                                        {[...Array(3)].map((_, i) => (
-                                            <div
-                                                key={i}
-                                                className="flex items-center gap-4 py-2 justify-center"
-                                            >
-                                                <span className="w-4 h-4 rounded-full bg-muted/60" />
-                                                <Skeleton className="h-4 w-24" />
-                                                <Skeleton className="h-4 w-16" />
-                                                <Skeleton className="h-4 w-16" />
-                                                <Skeleton className="h-4 w-24" />
-                                            </div>
-                                        ))}
-                                    </div>
+                        {(noActiveNodes || noCombinedNodes) && !deletedError ? (
+                            <div className="flex flex-col items-center justify-center px-6 py-14 text-center">
+                                <div className="flex h-10 w-10 items-center justify-center rounded-full bg-muted">
+                                    <Server className="h-[18px] w-[18px] text-muted-foreground" />
                                 </div>
-                            )}
-
-                            {noCombinedNodes && showDeleted && (
-                                <div className="border-2 border-dashed rounded-lg p-8 text-center text-muted-foreground">
-                                    <div className="text-sm">No nodes to display.</div>
-                                </div>
-                            )}
-
-                            {deletedError && showDeleted && (
-                                <div className="border border-destructive/40 rounded-lg p-4 mb-4 text-sm text-destructive bg-destructive/10">
-                                    {deletedError}
-                                </div>
-                            )}
-
-                            {displayNodes.length > 0 && (
+                                <p className="mt-3 text-sm font-medium text-foreground">
+                                    {noActiveNodes ? "No nodes running" : "No nodes to display"}
+                                </p>
+                                {noActiveNodes && (
+                                    <p className="mt-1 text-[13px] text-muted-foreground">
+                                        Hit <span className="font-medium">Start</span> to boot
+                                        machines.
+                                    </p>
+                                )}
+                            </div>
+                        ) : (
+                            displayNodes.length > 0 && (
                                 <>
-                                    <Table className="table-auto w-full">
+                                    <Table>
                                         <TableHeader>
-                                            <TableRow>
-                                                <TableHead className="w-8 pl-6 pr-4 py-2" />
-                                                <TableHead className="w-24 pl-6 pr-4 py-2">
-                                                    Status
-                                                </TableHead>
-                                                <TableHead className="w-48 pl-6 pr-4 py-2">
-                                                    Name
-                                                </TableHead>
-                                                <TableHead className="w-48 pl-6 pr-4 py-2">
-                                                    Function
-                                                </TableHead>
-                                                <TableHead className="w-24 pl-6 pr-4 py-2">
-                                                    vCPUs
-                                                </TableHead>
-                                                <TableHead className="w-24 pl-6 pr-4 py-2">
-                                                    RAM
-                                                </TableHead>
-                                                <TableHead className="w-24 pl-6 pr-4 py-2">
-                                                    GPUs
-                                                </TableHead>
-                                                <TableHead className="w-8 pl-6 pr-2 py-2 text-right" />
+                                            <TableRow className="hover:bg-transparent">
+                                                <TableHead className="w-10 pl-5 pr-0" />
+                                                <TableHead>Status</TableHead>
+                                                <TableHead>Name</TableHead>
+                                                <TableHead>Function</TableHead>
+                                                <TableHead className="text-right">vCPUs</TableHead>
+                                                <TableHead className="text-right">RAM</TableHead>
+                                                <TableHead className="pr-5">GPUs</TableHead>
                                             </TableRow>
                                         </TableHeader>
                                         <TableBody>
-                                            {displayNodes.map((node, idx) => (
+                                            {displayNodes.map((node) => (
                                                 <React.Fragment key={node.id}>
                                                     <TableRow
                                                         onClick={() => toggleExpanded(node.id)}
-                                                        className={cn(
-                                                            "cursor-pointer",
-                                                            didMountRef.current
-                                                                ? ""
-                                                                : "animate-row-in",
-                                                        )}
-                                                        style={{ animationDelay: `${idx * 50}ms` }}
+                                                        className="cursor-pointer"
                                                     >
-                                                        <TableCell className="w-8 pl-6 pr-4 py-2">
+                                                        <TableCell className="w-10 pl-5 pr-0">
                                                             <ChevronRight
                                                                 className={cn(
-                                                                    "h-4 w-4 transition-transform duration-200",
-                                                                    {
-                                                                        "rotate-90":
-                                                                            expandedNodeId ===
-                                                                            node.id,
-                                                                    },
+                                                                    "h-4 w-4 text-muted-foreground transition-transform duration-200",
+                                                                    expandedNodeId === node.id &&
+                                                                        "rotate-90",
                                                                 )}
                                                             />
                                                         </TableCell>
-                                                        <TableCell className="w-24 pl-6 pr-4 py-2">
-                                                            <div className="flex items-center space-x-2">
-                                                                <div
-                                                                    className={getStatusClass(
-                                                                        node.status,
-                                                                    )}
-                                                                />
-                                                                <span className="text-sm capitalize">
-                                                                    {node.status}
-                                                                </span>
-                                                            </div>
+                                                        <TableCell>
+                                                            <StatusBadge
+                                                                {...nodeStatusBadge(node.status)}
+                                                            />
                                                         </TableCell>
-                                                        <TableCell className="w-48 pl-6 pr-4 py-2 whitespace-nowrap">
+                                                        <TableCell className="whitespace-nowrap font-mono text-[13px] text-foreground">
                                                             {node.name}
                                                         </TableCell>
-                                                        <TableCell className="w-48 pl-6 pr-4 py-2">
+                                                        <TableCell>
                                                             <div
-                                                                className="max-w-[220px] truncate"
+                                                                className="max-w-[220px] truncate font-mono text-[13px]"
                                                                 title={node.current_function ?? ""}
                                                             >
-                                                                {node.current_function ?? "-"}
+                                                                {node.current_function ?? (
+                                                                    <span className="text-muted-foreground">
+                                                                        —
+                                                                    </span>
+                                                                )}
                                                             </div>
                                                         </TableCell>
-                                                        <TableCell className="w-24 pl-6 pr-4 py-2">
-                                                            <div className="inline-flex items-center space-x-1 justify-center">
-                                                                <Cpu className="h-4 w-4" />
-                                                                <span>
-                                                                    {node.cpus ??
-                                                                        extractCpuCount(
-                                                                            node.type,
-                                                                        ) ??
-                                                                        "?"}
+                                                        <TableCell className="text-right tabular-nums">
+                                                            {node.cpus ??
+                                                                extractCpuCount(node.type) ??
+                                                                "—"}
+                                                        </TableCell>
+                                                        <TableCell className="text-right tabular-nums">
+                                                            {parseRamDisplay(node.type) === "-" ? (
+                                                                <span className="text-muted-foreground">
+                                                                    —
                                                                 </span>
-                                                            </div>
+                                                            ) : (
+                                                                parseRamDisplay(node.type)
+                                                            )}
                                                         </TableCell>
-                                                        <TableCell className="w-24 pl-6 pr-4 py-2">
-                                                            {parseRamDisplay(node.type)}
+                                                        <TableCell className="whitespace-nowrap pr-5">
+                                                            {parseGpuDisplay(node.type) === "-" ? (
+                                                                <span className="text-muted-foreground">
+                                                                    —
+                                                                </span>
+                                                            ) : (
+                                                                parseGpuDisplay(node.type)
+                                                            )}
                                                         </TableCell>
-                                                        <TableCell className="w-24 pl-6 pr-4 py-2">
-                                                            {parseGpuDisplay(node.type)}
-                                                        </TableCell>
-                                                        <TableCell className="w-8 pl-6 pr-2 py-2 text-center" />
                                                     </TableRow>
 
                                                     {expandedNodeId === node.id && (
                                                         <TableRow
                                                             key={`${node.id}-logs`}
-                                                            className="bg-muted/50"
+                                                            className="bg-muted/30 hover:bg-muted/30"
                                                         >
-                                                            <TableCell colSpan={8} className="p-0">
-                                                                <div className="overflow-y-auto h-[400px] resize-y py-2 px-4">
+                                                            <TableCell colSpan={7} className="p-0">
+                                                                <div className="h-[400px] resize-y overflow-y-auto px-5 py-3">
                                                                     {logsLoading[node.id] ? (
-                                                                        <div className="flex flex-col items-center justify-center h-40 w-full text-muted-foreground">
-                                                                            <div className="w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin mb-2" />
+                                                                        <div className="flex h-40 w-full items-center justify-center">
+                                                                            <div className="h-5 w-5 animate-spin rounded-full border-2 border-border border-t-primary" />
                                                                         </div>
                                                                     ) : (
-                                                                        <pre className="whitespace-pre-wrap text-muted-foreground text-sm">
+                                                                        <pre className="whitespace-pre-wrap font-mono text-xs leading-5 text-muted-foreground">
                                                                             {nodeLogs[
                                                                                 node.id
                                                                             ]?.join("\n")}
@@ -769,80 +423,22 @@ export const NodesList: React.FC<NodesListProps> = ({
                                         </TableBody>
                                     </Table>
 
-                                    <div className="flex justify-center mt-6 space-x-2 items-center">
-                                        {page > 0 && (
-                                            <button
-                                                onClick={() => setPage(page - 1)}
-                                                className="px-3 py-1 text-sm text-primary hover:underline"
-                                            >
-                                                Prev
-                                            </button>
-                                        )}
-
-                                        <button
-                                            onClick={() => setPage(0)}
-                                            className={`px-3 py-1 rounded text-sm border ${
-                                                page === 0
-                                                    ? "bg-primary text-primary-foreground"
-                                                    : "bg-card text-foreground/80 hover:bg-accent"
+                                    <div className="px-5 pb-4">
+                                        <TablePagination
+                                            page={page}
+                                            totalPages={totalPages}
+                                            onPageChange={setPage}
+                                            resultsLabel={`${totalCount.toLocaleString()} ${
+                                                totalCount === 1 ? "node" : "nodes"
                                             }`}
-                                        >
-                                            1
-                                        </button>
-
-                                        {page > 3 && <span className="px-1">...</span>}
-
-                                        {Array.from({ length: totalPages }, (_, i) => i)
-                                            .filter(
-                                                (i) =>
-                                                    i !== 0 &&
-                                                    i !== totalPages - 1 &&
-                                                    Math.abs(i - page) <= 2,
-                                            )
-                                            .map((i) => (
-                                                <button
-                                                    key={i}
-                                                    onClick={() => setPage(i)}
-                                                    className={`px-3 py-1 rounded text-sm border ${
-                                                        page === i
-                                                            ? "bg-primary text-primary-foreground"
-                                                            : "bg-card text-foreground/80 hover:bg-accent"
-                                                    }`}
-                                                >
-                                                    {i + 1}
-                                                </button>
-                                            ))}
-
-                                        {page < totalPages - 4 && <span className="px-1">...</span>}
-
-                                        {totalPages > 1 && (
-                                            <button
-                                                onClick={() => setPage(totalPages - 1)}
-                                                className={`px-3 py-1 rounded text-sm border ${
-                                                    page === totalPages - 1
-                                                        ? "bg-primary text-primary-foreground"
-                                                        : "bg-card text-foreground/80 hover:bg-accent"
-                                                }`}
-                                            >
-                                                {totalPages}
-                                            </button>
-                                        )}
-
-                                        {page < totalPages - 1 && (
-                                            <button
-                                                onClick={() => setPage(page + 1)}
-                                                className="px-3 py-1 text-sm text-primary hover:underline"
-                                            >
-                                                Next
-                                            </button>
-                                        )}
+                                        />
                                     </div>
                                 </>
-                            )}
-                        </>
-                    )}
-                </CardContent>
-            </Card>
-        </div>
+                            )
+                        )}
+                    </>
+                )}
+            </CardContent>
+        </Card>
     );
 };

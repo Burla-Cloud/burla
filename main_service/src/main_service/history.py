@@ -65,6 +65,21 @@ CREATE TABLE IF NOT EXISTS node_logs (
 );
 CREATE INDEX IF NOT EXISTS idx_node_logs_node ON node_logs(instance_name, ts);
 
+-- Structured debug events (slot accounting, scaling decisions, stall dumps).
+-- Never shown to users: node_logs is the end-user story, this is the
+-- engineering flight recorder. Pruned by retention, shipped to Burla's
+-- telemetry backend when a job fails.
+CREATE TABLE IF NOT EXISTS debug_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts REAL,
+    instance_name TEXT,
+    job_id TEXT,
+    event TEXT,
+    fields TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_debug_logs_job ON debug_logs(job_id, ts);
+CREATE INDEX IF NOT EXISTS idx_debug_logs_ts ON debug_logs(ts);
+
 CREATE TABLE IF NOT EXISTS cluster_config (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     data TEXT
@@ -90,6 +105,76 @@ def _connection() -> sqlite3.Connection:
         _conn.executescript(_SCHEMA)
         _conn.commit()
     return _conn
+
+
+# ---------------------------------------------------------------- debug logs
+
+# Bounded so a laptop-hosted head can't bloat: a week of events, hard row cap.
+DEBUG_LOG_RETENTION_SEC = 7 * 24 * 3600
+DEBUG_LOG_MAX_ROWS = 200_000
+
+
+def add_debug_logs(instance_name: str, entries: list[dict]):
+    """`entries`: [{"ts", "job_id", "event", "fields"}]. Prunes on every batch
+    (cheap: indexed deletes, batches arrive at most ~1/sec per node)."""
+    now = time()
+    rows = [
+        (
+            entry.get("ts") or now,
+            instance_name,
+            entry.get("job_id"),
+            entry.get("event"),
+            json.dumps(entry.get("fields") or {}),
+        )
+        for entry in entries
+    ]
+    with _lock:
+        conn = _connection()
+        conn.executemany(
+            "INSERT INTO debug_logs (ts, instance_name, job_id, event, fields) "
+            "VALUES (?, ?, ?, ?, ?)",
+            rows,
+        )
+        conn.execute(
+            "DELETE FROM debug_logs WHERE ts < ?", (now - DEBUG_LOG_RETENTION_SEC,)
+        )
+        conn.execute(
+            "DELETE FROM debug_logs WHERE id <= "
+            "(SELECT id FROM debug_logs ORDER BY id DESC LIMIT 1 OFFSET ?)",
+            (DEBUG_LOG_MAX_ROWS,),
+        )
+        conn.commit()
+
+
+def debug_logs_for_job(job_id: str, max_bytes: int = 2_000_000) -> list[dict]:
+    """The job's debug-event trail, newest events kept when the byte cap
+    truncates, returned oldest-first."""
+    with _lock:
+        rows = (
+            _connection()
+            .execute(
+                "SELECT ts, instance_name, event, fields FROM debug_logs "
+                "WHERE job_id = ? ORDER BY ts DESC",
+                (job_id,),
+            )
+            .fetchall()
+        )
+    entries = []
+    total_bytes = 0
+    for ts, instance_name, event, fields in rows:
+        total_bytes += len(fields) + len(event or "") + len(instance_name or "") + 24
+        if total_bytes > max_bytes and entries:
+            break
+        entries.append(
+            {
+                "ts": ts,
+                "node": instance_name,
+                "event": event,
+                "fields": json.loads(fields),
+            }
+        )
+    entries.reverse()
+    return entries
 
 
 # ---------------------------------------------------------------- cluster_config

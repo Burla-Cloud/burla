@@ -21,6 +21,7 @@ from node_service import (
     __version__,
     head_client,
 )
+from node_service.helpers import debug_log
 
 # Sized so node_service's buffering fits inside its own memory reservation
 # (NODE_SERVICE_RESERVED_MEMORY_GB, 4GB on real VMs): workers own the rest of
@@ -58,6 +59,14 @@ CPU_PRESSURE_FILE = Path("/sys/fs/cgroup/cpu.pressure")
 CPU_PRESSURE_MONITOR_INTERVAL_SECONDS = 2
 CPU_PRESSURE_MAX_STALL_FRACTION = 0.10
 CPU_PRESSURE_MAX_KILL_FRACTION = 0.5
+
+# Worker re-adding: the inverse of the pressure monitors. Thresholds sit well
+# below the retire thresholds (hysteresis) so a node doesn't oscillate between
+# retiring and re-adding the same worker.
+READD_MONITOR_INTERVAL_SECONDS = 5
+READD_PRESSURE_COOLDOWN_SECONDS = 30
+READD_MAX_CPU_STALL_FRACTION = 0.05
+READD_MAX_WORKER_MEMORY_USED_FRACTION = 0.75
 
 
 class WorkerOutOfMemoryError(RuntimeError):
@@ -114,6 +123,7 @@ async def _relocate_worker_process_or_retire(worker: "WorkerClient"):
         worker.retired = True
         worker.is_idle = True
         SELF["reboot_containers_after_job"] = True
+        SELF["last_pressure_retirement_at"] = time.time()
         await Logger().log(
             f"Retired {worker.container_name}: process {stale_pid} is "
             "gone and its container is not running.",
@@ -376,6 +386,99 @@ async def cpu_pressure_monitor_loop():
         )
 
 
+async def _boot_readded_worker():
+    """Boot one fresh worker container toward this node's slot count and hand
+    it the retained function. Retirement deletes the worker's container, so
+    recovering capacity means booting a new container, not reviving the old
+    one. A replaced retired worker leaves SELF["workers"] so the list's
+    length keeps meaning "intended capacity"; with no retired worker to
+    replace, the deficit came from slots acquired in a trade, and the new
+    worker oversubscribes the machine (CPU nodes only - the trade loop never
+    runs on GPU nodes)."""
+    retired_workers = [worker for worker in SELF["workers"] if worker.retired]
+    if retired_workers:
+        template = retired_workers[0]
+        image, gpu_index = template.image, template.gpu_index
+    else:
+        template = None
+        image, gpu_index = SELF["workers"][0].image, None
+    worker = WorkerClient(image, gpu_index=gpu_index)
+    try:
+        await worker.boot()
+        await worker.load_function(SELF["function_pkl"])
+    except Exception as e:
+        if worker.container_id is not None:
+            asyncio.create_task(
+                worker._remove_retired_container(worker.container_id)
+            )
+        await debug_log("worker_readd_failed", error=f"{type(e).__name__}: {e}")
+        return
+
+    if template is not None:
+        SELF["workers"].remove(template)
+    SELF["workers"].append(worker)
+    new_parallelism = len(_active_dynamic_workers())
+    reason = "pressure subsided" if template is not None else "acquired slots"
+    await Logger().log(
+        f"Node parallelism increased from {new_parallelism - 1} to "
+        f"{new_parallelism}: {reason}, added a worker.",
+        job_id=SELF["current_job"],
+        old_parallelism=new_parallelism - 1,
+        new_parallelism=new_parallelism,
+    )
+
+
+async def dynamic_worker_readd_loop():
+    """Inverse of the pressure monitors: while this node runs fewer workers
+    than the slots it owes the job (pressure retired some), and pressure has
+    stayed away for a cooldown, boot replacement workers one at a time until
+    the node is whole again. Together with the monitors this makes worker
+    count fully elastic instead of a one-way ratchet."""
+    can_check_cpu = CPU_PRESSURE_FILE.exists()
+    last_stall_usec = _read_cpu_stall_usec() if can_check_cpu else 0
+    last_read_at = time.perf_counter()
+    while SELF["dynamic_func_ram"] or SELF["dynamic_func_cpu"]:
+        await asyncio.sleep(READD_MONITOR_INTERVAL_SECONDS)
+
+        stall_fraction = 0.0
+        if can_check_cpu:
+            stall_usec = _read_cpu_stall_usec()
+            read_at = time.perf_counter()
+            elapsed_usec = (read_at - last_read_at) * 1_000_000
+            stall_fraction = (stall_usec - last_stall_usec) / elapsed_usec
+            last_stall_usec, last_read_at = stall_usec, read_at
+
+        active_workers = _active_dynamic_workers()
+        deficit = SELF["target_parallelism"] - len(active_workers)
+        if deficit <= 0:
+            continue
+        pressure_gone_for = time.time() - SELF["last_pressure_retirement_at"]
+        if pressure_gone_for < READD_PRESSURE_COOLDOWN_SECONDS:
+            continue
+        if stall_fraction > READD_MAX_CPU_STALL_FRACTION:
+            continue
+        if SELF["inputs_queue"].qsize() == 0:
+            continue  # no queued work for another worker to pull
+        # RAM headroom check mirrors the RAM monitor's gating (its psutil
+        # numbers are meaningless inside a local-dev fake VM).
+        if SELF["dynamic_func_ram"] and not IN_LOCAL_DEV_MODE and active_workers:
+            memory_limit_bytes = _workers_memory_limit_bytes(active_workers[0])
+            used_bytes = 0
+            for worker in active_workers:
+                try:
+                    used_bytes += worker.memory_rss_bytes()
+                except psutil.NoSuchProcess:
+                    used_bytes = None  # worker mid-relaunch; skip this tick
+                    break
+            memory_fraction_used = (
+                used_bytes / memory_limit_bytes if used_bytes is not None else 1.0
+            )
+            if memory_fraction_used > READD_MAX_WORKER_MEMORY_USED_FRACTION:
+                continue
+
+        await _boot_readded_worker()
+
+
 class JobLogWriter:
     def __init__(self, job_id: str):
         self.job_id = job_id
@@ -625,6 +728,7 @@ async def retire_workers_for_pressure(
             await SELF["inputs_queue"].put((input_index, input_pkl), len(input_pkl))
 
         SELF["reboot_containers_after_job"] = True
+        SELF["last_pressure_retirement_at"] = time.time()
         msg = (
             f"Node parallelism decreased from {old_parallelism} to {new_parallelism} "
             f"due to {reason}."
@@ -946,6 +1050,7 @@ class WorkerClient:
             self.retired = True
             self.is_idle = True
             SELF["reboot_containers_after_job"] = True
+            SELF["last_pressure_retirement_at"] = time.time()
             await SELF["inputs_queue"].put((input_index, input_pkl), len(input_pkl))
 
             reason = (

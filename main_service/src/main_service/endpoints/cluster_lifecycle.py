@@ -213,6 +213,7 @@ def _start_nodes(
     node_machine_types: list[str] = None,
     containers_override: list[dict] = None,
     inactivity_shutdown_time_sec_override: int | None = None,
+    node_target_parallelisms: list[int] = None,
 ):
     # Lowest free port rather than highest+1, so a node slot is reused by the
     # node that replaces it. The heavy per-slot caches (inner docker image
@@ -261,6 +262,11 @@ def _start_nodes(
                 disk_size=node_spec.get("disk_size_gb"),
                 instance_name=instance_name,
                 reserved_for_job=reserved_for_job,
+                target_parallelism=(
+                    node_target_parallelisms[index]
+                    if node_target_parallelisms is not None
+                    else None
+                ),
             )
             futures.append(executor.submit(_add_node_logged, **node_start_kwargs))
         if n_nodes_to_add is not None:

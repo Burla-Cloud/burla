@@ -51,6 +51,26 @@ class SizedQueue(asyncio.Queue):
         return item
 
 
+async def debug_log(event: str, **fields):
+    """Structured engineering events, the counterpart to Logger.log: they land
+    in the head's debug_logs table (retention-pruned, shipped to Burla's
+    telemetry backend if the job fails) and are never shown to users, so
+    verbosity is a feature here, not noise. Values must be JSON-serializable.
+    Never raises."""
+    print(f"[debug] {event} {fields}")
+    # Lazy import: this module is imported before SELF/head_client exist.
+    from node_service import SELF, head_client
+
+    entry = {
+        "ts": time(),
+        "debug": {"job_id": SELF["current_job"], "event": event, "fields": fields},
+    }
+    try:
+        await head_client.post_node_logs([entry])
+    except Exception as e:
+        print(f"failed to forward debug log to head: {e}")
+
+
 class Logger:
     """Prints to stdout (journald / docker captures it) and forwards each line
     to the head so it shows in the dashboard's node-log view. Errors also go

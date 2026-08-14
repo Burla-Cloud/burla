@@ -16,10 +16,8 @@ you add a dashboard endpoint, put it in one of the files above.
 """
 
 import asyncio
-import math
 from time import time
 from typing import Optional
-from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
@@ -39,10 +37,12 @@ from main_service.transport_tls import cluster_ca_pem
 from main_service.providers.catalog import (
     gpu_machine_prefix,
     gpu_machine_type,
-    machine_type_cpu_count,
-    is_packable_cpu_machine,
-    pack_cpu_machines,
     parallelism_capacity,
+)
+from main_service.scaling import (
+    plan_grow_nodes,
+    planned_cpu_count,
+    required_cpus_per_call,
 )
 from main_service.endpoints.cluster_lifecycle import (
     GROW_INACTIVITY_SHUTDOWN_TIME_SEC,
@@ -177,105 +177,64 @@ def _grow_if_needed(
     job_id: str,
     logger: Logger,
     add_background_task,
-) -> list[dict]:
-    """Schedules `_start_nodes` in the background and returns one
-    `{instance_name, target_parallelism}` dict per reserved booting node.
-    Empty list if no growth was needed.
+) -> tuple[list[dict], Optional[int]]:
+    """Schedules `_start_nodes` in the background and returns
+    `(booting_nodes, grow_cpus_remaining)`: one `{instance_name,
+    target_parallelism}` dict per reserved booting node (empty if no growth
+    was needed), and the job's remaining grow-CPU budget for mid-job
+    replacement boots (None = uncapped, i.e. GPU jobs).
 
     When `func_gpu` is set, each new node is one of the mapped GPU machine
     types. When `image` is set, the new nodes run that image instead of the
     cluster default.
     """
+    if gpu_machine_type(func_gpu, CLOUD_PROVIDER):
+        max_additional_cpus = None
+    else:
+        max_cpu = LOCAL_DEV_MAX_GROW_CPUS if IN_LOCAL_DEV_MODE else MAX_GROW_CPUS
+        current_cpus = target_parallelism * required_cpus_per_call(func_cpu, func_ram)
+        max_additional_cpus = max(0, max_cpu - current_cpus)
+
     requested_parallelism = min(n_inputs, max_parallelism)
     missing_slots = max(0, requested_parallelism - target_parallelism)
     if missing_slots <= 0:
-        return []
+        return [], max_additional_cpus
 
-    gpu_mt = gpu_machine_type(func_gpu, CLOUD_PROVIDER)
+    config = _get_cluster_config()
+    planned = plan_grow_nodes(
+        missing_slots=missing_slots,
+        func_cpu=func_cpu,
+        func_ram=func_ram,
+        func_gpu=func_gpu,
+        config=config,
+        max_additional_cpus=max_additional_cpus,
+    )
+    if not planned:
+        return [], max_additional_cpus
 
-    if gpu_mt:
-        gpu_slots_per_node = parallelism_capacity(gpu_mt, func_cpu, func_ram)
-        n_nodes = math.ceil(missing_slots / gpu_slots_per_node)
-        node_machine_types = [gpu_mt] * n_nodes
-        parallelism_to_add = missing_slots
-        config = _get_cluster_config()
-    else:
-        func_cpu_for_scheduling = 1 if func_cpu == "dynamic" else int(func_cpu)
-        func_ram_for_scheduling = 4 if func_ram == "dynamic" else int(func_ram)
-        required_cpus_for_ram = (func_ram_for_scheduling + 3) // 4
-        required_cpus_per_call = max(func_cpu_for_scheduling, required_cpus_for_ram)
-        current_cpus = target_parallelism * required_cpus_per_call
-        missing_cpus = missing_slots * required_cpus_per_call
-
-        max_cpu = LOCAL_DEV_MAX_GROW_CPUS if IN_LOCAL_DEV_MODE else MAX_GROW_CPUS
-        max_additional_cpus = max(0, max_cpu - current_cpus)
-        num_cpus_to_add = min(missing_cpus, max_additional_cpus)
-        parallelism_to_add = num_cpus_to_add // required_cpus_per_call
-        if parallelism_to_add <= 0:
-            return []
-
-        config = _get_cluster_config()
-        node_spec = config["Nodes"][0]
-        configured_machine_type = node_spec["machine_type"]
-
-        # For CPU clusters, ignore the configured size and pack the required
-        # CPUs into as many of the family's largest size as fit, with the
-        # remainder covered by the smallest size that fits. GPU clusters keep
-        # using the configured machine type so GPU jobs still land on GPU
-        # hardware. Local dev stays homogeneous because node containers
-        # hard-code 2 workers regardless of the advertised machine_type
-        # (see INSTANCE_N_CPUS).
-        pack_by_size = not IN_LOCAL_DEV_MODE and is_packable_cpu_machine(
-            configured_machine_type
-        )
-
-        if pack_by_size:
-            node_machine_types = pack_cpu_machines(num_cpus_to_add, CLOUD_PROVIDER)
-        else:
-            cpu_per_node = machine_type_cpu_count(configured_machine_type)
-            n_nodes_to_add = math.ceil(num_cpus_to_add / cpu_per_node)
-            node_machine_types = [configured_machine_type] * n_nodes_to_add
-
-    # A machine_type whose capacity is 0 for this func_cpu/func_ram would boot a
-    # node that can't run a single call, and the client would then send
-    # parallelism=0 to it, producing a misleading 409 from the node.
-    node_machine_types = [
-        mt
-        for mt in node_machine_types
-        if parallelism_capacity(mt, func_cpu, func_ram) > 0
-    ]
-    if not node_machine_types:
-        return []
-
-    node_instance_names = [f"burla-node-{uuid4().hex[:8]}" for _ in node_machine_types]
     containers_override = [{"image": image}] if image else None
-    booting_nodes = []
-    remaining_parallelism = parallelism_to_add
-    for name, machine_type in zip(node_instance_names, node_machine_types):
-        node_parallelism = min(
-            remaining_parallelism,
-            parallelism_capacity(machine_type, func_cpu, func_ram),
-        )
-        booting_nodes.append(
-            {
-                "instance_name": name,
-                "target_parallelism": node_parallelism,
-            }
-        )
-        remaining_parallelism -= node_parallelism
-
     add_background_task(
         _start_nodes,
         logger,
         config,
-        len(node_instance_names),
-        node_instance_names,
+        len(planned),
+        [p["instance_name"] for p in planned],
         job_id,
-        node_machine_types,
+        [p["machine_type"] for p in planned],
         containers_override,
         GROW_INACTIVITY_SHUTDOWN_TIME_SEC,
+        [p["target_parallelism"] for p in planned],
     )
-    return booting_nodes
+    booting_nodes = [
+        {
+            "instance_name": p["instance_name"],
+            "target_parallelism": p["target_parallelism"],
+        }
+        for p in planned
+    ]
+    if max_additional_cpus is not None:
+        max_additional_cpus = max(0, max_additional_cpus - planned_cpu_count(planned))
+    return booting_nodes, max_additional_cpus
 
 
 @router.post("/v1/jobs/{job_id}/start")
@@ -428,12 +387,13 @@ async def start_job(
 
     # --- grow, if requested and short on capacity ---
     booting_nodes: list[dict] = []
+    grow_cpus_remaining: Optional[int] = None
     if grow:
         if min(n_inputs, max_parallelism) > target_parallelism:
             # In a thread because the verification request arrives back
             # through this same event loop.
             await asyncio.to_thread(verify_nodes_can_reach_head)
-        booting_nodes = _grow_if_needed(
+        booting_nodes, grow_cpus_remaining = _grow_if_needed(
             target_parallelism=target_parallelism,
             n_inputs=n_inputs,
             max_parallelism=max_parallelism,
@@ -453,6 +413,9 @@ async def start_job(
         "func_ram": func_ram,
         "image": image,
         "func_gpu": func_gpu,
+        "grow": grow,
+        # Remaining CPU budget for mid-job replacement boots (None = uncapped).
+        "grow_cpus_remaining": grow_cpus_remaining,
         "packages": body.get("packages") or {},
         "status": "RUNNING",
         "burla_client_version": client_version,
@@ -533,6 +496,14 @@ async def get_cluster_node(node_id: str):
     if data is None:
         raise HTTPException(status_code=404, detail="node not found")
     return data
+
+
+@router.get("/v1/jobs/{job_id}/nodes")
+async def get_job_nodes(job_id: str):
+    """Nodes running or reserved for this job. Polled by the client during a
+    job to discover mid-job replacement nodes, which it must assign the job
+    to (only the client holds the pickled function)."""
+    return {"nodes": cluster_state.nodes_for_job(job_id)}
 
 
 # Earliest log matching one of these is usually the root cause; later logs

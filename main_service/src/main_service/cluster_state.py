@@ -312,6 +312,7 @@ def update_job(
         if new_status == "COMPLETED" and job.get("status") != "RUNNING":
             updates.pop("status")
             new_status = None
+        became_failed = new_status == "FAILED" and job.get("status") != "FAILED"
         job.update(updates)
         if append_fail_reason is not None:
             reasons = job.setdefault("fail_reason", [])
@@ -329,6 +330,17 @@ def update_job(
     for node in released_nodes:
         _publish(_node_event_queues, {"deleted": False, **node})
     _publish(_job_event_queues, {"job_id": job_id, **_job_summary(snapshot)})
+
+    if became_failed:
+        # Lazy import: helpers imports from the main_service package, which
+        # is mid-initialization when this module is first imported.
+        from main_service.helpers import ship_job_debug_logs
+
+        threading.Thread(
+            target=ship_job_debug_logs,
+            args=(job_id, snapshot.get("fail_reason")),
+            daemon=True,
+        ).start()
     return True
 
 
@@ -365,6 +377,7 @@ def job_view(job_id: str) -> dict:
         return {
             "exists": True,
             "status": job.get("status"),
+            "grow": bool(job.get("grow")),
             "all_inputs_uploaded": bool(job.get("all_inputs_uploaded")),
             "client_has_all_results": bool(job.get("client_has_all_results")),
             "dashboard_canceled": bool(job.get("dashboard_canceled")),
@@ -387,6 +400,45 @@ def running_job_ids() -> list[str]:
         return [
             job_id for job_id, job in JOBS.items() if job.get("status") == "RUNNING"
         ]
+
+
+def nodes_for_job(job_id: str) -> list[dict]:
+    """Every node running or reserved for this job. The client polls this
+    during a job to discover mid-job replacement nodes it must assign."""
+    with _lock:
+        return [
+            {
+                "instance_name": name,
+                "status": node.get("status"),
+                "host": node.get("host"),
+                "machine_type": node.get("machine_type"),
+                "target_parallelism": node.get("target_parallelism"),
+            }
+            for name, node in NODES.items()
+            if node.get("status") != "DELETED"
+            and (
+                node.get("current_job") == job_id
+                or node.get("reserved_for_job") == job_id
+            )
+        ]
+
+
+def record_replacement_request(
+    job_id: str, requesting_node: str, request: dict, cpus_booted: int
+):
+    """Persist a replacement boot under the state lock: the idempotency entry
+    (nodes retry with the same request_id when a response is lost) and the
+    CPU-budget decrement must not race concurrent requests from other nodes."""
+    with _lock:
+        job = _get_or_load_job(job_id)
+        if job is None:
+            return
+        job.setdefault("replacement_requests", {})[requesting_node] = request
+        if job.get("grow_cpus_remaining") is not None:
+            job["grow_cpus_remaining"] = max(
+                0, job["grow_cpus_remaining"] - cpus_booted
+            )
+        history.upsert_job_and_nodes(job_id, dict(job), [])
 
 
 def peers_for_job(job_id: str) -> dict:

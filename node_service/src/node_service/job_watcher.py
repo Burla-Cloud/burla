@@ -8,26 +8,53 @@ import ssl
 from time import time
 from uuid import uuid4
 
+import psutil
+
 from node_service import (
     SELF,
     INSTANCE_NAME,
+    INSTANCE_N_CPUS,
+    IN_LOCAL_DEV_MODE,
     NODE_AUTH_CREDENTIALS_PATH,
+    NUM_GPUS,
     REINIT_SELF,
     head_client,
 )
-from node_service.helpers import Logger, format_traceback
+from node_service.helpers import Logger, debug_log, format_traceback
 from node_service.lifecycle_endpoints import reboot_containers
+from node_service.worker_client import (
+    CPU_PRESSURE_FILE,
+    READD_MAX_CPU_STALL_FRACTION,
+    READD_MAX_WORKER_MEMORY_USED_FRACTION,
+    READD_PRESSURE_COOLDOWN_SECONDS,
+    _read_cpu_stall_usec,
+    _workers_memory_limit_bytes,
+)
 
 EMPTY_NEIGHBOR_TIMEOUT_SEC = 120
 CLIENT_CONTACT_TIMEOUT_SEC = 5
 ACK_RETRY_TIMEOUT_SEC = 600
 ACK_RETRY_DELAY_SEC = 15
 WORKER_CLEANUP_TIMEOUT_SEC = 120
+# How long a worker deficit must persist before this node asks the head to
+# boot replacement machines for it. Long enough for transient pressure to
+# clear and for un-retiring to win when the machine recovers on its own.
+REPLACEMENT_DEFICIT_WINDOW_SEC = 60
+REPLACEMENT_RETRY_SEC = 60
+
+# Pairwise slot trading (packing): how often a hungry node may ask its ring
+# neighbor for slots, and how far beyond one-worker-per-CPU it may grow.
+TRADE_INTERVAL_SEC = 15
+OVERSUBSCRIBE_MAX_WORKERS_PER_CPU = 2
 # The set of nodes on a job changes rarely, so re-asking the head is cheap to do
 # seldom. Matches the client's wait before it hands a booting node the job.
 PEER_RECHECK_INTERVAL_SEC = 30
 # How long a node can make no progress before it logs its input accounting.
 STALL_REPORT_INTERVAL_SEC = 10
+# Cadence of the slot_state debug event: a continuous record of this node's
+# slot ledger, so post-mortems can read a timeseries instead of replaying
+# every change event.
+SLOT_STATE_LOG_INTERVAL_SEC = 60
 
 SEC_NEIGHBOR_HAD_NO_INPUTS = 0
 
@@ -65,14 +92,20 @@ async def get_neighbor(node_ids_expected):
 async def _input_steal_loop(session, logger, job_started_at, node_ids_expected):
     global SEC_NEIGHBOR_HAD_NO_INPUTS
 
-    should_steal = lambda: SELF["all_inputs_uploaded"] and (
-        time() - job_started_at > 10
+    # A node traded down to zero slots must stop pulling work in: it has no
+    # workers left to run it, and holding inputs would keep it on the job.
+    should_steal = lambda: (
+        SELF["all_inputs_uploaded"]
+        and (time() - job_started_at > 10)
+        and SELF["target_parallelism"] > 0
     )
-    neighbor_id, neighbor_host, nodes_might_join = await get_neighbor(node_ids_expected)
-    if not (neighbor_id or nodes_might_join):
-        return
+    # Replacement nodes can join the ring at any point in the job, so the
+    # peer list is re-checked on an interval for the whole job instead of
+    # only while initially-expected nodes are still booting. last_peer_check
+    # starts at 0 so the first active tick fetches the initial neighbor.
+    neighbor_id, neighbor_host, nodes_might_join = None, None, True
     neighbor_had_no_inputs_at = None
-    last_peer_check = time()
+    last_peer_check = 0.0
 
     while not SELF["job_watcher_stop_event"].is_set():
         await asyncio.sleep(1)
@@ -81,13 +114,18 @@ async def _input_steal_loop(session, logger, job_started_at, node_ids_expected):
             await asyncio.sleep(1)
             continue
 
-        if nodes_might_join and (time() - last_peer_check > PEER_RECHECK_INTERVAL_SEC):
+        if time() - last_peer_check > PEER_RECHECK_INTERVAL_SEC:
             last_peer_check = time()
-            neighbor_id, neighbor_host, nodes_might_join = await get_neighbor(
-                node_ids_expected
-            )
-            if not (neighbor_id or nodes_might_join):
-                return
+            try:
+                neighbor_id, neighbor_host, nodes_might_join = await get_neighbor(
+                    node_ids_expected
+                )
+            except Exception:
+                # Head briefly unreachable: keep the current neighbor and let
+                # the next interval retry, instead of silently killing
+                # stealing for the rest of the job (this task's exceptions
+                # are never observed).
+                pass
 
         if not neighbor_id:
             continue
@@ -169,6 +207,132 @@ async def _input_steal_loop(session, logger, job_started_at, node_ids_expected):
             await asyncio.sleep(1)
 
 
+async def _slot_trade_loop(session, logger, node_ids_expected):
+    """Acquire slots from the ring neighbor when this node could productively
+    run more workers than it owns: it is at its slot count, unsaturated, and
+    has more queued inputs than workers (the blog's "add workers to a machine
+    to increase utilization ... remove workers elsewhere to stay below the
+    job's maximum allowed parallelism"). The neighbor gives up capacity it is
+    using worse (see `trade_slots` in job_endpoints.py); the re-add loop then
+    boots workers here toward the raised slot count, oversubscribing beyond
+    one per CPU. Only meaningful for fully dynamic jobs: with a fixed
+    func_cpu/func_ram, packing extra workers in would break the per-call
+    resource guarantee. GPU nodes never oversubscribe (one worker per GPU).
+    """
+    fully_dynamic = SELF["dynamic_func_cpu"] and SELF["dynamic_func_ram"]
+    if not fully_dynamic or NUM_GPUS:
+        return
+    max_workers = OVERSUBSCRIBE_MAX_WORKERS_PER_CPU * INSTANCE_N_CPUS
+    can_check_cpu = CPU_PRESSURE_FILE.exists()
+    last_stall_usec = _read_cpu_stall_usec() if can_check_cpu else 0
+    last_read_at = time()
+
+    while not SELF["job_watcher_stop_event"].is_set():
+        await asyncio.sleep(1)
+        if time() - SELF["last_slot_trade_attempt_at"] < TRADE_INTERVAL_SEC:
+            continue
+
+        stall_fraction = 0.0
+        if can_check_cpu:
+            stall_usec = _read_cpu_stall_usec()
+            read_at = time()
+            elapsed_usec = (read_at - last_read_at) * 1_000_000
+            stall_fraction = (stall_usec - last_stall_usec) / elapsed_usec
+            last_stall_usec, last_read_at = stall_usec, read_at
+
+        if SELF["target_parallelism"] <= 0:
+            return  # traded out; this node is on its way off the job
+        if not SELF["all_inputs_uploaded"]:
+            continue
+        # A node that just shed workers under pressure has no business
+        # acquiring more capacity (mirrors the re-add cooldown, and stops
+        # a freshly-degraded node from instantly reclaiming the slot it
+        # donated).
+        recently_pressured = (
+            time() - SELF["last_pressure_retirement_at"]
+            < READD_PRESSURE_COOLDOWN_SECONDS
+        )
+        if recently_pressured:
+            continue
+        alive_workers = [w for w in SELF["workers"] if not w.retired]
+        # A deficit is the re-add / replacement paths' problem, not trading's.
+        if len(alive_workers) != SELF["target_parallelism"]:
+            continue
+        if len(alive_workers) >= max_workers:
+            continue
+        queued_inputs = SELF["inputs_queue"].qsize()
+        if queued_inputs <= len(alive_workers):
+            continue
+        if stall_fraction > READD_MAX_CPU_STALL_FRACTION:
+            continue
+        if not IN_LOCAL_DEV_MODE and alive_workers:
+            memory_limit_bytes = _workers_memory_limit_bytes(alive_workers[0])
+            used_bytes = 0
+            for worker in alive_workers:
+                try:
+                    used_bytes += worker.memory_rss_bytes()
+                except psutil.NoSuchProcess:
+                    used_bytes = None  # worker mid-relaunch; skip this tick
+                    break
+            if used_bytes is None:
+                continue
+            if used_bytes / memory_limit_bytes > READD_MAX_WORKER_MEMORY_USED_FRACTION:
+                continue
+
+        try:
+            neighbor_id, neighbor_host, _ = await get_neighbor(node_ids_expected)
+        except Exception:
+            continue
+        if not neighbor_id:
+            continue
+
+        want = min(
+            queued_inputs - len(alive_workers),
+            max_workers - len(alive_workers),
+        )
+        # The id lives from the first send attempt until a response is seen,
+        # so a retry after a lost response replays the same trade instead of
+        # taking the neighbor's slots twice.
+        if SELF["slot_trade_id"] is None:
+            SELF["slot_trade_id"] = uuid4().hex
+        SELF["last_slot_trade_attempt_at"] = time()
+        url = f"{neighbor_host}/jobs/{SELF['current_job']}/trade_slots"
+        params = {
+            "requesting_node": INSTANCE_NAME,
+            "slots_requested": want,
+            "trade_id": SELF["slot_trade_id"],
+        }
+        try:
+            async with session.post(
+                url, params=params, headers=SELF["auth_headers"]
+            ) as response:
+                if response.status == 404:
+                    # Neighbor is no longer on this job; nothing was granted.
+                    SELF["slot_trade_id"] = None
+                    continue
+                response.raise_for_status()
+                granted = int((await response.json()).get("slots_granted") or 0)
+        except Exception as error:
+            await debug_log(
+                "trade_failed",
+                neighbor=neighbor_id,
+                requested=want,
+                error=f"{type(error).__name__}: {error}",
+            )
+            continue
+
+        SELF["slot_trade_id"] = None
+        if granted:
+            SELF["target_parallelism"] += granted
+        await debug_log(
+            "trade_result",
+            neighbor=neighbor_id,
+            requested=want,
+            granted=granted,
+            target_now=SELF["target_parallelism"],
+        )
+
+
 async def _push_progress() -> dict:
     """Push this node's job progress and return the fresh job view."""
     while True:
@@ -203,6 +367,9 @@ async def _job_watcher(
     steal_task = asyncio.create_task(
         _input_steal_loop(session, logger, job_started_at, node_ids_expected)
     )
+    trade_task = asyncio.create_task(
+        _slot_trade_loop(session, logger, node_ids_expected)
+    )
 
     JOB_FAILED = False
     JOB_CANCELED = False
@@ -211,6 +378,7 @@ async def _job_watcher(
     last_loop_at = time()
     last_progress_at = time()
     last_progress_result_count = 0
+    last_slot_state_logged_at = 0.0
     while not SELF["job_watcher_stop_event"].is_set():
 
         SELF["current_parallelism"] = sum(
@@ -260,6 +428,86 @@ async def _job_watcher(
         contact_flag_changed = client_contact_last_1s != SELF["client_contact_last_1s"]
         SELF["client_contact_last_1s"] = client_contact_last_1s
 
+        # --- replacement requester ------------------------------------
+        # Pressure retirement permanently shrinks this node's worker pool
+        # (until un-retiring recovers it). A deficit that persists while
+        # queued work exists means this machine cannot run the slots it owes
+        # the job, so hand them to a fresh machine. All policy lives here;
+        # the head only executes the boot. Slots are conserved: on success
+        # this node's target shrinks by exactly what was booted. A connected
+        # client is required because only it can assign the job (it holds
+        # the pickled function).
+        alive_workers = sum(not worker.retired for worker in SELF["workers"])
+        deficit = SELF["target_parallelism"] - alive_workers
+        wants_replacement = (
+            deficit > 0
+            and job_view.get("grow")
+            and not SELF["replacement_refused"]
+            and remaining_inputs > alive_workers
+            and client_contact_last_1s
+        )
+        if not wants_replacement:
+            SELF["replacement_deficit_since"] = None
+        else:
+            if SELF["replacement_deficit_since"] is None:
+                SELF["replacement_deficit_since"] = time()
+            deficit_sustained = (
+                time() - SELF["replacement_deficit_since"]
+                > REPLACEMENT_DEFICIT_WINDOW_SEC
+            )
+            retry_ok = (
+                time() - SELF["last_replacement_request_at"] > REPLACEMENT_RETRY_SEC
+            )
+            if deficit_sustained and retry_ok:
+                SELF["last_replacement_request_at"] = time()
+                # The id lives from the first send attempt until a response
+                # is seen, so a retry after a lost response replays the same
+                # request instead of booting a second set of machines.
+                if SELF["replacement_request_id"] is None:
+                    SELF["replacement_request_id"] = uuid4().hex
+                request_id = SELF["replacement_request_id"]
+                try:
+                    response = await head_client.request_replacement_nodes(
+                        SELF["current_job"], deficit, request_id
+                    )
+                    SELF["replacement_request_id"] = None
+                    SELF["replacement_deficit_since"] = None
+                    slots_booted = int(response.get("slots_booted") or 0)
+                    SELF["target_parallelism"] -= slots_booted
+                    booted = [n["instance_name"] for n in response.get("booted", [])]
+                    await logger.log(
+                        f"Handed {slots_booted} slots lost to pressure "
+                        f"retirement to replacement node(s) {booted}."
+                    )
+                    await debug_log(
+                        "replacement_booted",
+                        request_id=request_id,
+                        deficit=deficit,
+                        slots_booted=slots_booted,
+                        booted=booted,
+                        target_now=SELF["target_parallelism"],
+                    )
+                except aiohttp.ClientResponseError as e:
+                    if e.status == 409:
+                        # Grow budget exhausted (or job no longer grow=True):
+                        # permanent for this job, stop asking.
+                        SELF["replacement_refused"] = True
+                        SELF["replacement_request_id"] = None
+                    await debug_log(
+                        "replacement_request_failed",
+                        request_id=request_id,
+                        deficit=deficit,
+                        status=e.status,
+                        refused_permanently=SELF["replacement_refused"],
+                    )
+                except Exception as e:
+                    await debug_log(
+                        "replacement_request_failed",
+                        request_id=request_id,
+                        deficit=deficit,
+                        error=f"{type(e).__name__}: {e}",
+                    )
+
         # Push progress immediately on meaningful changes; the 1s loop covers
         # the steady state.
         current_num_results = SELF["num_results_received"]
@@ -277,6 +525,20 @@ async def _job_watcher(
             last_results_update_time = time()
             last_reported_result_count = current_num_results
 
+        # Continuous slot-ledger record: target/alive/queued as a timeseries,
+        # so a failed run's forensics are a query instead of replaying every
+        # change event.
+        if time() - last_slot_state_logged_at > SLOT_STATE_LOG_INTERVAL_SEC:
+            last_slot_state_logged_at = time()
+            await debug_log(
+                "slot_state",
+                target=SELF["target_parallelism"],
+                alive_workers=sum(not w.retired for w in SELF["workers"]),
+                busy_workers=SELF["current_parallelism"],
+                queued_inputs=remaining_inputs,
+                results=SELF["num_results_received"],
+            )
+
         # A job that stops advancing is only diagnosable if you can see where
         # its inputs went: this node's queue, a parked transfer, or a worker.
         if current_num_results != last_progress_result_count:
@@ -284,19 +546,18 @@ async def _job_watcher(
             last_progress_at = time()
         elif time() - last_progress_at > STALL_REPORT_INTERVAL_SEC:
             last_progress_at = time()
-            await logger.log(
-                f"No new results for {STALL_REPORT_INTERVAL_SEC}s: "
-                f"queued_inputs={SELF['inputs_queue'].qsize()} "
-                f"inputs_in_transfer={pending_transfer_count} "
-                f"transfers={list(SELF['pending_transfers'])} "
-                f"busy_workers={SELF['current_parallelism']} "
-                f"results_produced={current_num_results} "
-                f"queued_results={SELF['results_queue'].qsize()} "
-                f"queued_result_bytes={SELF['results_queue'].size_bytes} "
-                f"unacked_result_batch={not pending_results_empty} "
-                f"workers={[(w.is_idle, w.retired) for w in SELF['workers']]} "
-                f"all_inputs_uploaded={SELF['all_inputs_uploaded']}",
-                severity="WARNING",
+            await debug_log(
+                "stall",
+                queued_inputs=SELF["inputs_queue"].qsize(),
+                inputs_in_transfer=pending_transfer_count,
+                transfers=list(SELF["pending_transfers"]),
+                busy_workers=SELF["current_parallelism"],
+                results_produced=current_num_results,
+                queued_results=SELF["results_queue"].qsize(),
+                queued_result_bytes=SELF["results_queue"].size_bytes,
+                unacked_result_batch=not pending_results_empty,
+                workers=[(w.is_idle, w.retired) for w in SELF["workers"]],
+                all_inputs_uploaded=SELF["all_inputs_uploaded"],
             )
 
         client_disconnected = False
@@ -319,6 +580,25 @@ async def _job_watcher(
                 )
                 await logger.log("Client disconnected!")
 
+        # Traded down to zero slots and drained? Finish this node's part of
+        # the job immediately instead of waiting out the empty-neighbor
+        # timeout: its slots (and any requeued inputs) live elsewhere now, so
+        # the machine is pure idle cost (this is what "packing into fewer
+        # machines" frees).
+        traded_out = (
+            SELF["target_parallelism"] <= 0
+            and input_queue_empty
+            and all_workers_idle
+            and SELF["results_queue"].empty()
+            and pending_results_empty
+        )
+        if traded_out:
+            steal_task.cancel()
+            trade_task.cancel()
+            await logger.log("All slots traded away and drained, done working on job!")
+            await reset_workers(logger)
+            break
+
         # Neighbor had no inputs for too long?
         if (
             SEC_NEIGHBOR_HAD_NO_INPUTS
@@ -330,6 +610,7 @@ async def _job_watcher(
                 and all_workers_idle
             ):
                 steal_task.cancel()
+                trade_task.cancel()
                 msg = f"Neighbor had no extra inputs for {EMPTY_NEIGHBOR_TIMEOUT_SEC}s"
                 await logger.log(msg + ", done working on job!")
                 await reset_workers(logger)
@@ -347,6 +628,7 @@ async def _job_watcher(
             job_completed = job_view.get("client_has_all_results")
         if job_completed or JOB_FAILED or JOB_CANCELED:
             steal_task.cancel()
+            trade_task.cancel()
             if JOB_FAILED:
                 status = "FAILED"
             elif JOB_CANCELED:
@@ -365,6 +647,7 @@ async def _job_watcher(
             break
 
     steal_task.cancel()
+    trade_task.cancel()
 
 
 async def job_watcher_logged(
@@ -424,7 +707,11 @@ async def reinit_node(assigned_workers: list):
 async def reset_workers(logger: Logger):
     # Stops idle or reassigned workers from holding creds for a finished job.
     NODE_AUTH_CREDENTIALS_PATH.unlink(missing_ok=True)
-    for task_key in ("dynamic_ram_monitor_task", "cpu_pressure_monitor_task"):
+    for task_key in (
+        "dynamic_ram_monitor_task",
+        "cpu_pressure_monitor_task",
+        "worker_readd_task",
+    ):
         monitor_task = SELF[task_key]
         if monitor_task is not None:
             monitor_task.cancel()

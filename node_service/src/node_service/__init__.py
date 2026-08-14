@@ -73,6 +73,20 @@ def REINIT_SELF(SELF):
     SELF["results_queue"] = SizedQueue()
     SELF["current_job"] = None
     SELF["current_parallelism"] = 0
+    # This node's slot count for the current job: how many parallel calls it
+    # owes the job. Set at assignment; shrinks when slots transfer to a
+    # replacement node. Sum over all nodes never exceeds the job's approved
+    # parallelism (slot conservation).
+    SELF["target_parallelism"] = 0
+    SELF["replacement_deficit_since"] = None
+    SELF["replacement_request_id"] = None
+    SELF["last_replacement_request_at"] = 0.0
+    SELF["replacement_refused"] = False
+    # Pairwise slot trading with ring neighbors (see job_watcher.py).
+    SELF["slot_trades_granted"] = {}
+    SELF["slot_trade_id"] = None
+    SELF["last_slot_trade_attempt_at"] = 0.0
+    SELF["job_assigned_at"] = 0.0
     SELF["job_watcher_stop_event"] = Event()
     SELF[
         "job_watcher_stop_event"
@@ -90,6 +104,11 @@ def REINIT_SELF(SELF):
     SELF["dynamic_retire_lock"] = asyncio.Lock()
     SELF["dynamic_ram_monitor_task"] = None
     SELF["cpu_pressure_monitor_task"] = None
+    SELF["worker_readd_task"] = None
+    SELF["last_pressure_retirement_at"] = 0.0
+    # The job's pickled function, kept so workers booted mid-job (re-adds,
+    # slot trades) can be assigned without the client.
+    SELF["function_pkl"] = None
     SELF["reboot_containers_after_job"] = False
     SELF["num_results_received"] = 0
     SELF["pending_transfers"] = {}

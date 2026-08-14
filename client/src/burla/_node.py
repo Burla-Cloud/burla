@@ -285,6 +285,9 @@ class Node:
         self.started_booting_at = time()
         self.auth_headers = get_auth_headers()
         self.removed_reason = ""
+        # Mid-job replacement nodes are opportunistic extras: one failing to
+        # boot must not fail the job like a node promised at job start does.
+        self.late_join = False
         self.spinner_compatible_print = lambda msg: (
             safe_spinner_write(spinner, msg) if spinner else safe_print(msg)
         )
@@ -501,6 +504,20 @@ class Node:
                     self.spinner_compatible_print(msg)
                     return
                 else:
+                    if self.late_join:
+                        # A replacement node holds no inputs until assigned,
+                        # so a botched assignment loses nothing; dropping it
+                        # must not kill a job that was running fine without
+                        # it (observed: a 500 from a fresh node's assignment
+                        # failing the whole job).
+                        self.state = "REMOVED"
+                        self.removed_reason = f"assignment failed: {response.status}"
+                        msg = (
+                            f"Replacement node {self.instance_name} failed "
+                            f"assignment ({response.status}), removed from job."
+                        )
+                        self.spinner_compatible_print(msg)
+                        return
                     msg = f"Failed to assign {self.instance_name}: {response.status}"
                     raise Exception(msg)
 
@@ -514,6 +531,11 @@ class Node:
                     await self._fail_and_delete(
                         self._node_silence_timeout_message("assigning job")
                     )
+                    if self.late_join:
+                        # VM cleanup already requested; the job continues
+                        # without this opportunistic extra.
+                        self.state = "REMOVED"
+                        self.removed_reason = "unreachable while assigning job"
                     return
 
     async def _gather_results(self):
@@ -634,6 +656,11 @@ class Node:
                         break
                     await asyncio.sleep(random.uniform(2, 6))
             if self.state != "READY":
+                if self.late_join and self.state == "FAILED":
+                    # It never held the job or any inputs, so losing it is
+                    # harmless; the job keeps running on the other nodes.
+                    self.state = "REMOVED"
+                    self.removed_reason = "replacement node failed to boot"
                 return
 
         if packages:

@@ -1,6 +1,7 @@
 import json
 import pickle
 from datetime import datetime, timezone
+from time import time
 from typing import Optional
 from uuid import uuid4
 
@@ -19,11 +20,13 @@ from node_service import (
     get_request_files,
     head_client,
 )
-from node_service.helpers import Logger
+from node_service.helpers import Logger, debug_log
 from node_service.job_watcher import job_watcher_logged
 from node_service.worker_client import (
+    READD_PRESSURE_COOLDOWN_SECONDS,
     cpu_pressure_monitor_loop,
     dynamic_ram_monitor_loop,
+    dynamic_worker_readd_loop,
 )
 
 _LOGS_OVERFLOW_MESSAGE = (
@@ -38,6 +41,10 @@ MAX_RESULTS_RESPONSE_BYTES = 1_000_000
 INPUTS_QUEUE_RAM_LIMIT_BYTES = min(
     1 * 1024**3, int(psutil.virtual_memory().total * 0.125)
 )
+
+# How long a node must have held the job before its idle workers' slots can
+# be traded away (see trade_slots).
+TRADE_IDLE_GRACE_SEC = 30
 
 router = APIRouter()
 
@@ -152,6 +159,98 @@ async def ack_transfer(
         for input_index, input_pkl in items:
             SELF["inputs_queue"].put_nowait((input_index, input_pkl), len(input_pkl))
     return Response(status_code=200)
+
+
+@router.post("/jobs/{job_id}/trade_slots")
+async def trade_slots(
+    job_id: str = Path(...),
+    requesting_node: str = Query(...),
+    slots_requested: int = Query(...),
+    trade_id: str = Query(...),
+):
+    """A ring neighbor that could productively run more workers than it owns
+    asks this node for slots. Grant what this node is using worst: slots with
+    no live worker behind them (pressure-retired capacity), then slots backed
+    by idle workers once the local queue is drained (retiring an idle worker
+    loses nothing - it holds no input). Slots are conserved: the requester
+    adds exactly what this node gives up. A node drained to zero slots
+    finishes its part of the job and frees its machine (packing).
+
+    Replaying the same trade_id returns the original grant instead of
+    granting twice, so a requester that never saw the response can retry.
+    """
+    if job_id != SELF["current_job"]:
+        return Response("job not found", status_code=404)
+    # current_job is set the moment assignment upload starts, but the workers
+    # only belong to the job once the watcher is live; granting before that
+    # retired (and killed) workers mid-assignment (observed as a 500 from the
+    # assignment endpoint).
+    if SELF["job_watcher_stop_event"].is_set():
+        return {"slots_granted": 0}
+
+    previous = SELF["slot_trades_granted"].get(requesting_node)
+    if previous and previous["trade_id"] == trade_id:
+        return {"slots_granted": previous["slots_granted"]}
+
+    async with SELF["dynamic_retire_lock"]:
+        alive_workers = [w for w in SELF["workers"] if not w.retired]
+        granted = 0
+
+        # Unbacked slots: a live neighbor is a faster, cheaper home for them
+        # than the replacement VM they would otherwise become. Only donate
+        # them while recently pressured, i.e. while this node's own re-add
+        # loop is blocked from filling them; otherwise two unpressured hungry
+        # nodes bounce the same slot back and forth faster than either can
+        # boot a worker for it (observed). Never trade them while a
+        # replacement request may be in flight for the same slots (that
+        # would duplicate them).
+        recently_pressured = (
+            time() - SELF["last_pressure_retirement_at"]
+            < READD_PRESSURE_COOLDOWN_SECONDS
+        )
+        if recently_pressured and SELF["replacement_request_id"] is None:
+            unbacked = max(0, SELF["target_parallelism"] - len(alive_workers))
+            granted += min(slots_requested, unbacked)
+
+        # A node that just joined looks exactly like a drained one (idle
+        # workers, empty queue, all inputs uploaded job-wide) until its first
+        # steal lands, so idle-backed grants need a grace period or a fresh
+        # replacement node gets drained at birth.
+        queue_drained = (
+            SELF["inputs_queue"].qsize() == 0
+            and SELF["all_inputs_uploaded"]
+            and time() - SELF["job_assigned_at"] > TRADE_IDLE_GRACE_SEC
+        )
+        if queue_drained:
+            idle_workers = [
+                w for w in alive_workers if w.is_idle and w.current_input is None
+            ]
+            idle_to_give = idle_workers[: max(0, slots_requested - granted)]
+            for worker in idle_to_give:
+                worker.retired = True
+                SELF["reboot_containers_after_job"] = True
+                # The task is parked on inputs_queue.get(); left alive it
+                # would swallow (and lose) the next input to arrive.
+                if worker.process_inputs_task is not None:
+                    worker.process_inputs_task.cancel()
+                await worker.retire_for_pressure()
+            granted += len(idle_to_give)
+
+        SELF["target_parallelism"] -= granted
+        SELF["slot_trades_granted"][requesting_node] = {
+            "trade_id": trade_id,
+            "slots_granted": granted,
+        }
+
+    if granted:
+        await debug_log(
+            "slots_traded",
+            to=requesting_node,
+            requested=slots_requested,
+            granted=granted,
+            target_now=SELF["target_parallelism"],
+        )
+    return {"slots_granted": granted}
 
 
 @router.post("/jobs/{job_id}/inputs")
@@ -309,10 +408,18 @@ async def execute(
 
     function_pkl = request_files["function_pkl"]
     await asyncio.gather(*(w.load_function(function_pkl) for w in workers_to_assign))
+    # Kept for the job's lifetime so workers booted mid-job (re-adds after
+    # pressure subsides, slot trades) can be handed the function without the
+    # client's involvement.
+    SELF["function_pkl"] = function_pkl
 
     SELF["workers"] = workers_to_assign
     SELF["idle_workers"] = workers_to_leave_idle
     SELF["current_parallelism"] = 0
+    # Slot count: what this node actually runs, not what was requested
+    # (fewer compatible workers than requested parallelism shrinks it).
+    SELF["target_parallelism"] = len(workers_to_assign)
+    SELF["job_assigned_at"] = time()
     SELF["dynamic_func_ram"] = request_json["func_ram"] == "dynamic"
     SELF["dynamic_func_cpu"] = request_json["func_cpu"] == "dynamic"
     SELF["reboot_containers_after_job"] = False
@@ -327,6 +434,8 @@ async def execute(
         SELF["cpu_pressure_monitor_task"] = asyncio.create_task(
             cpu_pressure_monitor_loop()
         )
+    if SELF["dynamic_func_ram"] or SELF["dynamic_func_cpu"]:
+        SELF["worker_readd_task"] = asyncio.create_task(dynamic_worker_readd_loop())
     # user specific, assign to self to use for node <-> node requests only during this job.
     SELF["auth_headers"] = {
         "Authorization": request.headers.get("Authorization", ""),

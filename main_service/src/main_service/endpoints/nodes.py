@@ -18,9 +18,15 @@ from hmac import compare_digest
 from time import time
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from main_service.endpoints.cluster_lifecycle import (
+    GROW_INACTIVITY_SHUTDOWN_TIME_SEC,
+    _get_cluster_config,
+    _start_nodes,
+)
 from main_service.helpers import Logger
 from main_service.node import Node
 from main_service.providers import get_provider
+from main_service.scaling import plan_grow_nodes, planned_cpu_count
 from main_service.transport_tls import cluster_ca_pem, node_auth_token, sign_node_csr
 
 from main_service import (
@@ -101,7 +107,17 @@ async def push_node_state(instance_name: str, request: Request):
 @router.post("/v1/nodes/{instance_name}/logs:batch")
 async def push_node_logs(instance_name: str, request: Request):
     body = await request.json()
-    await asyncio.to_thread(cluster_state.add_node_logs, instance_name, body["logs"])
+    # Same pipe, two sinks: entries carrying a "debug" payload are structured
+    # engineering events (never user-visible), everything else is the
+    # user-facing node-log story.
+    debug_entries = [
+        {**log["debug"], "ts": log.get("ts")} for log in body["logs"] if log.get("debug")
+    ]
+    user_logs = [log for log in body["logs"] if not log.get("debug")]
+    if debug_entries:
+        await asyncio.to_thread(history.add_debug_logs, instance_name, debug_entries)
+    if user_logs:
+        await asyncio.to_thread(cluster_state.add_node_logs, instance_name, user_logs)
 
 
 @router.post("/v1/nodes/{instance_name}/certificate")
@@ -144,6 +160,109 @@ async def self_delete_node(
 @router.get("/v1/jobs/{job_id}/peers")
 async def get_job_peers(job_id: str):
     return cluster_state.peers_for_job(job_id)
+
+
+@router.post("/v1/jobs/{job_id}/replacement_nodes")
+async def boot_replacement_nodes(
+    job_id: str,
+    request: Request,
+    add_background_task=Depends(get_add_background_task_function),
+    logger: Logger = Depends(get_logger),
+):
+    """A job node permanently lost workers to pressure retirement and asks for
+    its missing slots to be booted as fresh machines. Pure execution: all
+    policy (when to ask, how many slots) lives on the node, this endpoint only
+    plans machine types, enforces the job's grow-CPU budget, and boots. Slots
+    are conserved - the caller gives up the slots this boots.
+
+    Body: {"requesting_node", "missing_slots", "request_id"}. Replaying the
+    same request_id returns the original plan instead of booting again, so a
+    node that never saw the response can retry safely.
+    """
+    body = await request.json()
+    requesting_node = body["requesting_node"]
+    missing_slots = int(body["missing_slots"])
+    request_id = body["request_id"]
+
+    if missing_slots <= 0:
+        raise HTTPException(status_code=400, detail="missing_slots must be > 0")
+    if cluster_state.job_admission_paused():
+        raise HTTPException(status_code=409, detail="job admission is paused")
+
+    job = cluster_state.get_job(job_id)
+    if job is None or job.get("status") != "RUNNING" or not job.get("grow"):
+        raise HTTPException(
+            status_code=409, detail="job is not RUNNING with grow=True"
+        )
+
+    previous = (job.get("replacement_requests") or {}).get(requesting_node)
+    if previous and previous.get("request_id") == request_id:
+        return {
+            "booted": previous["booted"],
+            "slots_booted": previous["slots_booted"],
+        }
+
+    config = _get_cluster_config()
+    planned = plan_grow_nodes(
+        missing_slots=missing_slots,
+        func_cpu=job["func_cpu"],
+        func_ram=job["func_ram"],
+        func_gpu=job.get("func_gpu"),
+        config=config,
+        max_additional_cpus=job.get("grow_cpus_remaining"),
+    )
+    if not planned:
+        raise HTTPException(
+            status_code=409, detail="replacement refused: grow CPU budget exhausted"
+        )
+
+    image = job.get("image")
+    containers_override = [{"image": image}] if image else None
+    add_background_task(
+        _start_nodes,
+        logger,
+        config,
+        len(planned),
+        [p["instance_name"] for p in planned],
+        job_id,
+        [p["machine_type"] for p in planned],
+        containers_override,
+        GROW_INACTIVITY_SHUTDOWN_TIME_SEC,
+        [p["target_parallelism"] for p in planned],
+    )
+    slots_booted = sum(p["target_parallelism"] for p in planned)
+    cluster_state.record_replacement_request(
+        job_id,
+        requesting_node,
+        {"request_id": request_id, "booted": planned, "slots_booted": slots_booted},
+        cpus_booted=planned_cpu_count(planned),
+    )
+    names = [p["instance_name"] for p in planned]
+    logger.log(
+        f"Booting {len(planned)} replacement node(s) {names} covering "
+        f"{slots_booted} slots for job {job_id} (requested by {requesting_node})."
+    )
+    # The head's side of the transaction, in the same flight recorder as the
+    # nodes' events: records the plan and the budget spent on it.
+    updated_job = cluster_state.get_job(job_id) or {}
+    await asyncio.to_thread(
+        history.add_debug_logs,
+        "head",
+        [
+            {
+                "job_id": job_id,
+                "event": "replacement_planned",
+                "fields": {
+                    "requested_by": requesting_node,
+                    "request_id": request_id,
+                    "missing_slots": missing_slots,
+                    "booted": planned,
+                    "grow_cpus_remaining": updated_job.get("grow_cpus_remaining"),
+                },
+            }
+        ],
+    )
+    return {"booted": planned, "slots_booted": slots_booted}
 
 
 @router.post("/v1/jobs/{job_id}/logs:batch")

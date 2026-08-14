@@ -2,6 +2,9 @@ import { ReactNode, useState } from "react";
 import { ArrowUpRight, Check, Copy, X } from "lucide-react";
 import { Highlight, themes } from "prism-react-renderer";
 import { Card, CardContent } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
+import { useSettings } from "@/contexts/SettingsContext";
+import { extractCpuCount } from "@/lib/machineSpecs";
 import { cn } from "@/lib/utils";
 import { useTheme } from "@/lib/theme";
 
@@ -70,6 +73,22 @@ interface QuickstartCardProps {
 // First-run "get started" card. Dismissable; state lives in localStorage.
 export const QuickstartCard = ({ onDismiss }: QuickstartCardProps) => {
     const isClientHosted = window.__BURLA_CLIENT_HOSTED_MODE__ === true;
+    const { settings, loading, error } = useSettings();
+    const cloudResource =
+        settings.cloudProvider === "aws"
+            ? "AWS account"
+            : settings.cloudProvider === "azure"
+              ? "Azure subscription"
+              : "GCP project";
+    const resourceName =
+        (settings.cloudProvider === "gcp"
+            ? settings.googleCloudProjectId
+            : settings.cloudAccountName)!;
+    const vcpusPerVm = extractCpuCount(settings.machineType)!;
+    const machineDescription =
+        settings.machineQuantity === 1
+            ? `one ${vcpusPerVm} vCPU VM`
+            : `${settings.machineQuantity.toLocaleString()} VMs with ${vcpusPerVm} vCPUs each`;
     const { theme } = useTheme();
     const codeTheme = theme === "dark" ? DARK_CODE_THEME : LIGHT_CODE_THEME;
 
@@ -101,10 +120,28 @@ export const QuickstartCard = ({ onDismiss }: QuickstartCardProps) => {
                     <Step
                         number={nextStep()}
                         title={
-                            <>
-                                Hit <span className="font-semibold">Start</span> in the top right
-                                to boot some computers.
-                            </>
+                            loading ? (
+                                <Skeleton className="h-5 w-96 max-w-full" />
+                            ) : error ? (
+                                <span className="text-muted-foreground">
+                                    Could not load cluster settings.
+                                </span>
+                            ) : (
+                                <>
+                                    Hit{" "}
+                                    <span
+                                        className="mx-0.5 inline-flex h-7 items-center gap-1.5 rounded-lg bg-primary px-2.5 align-middle text-[12px] font-semibold leading-none text-primary-foreground shadow-[inset_0_1px_0_0_hsl(0_0%_100%/0.12),0_1px_2px_0_rgb(16_24_40/0.12)]"
+                                        aria-label="Start button"
+                                    >
+                                        <span aria-hidden="true" className="text-sm">
+                                            ⏻
+                                        </span>
+                                        Start
+                                    </span>{" "}
+                                    to boot{" "}
+                                    {machineDescription} in the {cloudResource}: {resourceName}
+                                </>
+                            )
                         }
                     />
 

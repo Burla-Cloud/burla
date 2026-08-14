@@ -423,16 +423,15 @@ export const NodesList: React.FC<NodesListProps> = ({
                                         </TableBody>
                                     </Table>
 
-                                    <div className="px-5 pb-4">
-                                        <TablePagination
-                                            page={page}
-                                            totalPages={totalPages}
-                                            onPageChange={setPage}
-                                            resultsLabel={`${totalCount.toLocaleString()} ${
-                                                totalCount === 1 ? "node" : "nodes"
-                                            }`}
-                                        />
-                                    </div>
+                                    {totalPages > 1 && (
+                                        <div className="px-5 pb-4">
+                                            <TablePagination
+                                                page={page}
+                                                totalPages={totalPages}
+                                                onPageChange={setPage}
+                                            />
+                                        </div>
+                                    )}
                                 </>
                             )
                         )}

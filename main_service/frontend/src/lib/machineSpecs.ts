@@ -7,7 +7,7 @@ export const extractCpuCount = (type: string): number | null => {
     const awsSpec = AWS_MACHINE_SPECS[type.toLowerCase()];
     if (awsSpec) return awsSpec.cpus;
 
-    const azureMatch = type.toLowerCase().match(/^standard_d(\d+)s_v6$/);
+    const azureMatch = type.toLowerCase().match(/^standard_d(\d+)(?:a)?s_v\d+$/);
     if (azureMatch) return parseInt(azureMatch[1], 10);
 
     const customMatch = type.match(/^custom-(\d+)-/);

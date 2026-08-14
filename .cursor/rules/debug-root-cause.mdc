@@ -11,3 +11,21 @@ When debugging a failure, do not stop at a plausible hypothesis if direct eviden
 - Keep investigating until you can cite the exact failing command, exception, log line, status, or response that explains the failure.
 - Final debugging answers must distinguish confirmed root cause from guesses and include the concrete evidence used.
 - If the evidence source is unavailable or blocked, say exactly what blocked it and what command/tool should be run next.
+
+## Failed-job debug trails
+
+Every failed job on a telemetry-enabled cluster ships its full debug-event trail
+(slot-ledger snapshots, trades, replacements, re-adds, stalls) to S3, one JSON
+object per failure with keys `{project_id}/{YYYY-MM-DD}/{job_id}_{unix_ts}.json`:
+`s3://burla-backend-debug-logs-018789813546` (prod, `--profile burla-prod`) or
+`s3://burla-backend-debug-logs-002645521087` (test, `--profile burla-test`).
+When asked to fix "the bug that just happened", start there:
+
+```bash
+aws s3api list-objects-v2 --bucket <bucket> --profile <profile> \
+    --query 'sort_by(Contents, &LastModified)[-1].Key' --output text
+aws s3 cp "s3://<bucket>/<key>" - --profile <profile> | python3 -m json.tool
+```
+
+A dev cluster's trail is also queryable directly in its worktree's
+`_local_dev_state/history.db` (`debug_logs` table, one row per event).

@@ -17,7 +17,22 @@ interface SettingsFormProps {
     onChange: () => void;
 }
 
-export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, SettingsFormProps>(
+// Official CPU-only base images: guaranteed to lack the CUDA libraries needed
+// to use a GPU. Unrecognized images are left alone since a custom image may
+// well have them baked in.
+const CPU_ONLY_IMAGE_REPOS = ["python", "ubuntu", "debian", "alpine"];
+const RECOMMENDED_GPU_IMAGE = "pytorch/pytorch:2.13.0-cuda12.6-cudnn9-runtime";
+
+function isKnownCpuOnlyImage(image: string): boolean {
+    const repo = image.trim().toLowerCase().split(":")[0];
+    const name = repo.replace(/^docker\.io\//, "").replace(/^library\//, "");
+    return CPU_ONLY_IMAGE_REPOS.includes(name);
+}
+
+export const SettingsForm = forwardRef<
+    { isRegionValid: () => boolean; isImageValid: () => boolean },
+    SettingsFormProps
+>(
     ({ onChange }, ref) => {
         const { settings, setSettings } = useSettings();
         const users = settings.users ?? [];
@@ -371,13 +386,18 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
         const regionOptions = getRegionOptionsForGpu(gpuVariant);
         const isRegionValid = regionOptions.some((r) => r.value === settings.gcpRegion);
 
-        // Expose isRegionValid to parent via ref
+        const gpuModel = gpuVariant.split(" ")[0]; // e.g. "A100"
+        const isImageValid =
+            gpuVariant === "None" || !isKnownCpuOnlyImage(settings.containerImage);
+
+        // Expose validity to parent via ref so save can be blocked
         useImperativeHandle(
             ref,
             () => ({
                 isRegionValid: () => isRegionValid,
+                isImageValid: () => isImageValid,
             }),
-            [isRegionValid]
+            [isRegionValid, isImageValid]
         );
 
         return (
@@ -403,10 +423,29 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
                             </TooltipProvider>
                         </div>
                         <Input
-                            className="w-full font-mono text-[13px]"
+                            className={`w-full font-mono text-[13px] ${
+                                !isImageValid
+                                    ? "border-destructive/60 ring-[3px] ring-destructive/15"
+                                    : ""
+                            }`}
                             value={settings.containerImage}
                             onChange={(e) => handleInputChange("containerImage", e.target.value)}
                         />
+                        {!isImageValid && (
+                            <span className="mt-1.5 block text-xs text-destructive">
+                                This image has no CUDA libraries, so the {gpuModel}s won't be
+                                usable.{" "}
+                                <button
+                                    type="button"
+                                    className="font-medium underline underline-offset-2"
+                                    onClick={() =>
+                                        handleInputChange("containerImage", RECOMMENDED_GPU_IMAGE)
+                                    }
+                                >
+                                    Use {RECOMMENDED_GPU_IMAGE}
+                                </button>
+                            </span>
+                        )}
                     </div>
                 </section>
 

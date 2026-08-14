@@ -41,7 +41,10 @@ const SettingsPage = () => {
   const [showExitDialog, setShowExitDialog] = useState(false);
 
   const pendingNavRef = useRef<string | null>(null);
-  const settingsFormRef = useRef<{ isRegionValid: () => boolean } | null>(null);
+  const settingsFormRef = useRef<{
+    isRegionValid: () => boolean;
+    isImageValid: () => boolean;
+  } | null>(null);
 
   const section = useMemo(() => {
     const sp = new URLSearchParams(location.search);
@@ -111,13 +114,18 @@ const SettingsPage = () => {
   }, [hasUnsavedChanges, location.pathname]);
 
   const handleSave = async () => {
-    if (
-      settingsFormRef.current &&
-      typeof settingsFormRef.current.isRegionValid === "function" &&
-      !settingsFormRef.current.isRegionValid()
-    ) {
+    if (settingsFormRef.current && !settingsFormRef.current.isRegionValid()) {
       toast({
         title: "Please select a valid region before saving",
+        variant: "destructive",
+      });
+      return false;
+    }
+
+    if (settingsFormRef.current && !settingsFormRef.current.isImageValid()) {
+      toast({
+        title: "This container image can't use GPUs",
+        description: "Pick an image with CUDA libraries, or set GPU to None.",
         variant: "destructive",
       });
       return false;

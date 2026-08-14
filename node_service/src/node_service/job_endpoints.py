@@ -24,6 +24,7 @@ from node_service.job_watcher import job_watcher_logged
 from node_service.worker_client import (
     cpu_pressure_monitor_loop,
     dynamic_ram_monitor_loop,
+    dynamic_worker_readd_loop,
 )
 
 _LOGS_OVERFLOW_MESSAGE = (
@@ -309,6 +310,10 @@ async def execute(
 
     function_pkl = request_files["function_pkl"]
     await asyncio.gather(*(w.load_function(function_pkl) for w in workers_to_assign))
+    # Kept for the job's lifetime so workers booted mid-job (re-adds after
+    # pressure subsides, slot trades) can be handed the function without the
+    # client's involvement.
+    SELF["function_pkl"] = function_pkl
 
     SELF["workers"] = workers_to_assign
     SELF["idle_workers"] = workers_to_leave_idle
@@ -330,6 +335,8 @@ async def execute(
         SELF["cpu_pressure_monitor_task"] = asyncio.create_task(
             cpu_pressure_monitor_loop()
         )
+    if SELF["dynamic_func_ram"] or SELF["dynamic_func_cpu"]:
+        SELF["worker_readd_task"] = asyncio.create_task(dynamic_worker_readd_loop())
     # user specific, assign to self to use for node <-> node requests only during this job.
     SELF["auth_headers"] = {
         "Authorization": request.headers.get("Authorization", ""),

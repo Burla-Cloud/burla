@@ -99,6 +99,11 @@ def REINIT_SELF(SELF):
     SELF["dynamic_retire_lock"] = asyncio.Lock()
     SELF["dynamic_ram_monitor_task"] = None
     SELF["cpu_pressure_monitor_task"] = None
+    SELF["worker_readd_task"] = None
+    SELF["last_pressure_retirement_at"] = 0.0
+    # The job's pickled function, kept so workers booted mid-job (re-adds,
+    # slot trades) can be assigned without the client.
+    SELF["function_pkl"] = None
     SELF["reboot_containers_after_job"] = False
     SELF["num_results_received"] = 0
     SELF["pending_transfers"] = {}

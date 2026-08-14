@@ -498,7 +498,11 @@ async def reinit_node(assigned_workers: list):
 async def reset_workers(logger: Logger):
     # Stops idle or reassigned workers from holding creds for a finished job.
     NODE_AUTH_CREDENTIALS_PATH.unlink(missing_ok=True)
-    for task_key in ("dynamic_ram_monitor_task", "cpu_pressure_monitor_task"):
+    for task_key in (
+        "dynamic_ram_monitor_task",
+        "cpu_pressure_monitor_task",
+        "worker_readd_task",
+    ):
         monitor_task = SELF[task_key]
         if monitor_task is not None:
             monitor_task.cancel()

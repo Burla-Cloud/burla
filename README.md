@@ -25,7 +25,7 @@
 
 ---
 
-Burla is a distributed computing framework that runs plain Python functions across thousands of CPUs or GPUs in your own cloud account. It has exactly one function:
+Burla is a distributed computing framework that runs plain Python functions across thousands of CPUs or GPUs in your own cloud. It has exactly one function:
 
 ```python
 from burla import remote_parallel_map

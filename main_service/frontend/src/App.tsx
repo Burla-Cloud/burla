@@ -28,8 +28,8 @@ const Layout = () => {
 
       {/* Make the main pane scroll vertically (not the whole window) */}
       <div className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden">
-        {/* Global top + bottom padding so pages never kiss the bottom */}
-        <div className="min-h-full w-full pt-10 pb-12 px-12 min-w-0 flex items-stretch">
+        {/* Extra right padding keeps content clear of the floating avatar */}
+        <div className="min-h-full w-full min-w-0 flex items-stretch pl-10 pr-16 pt-9 pb-12">
           <Outlet context={{ saving, setSaving }} />
         </div>
       </div>

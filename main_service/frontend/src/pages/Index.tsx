@@ -1,15 +1,36 @@
-import { ClusterStatusCard } from "@/components/ClusterStatusCard";
 import { ClusterControls } from "@/components/ClusterControls";
 import { NodesList } from "@/components/NodesList";
+import { QuickstartCard } from "@/components/QuickstartCard";
+import { PageHeader } from "@/components/PageHeader";
+import { StatusBadge, clusterStatusBadge } from "@/components/StatusBadge";
 import { useClusterControl } from "@/hooks/useClusterControl";
 import { useNodes } from "@/contexts/NodesContext";
 import { useCluster } from "@/contexts/ClusterContext";
 import { useEffect, useMemo, useState } from "react";
-import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { AWS_MACHINE_SPECS } from "@/types/constants";
+import { extractCpuCount, parseGpuDisplay, parseRamDisplay } from "@/lib/machineSpecs";
 
 const ACTIVE_STATUSES = new Set(["BOOTING", "READY", "RUNNING"]);
+
+const parseRamGB = (ram: string): number => {
+    if (!ram) return 0;
+    const match = ram.match(/(\d+)(G|g)/);
+    return match ? parseInt(match[1], 10) : 0;
+};
+
+const Stat = ({ label, value, loading }: { label: string; value: string; loading: boolean }) => (
+    <div className="min-w-0 px-5 py-4">
+        <div className="text-[13px] text-muted-foreground">{label}</div>
+        {loading ? (
+            <Skeleton className="mt-1.5 h-7 w-16" />
+        ) : (
+            <div className="mt-0.5 truncate text-2xl font-semibold tabular-nums tracking-tight text-foreground">
+                {value}
+            </div>
+        )}
+    </div>
+);
 
 const Dashboard = () => {
     const { rebootCluster, stopCluster } = useClusterControl();
@@ -29,15 +50,14 @@ const Dashboard = () => {
         () => localStorage.getItem("welcomeMessageHidden") !== "true",
     );
 
-    useEffect(() => {
-        const handler = (evt: Event) => {
-            const custom = evt as CustomEvent<boolean>;
-            setWelcomeVisible(Boolean(custom.detail));
-        };
-        window.addEventListener("welcomeVisibilityChanged", handler as EventListener);
-        return () =>
-            window.removeEventListener("welcomeVisibilityChanged", handler as EventListener);
-    }, []);
+    const dismissWelcome = () => {
+        setWelcomeVisible(false);
+        try {
+            localStorage.setItem("welcomeMessageHidden", "true");
+        } catch {
+            // ignore
+        }
+    };
 
     useEffect(() => {
         if (typeof window === "undefined") return;
@@ -45,39 +65,6 @@ const Dashboard = () => {
     }, [showDeleted]);
 
     const countedNodes = useMemo(() => nodes.filter((n) => ACTIVE_STATUSES.has(n.status)), [nodes]);
-
-    const extractCpuCount = (type: string): number | null => {
-        const awsSpec = AWS_MACHINE_SPECS[type.toLowerCase()];
-        if (awsSpec) return awsSpec.cpus;
-
-        const azureMatch = type.toLowerCase().match(/^standard_d(\d+)s_v6$/);
-        if (azureMatch) return parseInt(azureMatch[1], 10);
-
-        const customMatch = type.match(/^custom-(\d+)-/);
-        if (customMatch) return parseInt(customMatch[1], 10);
-
-        const standardMatch = type.match(/-(\d+)$/);
-        if (standardMatch) return parseInt(standardMatch[1], 10);
-
-        const gpuMatch = type.match(/^(a\d-(highgpu|ultragpu|megagpu|edgegpu))-(\d+)g$/);
-        if (gpuMatch) {
-            const family = gpuMatch[1];
-            const gpus = parseInt(gpuMatch[3], 10);
-
-            const cpuLookup: Record<string, Record<number, number>> = {
-                "a2-highgpu": { 1: 12, 2: 24, 4: 48, 8: 96 },
-                "a2-ultragpu": { 1: 12, 2: 24, 4: 48, 8: 96 },
-                "a2-megagpu": { 16: 96 },
-                "a3-highgpu": { 1: 26, 2: 52, 4: 104, 8: 208 },
-                "a3-ultragpu": { 8: 224 },
-                "a3-edgegpu": { 8: 208 },
-            };
-
-            return cpuLookup[family]?.[gpus] ?? null;
-        }
-
-        return null;
-    };
 
     const parallelism = useMemo(
         () =>
@@ -88,39 +75,6 @@ const Dashboard = () => {
         [countedNodes],
     );
 
-    const parseRamGB = (ram: string): number => {
-        if (!ram) return 0;
-        const match = ram.match(/(\d+)(G|g)/);
-        return match ? parseInt(match[1], 10) : 0;
-    };
-
-    const parseRamDisplay = (type: string): string => {
-        const lower = type.toLowerCase();
-
-        const awsSpec = AWS_MACHINE_SPECS[lower];
-        if (awsSpec) return awsSpec.ram;
-
-        if (lower.startsWith("n4-standard-") || lower.startsWith("standard_d")) {
-            const cpu = extractCpuCount(type);
-            return cpu !== null ? `${cpu * 4}G` : "-";
-        }
-
-        const ramTable: Record<string, Record<number, string>> = {
-            "a2-highgpu": { 1: "85G", 2: "170G", 4: "340G", 8: "680G", 16: "1360G" },
-            "a2-ultragpu": { 1: "170G", 2: "340G", 4: "680G", 8: "1360G" },
-            "a2-megagpu": { 16: "1360G" },
-            "a3-highgpu": { 1: "234G", 2: "468G", 4: "936G", 8: "1872G" },
-            "a3-ultragpu": { 8: "2952G" },
-        };
-
-        const match = lower.match(/^(a\d-(highgpu|ultragpu|megagpu|edgegpu))-(\d+)g$/);
-        if (!match) return "-";
-
-        const family = match[1];
-        const count = parseInt(match[3], 10);
-        return ramTable[family]?.[count] ?? "-";
-    };
-
     const totalRamGB = useMemo(
         () =>
             countedNodes.reduce((sum, node) => {
@@ -130,46 +84,14 @@ const Dashboard = () => {
         [countedNodes],
     );
 
-    const totalRam = totalRamGB > 0 ? `${totalRamGB}G` : "-";
-
-    const parseGpuDisplay = (type: string): string => {
-        const lower = type.toLowerCase();
-        const gpuDefs = [
-            { prefix: "a2-highgpu-", model: "A100", vram: "40G" },
-            { prefix: "a2-ultragpu-", model: "A100", vram: "80G" },
-            { prefix: "a2-megagpu-", model: "A100", vram: "40G" },
-            { prefix: "a3-highgpu-", model: "H100", vram: "80G" },
-            { prefix: "a3-ultragpu-", model: "H200", vram: "141G" },
-        ];
-
-        for (const def of gpuDefs) {
-            if (lower.startsWith(def.prefix)) {
-                const match = lower.match(/-(\d+)g$/);
-                if (!match) return "-";
-                const count = parseInt(match[1], 10);
-                return `${count}x ${def.model} ${def.vram}`;
-            }
-        }
-
-        return "-";
-    };
-
     const gpuTotalCount = useMemo(() => {
-        const gpuCount: Record<string, number> = {};
-
+        let total = 0;
         countedNodes.forEach((node) => {
             const gpuStr = parseGpuDisplay(node.type);
-            if (gpuStr !== "-") {
-                const match = gpuStr.match(/^(\d+)x (.+)$/);
-                if (match) {
-                    const count = parseInt(match[1], 10);
-                    const key = match[2];
-                    gpuCount[key] = (gpuCount[key] || 0) + count;
-                }
-            }
+            const match = gpuStr.match(/^(\d+)x /);
+            if (match) total += parseInt(match[1], 10);
         });
-
-        return Object.values(gpuCount).reduce((a, b) => a + b, 0);
+        return total;
     }, [countedNodes]);
 
     const handleReboot = async () => {
@@ -184,128 +106,59 @@ const Dashboard = () => {
         await stopCluster();
     };
 
+    const badge = clusterStatusBadge(clusterStatus);
+
     return (
-        <div className="flex-1 flex flex-col justify-start px-12 pt-6">
-            <div className="max-w-6xl mx-auto w-full flex-1 flex flex-col">
-                <h1 className="text-2xl font-bold mt-2 mb-6 text-primary">Cluster Status</h1>
+        <div className="flex flex-1 flex-col min-w-0">
+            <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col">
+                <PageHeader
+                    title="Cluster"
+                    titleAccessory={
+                        loading ? (
+                            <Skeleton className="h-5 w-14 rounded-md" />
+                        ) : (
+                            <StatusBadge tone={badge.tone} label={badge.label} pulse={badge.pulse} />
+                        )
+                    }
+                    actions={
+                        <ClusterControls
+                            status={clusterStatus}
+                            onReboot={handleReboot}
+                            onStop={handleStop}
+                            disableStartButton={disableStartButton || loading}
+                            disableStopButton={disableStopButton || loading}
+                        />
+                    }
+                />
 
-                <div className="space-y-8 flex-1">
-                    {/* status + controls */}
-                    <div className="grid grid-cols-1 gap-8 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
-                        <div className="min-w-0">
-                            {loading ? (
-                                <Card className="inline-block animate-pulse">
-                                    <CardContent className="p-0 px-7 py-3">
-                                        <div className="flex items-center gap-4">
-                                            <div className="flex items-center gap-2">
-                                                <Skeleton className="w-3 h-3 rounded-full" />
-                                                <Skeleton className="h-5 w-10" />
-                                            </div>
-                                        </div>
-                                    </CardContent>
-                                </Card>
-                            ) : (
-                                <ClusterStatusCard
-                                    status={clusterStatus}
-                                    parallelism={parallelism}
-                                    totalRam={totalRam}
-                                    gpuCount={gpuTotalCount}
-                                    hasResources={countedNodes.length > 0}
-                                />
-                            )}
-                        </div>
+                <div className="flex-1 space-y-5">
+                    {welcomeVisible && <QuickstartCard onDismiss={dismissWelcome} />}
 
-                        <div className="flex items-center justify-end">
-                            <ClusterControls
-                                status={clusterStatus}
-                                onReboot={handleReboot}
-                                onStop={handleStop}
-                                disableStartButton={disableStartButton || loading}
-                                disableStopButton={disableStopButton || loading}
-                                highlightStart={welcomeVisible}
-                            />
-                        </div>
-                    </div>
+                    <Card className="grid grid-cols-2 divide-y divide-border/70 sm:grid-cols-4 sm:divide-x sm:divide-y-0">
+                        <Stat
+                            label="Nodes"
+                            value={countedNodes.length.toLocaleString()}
+                            loading={loading}
+                        />
+                        <Stat label="vCPUs" value={parallelism.toLocaleString()} loading={loading} />
+                        <Stat
+                            label="RAM"
+                            value={totalRamGB > 0 ? `${totalRamGB}G` : "—"}
+                            loading={loading}
+                        />
+                        <Stat
+                            label="GPUs"
+                            value={gpuTotalCount > 0 ? gpuTotalCount.toLocaleString() : "—"}
+                            loading={loading}
+                        />
+                    </Card>
 
-                    {loading ? (
-                        <Card className="w-full animate-pulse">
-                            <CardHeader className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                                <Skeleton className="h-6 w-16" />
-                                <div className="flex items-center gap-2 sm:ml-auto">
-                                    <Skeleton className="h-4 w-32" />
-                                    <Skeleton className="h-5 w-9 rounded-full" />
-                                </div>
-                            </CardHeader>
-                            <CardContent>
-                                <table className="table-auto w-full">
-                                    <thead>
-                                        <tr>
-                                            <th className="w-8 pl-6 pr-4 py-2" />
-                                            <th className="w-24 pl-6 pr-4 py-2 text-left">
-                                                <Skeleton className="h-3 w-12" />
-                                            </th>
-                                            <th className="w-48 pl-6 pr-4 py-2 text-left">
-                                                <Skeleton className="h-3 w-10" />
-                                            </th>
-                                            <th className="w-24 pl-6 pr-4 py-2 text-left">
-                                                <Skeleton className="h-3 w-12" />
-                                            </th>
-                                            <th className="w-24 pl-6 pr-4 py-2 text-left">
-                                                <Skeleton className="h-3 w-10" />
-                                            </th>
-                                            <th className="w-24 pl-6 pr-4 py-2 text-left">
-                                                <Skeleton className="h-3 w-12" />
-                                            </th>
-                                            <th className="w-8 pl-6 pr-2 py-2" />
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        {[...Array(3)].map((_, i) => (
-                                            <tr key={i}>
-                                                <td className="w-8 pl-6 pr-4 py-2">
-                                                    <Skeleton className="h-4 w-4" />
-                                                </td>
-                                                <td className="w-24 pl-6 pr-4 py-2">
-                                                    <div className="flex items-center gap-2">
-                                                        <Skeleton className="w-2 h-2 rounded-full" />
-                                                        <Skeleton className="h-4 w-14" />
-                                                    </div>
-                                                </td>
-                                                <td className="w-48 pl-6 pr-4 py-2">
-                                                    <Skeleton className="h-4 w-36" />
-                                                </td>
-                                                <td className="w-24 pl-6 pr-4 py-2">
-                                                    <Skeleton className="h-4 w-8" />
-                                                </td>
-                                                <td className="w-24 pl-6 pr-4 py-2">
-                                                    <Skeleton className="h-4 w-10" />
-                                                </td>
-                                                <td className="w-24 pl-6 pr-4 py-2">
-                                                    <Skeleton className="h-4 w-20" />
-                                                </td>
-                                                <td className="w-8 pl-6 pr-2 py-2" />
-                                            </tr>
-                                        ))}
-                                    </tbody>
-                                </table>
-                            </CardContent>
-                        </Card>
-                    ) : (
-                        <div className="mt-1">
-                            <NodesList
-                                nodes={nodes}
-                                showDeleted={showDeleted}
-                                onShowDeletedChange={setShowDeleted}
-                            />
-                        </div>
-                    )}
-                </div>
-
-                <div className="text-center text-sm text-muted-foreground mt-auto pt-8">
-                    Need help? Email me{" "}
-                    <a href="mailto:jake@burla.dev" className="text-primary hover:underline">
-                        jake@burla.dev
-                    </a>
+                    <NodesList
+                        nodes={nodes}
+                        loading={loading}
+                        showDeleted={showDeleted}
+                        onShowDeletedChange={setShowDeleted}
+                    />
                 </div>
             </div>
         </div>

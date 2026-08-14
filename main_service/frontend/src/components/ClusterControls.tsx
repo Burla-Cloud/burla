@@ -1,6 +1,5 @@
 import { Button } from "@/components/ui/button";
 import { useEffect, useState } from "react";
-import { cn } from "@/lib/utils";
 import { Loader2, Power, PowerOff, RefreshCw } from "lucide-react";
 import { ClusterStatus } from "@/types/coreTypes";
 
@@ -10,7 +9,6 @@ interface ClusterControlsProps {
     onStop: () => void;
     disableStartButton?: boolean;
     disableStopButton?: boolean;
-    highlightStart?: boolean;
 }
 
 export const ClusterControls = ({
@@ -19,7 +17,6 @@ export const ClusterControls = ({
     onStop,
     disableStartButton = false,
     disableStopButton = false,
-    highlightStart = false,
 }: ClusterControlsProps) => {
     const [pendingAction, setPendingAction] = useState<null | "start" | "restart">(null);
     const isRebooting = status === "REBOOTING";
@@ -38,17 +35,17 @@ export const ClusterControls = ({
     let startButtonIcon;
     let startButtonText;
     if (isStarting || isRebooting) {
-        startButtonIcon = <Loader2 className="mr-2 h-4 w-4 animate-spin" />;
+        startButtonIcon = <Loader2 className="animate-spin" />;
         if (pendingAction === "restart" || isRebooting) {
             startButtonText = "Restarting…";
         } else {
             startButtonText = "Starting…";
         }
     } else if (isOn) {
-        startButtonIcon = <RefreshCw className="mr-2 h-4 w-4" />;
+        startButtonIcon = <RefreshCw />;
         startButtonText = "Restart";
     } else {
-        startButtonIcon = <Power className="mr-2 h-4 w-4" />;
+        startButtonIcon = <Power />;
         startButtonText = "Start";
     }
 
@@ -58,44 +55,26 @@ export const ClusterControls = ({
         onReboot();
     };
 
-    let stopButtonIcon;
-    let stopButtonText = "Stop";
-    if (isStopping) {
-        stopButtonIcon = <Loader2 className="mr-2 h-4 w-4 animate-spin" />;
-        stopButtonText = "Stopping…";
-    } else {
-        stopButtonIcon = <PowerOff className="mr-2 h-4 w-4" />;
-        stopButtonText = "Stop";
-    }
-
     return (
-        <div className="flex space-x-5">
+        <div className="flex items-center gap-2">
             <Button
-                size="lg"
-                onClick={handleStartOrRestart}
-                disabled={isStartDisabled}
-                aria-busy={isStarting || isRebooting}
-                className={cn(
-                    "w-36 px-3 transition-all duration-300 ease-in-out shadow-md hover:shadow-xl active:shadow transform-gpu hover:-translate-y-0.5 active:translate-y-0 disabled:shadow-none disabled:bg-muted disabled:text-muted-foreground",
-                    highlightStart &&
-                        !isOn &&
-                        !isStartDisabled &&
-                        "animate-pulse glow-pulse ring-4 ring-primary/50 ring-offset-2 ring-offset-background transition-shadow transform transition-transform hover:scale-105",
-                )}
-            >
-                {startButtonIcon}
-                {startButtonText}
-            </Button>
-            <Button
-                variant="destructive"
-                size="lg"
+                variant="outline-destructive"
                 onClick={onStop}
                 disabled={isStopping || isOff || disableStopButton}
                 aria-busy={isStopping}
-                className="w-36 px-3 transition-all duration-300 ease-in-out shadow-md hover:shadow-xl active:shadow transform-gpu hover:-translate-y-0.5 active:translate-y-0 disabled:shadow-none disabled:bg-muted disabled:text-muted-foreground"
+                className="min-w-20"
             >
-                {stopButtonIcon}
-                {stopButtonText}
+                {isStopping ? <Loader2 className="animate-spin" /> : <PowerOff />}
+                {isStopping ? "Stopping…" : "Stop"}
+            </Button>
+            <Button
+                onClick={handleStartOrRestart}
+                disabled={isStartDisabled}
+                aria-busy={isStarting || isRebooting}
+                className="min-w-24"
+            >
+                {startButtonIcon}
+                {startButtonText}
             </Button>
         </div>
     );

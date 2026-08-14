@@ -5,18 +5,21 @@ import { UsageProvider } from "@/contexts/UsageContext";
 
 import { SettingsForm } from "@/components/SettingsForm";
 import UsageSettings from "@/components/UsageSettings";
+import { PageHeader } from "@/components/PageHeader";
 
 import { Button } from "@/components/ui/button";
 import { useSaveSettings } from "@/hooks/useSaveSettings";
 import { toast } from "@/components/ui/use-toast";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { AlertTriangle, Loader2 } from "lucide-react";
+import { cn } from "@/lib/utils";
 import {
   AlertDialog,
   AlertDialogContent,
   AlertDialogTitle,
+  AlertDialogDescription,
   AlertDialogAction,
   AlertDialogCancel,
 } from "@/components/ui/alert-dialog";
@@ -156,18 +159,23 @@ const SettingsPage = () => {
   const resourceId =
     isAws || isAzure ? settings.cloudAccountName : settings.googleCloudProjectId;
 
+  const tabClass = (active: boolean) =>
+    cn(
+      "relative -mb-px border-b-2 px-1 pb-2.5 text-sm font-medium transition-colors duration-150 focus-visible:outline-none",
+      active
+        ? "border-primary text-foreground"
+        : "border-transparent text-muted-foreground hover:text-foreground",
+    );
+
   const content = (() => {
     if (loading) {
       return (
-        <Card className="w-full animate-pulse">
-          <CardHeader>
-            <CardTitle className="text-xl font-semibold text-primary">
-              <Skeleton className="h-6 w-40 mb-2" />
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-8 pt-8">
-            <Skeleton className="h-10 w-full" />
-            <Skeleton className="h-10 w-full" />
+        <Card className="w-full">
+          <CardContent className="space-y-6 p-5">
+            <Skeleton className="h-5 w-40" />
+            <Skeleton className="h-9 w-full" />
+            <Skeleton className="h-9 w-full" />
+            <Skeleton className="h-9 w-2/3" />
           </CardContent>
         </Card>
       );
@@ -200,144 +208,85 @@ const SettingsPage = () => {
   })();
 
   return (
-    <div className="flex-1 flex flex-col justify-start px-12 pt-6 min-w-0">
-      <div className="max-w-6xl mx-auto w-full flex-1 flex flex-col min-w-0">
-        <div className="mt-2">
-          <div className="flex items-center justify-between gap-6">
-            <div className="min-w-0">
-              <h1 className="text-2xl font-bold text-primary">Settings</h1>
-            </div>
+    <div className="flex flex-1 flex-col min-w-0">
+      <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col min-w-0">
+        <PageHeader
+          title="Settings"
+          actions={
+            showSaveButton ? (
+              <Button onClick={handleSave} disabled={saving || loading || !!error} className="min-w-20">
+                {saving ? <Loader2 className="animate-spin" /> : "Save"}
+              </Button>
+            ) : undefined
+          }
+        />
 
-            <div className="min-w-[92px] flex justify-end">
-              {showSaveButton ? (
-                <Button
-                  onClick={handleSave}
-                  variant="ghost"
-                  disabled={saving || loading || !!error}
-                  className={[
-                    "relative bg-card text-foreground",
-                    "border border-border shadow-[0_1px_3px_rgba(0,0,0,0.04)]",
-                    "transform-gpu transition-all duration-200 ease-in-out",
-                    "hover:-translate-y-0.5 hover:bg-accent",
-                    "hover:shadow-[0_6px_14px_rgba(0,0,0,0.08)]",
-                    "!focus:outline-none !ring-0 focus:border-border",
-                    "active:translate-y-0 active:shadow-[0_1px_3px_rgba(0,0,0,0.04)]",
-                  ].join(" ")}
-                >
-                  <span className="flex items-center justify-center min-w-[48px]">
-                    {saving ? (
-                      <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-                    ) : (
-                      "Save"
-                    )}
-                  </span>
-                </Button>
-              ) : (
-                <div className="h-10" />
-              )}
-            </div>
-          </div>
-
-          <div className="mt-6 flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
-            <nav
-              className="relative inline-grid h-9 grid-cols-2 rounded-xl bg-muted/80 p-1"
-              aria-label="Settings sections"
+        <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-2 border-b border-border">
+          <nav className="flex items-center gap-5" aria-label="Settings sections">
+            <button
+              type="button"
+              onClick={() => handleSectionClick("cluster")}
+              className={tabClass(section === "cluster")}
+              aria-pressed={section === "cluster"}
             >
-              <span
-                aria-hidden="true"
-                className={[
-                  "pointer-events-none absolute bottom-1 left-1 top-1 w-[calc(50%-4px)] rounded-[10px] bg-card",
-                  "border border-border shadow-[0_1px_2px_rgba(15,23,42,0.06)]",
-                  "transition-transform duration-150 ease-out",
-                  section === "cluster" ? "translate-x-0" : "translate-x-full",
-                ].join(" ")}
-              />
-              <button
-                type="button"
-                onClick={() => handleSectionClick("cluster")}
-                className={[
-                  "relative z-10 h-7 min-w-[112px] rounded-[10px] px-3 font-mono text-sm font-medium",
-                  "transition-colors duration-150",
-                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:ring-offset-1 focus-visible:ring-offset-background",
-                  section === "cluster"
-                    ? "text-foreground"
-                    : "text-muted-foreground hover:bg-muted hover:text-foreground/80",
-                ].join(" ")}
-                aria-pressed={section === "cluster"}
-              >
-                Cluster
-              </button>
-
-              <button
-                type="button"
-                onClick={() => handleSectionClick("usage")}
-                className={[
-                  "relative z-10 h-7 min-w-[112px] rounded-[10px] px-3 font-mono text-sm font-medium",
-                  "transition-colors duration-150",
-                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:ring-offset-1 focus-visible:ring-offset-background",
-                  section === "usage"
-                    ? "text-foreground"
-                    : "text-muted-foreground hover:bg-muted hover:text-foreground/80",
-                ].join(" ")}
-                aria-pressed={section === "usage"}
-              >
-                Usage
-              </button>
-            </nav>
-            {!loading && !error && (
-              <p
-                className="min-w-0 truncate text-xs text-muted-foreground/70"
-                aria-label={`${cloudLabel} ${resourceLabel} ${resourceId}`}
-              >
-                {cloudLabel}
-                <span className="mx-1.5">·</span>
-                {resourceLabel}{" "}
-                <code className="font-mono text-muted-foreground" title={resourceId}>
-                  {resourceId}
-                </code>
-              </p>
-            )}
-          </div>
+              Cluster
+            </button>
+            <button
+              type="button"
+              onClick={() => handleSectionClick("usage")}
+              className={tabClass(section === "usage")}
+              aria-pressed={section === "usage"}
+            >
+              Usage
+            </button>
+          </nav>
+          {!loading && !error && (
+            <p
+              className="min-w-0 truncate pb-2.5 text-xs text-muted-foreground"
+              aria-label={`${cloudLabel} ${resourceLabel} ${resourceId}`}
+            >
+              {cloudLabel}
+              <span className="mx-1.5">·</span>
+              {resourceLabel}{" "}
+              <code className="font-mono" title={resourceId}>
+                {resourceId}
+              </code>
+            </p>
+          )}
         </div>
 
-        <div className="mt-8 space-y-10 flex-1 min-w-0">{content}</div>
-
-        <div className="text-center text-sm text-muted-foreground mt-10 pb-2">
-          Need help? Email me{" "}
-          <a href="mailto:jake@burla.dev" className="text-primary hover:underline">
-            jake@burla.dev
-          </a>
-        </div>
+        <div className="mt-6 flex-1 min-w-0">{content}</div>
       </div>
 
       <AlertDialog open={showExitDialog} onOpenChange={setShowExitDialog}>
-        <AlertDialogContent className="max-w-[360px] mx-auto py-7 px-6 rounded-lg shadow-[0_8px_24px_rgba(0,0,0,0.06)] bg-card">
-          <div className="text-center mb-2">
-            <AlertDialogTitle className="text-[15px] font-medium text-foreground">
-              Unsaved changes
-            </AlertDialogTitle>
-          </div>
+        <AlertDialogContent className="max-w-sm rounded-xl border border-border bg-card p-6 shadow-xl">
+          <AlertDialogTitle className="text-base font-semibold text-foreground">
+            Unsaved changes
+          </AlertDialogTitle>
+          <AlertDialogDescription className="mt-1 text-[13px] text-muted-foreground">
+            Your cluster settings have unsaved changes.
+          </AlertDialogDescription>
 
-          <div className="flex justify-center gap-3">
+          <div className="mt-5 flex justify-end gap-2">
             <AlertDialogCancel className="hidden" />
+
+            <AlertDialogAction
+              onClick={() => {
+                if (pendingNavRef.current) navigate(pendingNavRef.current);
+              }}
+              className="inline-flex h-9 items-center justify-center rounded-lg border border-border bg-card px-3.5 text-[13px] font-semibold text-foreground shadow-sm transition-colors duration-150 hover:bg-muted/60 focus:outline-none"
+            >
+              Discard changes
+            </AlertDialogAction>
 
             <AlertDialogAction
               onClick={async () => {
                 const ok = await handleSave();
                 if (ok && pendingNavRef.current) navigate(pendingNavRef.current);
               }}
-              className="bg-primary text-primary-foreground hover:bg-primary/90 px-5 py-2.5 font-medium min-w-[130px] transition-all focus:outline-none"
+              className="inline-flex h-9 items-center justify-center rounded-lg bg-primary px-3.5 text-[13px] font-semibold text-primary-foreground shadow-sm transition-colors duration-150 hover:bg-primary/90 focus:outline-none"
             >
-              Save & Exit
-            </AlertDialogAction>
-
-            <AlertDialogAction
-              onClick={() => {
-                if (pendingNavRef.current) navigate(pendingNavRef.current);
-              }}
-              className="border border-border bg-secondary text-secondary-foreground hover:bg-secondary/80 px-5 py-2.5 font-medium min-w-[130px] transition-all focus:outline-none"
-            >
-              Exit Without Saving
+              Save and exit
             </AlertDialogAction>
           </div>
         </AlertDialogContent>

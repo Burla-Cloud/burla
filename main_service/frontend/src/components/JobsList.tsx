@@ -1,5 +1,5 @@
 import { useJobs } from "@/contexts/JobsContext";
-import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import {
   Table,
   TableBody,
@@ -8,9 +8,11 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { cn } from "@/lib/utils";
+import { ListChecks } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { StatusBadge, jobStatusBadge } from "@/components/StatusBadge";
+import { TablePagination } from "@/components/TablePagination";
 
 export const JobsList = () => {
   const { jobs, page, setPage, totalPages, isLoading } = useJobs();
@@ -71,247 +73,139 @@ export const JobsList = () => {
     return parts.find((p) => p.type === "timeZoneName")?.value || "";
   };
 
-  const formatStartedAtTime = (date?: Date): string => {
-    if (!date) return "";
+  const formatStartedAt = (date?: Date): string => {
+    if (!date) return "—";
     const tz = userTimeZone || Intl.DateTimeFormat().resolvedOptions().timeZone;
-    const t = date.toLocaleTimeString("en-US", {
+    const monthDay = date.toLocaleDateString("en-US", {
+      timeZone: tz,
+      month: "short",
+      day: "numeric",
+    });
+    const time = date.toLocaleTimeString("en-US", {
       timeZone: tz,
       hour: "numeric",
       minute: "2-digit",
       hour12: true,
     });
-    return `${t},`;
+    return `${monthDay}, ${time}`;
   };
 
-  const formatStartedAtWeekday = (date?: Date): string => {
-    if (!date) return "";
-    const tz = userTimeZone || Intl.DateTimeFormat().resolvedOptions().timeZone;
-    const wd = date.toLocaleDateString("en-US", {
-      timeZone: tz,
-      weekday: "long",
-    });
-    return `${wd},`;
-  };
-
-  const formatStartedAtMonthDay = (date?: Date): string => {
-    if (!date) return "";
-    const tz = userTimeZone || Intl.DateTimeFormat().resolvedOptions().timeZone;
-    return date.toLocaleDateString("en-US", {
-      timeZone: tz,
-      month: "short",
-      day: "numeric",
-    });
-  };
-
-  const getStatusDotClass = (status: string | null) => {
-    const statusDotClasses: Record<string, string> = {
-      PENDING: "bg-muted-foreground/50",
-      RUNNING: "bg-amber-400 dark:bg-amber-300",
-      FAILED: "bg-destructive",
-      CANCELED: "bg-destructive",
-      COMPLETED: "bg-emerald-400 dark:bg-emerald-300",
-    };
-    return status ? statusDotClasses[status] || "bg-muted-foreground/50" : "bg-muted-foreground/50";
-  };
-
-  const getStatusTextClass = (status: string | null) => {
-    const statusTextClasses: Record<string, string> = {
-      PENDING: "text-muted-foreground",
-      RUNNING: "text-amber-700 dark:text-amber-300",
-      FAILED: "text-destructive",
-      CANCELED: "text-destructive",
-      COMPLETED: "text-emerald-700 dark:text-emerald-300",
-    };
-    return status ? statusTextClasses[status] || "text-muted-foreground" : "text-muted-foreground";
-  };
+  const tz = userTimeZone || Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const tzAbbr = getTimeZoneAbbr(tz, new Date());
 
   return (
-    <div className="space-y-6 min-w-0">
-      <Card className="min-w-0">
-        <CardHeader className="flex items-center justify-between py-4" />
-
-        <CardContent className="min-w-0">
-          {isLoading ? (
-            <div className="flex justify-center py-8">
-              <div className="w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+    <Card className="min-w-0">
+      <CardContent className="p-0">
+        {isLoading ? (
+          <div className="flex justify-center py-12">
+            <div className="h-5 w-5 animate-spin rounded-full border-2 border-border border-t-primary" />
+          </div>
+        ) : jobs.length === 0 ? (
+          <div className="flex flex-col items-center justify-center px-6 py-14 text-center">
+            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-muted">
+              <ListChecks className="h-[18px] w-[18px] text-muted-foreground" />
             </div>
-          ) : jobs.length === 0 ? (
-            <div className="text-center text-muted-foreground py-4">No jobs</div>
-          ) : (
-            <>
-              {/* CONTAIN OVERFLOW HERE so the PAGE doesn't get a horizontal scrollbar */}
-              <div className="w-full min-w-0 overflow-x-auto">
-                <Table className="w-full min-w-[920px]">
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Status</TableHead>
-                      <TableHead>Function</TableHead>
-                      <TableHead className="w-[360px]">Results</TableHead>
-                      <TableHead>User</TableHead>
-                      <TableHead colSpan={3}>
-                        {(() => {
-                          const tz = userTimeZone || Intl.DateTimeFormat().resolvedOptions().timeZone;
-                          const abbr = getTimeZoneAbbr(tz, new Date());
-                          return (
-                            <>
-                              <span>Started At </span>
-                              <span className="text-muted-foreground font-normal">({abbr})</span>
-                            </>
-                          );
-                        })()}
-                      </TableHead>
-                      <TableHead className="w-[5px] text-right" />
-                    </TableRow>
-                  </TableHeader>
+            <p className="mt-3 text-sm font-medium text-foreground">No jobs yet</p>
+            <p className="mt-1 text-[13px] text-muted-foreground">
+              Jobs appear here when you call{" "}
+              <code className="font-mono text-xs">remote_parallel_map</code>.
+            </p>
+          </div>
+        ) : (
+          <>
+            {/* CONTAIN OVERFLOW HERE so the PAGE doesn't get a horizontal scrollbar */}
+            <div className="w-full min-w-0 overflow-x-auto">
+              <Table className="w-full min-w-[860px]">
+                <TableHeader>
+                  <TableRow className="hover:bg-transparent">
+                    <TableHead className="pl-5">Status</TableHead>
+                    <TableHead>Function</TableHead>
+                    <TableHead className="w-[280px]">Results</TableHead>
+                    <TableHead>User</TableHead>
+                    <TableHead className="pr-5 text-right">
+                      Started{" "}
+                      <span className="font-normal text-muted-foreground/80">({tzAbbr})</span>
+                    </TableHead>
+                  </TableRow>
+                </TableHeader>
 
-                  <TableBody>
-                    {jobs.map((job) => {
-                      const failedCount = Math.max(0, job.n_failed ?? 0);
-                      const successfulCount = Math.max(0, job.n_results - failedCount);
-                      return (
-                        <TableRow
-                          key={job.id}
-                          className="cursor-pointer"
-                          onClick={() => navigate(`/jobs/${job.id}`)}
-                          onKeyDown={(event) => {
-                            if (event.key !== "Enter" && event.key !== " ") return;
-                            event.preventDefault();
-                            navigate(`/jobs/${job.id}`);
-                          }}
-                          tabIndex={0}
-                        >
-                        <TableCell>
-                          <span
-                            className={cn("inline-flex items-center gap-2 text-[14px] font-normal", getStatusTextClass(job.status))}
-                          >
-                            <span className={cn("h-2.5 w-2.5 rounded-full", getStatusDotClass(job.status))} />
-                            <span className="capitalize">{job.status?.toLowerCase() || "unknown"}</span>
-                          </span>
+                <TableBody>
+                  {jobs.map((job) => {
+                    const failedCount = Math.max(0, job.n_failed ?? 0);
+                    const successfulCount = Math.max(0, job.n_results - failedCount);
+                    const pct = job.n_inputs
+                      ? Math.min(100, (successfulCount / job.n_inputs) * 100)
+                      : 0;
+                    return (
+                      <TableRow
+                        key={job.id}
+                        className="cursor-pointer"
+                        onClick={() => navigate(`/jobs/${job.id}`)}
+                        onKeyDown={(event) => {
+                          if (event.key !== "Enter" && event.key !== " ") return;
+                          event.preventDefault();
+                          navigate(`/jobs/${job.id}`);
+                        }}
+                        tabIndex={0}
+                      >
+                        <TableCell className="pl-5">
+                          <StatusBadge {...jobStatusBadge(job.status)} />
                         </TableCell>
 
-                        {/* BIGGEST CULPRIT: long function names. Truncate them. */}
                         <TableCell>
-                          <div className="max-w-[360px] truncate">
+                          <div className="max-w-[320px] truncate">
                             <span
                               title={job.function_name ?? "Unknown"}
-                              className="text-foreground underline underline-offset-2"
+                              className="font-mono text-[13px] font-medium text-foreground"
                             >
                               {job.function_name ?? "Unknown"}
                             </span>
                           </div>
                         </TableCell>
 
-                        <TableCell className="w-[360px]">
-                          <div className="flex flex-col space-y-1 min-w-[320px]">
-                            <div>
-                              {successfulCount.toLocaleString()} / {job.n_inputs.toLocaleString()}
-                            </div>
-                            <div className="w-full bg-secondary rounded h-1.5 overflow-hidden">
+                        <TableCell className="w-[280px]">
+                          <div className="flex items-center gap-3">
+                            <span className="whitespace-nowrap text-[13px] tabular-nums text-foreground">
+                              {successfulCount.toLocaleString()}
+                              <span className="text-muted-foreground">
+                                {" "}
+                                / {job.n_inputs.toLocaleString()}
+                              </span>
+                            </span>
+                            <div className="h-1 w-24 shrink-0 overflow-hidden rounded-full bg-secondary">
                               <div
-                                className="bg-primary h-1.5 transition-all"
-                                style={{
-                                  width: `${
-                                    job.n_inputs
-                                      ? Math.min(100, (successfulCount / job.n_inputs) * 100)
-                                      : 0
-                                  }%`,
-                                }}
+                                className="h-full rounded-full bg-primary transition-all"
+                                style={{ width: `${pct}%` }}
                               />
                             </div>
                           </div>
                         </TableCell>
 
-                        {/* Second culprit: long emails. Truncate them. */}
                         <TableCell>
-                          <div className="max-w-[220px] truncate" title={job.user}>
+                          <div
+                            className="max-w-[200px] truncate text-[13px] text-muted-foreground"
+                            title={job.user}
+                          >
                             {job.user}
                           </div>
                         </TableCell>
 
-                        <TableCell className="whitespace-nowrap">
-                          <span className="flex items-baseline">
-                            <span className="tabular-nums">{formatStartedAtTime(job.started_at)}</span>
-                            <span className="ml-1">{formatStartedAtWeekday(job.started_at)}</span>
-                            <span className="ml-1">{formatStartedAtMonthDay(job.started_at)}</span>
-                          </span>
+                        <TableCell className="whitespace-nowrap pr-5 text-right text-[13px] tabular-nums text-muted-foreground">
+                          {formatStartedAt(job.started_at)}
                         </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </div>
 
-                        <TableCell className="text-right" />
-                        </TableRow>
-                      );
-                    })}
-                  </TableBody>
-                </Table>
-              </div>
-
-              {/* Pagination */}
-              <div className="flex justify-center mt-6 space-x-2 items-center">
-                {page > 0 && (
-                  <button
-                    onClick={() => setPage(page - 1)}
-                    className="px-3 py-1 text-sm text-primary hover:underline"
-                  >
-                    ‹ Prev
-                  </button>
-                )}
-
-                <button
-                  onClick={() => setPage(0)}
-                  className={`px-3 py-1 rounded text-sm border ${
-                    page === 0
-                      ? "bg-primary text-primary-foreground"
-                      : "bg-card text-foreground/80 hover:bg-accent"
-                  }`}
-                >
-                  1
-                </button>
-
-                {page > 3 && <span className="px-1">...</span>}
-
-                {Array.from({ length: totalPages }, (_, i) => i)
-                  .filter((i) => i !== 0 && i !== totalPages - 1 && Math.abs(i - page) <= 2)
-                  .map((i) => (
-                    <button
-                      key={i}
-                      onClick={() => setPage(i)}
-                      className={`px-3 py-1 rounded text-sm border ${
-                        page === i
-                          ? "bg-primary text-primary-foreground"
-                          : "bg-card text-foreground/80 hover:bg-accent"
-                      }`}
-                    >
-                      {i + 1}
-                    </button>
-                  ))}
-
-                {page < totalPages - 4 && <span className="px-1">...</span>}
-
-                {totalPages > 1 && (
-                  <button
-                    onClick={() => setPage(totalPages - 1)}
-                    className={`px-3 py-1 rounded text-sm border ${
-                      page === totalPages - 1
-                        ? "bg-primary text-primary-foreground"
-                        : "bg-card text-foreground/80 hover:bg-accent"
-                    }`}
-                  >
-                    {totalPages}
-                  </button>
-                )}
-
-                {page < totalPages - 1 && (
-                  <button
-                    onClick={() => setPage(page + 1)}
-                    className="px-3 py-1 text-sm text-primary hover:underline"
-                  >
-                    Next ›
-                  </button>
-                )}
-              </div>
-            </>
-          )}
-        </CardContent>
-      </Card>
-    </div>
+            <div className="px-5 pb-4">
+              <TablePagination page={page} totalPages={totalPages} onPageChange={setPage} />
+            </div>
+          </>
+        )}
+      </CardContent>
+    </Card>
   );
 };

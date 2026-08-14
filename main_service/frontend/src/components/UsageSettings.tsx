@@ -2,6 +2,21 @@ import { useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { AlertTriangle } from "lucide-react";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { getOnDemandHourlyUsdForMachine, getVmCategory, VM_TYPES, type VmType } from "@/types/constants";
@@ -85,30 +100,30 @@ const UsageSettings = () => {
   }, [daily]);
 
   const chartData = useMemo(() => {
-  return (daily?.days || []).map((d) => {
-    let daySpend = 0;
-    let unknownHours = 0;
+    return (daily?.days || []).map((d) => {
+      let daySpend = 0;
+      let unknownHours = 0;
 
-    for (const g of d.groups || []) {
-      const rate = getOnDemandHourlyUsdForMachine(g.machine_type);
-      const h = Number(g.total_node_hours || 0); // spend uses node-hours
+      for (const g of d.groups || []) {
+        const rate = getOnDemandHourlyUsdForMachine(g.machine_type);
+        const h = Number(g.total_node_hours || 0); // spend uses node-hours
 
-      if (rate == null) {
-        unknownHours += h;
-        continue;
+        if (rate == null) {
+          unknownHours += h;
+          continue;
+        }
+
+        daySpend += h * rate;
       }
 
-      daySpend += h * rate;
-    }
-
-    return {
-      date: d.date,
-      day: fmtDayLabel(d.date),
-      spend: Number(daySpend.toFixed(2)),
-      unknownHours: Number(unknownHours.toFixed(2)),
-    };
-  });
-}, [daily]);
+      return {
+        date: d.date,
+        day: fmtDayLabel(d.date),
+        spend: Number(daySpend.toFixed(2)),
+        unknownHours: Number(unknownHours.toFixed(2)),
+      };
+    });
+  }, [daily]);
 
   const vmRows = useMemo(() => {
     const buckets = new Map<VmType, { vm: VmType; totalComputeHours: number; cost: number; rateMissing: boolean }>();
@@ -152,189 +167,185 @@ const UsageSettings = () => {
     return rows;
   }, [nodes]);
 
+  if (loading) {
+    return (
+      <div className="space-y-5">
+        <div className="flex justify-end">
+          <Skeleton className="h-9 w-40" />
+        </div>
+        <Card className="grid grid-cols-2 divide-x divide-border/70">
+          <div className="px-5 py-4">
+            <Skeleton className="h-4 w-24" />
+            <Skeleton className="mt-2 h-7 w-20" />
+          </div>
+          <div className="px-5 py-4">
+            <Skeleton className="h-4 w-24" />
+            <Skeleton className="mt-2 h-7 w-20" />
+          </div>
+        </Card>
+        <Card>
+          <CardContent className="p-5">
+            <Skeleton className="h-4 w-28" />
+            <Skeleton className="mt-4 h-56 w-full" />
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <Alert variant="destructive" className="w-full">
+        <AlertTriangle className="h-4 w-4" />
+        <AlertTitle>Could not load usage</AlertTitle>
+        <AlertDescription>{error}</AlertDescription>
+      </Alert>
+    );
+  }
+
   return (
-    <div className="space-y-6 max-w-6xl mx-auto w-full">
-      <Card className="w-full">
-        <CardHeader className="flex flex-row items-center justify-between gap-3">
-          <CardTitle className="text-xl font-semibold text-primary">Usage</CardTitle>
-
-          <select
-            className="h-9 rounded-md border border-border bg-background px-3 text-sm"
-            value={selectedMonth}
-            onChange={(e) => setSelectedMonth(e.target.value)}
-          >
+    <div className="space-y-5">
+      <div className="flex items-center justify-end">
+        <Select value={selectedMonth} onValueChange={setSelectedMonth}>
+          <SelectTrigger className="w-40">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
             {monthOptions.map((m) => (
-              <option key={m} value={m}>
+              <SelectItem key={m} value={m}>
                 {fmtMonthLabel(m)}
-              </option>
+              </SelectItem>
             ))}
-          </select>
-        </CardHeader>
+          </SelectContent>
+        </Select>
+      </div>
 
-        <CardContent className="space-y-6">
-          {loading ? (
-            <>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <Card>
-                  <CardContent className="pt-6">
-                    <Skeleton className="h-4 w-24" />
-                    <Skeleton className="h-10 w-28 mt-2" />
-                    <Skeleton className="h-4 w-28 mt-3" />
-                  </CardContent>
-                </Card>
-                <Card>
-                  <CardContent className="pt-6">
-                    <Skeleton className="h-4 w-24" />
-                    <Skeleton className="h-10 w-28 mt-2" />
-                    <Skeleton className="h-4 w-28 mt-3" />
-                  </CardContent>
-                </Card>
+      {!daily ? (
+        <Card>
+          <CardContent className="p-5 text-sm text-muted-foreground">No usage yet.</CardContent>
+        </Card>
+      ) : (
+        <>
+          <Card className="grid grid-cols-1 divide-y divide-border/70 sm:grid-cols-2 sm:divide-x sm:divide-y-0">
+            <div className="px-5 py-4">
+              <div className="text-[13px] text-muted-foreground">Compute hours</div>
+              <div className="mt-0.5 text-2xl font-semibold tabular-nums tracking-tight text-foreground">
+                {hours(totals.totalComputeHours)}
               </div>
-
-              <Card>
-                <CardContent className="pt-6">
-                  <Skeleton className="h-4 w-40" />
-                  <Skeleton className="h-56 w-full mt-4" />
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardContent className="pt-6">
-                  <Skeleton className="h-4 w-24" />
-                  <Skeleton className="h-72 w-full mt-4" />
-                </CardContent>
-              </Card>
-            </>
-          ) : error ? (
-            <Alert variant="destructive" className="w-full">
-              <AlertTriangle className="h-4 w-4" />
-              <AlertTitle>Could not load usage</AlertTitle>
-              <AlertDescription>{error}</AlertDescription>
-            </Alert>
-          ) : !daily ? (
-            <div className="text-sm text-muted-foreground">No usage yet.</div>
-          ) : (
-            <>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <Card>
-                  <CardContent className="pt-6">
-                    <div className="text-sm text-muted-foreground">Usage</div>
-                    <div className="text-3xl font-semibold mt-1">{hours(totals.totalComputeHours)}</div>
-                    <div className="text-sm text-muted-foreground mt-2">{monthLabel}</div>
-                  </CardContent>
-                </Card>
-
-                <Card>
-                  <CardContent className="pt-6">
-                    <div className="text-sm text-muted-foreground">Spend</div>
-                    <div className="text-3xl font-semibold mt-1">{money(totals.totalSpend)}</div>
-                    <div className="text-sm text-muted-foreground mt-2">{monthLabel}</div>
-                    {totals.unknownNodeHours > 0 ? (
-                      <div className="text-xs text-muted-foreground mt-2">
-                        Missing pricing for {hours(totals.unknownNodeHours)}.
-                      </div>
-                    ) : null}
-                  </CardContent>
-                </Card>
+            </div>
+            <div className="px-5 py-4">
+              <div className="text-[13px] text-muted-foreground">Estimated spend</div>
+              <div className="mt-0.5 text-2xl font-semibold tabular-nums tracking-tight text-foreground">
+                {money(totals.totalSpend)}
               </div>
+              {totals.unknownNodeHours > 0 && (
+                <div className="mt-1 text-xs text-muted-foreground">
+                  Missing pricing for {hours(totals.unknownNodeHours)}.
+                </div>
+              )}
+            </div>
+          </Card>
 
-              <Card>
-                <CardContent className="pt-6">
-                  <div className="flex items-baseline justify-between gap-3">
-                    <div className="text-sm text-muted-foreground">Daily spend</div>
-                    <div className="text-sm text-muted-foreground">{monthLabel}</div>
-                  </div>
+          <Card>
+            <CardHeader className="flex-row items-baseline justify-between space-y-0 px-5 py-4">
+              <CardTitle>Daily spend</CardTitle>
+              <span className="text-[13px] text-muted-foreground">{monthLabel}</span>
+            </CardHeader>
+            <CardContent className="px-5 pb-5 pt-0">
+              <div className="h-64">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={chartData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                    <CartesianGrid stroke="hsl(var(--border) / 0.6)" vertical={false} />
+                    <XAxis
+                      dataKey="day"
+                      tickLine={false}
+                      axisLine={false}
+                      tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }}
+                      minTickGap={18}
+                    />
+                    <YAxis
+                      tickLine={false}
+                      axisLine={false}
+                      tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }}
+                      tickFormatter={(v) => money(Number(v || 0))}
+                    />
+                    <Tooltip
+                      cursor={{ fill: "hsl(var(--muted) / 0.5)" }}
+                      content={({ active, payload }) => {
+                        if (!active || !payload?.length) return null;
 
-                  <div className="h-64 mt-3">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={chartData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
-                        <CartesianGrid stroke="hsl(var(--border))" vertical={false} />
-                        <XAxis
-                          dataKey="day"
-                          tickLine={false}
-                          axisLine={false}
-                          tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }}
-                          minTickGap={18}
-                        />
-                        <YAxis
-                          tickLine={false}
-                          axisLine={false}
-                          tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }}
-                          tickFormatter={(v) => money(Number(v || 0))}
-                        />
-                        <Tooltip
-                          content={({ active, payload }) => {
-                              if (!active || !payload?.length) return null;
+                        const p: any = payload[0]?.payload || {};
+                        const spend = money(Number(p.spend || 0));
+                        const u = Number(p.unknownHours || 0);
 
-                              const p: any = payload[0]?.payload || {};
-                              const spend = money(Number(p.spend || 0));
-                              const u = Number(p.unknownHours || 0);
-
-                              return (
-                                <div
-                                  style={{
-                                    borderRadius: 10,
-                                    border: "1px solid hsl(var(--border))",
-                                    background: "hsl(var(--background))",
-                                    padding: "10px 12px",
-                                  }}
-                                >
-                                  <div className="text-sm font-medium">{p.date}</div>
-                                  <div className="text-sm mt-1">Spend: {spend}</div>
-                                  {u > 0 ? (
-                                    <div className="text-xs text-muted-foreground mt-1">
-                                      Missing rate for {hours(u)}
-                                    </div>
-                                  ) : null}
-                                </div>
-                              );
-                            }}
-                          />
-                        <Bar dataKey="spend" fill={PRIMARY} radius={[6, 6, 0, 0]} />
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </div>
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardContent className="pt-6">
-                  <div className="text-sm text-muted-foreground">Compute types</div>
-
-                  <div className="mt-4 rounded-md border border-border overflow-hidden">
-                    <div className="grid grid-cols-12 bg-muted/30 text-xs font-medium text-muted-foreground">
-                      <div className="col-span-6 px-4 py-3">Type</div>
-                      <div className="col-span-3 px-4 py-3 text-right">Hours</div>
-                      <div className="col-span-3 px-4 py-3 text-right">Cost</div>
-                    </div>
-
-                    {vmRows.length === 0 ? (
-                      <div className="px-4 py-4 text-sm text-muted-foreground">No usage found for this month.</div>
-                    ) : (
-                      vmRows.map((r) => (
-                        <div key={r.vm} className="grid grid-cols-12 border-t border-border items-center">
-                          <div className="col-span-6 px-4 py-3 min-w-0">
-                            <div className="font-medium text-sm truncate">{r.vm}</div>
+                        return (
+                          <div className="rounded-lg border border-border bg-popover px-3 py-2 shadow-md">
+                            <div className="text-xs font-medium text-muted-foreground">
+                              {p.date}
+                            </div>
+                            <div className="mt-0.5 text-sm font-semibold tabular-nums text-foreground">
+                              {spend}
+                            </div>
+                            {u > 0 && (
+                              <div className="mt-0.5 text-xs text-muted-foreground">
+                                Missing rate for {hours(u)}
+                              </div>
+                            )}
                           </div>
+                        );
+                      }}
+                    />
+                    <Bar dataKey="spend" fill={PRIMARY} radius={[4, 4, 0, 0]} maxBarSize={28} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </CardContent>
+          </Card>
 
-                          <div className="col-span-3 px-4 py-3 text-right">
-                            <div className="text-sm tabular-nums">{r.totalComputeHours.toFixed(2)}</div>
-                          </div>
-
-                          <div className="col-span-3 px-4 py-3 text-right">
-                            <div className="font-semibold text-sm tabular-nums">{money(r.cost)}</div>
-                            {r.rateMissing ? <div className="text-[10px] text-muted-foreground">missing rate</div> : null}
-                          </div>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                </CardContent>
-              </Card>
-            </>
-          )}
-        </CardContent>
-      </Card>
+          <Card>
+            <CardHeader className="border-b border-border/70 px-5 py-4">
+              <CardTitle>Compute types</CardTitle>
+            </CardHeader>
+            <CardContent className="p-0">
+              {vmRows.length === 0 ? (
+                <div className="px-5 py-6 text-sm text-muted-foreground">
+                  No usage found for this month.
+                </div>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow className="hover:bg-transparent">
+                      <TableHead className="pl-5">Type</TableHead>
+                      <TableHead className="text-right">Hours</TableHead>
+                      <TableHead className="pr-5 text-right">Cost</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {vmRows.map((r) => (
+                      <TableRow key={r.vm} className="hover:bg-transparent">
+                        <TableCell className="pl-5 text-sm font-medium text-foreground">
+                          {r.vm}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {r.totalComputeHours.toFixed(2)}
+                        </TableCell>
+                        <TableCell className="pr-5 text-right">
+                          <span className="text-sm font-medium tabular-nums text-foreground">
+                            {money(r.cost)}
+                          </span>
+                          {r.rateMissing && (
+                            <div className="text-[11px] text-muted-foreground">missing rate</div>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </CardContent>
+          </Card>
+        </>
+      )}
     </div>
   );
 };

@@ -11,7 +11,8 @@ import {
 } from "@syncfusion/ej2-react-filemanager";
 import { DialogUtility } from "@syncfusion/ej2-popups";
 import { X } from "lucide-react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { PageHeader } from "@/components/PageHeader";
+import { Button } from "@/components/ui/button";
 
 import { useTheme } from "@/lib/theme";
 import { applySyncfusionTheme } from "@/lib/syncfusion-theme";
@@ -1654,16 +1655,6 @@ export default function Filesystem() {
         setBatchDownloadState("idle");
     }, []);
 
-    const [showWelcome, setShowWelcome] = React.useState(true);
-    React.useEffect(() => {
-        const hidden = localStorage.getItem("filesystemWelcomeHidden") === "true";
-        setShowWelcome(!hidden);
-    }, []);
-    const handleDismissWelcome = () => {
-        setShowWelcome(false);
-        localStorage.setItem("filesystemWelcomeHidden", "true");
-    };
-
     const totalPages = totalCount > 0 ? Math.max(1, Math.ceil(totalCount / PAGE_SIZE)) : 1;
     const displayTotal = hasMore ? "many" : totalPages.toString();
 
@@ -1671,46 +1662,21 @@ export default function Filesystem() {
     const isNextDisabled = isBusy || (!hasMore && (pageIndex + 1) * PAGE_SIZE >= totalCount);
 
     return (
-        <div className="flex-1 flex flex-col justify-start px-12 pt-6 pb-8">
-            <div className="max-w-6xl mx-auto w-full flex-1 flex flex-col">
-                <h1 className="text-2xl font-bold mt-2 mb-6 text-primary">Cluster Filesystem</h1>
+        <div className="flex flex-1 flex-col min-w-0">
+            <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col">
+                <PageHeader
+                    title="Filesystem"
+                    description={
+                        <>
+                            Files here are shared with every node at{" "}
+                            <code className="font-mono text-xs">/workspace/shared</code>, in both
+                            directions.
+                        </>
+                    }
+                />
 
-                <div className="space-y-8 flex-1">
-                    {showWelcome && (
-                        <div className="spotlight-surface rounded-xl my-0">
-                            <Card className="w-full relative rounded-xl shadow-lg shadow-black/5 bg-card/90 backdrop-blur">
-                                <button
-                                    onClick={handleDismissWelcome}
-                                    className="absolute top-2 right-2 p-1 hover:bg-accent rounded-full"
-                                    aria-label="Dismiss welcome message"
-                                >
-                                    <X className="h-6 w-6" />
-                                </button>
-                                <CardHeader className="pb-4">
-                                    <CardTitle className="text-[1.45rem] font-semibold text-primary">
-                                        📂 &nbsp;Welcome to Your Network Filesystem!
-                                    </CardTitle>
-                                </CardHeader>
-                                <CardContent className="space-y-3">
-                                    <p className="text-foreground/85">
-                                        <ul className="list-disc pl-6 space-y-1 text-left">
-                                            <li>
-                                                Any files uploaded here will appear in "
-                                                <code>/workspace/shared</code>" inside the cluster.
-                                            </li>
-                                            <li>
-                                                Any files you write to "
-                                                <code>/workspace/shared</code>" inside the cluster,
-                                                will appear here where you can download them!
-                                            </li>
-                                        </ul>
-                                    </p>
-                                </CardContent>
-                            </Card>
-                        </div>
-                    )}
-
-                    <div className="relative rounded-lg border border-border bg-card shadow-sm filesystem-shell">
+                <div className="flex-1">
+                    <div className="relative rounded-xl border border-border bg-card shadow-sm filesystem-shell">
                         <FileManagerComponent
                             view="Details"
                             ref={fmRef}
@@ -1758,48 +1724,34 @@ export default function Filesystem() {
                         </FileManagerComponent>
 
                         {(totalCount > PAGE_SIZE || hasMore) && (
-                            <div className="flex items-center justify-between px-4 py-2 border-t border-border text-sm text-muted-foreground">
-                                <div>
+                            <div className="flex items-center justify-between border-t border-border/70 px-4 py-3">
+                                <span className="text-[13px] tabular-nums text-muted-foreground">
                                     Page {pageIndex + 1} of {displayTotal}
-                                </div>
-                                <div className="space-x-2">
-                                    <button
-                                        type="button"
-                                        className={`px-2 py-1 border rounded transition-colors ${
-                                            isPrevDisabled
-                                                ? "bg-muted text-muted-foreground/60 border-border"
-                                                : "bg-card text-foreground/90 border-border hover:bg-accent"
-                                        }`}
+                                </span>
+                                <div className="flex items-center gap-2">
+                                    <Button
+                                        variant="outline"
+                                        size="sm"
                                         onClick={() => handlePageChange("prev")}
                                         disabled={isPrevDisabled}
-                                        style={{
-                                            cursor: isPrevDisabled ? "default" : "pointer",
-                                        }}
                                     >
                                         Previous
-                                    </button>
-                                    <button
-                                        type="button"
-                                        className={`px-2 py-1 border rounded transition-colors ${
-                                            isNextDisabled
-                                                ? "bg-muted text-muted-foreground/60 border-border"
-                                                : "bg-card text-foreground/90 border-border hover:bg-accent"
-                                        }`}
+                                    </Button>
+                                    <Button
+                                        variant="outline"
+                                        size="sm"
                                         onClick={() => handlePageChange("next")}
                                         disabled={isNextDisabled}
-                                        style={{
-                                            cursor: isNextDisabled ? "default" : "pointer",
-                                        }}
                                     >
                                         Next
-                                    </button>
+                                    </Button>
                                 </div>
                             </div>
                         )}
 
                         {batchDownloadState !== "idle" && (
-                            <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/50 backdrop-blur-sm">
-                                <div className="pointer-events-auto relative flex w-full max-w-xl flex-col items-center gap-6 rounded-3xl border border-border bg-card px-8 py-8 text-foreground/90 shadow-xl shadow-black/10">
+                            <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+                                <div className="pointer-events-auto relative flex w-full max-w-md flex-col items-center gap-5 rounded-xl border border-border bg-card px-8 py-8 text-foreground/90 shadow-xl">
                                     <button
                                         type="button"
                                         className="absolute right-5 top-5 rounded-full p-2 text-muted-foreground transition hover:bg-accent hover:text-foreground"
@@ -1827,10 +1779,10 @@ export default function Filesystem() {
                         )}
 
                         {activeUpload && (
-                            <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/50 backdrop-blur-sm">
-                                <div className="pointer-events-auto relative w-full max-w-2xl rounded-2xl bg-card/95 p-8 shadow-2xl">
+                            <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+                                <div className="pointer-events-auto relative w-full max-w-xl rounded-xl border border-border bg-card p-6 shadow-xl">
                                     <div className="flex items-start justify-between gap-6">
-                                        <p className="flex-1 text-base font-semibold text-foreground/85 truncate">
+                                        <p className="flex-1 truncate text-sm font-semibold text-foreground">
                                             {activeUpload.state === "uploading"
                                                 ? `Uploading: ${activeUpload.name}`
                                                 : activeUpload.name}
@@ -1846,7 +1798,7 @@ export default function Filesystem() {
                                             </button>
                                         )}
                                     </div>
-                                    <div className="mt-5 h-4 w-full overflow-hidden rounded-full bg-secondary">
+                                    <div className="mt-4 h-2 w-full overflow-hidden rounded-full bg-secondary">
                                         <div
                                             className="h-full rounded-full"
                                             style={{

@@ -1,3 +1,4 @@
+import { showErrorToast, ErrorToastDetail } from "@/components/ErrorToast";
 import { useToast } from "@/components/ui/use-toast";
 import { useCluster } from "@/contexts/ClusterContext";
 
@@ -18,28 +19,34 @@ export const useClusterControl = () => {
 
             if (!response.ok) {
                 setClusterStatus(null);
-                let description = "Failed to start the cluster. Please try again.";
+                let detail: ErrorToastDetail = {
+                    title: "Couldn't start the cluster",
+                    message: "Failed to start the cluster. Please try again.",
+                };
                 try {
                     const body = await response.json();
-                    if (typeof body?.detail === "string") description = body.detail;
+                    const raw = body?.detail;
+                    if (typeof raw === "string") {
+                        detail = { ...detail, message: raw };
+                    } else if (
+                        typeof raw?.title === "string" &&
+                        typeof raw?.message === "string"
+                    ) {
+                        detail = raw;
+                    }
                 } catch {
                     // non-JSON error body; keep the generic message
                 }
-                toast({
-                    variant: "destructive",
-                    title: "Error",
-                    description,
-                });
+                showErrorToast(detail);
                 return false;
             }
 
             return true;
         } catch (error) {
             setClusterStatus(null);
-            toast({
-                variant: "destructive",
-                title: "Error",
-                description: "Failed to start the cluster. Please try again.",
+            showErrorToast({
+                title: "Couldn't start the cluster",
+                message: "Failed to start the cluster. Please try again.",
             });
             return false;
         }
@@ -64,10 +71,9 @@ export const useClusterControl = () => {
             });
             return true;
         } catch (error) {
-            toast({
-                variant: "destructive",
-                title: "Error",
-                description: "Failed to stop the cluster. Please try again.",
+            showErrorToast({
+                title: "Couldn't stop the cluster",
+                message: "Failed to stop the cluster. Please try again.",
             });
             return false;
         }

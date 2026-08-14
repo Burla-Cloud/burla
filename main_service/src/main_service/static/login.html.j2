@@ -4,8 +4,10 @@
   <meta charset="UTF-8" />
   <title>Burla - Sign In</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <link rel="icon" type="image/png" href="/favicon.png" />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="icon" type="image/svg+xml" sizes="any" href="/favicon.svg" />
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+  <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&family=Poppins:wght@700&display=swap" rel="stylesheet" />
   <style>
     * {
       box-sizing: border-box;
@@ -15,8 +17,38 @@
       margin: 0;
       min-height: 100vh;
       font-family: "Inter", sans-serif;
-      background: #fdfdfd;
-      color: #111111;
+      background: #03080d;
+      color: #f4fbfd;
+      color-scheme: dark;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* Faint nebula washes behind the stars, echoing burla.dev's deep space */
+    .starfield {
+      position: fixed;
+      inset: 0;
+      z-index: 0;
+      pointer-events: none;
+      background:
+        radial-gradient(900px circle at 18% 22%, rgba(42, 127, 150, 0.14), transparent 60%),
+        radial-gradient(1100px circle at 82% 70%, rgba(126, 203, 221, 0.08), transparent 65%),
+        radial-gradient(700px circle at 65% 12%, rgba(42, 127, 150, 0.1), transparent 60%);
+    }
+
+    .starfield canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+
+    .page-layer {
+      position: relative;
+      z-index: 1;
+    }
+
+    ::selection {
+      background: #7ecbdd;
+      color: #03080d;
     }
 
     .corner-logo-link {
@@ -25,10 +57,10 @@
       left: clamp(12px, 1.6vw, 24px);
       width: clamp(34px, 3.5vw, 50px);
       height: clamp(34px, 3.5vw, 50px);
-      border: 1px solid #d8d8d8;
+      border: 1px solid rgba(126, 203, 221, 0.3);
       border-radius: 8px;
-      background: #ffffff;
-      box-shadow: 0 2px 7px rgba(0, 0, 0, 0.08);
+      background: #091823;
+      box-shadow: 0 2px 7px rgba(0, 0, 0, 0.4);
       display: flex;
       align-items: center;
       justify-content: center;
@@ -37,8 +69,8 @@
 
     .corner-logo-link:hover {
       transform: translateY(-1px);
-      border-color: #bfc3c9;
-      box-shadow: 0 6px 14px rgba(0, 0, 0, 0.13);
+      border-color: rgba(126, 203, 221, 0.68);
+      box-shadow: 0 6px 14px rgba(0, 0, 0, 0.5);
     }
 
     .corner-logo {
@@ -51,7 +83,7 @@
       position: fixed;
       left: clamp(12px, 1.6vw, 24px);
       bottom: clamp(12px, 1.6vw, 24px);
-      color: #6d6d6d;
+      color: rgba(234, 246, 250, 0.55);
       font-size: 12px;
       font-weight: 400;
       text-decoration: none;
@@ -75,28 +107,76 @@
       text-align: center;
     }
 
-    .hero-logo {
-      width: min(100%, 360px);
-      height: auto;
-      display: block;
-      margin: 0 auto 8px;
+    /* The burla.dev lockup: stair of three squares, wordmark, underscore block */
+    .hero-lockup {
+      display: inline-flex;
+      align-items: baseline;
+      gap: 10px;
+      margin: 0 auto 10px;
+      font-family: "Poppins", system-ui, sans-serif;
+      font-weight: 700;
+      font-size: 58px;
+      letter-spacing: -0.025em;
+      line-height: 1;
+      color: #7ecbdd;
+      text-shadow:
+        0 -1px 0 rgba(226, 250, 255, 0.26),
+        0 1px 0 rgba(6, 26, 34, 0.48),
+        0 2px 1px rgba(2, 12, 18, 0.38),
+        0 3px 6px rgba(0, 0, 0, 0.34),
+        0 0 22px rgba(150, 221, 240, 0.16);
+    }
+
+    .hero-lockup .mark {
+      height: 0.78em;
+      width: auto;
+      align-self: center;
+    }
+
+    .hero-lockup .caret {
+      height: 0.26em;
+      width: auto;
+      animation: caret-blink 1.05s steps(1) infinite;
+    }
+
+    @keyframes caret-blink {
+      0%, 55% {
+        opacity: 1;
+      }
+      56%, 100% {
+        opacity: 0;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .hero-lockup .caret {
+        animation: none;
+      }
     }
 
     .tagline {
-      margin: 0 0 26px;
+      margin: 0 0 30px;
       font-size: 15.6px;
       font-weight: 400;
       line-height: 1.35;
-      color: #3B5A64;
+      color: rgba(234, 246, 250, 0.75);
+      opacity: 0;
+      animation: fade-in 1s ease 0.6s forwards;
+    }
+
+    @keyframes fade-in {
+      to {
+        opacity: 1;
+      }
     }
 
     .banner {
       margin: 0 0 14px;
       padding: 10px 12px;
       border-radius: 6px;
-      border: 1px solid #e9b8b3;
-      background: #fdf0ee;
-      color: #7c261d;
+      border: 1px solid rgba(255, 128, 108, 0.4);
+      background: rgba(255, 128, 108, 0.1);
+      color: #ffb3a6;
       text-align: left;
       font-size: 13px;
       line-height: 1.45;
@@ -105,6 +185,7 @@
     .banner strong {
       display: block;
       margin-bottom: 2px;
+      color: #ff806c;
     }
 
     .login-btn {
@@ -115,23 +196,24 @@
       justify-content: center;
       gap: 9px;
       padding: 0 18px;
-      border-radius: 7px;
-      border: 1px solid #767676;
-      background: #ffffff;
-      color: #161616;
+      border-radius: 999px;
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      background: rgba(9, 24, 35, 0.8);
+      color: rgba(234, 246, 250, 0.9);
       text-decoration: none;
-      font-size: 15px;
+      font-family: "IBM Plex Mono", ui-monospace, monospace;
+      font-size: 14px;
       font-weight: 500;
       line-height: 1.2;
-      box-shadow: 0 2px 7px rgba(0, 0, 0, 0.08);
-      transition: transform 0.16s ease, box-shadow 0.16s ease, border-color 0.16s ease, background 0.12s ease;
+      box-shadow: 0 2px 7px rgba(0, 0, 0, 0.35);
+      transition: transform 0.16s ease, box-shadow 0.16s ease, border-color 0.16s ease, color 0.12s ease;
     }
 
     .login-btn:hover {
       transform: translateY(-1px);
-      background: #fbfbfb;
-      border-color: #5f5f5f;
-      box-shadow: 0 6px 14px rgba(0, 0, 0, 0.13);
+      border-color: rgba(126, 203, 221, 0.6);
+      color: #eaf6fa;
+      box-shadow: 0 6px 14px rgba(0, 0, 0, 0.45);
     }
 
     .login-btn + .login-btn {
@@ -152,40 +234,146 @@
   </style>
 </head>
 <body>
-  <a href="https://burla.dev" aria-label="Go to burla.dev" class="corner-logo-link">
-    <img src="/logo_small.svg" alt="Burla logo" class="corner-logo" />
+  <div class="starfield" aria-hidden="true"><canvas id="stars"></canvas></div>
+  <a href="https://burla.dev" aria-label="Go to burla.dev" class="corner-logo-link page-layer">
+    <!-- Compact mark: the tile stair plus the underscore block -->
+    <svg viewBox="0 0 30 18" class="corner-logo" aria-hidden="true">
+      <defs>
+        <linearGradient id="corner-face" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stop-color="#AEE1ED" />
+          <stop offset="0.45" stop-color="#7ECBDD" />
+          <stop offset="1" stop-color="#56A4B7" />
+        </linearGradient>
+        <linearGradient id="corner-bar" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="#AEE1ED" />
+          <stop offset="0.5" stop-color="#7ECBDD" />
+          <stop offset="1" stop-color="#56A4B7" />
+        </linearGradient>
+      </defs>
+      <g>
+        <rect x="0" y="0.5" width="6" height="6" fill="#04141B" opacity="0.36" />
+        <rect x="0" y="0" width="6" height="6" fill="url(#corner-face)" />
+        <rect x="6" y="6.5" width="6" height="6" fill="#04141B" opacity="0.36" />
+        <rect x="6" y="6" width="6" height="6" fill="url(#corner-face)" />
+        <rect x="0" y="12.5" width="6" height="6" fill="#04141B" opacity="0.36" />
+        <rect x="0" y="12" width="6" height="6" fill="url(#corner-face)" />
+        <rect x="18" y="12.6" width="12" height="6" fill="#04141B" opacity="0.36" />
+        <rect x="18" y="12" width="12" height="6" fill="url(#corner-bar)" />
+      </g>
+    </svg>
   </a>
-  <a href="https://docs.burla.dev/privacy-policy" class="privacy-policy-link">Privacy Policy</a>
-  <main class="page-content">
+  <a href="https://docs.burla.dev/privacy-policy" class="privacy-policy-link page-layer">Privacy Policy</a>
+  <main class="page-content page-layer">
     <div class="auth-panel">
-      <img id="welcome-logo" src="/welcome.png" srcset="/welcome@2x.png 2x" width="360" height="55" alt="Burla logo" class="hero-logo" />
-      <div id="deferred-auth-content" hidden>
-        <p class="tagline">The simplest way to scale Python.</p>
-        {% if user_email %}
-        <div class="banner">
-          <strong>Access denied</strong>
-          {{ user_email }} is not authorized.<br />Contact your admin to request access.
-        </div>
-        {% endif %}
-        <a id="google-login-btn" href="#" class="login-btn">
-          <svg viewBox="0 0 18 18" aria-hidden="true" class="google-logo">
-            <path d="M17.64 9.2045c0-.638-.0573-1.2518-.1636-1.8409H9v3.4818h4.8436c-.2086 1.125-.8427 2.0782-1.7968 2.7155v2.2573h2.9082c1.7027-1.5664 2.685-3.874 2.685-6.6136z" fill="#4285F4" />
-            <path d="M9 18c2.43 0 4.4673-.8064 5.9564-2.1818l-2.9082-2.2573c-.8063.54-1.8363.8591-3.0482.8591-2.3418 0-4.3241-1.5818-5.0327-3.7091H.9573v2.3309C2.4382 15.9836 5.4818 18 9 18z" fill="#34A853" />
-            <path d="M3.9655 10.7127C3.7855 10.1727 3.6836 9.5955 3.6836 9s.1018-1.1727.2818-1.7127V4.9564H.9573C.3477 6.1718 0 7.5436 0 9s.3477 2.8282.9573 4.0436l3.0082-2.3309z" fill="#FBBC05" />
-            <path d="M9 3.5795c1.3214 0 2.5077.4541 3.4405 1.3459l2.5814-2.5814C13.4636.8918 11.4273 0 9 0 5.4818 0 2.4382 2.0164.9573 4.9564l3.0082 2.3309C4.6759 5.1609 6.6582 3.5795 9 3.5795z" fill="#EA4335" />
-          </svg>
-          <span>Continue with Google</span>
-        </a>
-        <a id="microsoft-login-btn" href="#" class="login-btn">
-          <img src="https://upload.wikimedia.org/wikipedia/commons/4/44/Microsoft_logo.svg" alt="Microsoft logo" />
-          <span>Continue with Microsoft</span>
-        </a>
+      <div class="hero-lockup" aria-label="Burla">
+        <svg viewBox="0 0 12 18" class="mark" aria-hidden="true">
+          <defs>
+            <linearGradient id="hero-face" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0" stop-color="#AEE1ED" />
+              <stop offset="0.45" stop-color="#7ECBDD" />
+              <stop offset="1" stop-color="#56A4B7" />
+            </linearGradient>
+          </defs>
+          <g>
+            <rect x="0" y="0.5" width="6" height="6" fill="#04141B" opacity="0.36" />
+            <rect x="0" y="0" width="6" height="6" fill="url(#hero-face)" />
+            <rect x="6" y="6.5" width="6" height="6" fill="#04141B" opacity="0.36" />
+            <rect x="6" y="6" width="6" height="6" fill="url(#hero-face)" />
+            <rect x="0" y="12.5" width="6" height="6" fill="#04141B" opacity="0.36" />
+            <rect x="0" y="12" width="6" height="6" fill="url(#hero-face)" />
+          </g>
+        </svg>
+        <span>Burla</span>
+        <svg viewBox="0 0 12 6" class="caret" aria-hidden="true">
+          <defs>
+            <linearGradient id="hero-bar" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="#AEE1ED" />
+              <stop offset="0.5" stop-color="#7ECBDD" />
+              <stop offset="1" stop-color="#56A4B7" />
+            </linearGradient>
+          </defs>
+          <rect y="0.6" width="12" height="6" fill="#04141B" opacity="0.36" />
+          <rect width="12" height="6" fill="url(#hero-bar)" />
+        </svg>
       </div>
+      <p class="tagline">The simplest way to scale Python.</p>
+      {% if user_email %}
+      <div class="banner">
+        <strong>Access denied</strong>
+        {{ user_email }} is not authorized.<br />Contact your admin to request access.
+      </div>
+      {% endif %}
+      <a id="google-login-btn" href="#" class="login-btn">
+        <svg viewBox="0 0 18 18" aria-hidden="true" class="google-logo">
+          <path d="M17.64 9.2045c0-.638-.0573-1.2518-.1636-1.8409H9v3.4818h4.8436c-.2086 1.125-.8427 2.0782-1.7968 2.7155v2.2573h2.9082c1.7027-1.5664 2.685-3.874 2.685-6.6136z" fill="#4285F4" />
+          <path d="M9 18c2.43 0 4.4673-.8064 5.9564-2.1818l-2.9082-2.2573c-.8063.54-1.8363.8591-3.0482.8591-2.3418 0-4.3241-1.5818-5.0327-3.7091H.9573v2.3309C2.4382 15.9836 5.4818 18 9 18z" fill="#34A853" />
+          <path d="M3.9655 10.7127C3.7855 10.1727 3.6836 9.5955 3.6836 9s.1018-1.1727.2818-1.7127V4.9564H.9573C.3477 6.1718 0 7.5436 0 9s.3477 2.8282.9573 4.0436l3.0082-2.3309z" fill="#FBBC05" />
+          <path d="M9 3.5795c1.3214 0 2.5077.4541 3.4405 1.3459l2.5814-2.5814C13.4636.8918 11.4273 0 9 0 5.4818 0 2.4382 2.0164.9573 4.9564l3.0082 2.3309C4.6759 5.1609 6.6582 3.5795 9 3.5795z" fill="#EA4335" />
+        </svg>
+        <span>Continue with Google</span>
+      </a>
+      <a id="microsoft-login-btn" href="#" class="login-btn">
+        <img src="https://upload.wikimedia.org/wikipedia/commons/4/44/Microsoft_logo.svg" alt="Microsoft logo" />
+        <span>Continue with Microsoft</span>
+      </a>
     </div>
   </main>
   <script>
-    const welcomeLogo = document.getElementById("welcome-logo");
-    const deferredAuthContent = document.getElementById("deferred-auth-content");
+    // Starfield: canvas dots in the site's teal/cyan/ice, twinkling gently.
+    (function () {
+      const canvas = document.getElementById("stars");
+      const ctx = canvas.getContext("2d");
+      const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      let stars = [];
+
+      function build() {
+        const dpr = Math.min(2, window.devicePixelRatio || 1);
+        canvas.width = window.innerWidth * dpr;
+        canvas.height = window.innerHeight * dpr;
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+        const count = Math.round((window.innerWidth * window.innerHeight) / 5500);
+        stars = Array.from({ length: count }, () => {
+          const seed = Math.random();
+          const color = seed > 0.78 ? "#EAF6FA" : seed > 0.4 ? "#7ECBDD" : "#2A7F96";
+          return {
+            x: Math.random() * window.innerWidth,
+            y: Math.random() * window.innerHeight,
+            r: 0.4 + Math.pow(Math.random(), 2.4) * 1.4,
+            color,
+            base: 0.25 + Math.random() * 0.55,
+            phase: Math.random() * Math.PI * 2,
+            speed: 0.4 + Math.random() * 0.9,
+          };
+        });
+      }
+
+      function draw(t) {
+        ctx.clearRect(0, 0, window.innerWidth, window.innerHeight);
+        for (const s of stars) {
+          const twinkle = reducedMotion ? 1 : 0.65 + 0.35 * Math.sin(s.phase + t * 0.001 * s.speed);
+          ctx.globalAlpha = s.base * twinkle;
+          ctx.fillStyle = s.color;
+          ctx.beginPath();
+          ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.globalAlpha = 1;
+      }
+
+      function loop(t) {
+        draw(t);
+        if (!reducedMotion) requestAnimationFrame(loop);
+      }
+
+      build();
+      window.addEventListener("resize", () => {
+        build();
+        if (reducedMotion) draw(0);
+      });
+      requestAnimationFrame(loop);
+    })();
+
     const redirectLocally = {{ redirect_locally | tojson }};
     const projectId = {{ project_id | tojson }};
     const loginParams = new URLSearchParams({
@@ -199,14 +387,6 @@
       loginParams.set("redirect_to", window.location.origin);
     }
     const queryParams = `?${loginParams.toString()}`;
-
-    welcomeLogo.addEventListener("load", function () {
-      deferredAuthContent.hidden = false;
-    });
-
-    if (welcomeLogo.complete) {
-      deferredAuthContent.hidden = false;
-    }
 
     document.getElementById("google-login-btn").addEventListener("click", function (event) {
       event.preventDefault();

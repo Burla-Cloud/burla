@@ -559,11 +559,11 @@ def dashboard():
     )
 
 
-@app.get("/favicon.png")
+@app.get("/favicon.svg")
 def favicon():
     headers = {"Cache-Control": "no-store"}
     return FileResponse(
-        STATIC_DIR / "favicon.png", media_type="image/png", headers=headers
+        STATIC_DIR / "favicon.svg", media_type="image/svg+xml", headers=headers
     )
 
 

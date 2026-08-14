@@ -504,6 +504,20 @@ class Node:
                     self.spinner_compatible_print(msg)
                     return
                 else:
+                    if self.late_join:
+                        # A replacement node holds no inputs until assigned,
+                        # so a botched assignment loses nothing; dropping it
+                        # must not kill a job that was running fine without
+                        # it (observed: a 500 from a fresh node's assignment
+                        # failing the whole job).
+                        self.state = "REMOVED"
+                        self.removed_reason = f"assignment failed: {response.status}"
+                        msg = (
+                            f"Replacement node {self.instance_name} failed "
+                            f"assignment ({response.status}), removed from job."
+                        )
+                        self.spinner_compatible_print(msg)
+                        return
                     msg = f"Failed to assign {self.instance_name}: {response.status}"
                     raise Exception(msg)
 
@@ -517,6 +531,11 @@ class Node:
                     await self._fail_and_delete(
                         self._node_silence_timeout_message("assigning job")
                     )
+                    if self.late_join:
+                        # VM cleanup already requested; the job continues
+                        # without this opportunistic extra.
+                        self.state = "REMOVED"
+                        self.removed_reason = "unreachable while assigning job"
                     return
 
     async def _gather_results(self):

@@ -42,6 +42,10 @@ INPUTS_QUEUE_RAM_LIMIT_BYTES = min(
     1 * 1024**3, int(psutil.virtual_memory().total * 0.125)
 )
 
+# How long a node must have held the job before its idle workers' slots can
+# be traded away (see trade_slots).
+TRADE_IDLE_GRACE_SEC = 30
+
 router = APIRouter()
 
 
@@ -178,6 +182,12 @@ async def trade_slots(
     """
     if job_id != SELF["current_job"]:
         return Response("job not found", status_code=404)
+    # current_job is set the moment assignment upload starts, but the workers
+    # only belong to the job once the watcher is live; granting before that
+    # retired (and killed) workers mid-assignment (observed as a 500 from the
+    # assignment endpoint).
+    if SELF["job_watcher_stop_event"].is_set():
+        return {"slots_granted": 0}
 
     previous = SELF["slot_trades_granted"].get(requesting_node)
     if previous and previous["trade_id"] == trade_id:
@@ -203,8 +213,14 @@ async def trade_slots(
             unbacked = max(0, SELF["target_parallelism"] - len(alive_workers))
             granted += min(slots_requested, unbacked)
 
+        # A node that just joined looks exactly like a drained one (idle
+        # workers, empty queue, all inputs uploaded job-wide) until its first
+        # steal lands, so idle-backed grants need a grace period or a fresh
+        # replacement node gets drained at birth.
         queue_drained = (
-            SELF["inputs_queue"].qsize() == 0 and SELF["all_inputs_uploaded"]
+            SELF["inputs_queue"].qsize() == 0
+            and SELF["all_inputs_uploaded"]
+            and time() - SELF["job_assigned_at"] > TRADE_IDLE_GRACE_SEC
         )
         if queue_drained:
             idle_workers = [
@@ -401,6 +417,7 @@ async def execute(
     # Slot count: what this node actually runs, not what was requested
     # (fewer compatible workers than requested parallelism shrinks it).
     SELF["target_parallelism"] = len(workers_to_assign)
+    SELF["job_assigned_at"] = time()
     SELF["dynamic_func_ram"] = request_json["func_ram"] == "dynamic"
     SELF["dynamic_func_cpu"] = request_json["func_cpu"] == "dynamic"
     SELF["reboot_containers_after_job"] = False

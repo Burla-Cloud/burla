@@ -86,6 +86,7 @@ def REINIT_SELF(SELF):
     SELF["slot_trades_granted"] = {}
     SELF["slot_trade_id"] = None
     SELF["last_slot_trade_attempt_at"] = 0.0
+    SELF["job_assigned_at"] = 0.0
     SELF["job_watcher_stop_event"] = Event()
     SELF[
         "job_watcher_stop_event"

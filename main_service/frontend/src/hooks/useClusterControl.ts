@@ -27,8 +27,11 @@ export const useClusterControl = () => {
                 }
                 toast({
                     variant: "destructive",
-                    title: "Error",
+                    title: "Cluster failed to start",
                     description,
+                    // These errors carry instructions (e.g. which login command
+                    // to run), so they stay up until dismissed.
+                    duration: Infinity,
                 });
                 return false;
             }
@@ -38,8 +41,9 @@ export const useClusterControl = () => {
             setClusterStatus(null);
             toast({
                 variant: "destructive",
-                title: "Error",
+                title: "Cluster failed to start",
                 description: "Failed to start the cluster. Please try again.",
+                duration: Infinity,
             });
             return false;
         }

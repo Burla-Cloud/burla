@@ -140,6 +140,52 @@ def verify_nodes_can_reach_head():
         )
 
 
+def verify_cloud_credentials():
+    """A client-hosted head boots VMs with the user's own CLI login (whatever
+    the cloud SDK's default credential chain finds), and those sessions expire
+    while the head is running. Checked here, an expired login is an immediate,
+    actionable error; unchecked, it's nodes that appear, instantly fail, and
+    vanish, with the real error buried in the failed node's logs. Deployed
+    heads run on instance credentials and local-dev nodes are containers, so
+    neither is checked.
+
+    Blocking network round trip: callers on the event loop must run this in a
+    thread."""
+    if IN_LOCAL_DEV_MODE or not IN_CLIENT_HOSTED_MODE:
+        return
+    try:
+        if CLOUD_PROVIDER == "aws":
+            import boto3
+
+            boto3.client("sts").get_caller_identity()
+        elif CLOUD_PROVIDER == "azure":
+            from main_service.providers.azure import _default_credential
+
+            _default_credential().get_token("https://management.azure.com/.default")
+        else:
+            import google.auth
+            from google.auth.transport.requests import Request as GoogleAuthRequest
+
+            credentials, _ = google.auth.default()
+            credentials.refresh(GoogleAuthRequest())
+    except Exception as error:
+        cloud_name, login_command = {
+            "aws": ("AWS", "`aws sso login` (or `aws configure`)"),
+            "azure": ("Azure", "`az login`"),
+        }.get(
+            CLOUD_PROVIDER, ("Google Cloud", "`gcloud auth application-default login`")
+        )
+        error_summary = str(error).split("\n")[0]
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"This machine is not signed in to {cloud_name}, so it can't "
+                f"start any nodes. Run {login_command} in a terminal, then "
+                f"press Start again. ({type(error).__name__}: {error_summary})"
+            ),
+        )
+
+
 @router.post("/v1/local-dev/node-quantity/{quantity}")
 def set_local_dev_node_quantity(quantity: int):
     """Test-only knob. Multi-node tests need more than the one node local-dev
@@ -276,6 +322,7 @@ def restart_cluster(
     add_background_task=Depends(get_add_background_task_function),
 ):
     verify_nodes_can_reach_head()
+    verify_cloud_credentials()
     _mark_running_jobs_with_lifecycle_event(
         "cluster_restarted", "The cluster was restarted."
     )

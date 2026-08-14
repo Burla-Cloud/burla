@@ -22,7 +22,11 @@ export function Toaster() {
             }) {
                 return (
                     <Toast key={id} {...props}>
-                        <div className="grid gap-1">
+                        {/* Column flex (not grid) so children get the
+                            container's definite width: long content wraps or
+                            truncates instead of laying out at max-content and
+                            getting clipped by the toast's overflow-hidden. */}
+                        <div className="flex min-w-0 flex-1 flex-col gap-1">
                             {title && <ToastTitle>{title}</ToastTitle>}
                             {description && (
                                 <ToastDescription>

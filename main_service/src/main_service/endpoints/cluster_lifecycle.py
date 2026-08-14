@@ -170,19 +170,26 @@ def verify_cloud_credentials():
             credentials.refresh(GoogleAuthRequest())
     except Exception as error:
         cloud_name, login_command = {
-            "aws": ("AWS", "`aws sso login` (or `aws configure`)"),
-            "azure": ("Azure", "`az login`"),
+            "aws": ("AWS", "aws sso login"),
+            "azure": ("Azure", "az login"),
         }.get(
-            CLOUD_PROVIDER, ("Google Cloud", "`gcloud auth application-default login`")
+            CLOUD_PROVIDER, ("Google Cloud", "gcloud auth application-default login")
         )
         error_summary = str(error).split("\n")[0]
+        # Structured so the dashboard can render the fix as a copyable command
+        # (see frontend ErrorToast.tsx); curl/scripts still get readable JSON.
         raise HTTPException(
             status_code=503,
-            detail=(
-                f"This machine is not signed in to {cloud_name}, so it can't "
-                f"start any nodes. Run {login_command} in a terminal, then "
-                f"press Start again. ({type(error).__name__}: {error_summary})"
-            ),
+            detail={
+                "title": f"Not signed in to {cloud_name}",
+                "message": (
+                    f"Nodes can't start without an active {cloud_name} session "
+                    f"on this machine. Run this in a terminal, then press "
+                    f"Start again:"
+                ),
+                "command": login_command,
+                "error": f"{type(error).__name__}: {error_summary}",
+            },
         )
 
 

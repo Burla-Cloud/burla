@@ -19,7 +19,7 @@ from fastapi.responses import Response
 from starlette.datastructures import UploadFile
 from starlette.requests import ClientDisconnect
 
-__version__ = "1.6.4"
+__version__ = "1.6.5"
 PROJECT_ID = os.environ["PROJECT_ID"]
 BURLA_BACKEND_URL = os.environ.get(
     "BURLA_BACKEND_URL", "https://backend.burla.dev"

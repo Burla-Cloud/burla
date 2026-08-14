@@ -7,7 +7,7 @@ from fire import Fire
 from platformdirs import user_config_dir
 
 # needed so main_service can associate a client version with a request
-__version__ = "1.6.4"
+__version__ = "1.6.5"
 
 # In a checkout this file is <root>/client/src/burla/__init__.py. Installed
 # flat (e.g. /worker_service_python_env/burla/ on nodes) there is no parents[3],

@@ -384,9 +384,6 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
             <Card className="w-full divide-y divide-border/70">
                 <section className="px-5 py-5">
                     <h2 className="text-sm font-semibold text-foreground">Container image</h2>
-                    <p className="mt-0.5 text-[13px] text-muted-foreground">
-                        The Docker image your code runs inside.
-                    </p>
                     <div className="mt-4 max-w-2xl">
                         <div className="mb-1.5 flex items-center gap-1.5">
                             <label className={labelClass}>Image URI</label>
@@ -415,9 +412,6 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
 
                 <section className="px-5 py-5">
                     <h2 className="text-sm font-semibold text-foreground">Virtual machines</h2>
-                    <p className="mt-0.5 text-[13px] text-muted-foreground">
-                        The machines booted when the cluster starts.
-                    </p>
 
                     <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-4">
                         {/* Quantity */}
@@ -641,9 +635,6 @@ export const SettingsForm = forwardRef<{ isRegionValid: () => boolean }, Setting
                 {!isClientHosted && (
                     <section className="px-5 py-5">
                         <h2 className="text-sm font-semibold text-foreground">Authorized users</h2>
-                        <p className="mt-0.5 text-[13px] text-muted-foreground">
-                            Google accounts authorized to use this deployment.
-                        </p>
 
                         <form
                             onSubmit={(e) => {

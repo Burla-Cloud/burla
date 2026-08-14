@@ -178,3 +178,14 @@ head disappears, every node stops billing without outside intervention.
 Verify: clear Burla's local state, use an identity limited to Virtual Machine Contributor,
 run `burla dashboard`, then run a job. Kill the local head while a node is running and
 confirm the node is deleted before its short-lived cloud credential expires.
+
+## R19. Local dashboard lifecycle
+
+Running `burla dashboard` serves the local dashboard on port 5001, or the requested
+`--port`, and streams its service logs in the terminal. Ctrl-C stops an idle dashboard;
+if a job is running, the command exits while the same dashboard process and job continue.
+
+Verify: start `burla dashboard --port 5002`, run a slow foreground job, and note the
+dashboard pid. Press Ctrl-C in the dashboard terminal; the command exits, the pid stays
+the same, and the job returns correct results. Run `burla dashboard` again after the job
+and press Ctrl-C; the dashboard process exits.

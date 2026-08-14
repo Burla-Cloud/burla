@@ -35,7 +35,7 @@ my_inputs = list(range(1000))
 def my_function(x):
     print(f"[#{x}] running on separate computer")
 
-remote_parallel_map(my_function, my_inputs, grow=True)
+remote_parallel_map(my_function, my_inputs)
 ```
 
 This example asks Burla to scale the job to 1,000 CPUs and run 1,000 function calls in parallel:

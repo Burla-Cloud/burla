@@ -9,10 +9,10 @@
 </p>
 
 <p align="center">
-  <a href="https://docs.burla.dev">Documentation</a> ·
-  <a href="https://docs.burla.dev/get-started">Getting started</a> ·
-  <a href="https://docs.burla.dev/api-reference">API reference</a> ·
-  <a href="https://docs.burla.dev/demo-categories/basic-examples">Examples</a> ·
+  <a href="https://burla.dev/docs">Documentation</a> ·
+  <a href="https://burla.dev/docs/get-started">Getting started</a> ·
+  <a href="https://burla.dev/docs/api-reference">API reference</a> ·
+  <a href="https://burla.dev/docs/examples">Examples</a> ·
   <a href="https://burla.dev">Website</a>
 </p>
 
@@ -25,7 +25,7 @@
 
 ---
 
-Burla is a distributed computing framework that runs plain Python functions across thousands of VMs in your own cloud account. It has exactly one function:
+Burla is a distributed computing framework that runs plain Python functions across thousands of CPUs or GPUs in your own cloud. It has exactly one function:
 
 ```python
 from burla import remote_parallel_map
@@ -38,54 +38,71 @@ def my_function(x):
 remote_parallel_map(my_function, my_inputs)
 ```
 
-This example runs `my_function` on 1,000 VMs in less than one second:
+This example asks Burla to scale the job to 1,000 CPUs and run 1,000 function calls in parallel:
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Burla-Cloud/user-docs/main/.gitbook/assets/hell_cut_extended_no-zsh.gif" alt="Burla terminal demo showing remote_parallel_map running on 1,000 computers" width="90%">
+  <img src="https://raw.githubusercontent.com/Burla-Cloud/user-docs/main/.gitbook/assets/hell_cut_extended_no-zsh.gif" alt="Burla terminal demo showing remote_parallel_map running 1,000 function calls" width="90%">
 </p>
 
 ## Highlights
 
 - **One function.** `results = remote_parallel_map(my_function, my_inputs)` is the entire API. No DAGs, no YAML, no cluster SDK to learn.
-- **Feels local.** Anything your function prints streams back to your terminal. Exceptions are re-raised locally with full tracebacks. Local packages and modules are cloned onto every machine automatically.
-- **Fast dispatch.** Code starts running in under a second, even with thousands of VMs or millions of inputs.
-- **Runs in your cloud.** Burla is self-hosted in your own cloud account. Your code, inputs, and results never leave it.
-- **Any hardware, any image.** Request CPUs, RAM, or GPUs (A100, H100) per function call, and run inside any Docker image.
-- **High utilization.** Adaptive concurrency repacks work while the job runs, keeping CPU and RAM near 90% utilization and preventing out-of-memory errors.
-- **Built-in dashboard.** Live logs, node status, and background jobs, viewable from any device.
+- **Feels local.** Anything your function prints streams back to your terminal. Exceptions are re-raised locally with full tracebacks. Packages missing from the image are installed automatically, and import-time local modules ship with your function.
+- **Fast dispatch.** On a warm cluster, a print-only job across 1,000 CPUs completes in under a second.
+- **Runs in your cloud.** Burla runs your functions on raw VMs in your own cloud account, not shared Burla infrastructure.
+- **Hardware and images in code.** Request CPUs or RAM per function call, add A100 or H100 GPUs on AWS or Google Cloud, and select a compatible `linux/amd64` image.
+- **Adaptive concurrency.** On CPU nodes, the default dynamic CPU and RAM settings start one worker per CPU, then reduce node concurrency under pressure when possible.
+- **Built-in dashboard.** View live logs and node status locally; deploy it for background jobs and access from any device.
 
 ## Getting started
 
-You'll need Python 3.11+ and permission to boot VMs. Burla defaults to the
-account and region selected by your AWS CLI.
+You'll need Python 3.11+, permission to boot VMs, and the CLI for AWS, Google
+Cloud, or Azure installed and signed in.
 
 ```bash
 pip install burla
 ```
 
-AWS uses the default VPC. Set `AWS_SUBNET_ID` and `AWS_SECURITY_GROUP_ID` only
-when you need to choose existing network resources.
-
-That's the whole setup. If you can boot a VM in your cloud account, you can use Burla: no service accounts, buckets, firewall rules, or IAM changes are needed.
-
-To use Google Cloud instead, select it once and Burla will use the active
-gcloud project:
+If exactly one cloud CLI is installed, Burla selects it automatically. If
+several are installed, an interactive command asks you to choose once and saves
+the answer. In a notebook or script, select it explicitly:
 
 ```bash
-burla config set cloud gcp
+burla config set cloud <aws|gcp|azure>
+```
+
+For AWS, Burla uses the account and region selected by the AWS CLI:
+
+```bash
+aws sso login  # or: aws configure
+```
+
+For Google Cloud, Burla uses the active gcloud project:
+
+```bash
+gcloud auth login
+gcloud auth application-default login
 gcloud config set project <project-id>
 ```
 
-To use Microsoft Azure, select it once and Burla will use the active Azure
-subscription:
+For Azure, Burla uses the active Azure subscription:
 
 ```bash
-burla config set cloud azure
+az login
 az account set --subscription <subscription-id>
 ```
 
-Azure uses an existing outbound-capable subnet. Set `AZURE_SUBNET_ID` only when
-you need to choose a specific one.
+Open the dashboard. In Settings, choose a Docker image whose Python minor version
+matches your local interpreter, then press **Start** to boot the first node:
+
+```bash
+burla dashboard
+```
+
+AWS uses the default VPC. Set `AWS_SUBNET_ID` and `AWS_SECURITY_GROUP_ID` only
+when you need to choose existing network resources. Google Cloud uses the
+default network. Azure uses an existing outbound-capable subnet; set
+`AZURE_SUBNET_ID` to choose a specific one.
 
 ```python
 from burla import remote_parallel_map
@@ -94,19 +111,19 @@ def my_function(x):
     print(f"processing input {x} on a machine in the cloud")
     return x * 2
 
-results = remote_parallel_map(my_function, list(range(1000)))
+results = remote_parallel_map(my_function, list(range(100)))
 ```
 
-The first `remote_parallel_map` call starts Burla's cluster coordinator on your
-machine automatically. VMs shut themselves down when idle; client-hosted Azure
-nodes receive a short-lived deletion token because guest poweroff does not stop
-Azure billing. Run `burla dashboard` to open that coordinator without restarting
-it. If none is running, the command starts one in the foreground and streams its
-logs until you press Ctrl-C.
+Burla runs the cluster coordinator on your machine by default.
+`remote_parallel_map` starts it automatically when needed, and
+`burla dashboard` reuses it. Configured nodes default to a 10-minute idle
+timeout; nodes added by `grow=True` use one minute. Client-hosted Azure nodes
+receive a short-lived deletion token because guest poweroff does not stop Azure
+billing.
 
-**Deploying for a team (optional):** `burla deploy` moves the coordinator and dashboard onto a small always-on VM so teammates can share one cluster. The job history and settings from your machine's coordinator move with it, so the deployed dashboard picks up where your local one left off. This is the only step that requires elevated permissions (service-account and IAM setup); the exact list is in the [CLI reference](https://docs.burla.dev/cli-reference). After deploying, teammates connect with `burla login`.
+**Deploying for a team (optional):** `burla deploy` moves the coordinator and dashboard onto a small always-on VM so teammates can share one cluster. On AWS and Google Cloud, the first deploy also moves the job history and settings from your machine's coordinator. This is the only step that requires elevated cloud permissions; the exact list is in the [CLI reference](https://burla.dev/docs/cli-reference). Add teammates in the deployed dashboard's authorized-users settings; they then connect with `burla login`.
 
-See the [getting started guide](https://docs.burla.dev/get-started) for a full walkthrough.
+See the [getting started guide](https://burla.dev/docs/get-started) for a full walkthrough.
 
 ## Usage
 
@@ -116,21 +133,24 @@ Hardware and environment are arguments, not configuration:
 results = remote_parallel_map(
     my_function,
     my_inputs,
-    func_cpu=4,           # CPUs reserved per function call
+    func_cpu=4,           # CPUs reserved per call ("dynamic" by default)
     func_ram=16,          # GB of RAM per call ("dynamic" by default)
-    func_gpu="A100",      # one GPU per call
-    image="python:3.12",  # any Docker image
-    grow=True,            # add VMs to the cluster if capacity falls short
+    func_gpu="A100",      # one GPU per call (AWS or Google Cloud)
+    image="python:3.12",  # linux/amd64; match the client's Python minor version
+    grow=True,            # add VMs when capacity falls short (False by default)
     generator=True,       # yield results as they finish
 )
 ```
 
+Custom images must expose the matching interpreter as `python` and provide
+`sh`, `awk`, and `sleep`.
+
 Because each call can use different machine sizes, types, and environments, a multi-stage pipeline over a 100+ TB dataset is just a few lines:
 
 ```python
-remote_parallel_map(process, [...], image="rocker/geospatial:latest")
-remote_parallel_map(aggregate, [...], func_cpu=64)
-remote_parallel_map(predict, [...], func_gpu="A100")
+remote_parallel_map(process, [...], image="python:3.12", grow=True)
+remote_parallel_map(aggregate, [...], func_cpu=64, grow=True)
+remote_parallel_map(predict, [...], func_gpu="A100", grow=True)
 ```
 
 <p align="center">
@@ -139,17 +159,16 @@ remote_parallel_map(predict, [...], func_gpu="A100")
 
 ## Efficiency
 
-Burla measures the actual CPU and RAM each task uses and repacks work across the cluster while the job runs. Nodes stay near full utilization instead of idling on conservative resource requests, so the same workloads typically finish with 20-50% less compute than on Ray, Dask, or AWS Batch, without taking any longer.
+On CPU nodes with dynamic CPU and RAM, Burla starts with one worker per CPU.
+When a node sees sustained CPU pressure, Burla reduces concurrency. If a worker
+runs out of memory, Burla requeues its input and reduces concurrency when
+possible so the remaining workers get more resources.
 
-<p align="center">
-  <img src="https://raw.githubusercontent.com/Burla-Cloud/user-docs/main/.gitbook/assets/image%20(31).png" alt="CPU utilization comparison: other orchestration tools fluctuate between idle and busy, while the same workload on Burla stays near full utilization" width="90%">
-</p>
-
-[Read the blog post](https://docs.burla.dev/blog/dynamic-hardware) on how adaptive concurrency works.
+[Read the blog post](https://burla.dev/blog) on how adaptive concurrency works.
 
 ## Monitoring
 
-Every deployment includes a dashboard with live logs, output files, node status, and background jobs:
+A deployed cluster includes a dashboard with live logs, shared output files, node status, and background jobs:
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/Burla-Cloud/user-docs/main/.gitbook/assets/area2-radius60-247-251-252.gif" alt="Burla dashboard showing live logs, output files, and cluster status">
@@ -159,22 +178,22 @@ Every deployment includes a dashboard with live logs, output files, node status,
 
 <table>
   <tr>
-    <td width="33%" align="center"><a href="https://docs.burla.dev/examples/process-2.4tb-of-parquet-files-in-76s"><img src="https://raw.githubusercontent.com/Burla-Cloud/user-docs/main/.gitbook/assets/more-examples/query-2-4tb-parquet-card.png" width="100%" alt="Query 2.4TB of Parquet in 76s"><br><b>Query 2.4TB of Parquet in 76s</b></a></td>
-    <td width="33%" align="center"><a href="https://docs.burla.dev/demo-blogs/airbnb-burla"><img src="https://raw.githubusercontent.com/Burla-Cloud/user-docs/main/.gitbook/assets/more-examples/airbnb-burla-card.png" width="100%" alt="Rank 1.7M Airbnbs"><br><b>Rank 1.7M Airbnbs</b></a></td>
-    <td width="33%" align="center"><a href="https://docs.burla.dev/demo-blogs/amazon-review-distiller"><img src="https://raw.githubusercontent.com/Burla-Cloud/user-docs/main/.gitbook/assets/more-examples/amazon-review-distiller-card.png" width="100%" alt="Distill 572M Amazon reviews"><br><b>Distill 572M Amazon reviews</b></a></td>
+    <td width="33%" align="center"><a href="https://burla.dev/docs/featured-examples/process-2.4tb-of-parquet-files-in-76s"><img src="https://raw.githubusercontent.com/Burla-Cloud/user-docs/main/.gitbook/assets/more-examples/query-2-4tb-parquet-card.png" width="100%" alt="Query 2.4TB of Parquet in 76s"><br><b>Query 2.4TB of Parquet in 76s</b></a></td>
+    <td width="33%" align="center"><a href="https://burla.dev/docs/featured-examples/airbnb-burla"><img src="https://raw.githubusercontent.com/Burla-Cloud/user-docs/main/.gitbook/assets/more-examples/airbnb-burla-card.png" width="100%" alt="Rank 1.7M Airbnbs"><br><b>Rank 1.7M Airbnbs</b></a></td>
+    <td width="33%" align="center"><a href="https://burla.dev/docs/featured-examples/amazon-review-distiller"><img src="https://raw.githubusercontent.com/Burla-Cloud/user-docs/main/.gitbook/assets/more-examples/amazon-review-distiller-card.png" width="100%" alt="Distill 572M Amazon reviews"><br><b>Distill 572M Amazon reviews</b></a></td>
   </tr>
   <tr>
-    <td width="33%" align="center"><a href="https://docs.burla.dev/demo-blogs/arxiv-fossils"><img src="https://raw.githubusercontent.com/Burla-Cloud/user-docs/main/.gitbook/assets/more-examples/arxiv-fossils-card.png" width="100%" alt="Cluster 2.7M arXiv abstracts"><br><b>Cluster 2.7M arXiv abstracts</b></a></td>
-    <td width="33%" align="center"><a href="https://docs.burla.dev/examples/multi-stage-genomic-pipeline"><img src="https://raw.githubusercontent.com/Burla-Cloud/user-docs/main/.gitbook/assets/more-examples/multi-stage-genomic-pipeline-card.png" width="100%" alt="Genomic alignment pipeline"><br><b>Genomic alignment pipeline</b></a></td>
-    <td width="33%" align="center"><a href="https://docs.burla.dev/demo-blogs/world-photo-index"><img src="https://raw.githubusercontent.com/Burla-Cloud/user-docs/main/.gitbook/assets/more-examples/world-photo-index-card.png" width="100%" alt="Map 9.5M geotagged photos"><br><b>Map 9.5M geotagged photos</b></a></td>
+    <td width="33%" align="center"><a href="https://burla.dev/docs/featured-examples/arxiv-fossils"><img src="https://raw.githubusercontent.com/Burla-Cloud/user-docs/main/.gitbook/assets/more-examples/arxiv-fossils-card.png" width="100%" alt="Cluster 2.7M arXiv abstracts"><br><b>Cluster 2.7M arXiv abstracts</b></a></td>
+    <td width="33%" align="center"><a href="https://burla.dev/docs/featured-examples/multi-stage-genomic-pipeline"><img src="https://raw.githubusercontent.com/Burla-Cloud/user-docs/main/.gitbook/assets/more-examples/multi-stage-genomic-pipeline-card.png" width="100%" alt="Genomic alignment pipeline"><br><b>Genomic alignment pipeline</b></a></td>
+    <td width="33%" align="center"><a href="https://burla.dev/docs/all-examples/data-processing-examples/world-photo-index"><img src="https://raw.githubusercontent.com/Burla-Cloud/user-docs/main/.gitbook/assets/more-examples/world-photo-index-card.png" width="100%" alt="Map 9.5M geotagged photos"><br><b>Map 9.5M geotagged photos</b></a></td>
   </tr>
 </table>
 
-<p align="center"><a href="https://docs.burla.dev/demo-categories/basic-examples"><b>Browse all &rarr;</b></a></p>
+<p align="center"><a href="https://burla.dev/docs/examples"><b>Browse all &rarr;</b></a></p>
 
 ## How it works
 
-Burla is three services, all in this repository:
+Burla has three top-level components in this repository:
 
 | Directory | Runs on | Purpose |
 | --- | --- | --- |
@@ -182,22 +201,22 @@ Burla is three services, all in this repository:
 | [`main_service/`](main_service) | Your machine, or a small always-on VM after `burla deploy` | Control plane. Boots and deletes VMs, hosts the dashboard, handles auth. |
 | [`node_service/`](node_service) | Each VM | Per-node orchestrator. Queues inputs, runs your function inside workers in your Docker image. |
 
-When you call `remote_parallel_map`, the client sends your function and inputs directly to the nodes, which fan them out to one worker per CPU. Results, logs, and exceptions stream straight back to your machine. Cluster state lives in memory on the control plane, and nodes rebalance queued inputs between themselves mid-job so the cluster stays busy.
+When you call `remote_parallel_map`, the client sends your function and inputs over TLS to the nodes instead of through the control plane. The nodes fan work out to workers, and results, logs, and exceptions stream back to your machine. Cluster state lives in memory on the control plane, and nodes rebalance queued inputs between themselves mid-job so the cluster stays busy.
 
 ## FAQ
 
 **How is Burla different from Ray or Dask?**
-Ray and Dask are general-purpose frameworks with APIs for tasks, actors, and distributed data structures. Burla deliberately covers one case, fanning a Python function out over many machines, and optimizes it hard: sub-second starts, adaptive concurrency, and nothing to learn beyond `remote_parallel_map`.
+Ray and Dask are general-purpose frameworks with APIs for tasks, actors, and distributed data structures. Burla deliberately covers one case, fanning a Python function out over many machines, with per-call hardware and images, adaptive concurrency, and nothing to learn beyond `remote_parallel_map`.
 
 **Where does my code run?**
-Entirely inside your own cloud account, on VMs Burla boots and deletes for you. Your client talks directly to those VMs; your code, inputs, and results are never routed through anyone else's servers.
+Entirely inside your own cloud account, on VMs Burla boots and deletes for you. Your client sends work to those VMs over TLS; Burla's relay carries the encrypted traffic so your account needs no public inbound firewall rules.
 
 **Which clouds are supported?**
 Google Cloud, AWS, and Microsoft Azure.
 
 ## Contributing
 
-Bug reports and feature requests are welcome in [GitHub issues](https://github.com/Burla-Cloud/burla/issues). If you'd like to contribute code, open an issue first so we can point you in the right direction. To report a security issue, email jake@burla.dev.
+Bug reports and feature requests are welcome in [GitHub issues](https://github.com/Burla-Cloud/burla/issues). If you'd like to contribute code, open an issue first so we can point you in the right direction. To report a security issue, email security@burla.dev.
 
 ## License
 

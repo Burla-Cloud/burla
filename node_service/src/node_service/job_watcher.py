@@ -439,11 +439,12 @@ async def _job_watcher(
         # the pickled function).
         alive_workers = sum(not worker.retired for worker in SELF["workers"])
         deficit = SELF["target_parallelism"] - alive_workers
+        unfinished_inputs = remaining_inputs + SELF["current_parallelism"]
         wants_replacement = (
             deficit > 0
             and job_view.get("grow")
             and not SELF["replacement_refused"]
-            and remaining_inputs > alive_workers
+            and unfinished_inputs > alive_workers
             and client_contact_last_1s
         )
         if not wants_replacement:

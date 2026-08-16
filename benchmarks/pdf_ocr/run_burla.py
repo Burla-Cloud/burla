@@ -423,6 +423,8 @@ def main() -> None:
         "image": args.image,
         "max_parallelism": args.max_parallelism,
         "documents": len(results),
+        "resumed_documents": len(prior_results),
+        "processed_documents": len(new_results),
         "succeeded": len(succeeded),
         "failed": len(failed),
         "pages": sum(result["page_count"] for result in succeeded),
@@ -430,7 +432,7 @@ def main() -> None:
         "ocr_pages": sum(result["ocr_pages"] for result in succeeded),
         "text_bytes": sum(result["text_bytes"] for result in succeeded),
         "wall_seconds": wall_seconds,
-        "documents_per_second": len(results) / wall_seconds,
+        "processed_documents_per_second": len(new_results) / wall_seconds,
         "documents_by_worker_container": dict(
             sorted(Counter(result["worker_container"] for result in results).items())
         ),

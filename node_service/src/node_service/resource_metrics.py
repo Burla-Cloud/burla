@@ -102,17 +102,20 @@ def _node_sample(
         "memory_percent": (
             100 * current["memory_bytes"] / current["memory_total_bytes"]
         ),
-        "network_rx_bytes": (
-            current["network_rx_bytes"] - previous["network_rx_bytes"]
+        # max(0, ...): the node-wide network/disk totals include worker veth
+        # interfaces and devices that vanish when containers exit, so the
+        # aggregate counter can go backwards between samples.
+        "network_rx_bytes": max(
+            0, current["network_rx_bytes"] - previous["network_rx_bytes"]
         ),
-        "network_tx_bytes": (
-            current["network_tx_bytes"] - previous["network_tx_bytes"]
+        "network_tx_bytes": max(
+            0, current["network_tx_bytes"] - previous["network_tx_bytes"]
         ),
-        "disk_read_bytes": (
-            current["disk_read_bytes"] - previous["disk_read_bytes"]
+        "disk_read_bytes": max(
+            0, current["disk_read_bytes"] - previous["disk_read_bytes"]
         ),
-        "disk_write_bytes": (
-            current["disk_write_bytes"] - previous["disk_write_bytes"]
+        "disk_write_bytes": max(
+            0, current["disk_write_bytes"] - previous["disk_write_bytes"]
         ),
         **_node_gpu_fields(gpu_readings),
     }

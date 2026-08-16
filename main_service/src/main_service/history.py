@@ -240,9 +240,11 @@ def job_metrics_series(job_id: str) -> dict:
         bucket_sec = max(1, math.ceil((last_ts - first_ts) / JOB_SERIES_TARGET_POINTS))
         rows = conn.execute(
             "SELECT CAST((timestamp - ?) / ? AS INTEGER) AS bucket, "
+            # MAX(x, 0): samples written before the sampler clamped
+            # counter-reset deltas can be negative.
             "COUNT(DISTINCT instance_name), AVG(cpu_percent), AVG(memory_percent), "
-            "SUM(network_rx_bytes), SUM(network_tx_bytes), "
-            "SUM(disk_read_bytes), SUM(disk_write_bytes), "
+            "SUM(MAX(network_rx_bytes, 0)), SUM(MAX(network_tx_bytes, 0)), "
+            "SUM(MAX(disk_read_bytes, 0)), SUM(MAX(disk_write_bytes, 0)), "
             "AVG(gpu_percent), AVG(gpu_memory_percent), COUNT(gpu_percent) "
             # INDEXED BY: the planner otherwise picks the non-covering
             # job_task index and pays a main-table fetch per row.
@@ -314,10 +316,10 @@ def task_metrics_series(job_id: str, input_index: int) -> dict:
         rows = conn.execute(
             "SELECT CAST((timestamp - ?) / ? AS INTEGER) AS bucket, "
             "SUM(cpu_seconds) / SUM(duration_sec), AVG(memory_bytes), "
-            "SUM(network_rx_bytes) / SUM(duration_sec), "
-            "SUM(network_tx_bytes) / SUM(duration_sec), "
-            "SUM(disk_read_bytes) / SUM(duration_sec), "
-            "SUM(disk_write_bytes) / SUM(duration_sec), "
+            "SUM(MAX(network_rx_bytes, 0)) / SUM(duration_sec), "
+            "SUM(MAX(network_tx_bytes, 0)) / SUM(duration_sec), "
+            "SUM(MAX(disk_read_bytes, 0)) / SUM(duration_sec), "
+            "SUM(MAX(disk_write_bytes, 0)) / SUM(duration_sec), "
             "AVG(gpu_percent), AVG(gpu_memory_bytes), COUNT(gpu_percent) "
             "FROM resource_metrics "
             "WHERE job_id = ? AND scope = 'task' AND input_index = ? "

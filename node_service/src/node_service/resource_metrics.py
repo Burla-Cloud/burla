@@ -1,7 +1,7 @@
 import asyncio
+from pathlib import Path
 from time import monotonic, time
 
-import aiodocker
 import psutil
 
 from node_service import INSTANCE_N_CPUS, SELF, head_client
@@ -9,7 +9,7 @@ from node_service import INSTANCE_N_CPUS, SELF, head_client
 SAMPLE_INTERVAL_SEC = 1
 BATCH_INTERVAL_SEC = 5
 BATCH_MAX_ROWS = 5_000
-NANOSECONDS_PER_SECOND = 1_000_000_000
+MICROSECONDS_PER_SECOND = 1_000_000
 
 
 def _node_cpu_counters() -> tuple[float, float]:
@@ -75,46 +75,64 @@ def _node_sample(
     }
 
 
-def _container_counters(stats: dict) -> dict:
-    memory = stats["memory_stats"]
-    memory_bytes = memory["usage"] - memory["stats"]["inactive_file"]
-    network_interfaces = stats["networks"].values()
-    block_io = stats["blkio_stats"]["io_service_bytes_recursive"]
+def _worker_counters(worker_pid: int) -> dict:
+    cgroup_path = (
+        Path(f"/proc/{worker_pid}/cgroup").read_text().strip().split(":", 2)[2]
+    )
+    cgroup_dir = Path("/sys/fs/cgroup", cgroup_path.lstrip("/"))
+    cpu = dict(
+        line.split() for line in (cgroup_dir / "cpu.stat").read_text().splitlines()
+    )
+    memory = dict(
+        line.split() for line in (cgroup_dir / "memory.stat").read_text().splitlines()
+    )
+
+    disk_read_bytes = 0
+    disk_write_bytes = 0
+    for line in (cgroup_dir / "io.stat").read_text().splitlines():
+        _, *fields = line.split()
+        counters = dict(field.split("=") for field in fields)
+        disk_read_bytes += int(counters["rbytes"])
+        disk_write_bytes += int(counters["wbytes"])
+
+    network_rx_bytes = 0
+    network_tx_bytes = 0
+    network_lines = Path(f"/proc/{worker_pid}/net/dev").read_text().splitlines()[2:]
+    for line in network_lines:
+        interface, counters = line.split(":", 1)
+        if interface.strip() == "lo":
+            continue
+        fields = counters.split()
+        network_rx_bytes += int(fields[0])
+        network_tx_bytes += int(fields[8])
+
+    memory_bytes = int((cgroup_dir / "memory.current").read_text()) - int(
+        memory["inactive_file"]
+    )
     return {
-        "cpu_usage_ns": stats["cpu_stats"]["cpu_usage"]["total_usage"],
+        "cpu_usage_usec": int(cpu["usage_usec"]),
         "memory_bytes": memory_bytes,
-        "network_rx_bytes": sum(
-            interface["rx_bytes"] for interface in network_interfaces
-        ),
-        "network_tx_bytes": sum(
-            interface["tx_bytes"] for interface in stats["networks"].values()
-        ),
-        "disk_read_bytes": sum(
-            entry["value"] for entry in block_io if entry["op"].lower() == "read"
-        ),
-        "disk_write_bytes": sum(
-            entry["value"] for entry in block_io if entry["op"].lower() == "write"
-        ),
+        "network_rx_bytes": network_rx_bytes,
+        "network_tx_bytes": network_tx_bytes,
+        "disk_read_bytes": disk_read_bytes,
+        "disk_write_bytes": disk_write_bytes,
     }
 
 
-async def _worker_snapshot(worker, job_id: str | None):
-    container = worker.container
+def _worker_snapshot(worker, job_id: str | None):
     container_id = worker.container_id
     current_input = worker.current_input
     input_index = current_input[0] if current_input is not None else None
     try:
-        stats = (await container.stats(stream=False))[0]
-    except aiodocker.DockerError as error:
-        if error.status == 404:
-            return None
-        raise
+        counters = _worker_counters(worker.worker_host_pid)
+    except FileNotFoundError:
+        return None
     return {
         "container_id": container_id,
         "worker_id": worker.container_name,
         "job_id": job_id,
         "input_index": input_index,
-        "counters": _container_counters(stats),
+        "counters": counters,
     }
 
 
@@ -127,8 +145,8 @@ def _task_sample(
 ) -> dict:
     current = snapshot["counters"]
     cpu_seconds = (
-        current["cpu_usage_ns"] - previous["cpu_usage_ns"]
-    ) / NANOSECONDS_PER_SECOND
+        current["cpu_usage_usec"] - previous["cpu_usage_usec"]
+    ) / MICROSECONDS_PER_SECOND
     return {
         "timestamp": sampled_at,
         "duration_sec": duration_sec,
@@ -185,13 +203,11 @@ async def resource_metrics_loop():
         previous_node_at = sampled_monotonic
 
         job_id = SELF["current_job"]
-        snapshots = await asyncio.gather(
-            *(
-                _worker_snapshot(worker, job_id)
-                for worker in SELF["workers"]
-                if worker.container is not None
-            )
-        )
+        snapshots = [
+            _worker_snapshot(worker, job_id)
+            for worker in SELF["workers"]
+            if worker.container_id is not None and worker.worker_host_pid is not None
+        ]
         worker_sampled_at = monotonic()
         current_container_ids = set()
         for snapshot in snapshots:

@@ -36,8 +36,8 @@ sample.
   process it starts.
 - Network and disk columns are raw byte-counter deltas over the preceding
   approximately one-second `duration_sec` interval. Node counters come from
-  psutil; task counters come from the worker container's Docker network and
-  block-I/O cgroups.
+  psutil; task counters come from the worker container's network namespace and
+  cgroup.
 - Task rows are attributed to `WorkerClient.current_input` at sample time.
   Inputs that begin and end between sampling instants do not produce a task
   row.

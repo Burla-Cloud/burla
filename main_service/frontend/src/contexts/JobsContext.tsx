@@ -108,6 +108,10 @@ export const JobsProvider = ({ children }: { children: React.ReactNode }) => {
                             typeof data.started_at === "number"
                                 ? new Date(data.started_at * 1000)
                                 : undefined,
+                        ended_at:
+                            typeof data.ended_at === "number"
+                                ? new Date(data.ended_at * 1000)
+                                : undefined,
                     };
 
                     setJobs((prevJobs) => {
@@ -171,6 +175,7 @@ const createNewJob = (data: any): BurlaJob => ({
     n_failed: typeof data.n_failed === "number" ? data.n_failed : 0,
     function_name: typeof data.function_name === "string" ? data.function_name : "Unknown",
     started_at: typeof data.started_at === "number" ? new Date(data.started_at * 1000) : undefined,
+    ended_at: typeof data.ended_at === "number" ? new Date(data.ended_at * 1000) : undefined,
 });
 
 export const useJobs = () => useContext(JobsContext);

@@ -313,7 +313,15 @@ def update_job(
             updates.pop("status")
             new_status = None
         became_failed = new_status == "FAILED" and job.get("status") != "FAILED"
+        was_terminal = job.get("status") in TERMINAL_JOB_STATUSES
         job.update(updates)
+        entered_terminal = (
+            job.get("status") in TERMINAL_JOB_STATUSES and not was_terminal
+        )
+        # The reaper passes a backfilled ended_at for jobs that died silently;
+        # everything else gets the live transition time.
+        if entered_terminal and job.get("ended_at") is None:
+            job["ended_at"] = time()
         if append_fail_reason is not None:
             reasons = job.setdefault("fail_reason", [])
             if append_fail_reason not in reasons:
@@ -483,6 +491,7 @@ def _job_summary(job: dict) -> dict:
         "n_inputs": job.get("n_inputs", 0),
         "n_results": sum(p.get("current_num_results", 0) for p in assigned.values()),
         "started_at": job.get("started_at"),
+        "ended_at": job.get("ended_at"),
     }
 
 
@@ -541,13 +550,20 @@ async def job_reaper_loop(logger=None):
                     candidates.append((job_id, "COMPLETED" if completed else "FAILED"))
 
         for job_id, status in candidates:
+            # The job actually ended when its nodes went silent, not when the
+            # reaper noticed; the last persisted sample is the closest record.
+            ended_at = history.last_job_metrics_timestamp(job_id) or now
             if status == "COMPLETED":
-                update_job(job_id, {"status": status})
+                update_job(job_id, {"status": status, "ended_at": ended_at})
                 if logger is not None:
                     logger.log(f"Reaped completed job {job_id}", severity="WARNING")
                 continue
             reason = 'main_svc: job is "running" but no nodes working on it ???'
-            update_job(job_id, {"status": "FAILED"}, append_fail_reason=reason)
+            update_job(
+                job_id,
+                {"status": "FAILED", "ended_at": ended_at},
+                append_fail_reason=reason,
+            )
             history.add_job_logs(
                 job_id,
                 [

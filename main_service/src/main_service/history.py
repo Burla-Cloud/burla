@@ -30,7 +30,11 @@ CREATE TABLE IF NOT EXISTS jobs (
     function_name TEXT,
     n_inputs INTEGER,
     n_results INTEGER DEFAULT 0,
-    data TEXT
+    data TEXT,
+    -- Last on purpose: matches where the ALTER migration below puts it on
+    -- pre-existing databases, so import_snapshot's positional SELECT * works
+    -- between any two databases on this version.
+    ended_at REAL
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_started_at ON jobs(started_at DESC);
 
@@ -152,6 +156,10 @@ def _connection() -> sqlite3.Connection:
         ):
             if column not in existing:
                 _conn.execute(f"ALTER TABLE resource_metrics ADD COLUMN {column} {column_type}")
+        # Jobs tables created before job durations existed lack ended_at.
+        existing_job_columns = {row[1] for row in _conn.execute("PRAGMA table_info(jobs)")}
+        if "ended_at" not in existing_job_columns:
+            _conn.execute("ALTER TABLE jobs ADD COLUMN ended_at REAL")
         _conn.execute(_NODE_SERIES_INDEX)
         _conn.commit()
     return _conn
@@ -355,6 +363,20 @@ def task_metrics_series(job_id: str, input_index: int) -> dict:
     }
 
 
+def last_job_metrics_timestamp(job_id: str) -> float | None:
+    """Most recent node-scope sample for a job: the backfill source for
+    ended_at when a job is finalized without a live end (head died mid-job)."""
+    with _read_lock:
+        conn = _read_connection()
+        row = conn.execute(
+            "SELECT MAX(timestamp) "
+            "FROM resource_metrics INDEXED BY idx_resource_metrics_node_series "
+            "WHERE job_id = ? AND scope = 'node'",
+            (job_id,),
+        ).fetchone()
+    return row[0]
+
+
 # ---------------------------------------------------------------- debug logs
 
 # Bounded so a laptop-hosted head can't bloat: a week of events, hard row cap.
@@ -459,15 +481,16 @@ def _upsert_job(conn: sqlite3.Connection, job_id: str, job: dict):
     )
     data = {k: v for k, v in job.items() if k != "assigned_nodes"}
     conn.execute(
-        "INSERT INTO jobs (job_id, started_at, status, user, function_name, n_inputs, "
-        "n_results, data) VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+        "INSERT INTO jobs (job_id, started_at, ended_at, status, user, function_name, "
+        "n_inputs, n_results, data) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
         "ON CONFLICT(job_id) DO UPDATE SET started_at = excluded.started_at, "
-        "status = excluded.status, user = excluded.user, "
+        "ended_at = excluded.ended_at, status = excluded.status, user = excluded.user, "
         "function_name = excluded.function_name, n_inputs = excluded.n_inputs, "
         "n_results = MAX(jobs.n_results, excluded.n_results), data = excluded.data",
         (
             job_id,
             job.get("started_at"),
+            job.get("ended_at"),
             job.get("status"),
             job.get("user"),
             job.get("function_name"),

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from "react";
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import { Activity, ChevronLeft, ChevronRight } from "lucide-react";
 import { useLogsContext } from "@/contexts/LogsContext";
 import { VariableSizeList as List } from "react-window";
 import { Switch } from "@/components/ui/switch";
@@ -10,6 +10,7 @@ interface JobLogsProps {
   jobStatus: string | null;
   nInputs: number;
   failedCount: number;
+  onViewUtilization?: (inputIndex: number) => void;
 }
 
 type RowItem =
@@ -25,6 +26,7 @@ const JobLogs = ({
   jobStatus,
   nInputs,
   failedCount,
+  onViewUtilization,
 }: JobLogsProps) => {
   const {
     getLogs,
@@ -638,6 +640,18 @@ const JobLogs = ({
             </label>
 
           </div>
+
+          {onViewUtilization && (
+            <button
+              type="button"
+              onClick={() => onViewUtilization(selectedIndex)}
+              className="inline-flex shrink-0 items-center gap-1.5 rounded text-[13px] font-medium text-muted-foreground transition-colors duration-150 hover:text-foreground focus-visible:outline-none"
+              title={`View utilization for input ${selectedIndex}`}
+            >
+              <Activity className="h-3.5 w-3.5" />
+              Utilization
+            </button>
+          )}
         </div>
 
       <div className="flex-1 min-h-0 relative bg-card font-mono text-xs text-foreground/90">

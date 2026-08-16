@@ -33,6 +33,7 @@ async def _job_summaries_page(page: int) -> tuple[list[dict], int]:
             "function_name": job.get("function_name", "Unknown"),
             "n_inputs": job.get("n_inputs", 0),
             "started_at": job.get("started_at"),
+            "ended_at": job.get("ended_at"),
         }
         # Live counts restart at 0 when a restarted head reloads a job
         # (per-node progress is memory-only), so history's count still wins.
@@ -139,6 +140,7 @@ async def get_job_result_stats(job_id: str):
             "user": job.get("user", "Unknown"),
             "function_name": job.get("function_name", "Unknown"),
             "started_at": job.get("started_at"),
+            "ended_at": job.get("ended_at"),
         }
     )
 

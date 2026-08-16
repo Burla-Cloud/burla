@@ -166,6 +166,15 @@ async def post_node_logs(logs: list[dict]):
         response.raise_for_status()
 
 
+async def post_resource_metrics(samples: list[dict]):
+    session = _get_session()
+    url = f"{MAIN_SERVICE_URL}/v1/nodes/{INSTANCE_NAME}/metrics:batch"
+    async with session.post(
+        url, json={"samples": samples}, headers=_HEADERS
+    ) as response:
+        response.raise_for_status()
+
+
 async def post_job_logs(job_id: str, documents: list[dict]):
     session = _get_session()
     url = f"{MAIN_SERVICE_URL}/v1/jobs/{job_id}/logs:batch"

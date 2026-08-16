@@ -218,6 +218,7 @@ from node_service.lifecycle_endpoints import (
 from node_service.lifecycle_endpoints import (
     router as lifecycle_endpoints_router,
 )
+from node_service.resource_metrics import resource_metrics_loop
 
 
 def _poweroff_self():
@@ -517,6 +518,7 @@ async def lifespan(app: FastAPI):
         await logger.log(msg)
 
     asyncio.create_task(_state_push_loop(logger=logger))
+    resource_metrics_task = asyncio.create_task(resource_metrics_loop())
 
     # boot containers before accepting any requests.
     # `reboot_containers` will ask the head to delete this VM if it fails, no need to do that here.
@@ -531,6 +533,7 @@ async def lifespan(app: FastAPI):
 
     yield
 
+    resource_metrics_task.cancel()
     if certificate_renewal_task is not None:
         certificate_renewal_task.cancel()
 

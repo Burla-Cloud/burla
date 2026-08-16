@@ -6,6 +6,7 @@ cluster token. These replace every node -> Firestore write and watch:
                                  response carries the head's view back down
                                  (host during boot, job signals during a job).
 - POST /v1/nodes/{id}/logs:batch node + startup-script log lines.
+- POST /v1/nodes/{id}/metrics:batch per-second node and task resource samples.
 - POST /v1/nodes/{id}/self_delete node asks the head to delete its VM
                                  (inactivity shutdown, boot failure).
 - GET  /v1/jobs/{id}/peers       input-stealing ring (replaces the firestore
@@ -118,6 +119,14 @@ async def push_node_logs(instance_name: str, request: Request):
         await asyncio.to_thread(history.add_debug_logs, instance_name, debug_entries)
     if user_logs:
         await asyncio.to_thread(cluster_state.add_node_logs, instance_name, user_logs)
+
+
+@router.post("/v1/nodes/{instance_name}/metrics:batch")
+async def push_resource_metrics(instance_name: str, request: Request):
+    body = await request.json()
+    await asyncio.to_thread(
+        history.add_resource_metrics, instance_name, body["samples"]
+    )
 
 
 @router.post("/v1/nodes/{instance_name}/certificate")

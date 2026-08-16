@@ -7,8 +7,8 @@ over HTTP. Rows here exist so the dashboard can show jobs / logs / usage
 after the fact, and so cluster_config survives head restarts.
 
 All functions are synchronous; call them via `asyncio.to_thread` from async
-endpoints. A single WAL-mode connection guarded by a lock is plenty for the
-write volume (log batches flush at most ~1/sec per worker).
+endpoints. A single WAL-mode connection guarded by a lock is plenty because
+high-frequency logs and resource metrics arrive in batches.
 """
 
 import json
@@ -65,6 +65,30 @@ CREATE TABLE IF NOT EXISTS node_logs (
 );
 CREATE INDEX IF NOT EXISTS idx_node_logs_node ON node_logs(instance_name, ts);
 
+CREATE TABLE IF NOT EXISTS resource_metrics (
+    id INTEGER PRIMARY KEY,
+    timestamp REAL NOT NULL,
+    duration_sec REAL NOT NULL,
+    instance_name TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    job_id TEXT,
+    input_index INTEGER,
+    worker_id TEXT NOT NULL,
+    cpu_seconds REAL NOT NULL,
+    cpu_percent REAL NOT NULL,
+    memory_bytes INTEGER NOT NULL,
+    memory_percent REAL NOT NULL,
+    network_rx_bytes INTEGER NOT NULL,
+    network_tx_bytes INTEGER NOT NULL,
+    disk_read_bytes INTEGER NOT NULL,
+    disk_write_bytes INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_resource_metrics_sample
+ON resource_metrics(instance_name, timestamp, scope, worker_id);
+CREATE INDEX IF NOT EXISTS idx_resource_metrics_job_task
+ON resource_metrics(job_id, scope, input_index, timestamp)
+WHERE job_id IS NOT NULL;
+
 -- Structured debug events (slot accounting, scaling decisions, stall dumps).
 -- Never shown to users: node_logs is the end-user story, this is the
 -- engineering flight recorder. Pruned by retention, shipped to Burla's
@@ -105,6 +129,40 @@ def _connection() -> sqlite3.Connection:
         _conn.executescript(_SCHEMA)
         _conn.commit()
     return _conn
+
+
+def add_resource_metrics(instance_name: str, samples: list[dict]):
+    rows = [
+        (
+            sample["timestamp"],
+            sample["duration_sec"],
+            instance_name,
+            sample["scope"],
+            sample["job_id"],
+            sample["input_index"],
+            sample["worker_id"],
+            sample["cpu_seconds"],
+            sample["cpu_percent"],
+            sample["memory_bytes"],
+            sample["memory_percent"],
+            sample["network_rx_bytes"],
+            sample["network_tx_bytes"],
+            sample["disk_read_bytes"],
+            sample["disk_write_bytes"],
+        )
+        for sample in samples
+    ]
+    with _lock:
+        conn = _connection()
+        conn.executemany(
+            "INSERT OR IGNORE INTO resource_metrics "
+            "(timestamp, duration_sec, instance_name, scope, job_id, input_index, "
+            "worker_id, cpu_seconds, cpu_percent, memory_bytes, memory_percent, "
+            "network_rx_bytes, network_tx_bytes, disk_read_bytes, disk_write_bytes) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            rows,
+        )
+        conn.commit()
 
 
 # ---------------------------------------------------------------- debug logs
@@ -545,6 +603,22 @@ def import_snapshot(snapshot_path: str, digest: str, cluster_config: dict | None
                 "SELECT instance_name, ts, msg FROM snapshot.node_logs "
                 "WHERE instance_name IN (SELECT instance_name FROM nodes) "
                 "AND instance_name NOT IN (SELECT instance_name FROM old_nodes)"
+            )
+            conn.execute(
+                "INSERT OR IGNORE INTO resource_metrics "
+                "(timestamp, duration_sec, instance_name, scope, job_id, input_index, "
+                "worker_id, cpu_seconds, cpu_percent, memory_bytes, memory_percent, "
+                "network_rx_bytes, network_tx_bytes, disk_read_bytes, disk_write_bytes) "
+                "SELECT timestamp, duration_sec, instance_name, scope, job_id, "
+                "input_index, worker_id, cpu_seconds, cpu_percent, memory_bytes, "
+                "memory_percent, network_rx_bytes, network_tx_bytes, disk_read_bytes, "
+                "disk_write_bytes FROM snapshot.resource_metrics "
+                "WHERE job_id IN ("
+                "SELECT job_id FROM jobs WHERE job_id NOT IN (SELECT job_id FROM old_jobs)"
+                ") OR (scope = 'node' AND instance_name IN ("
+                "SELECT instance_name FROM nodes "
+                "WHERE instance_name NOT IN (SELECT instance_name FROM old_nodes)"
+                "))"
             )
             if cluster_config is not None:
                 conn.execute(

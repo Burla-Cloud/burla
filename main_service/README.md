@@ -12,6 +12,40 @@ There is no external database. The head is a stateful singleton:
 It is currently not possible to run more than one "main-service" instance in any single cloud account.
 It is currently not possible to run more than one "cluster" using a single "main-service".  
 
+#### Resource metrics
+
+Every node samples resources once per second and sends batches to the
+cluster-token-authenticated
+`POST /v1/nodes/{instance_name}/metrics:batch` endpoint. The head persists the
+samples in SQLite table `resource_metrics`; they are not part of live
+coordination state or displayed by the dashboard.
+
+Each row contains `timestamp`, `duration_sec`, `instance_name`, `scope`,
+`job_id`, `input_index`, `worker_id`, `cpu_seconds`, `cpu_percent`,
+`memory_bytes`, `memory_percent`, `network_rx_bytes`, `network_tx_bytes`,
+`disk_read_bytes`, and `disk_write_bytes`. `scope` is `node` for a whole-node
+sample and `task` for a worker container that had an active input at that
+sample.
+
+- CPU percentages are normalized to the whole node's logical CPU capacity, so
+  100 means every logical CPU was busy. `cpu_seconds` is the raw busy CPU time
+  consumed during the row's interval.
+- Memory percentages use whole-node physical memory as the denominator. Node
+  bytes are total memory minus available memory; task bytes are Docker cgroup
+  usage minus inactive file cache, which includes the worker and every child
+  process it starts.
+- Network and disk columns are raw byte-counter deltas over the preceding
+  approximately one-second `duration_sec` interval. Node counters come from
+  psutil; task counters come from the worker container's Docker network and
+  block-I/O cgroups.
+- Task rows are attributed to `WorkerClient.current_input` at sample time.
+  Inputs that begin and end between sampling instants do not produce a task
+  row.
+
+The unique `(instance_name, timestamp, scope, worker_id)` index makes retried
+batches idempotent. The `(job_id, scope, input_index, timestamp)` index supports
+ordered job and task queries.
+
 #### Dev:
 
 To avoid the need for CORS middleware I use a script that builds the react website every time I hit save. It takes about the same amount of time to build as the fastapi webservice takes to reload, so it dosent actually slow anything down much.  

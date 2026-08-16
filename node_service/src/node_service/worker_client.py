@@ -717,11 +717,14 @@ async def retire_workers_for_pressure(
         if not selected_workers:
             return
 
+        current_inputs = [
+            (worker, worker.current_input) for _, worker in selected_workers
+        ]
         old_parallelism = len(active_workers)
-        new_parallelism = old_parallelism - len(selected_workers)
+        new_parallelism = old_parallelism - len(current_inputs)
         input_indexes = []
-        for _, worker in selected_workers:
-            input_index, input_pkl = worker.current_input
+        for worker, current_input in current_inputs:
+            input_index, input_pkl = current_input
             input_indexes.append(input_index)
             worker.retired = True
             worker.is_idle = True
@@ -742,15 +745,11 @@ async def retire_workers_for_pressure(
             new_parallelism=new_parallelism,
         )
 
-        current_inputs = []
-        for _, worker in selected_workers:
-            input_index = worker.current_input[0]
-            current_inputs.append((worker, input_index))
-        for worker, input_index in current_inputs:
+        for worker, _ in current_inputs:
             worker.current_input = None
 
         await asyncio.gather(
-            *(worker.retire_for_pressure() for _, worker in selected_workers)
+            *(worker.retire_for_pressure() for worker, _ in current_inputs)
         )
 
 

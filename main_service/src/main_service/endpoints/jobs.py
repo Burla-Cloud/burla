@@ -32,9 +32,13 @@ async def _job_summaries_page(page: int) -> tuple[list[dict], int]:
             "user": job.get("user", "Unknown"),
             "function_name": job.get("function_name", "Unknown"),
             "n_inputs": job.get("n_inputs", 0),
-            "n_results": job.get("n_results", 0),
             "started_at": job.get("started_at"),
         }
+        # Live counts restart at 0 when a restarted head reloads a job
+        # (per-node progress is memory-only), so history's count still wins.
+        summary["n_results"] = max(
+            int((live or {}).get("n_results") or 0), int(job.get("n_results") or 0)
+        )
         n_failed = await asyncio.to_thread(history.job_error_count, job_id)
         jobs.append({"jobId": job_id, "n_failed": n_failed, **summary})
     return jobs, total
@@ -110,17 +114,31 @@ async def stop_job(job_id: str, request: Request):
 
 @router.get("/v1/jobs/{job_id}/result-stats")
 async def get_job_result_stats(job_id: str):
-    job = cluster_state.get_job(job_id)
-    if job is None:
+    """Counts plus the summary fields the job page needs, resolved from live
+    state first and history second, so a deep link to any job id works even
+    when the job is outside the paginated jobs list (and after head restarts,
+    which reset live per-node result counts to 0)."""
+    live = cluster_state.get_job(job_id)
+    stored = await asyncio.to_thread(history.get_job, job_id)
+    if live is None and stored is None:
         raise HTTPException(status_code=404, detail="Job not found")
 
+    job = live or stored
+    n_results = max(
+        int((live or {}).get("n_results") or 0),
+        int((stored or {}).get("n_results") or 0),
+    )
     n_failed = await asyncio.to_thread(history.job_error_count, job_id)
     return JSONResponse(
         {
             "job_id": job_id,
             "n_inputs": int(job.get("n_inputs", 0) or 0),
-            "n_results": job.get("n_results", 0),
+            "n_results": n_results,
             "n_failed": n_failed,
+            "status": job.get("status"),
+            "user": job.get("user", "Unknown"),
+            "function_name": job.get("function_name", "Unknown"),
+            "started_at": job.get("started_at"),
         }
     )
 

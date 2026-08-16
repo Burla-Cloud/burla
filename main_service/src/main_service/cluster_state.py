@@ -344,6 +344,14 @@ def update_job(
     return True
 
 
+# Result counts live in memory (per-node progress) and normally only reach
+# history on status transitions. Flushing them every few seconds bounds how
+# many counts an ungraceful head death (kill -9, SIGTERM mid-job) can lose;
+# the MAX() in history's upsert keeps the stored count monotonic.
+COUNTS_FLUSH_INTERVAL_SEC = 5
+_counts_flushed_at: dict[str, float] = {}
+
+
 def update_job_progress(
     job_id: str,
     instance_name: str,
@@ -361,7 +369,11 @@ def update_job_progress(
             progress["current_num_results"] = current_num_results
         if client_contact_last_1s is not None:
             progress["client_contact_last_1s"] = client_contact_last_1s
-        progress["last_push_at"] = time()
+        now = time()
+        progress["last_push_at"] = now
+        if now - _counts_flushed_at.get(job_id, 0) >= COUNTS_FLUSH_INTERVAL_SEC:
+            _counts_flushed_at[job_id] = now
+            history.upsert_job_and_nodes(job_id, dict(job), [])
 
 
 def job_view(job_id: str) -> dict:

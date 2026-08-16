@@ -1,6 +1,7 @@
 import { Link, useParams } from "react-router-dom";
 import { useEffect, useRef, useState } from "react";
 import { useJobs } from "@/contexts/JobsContext";
+import { BurlaJob, JobsStatus } from "@/types/coreTypes";
 import JobLogs from "@/components/JobLogs";
 import JobUtilization from "@/components/JobUtilization";
 import { Button } from "@/components/ui/button";
@@ -38,6 +39,10 @@ const JobDetails = () => {
     const [isStatsLoading, setIsStatsLoading] = useState(true);
     const [statsLoadError, setStatsLoadError] = useState(false);
     const [jobDoc, setJobDoc] = useState<JobDoc | null>(null);
+    // Deep links: jobs outside the SSE-streamed first page never appear in
+    // the jobs context, so the page falls back to the job summary that
+    // result-stats returns.
+    const [fetchedJob, setFetchedJob] = useState<BurlaJob | null>(null);
     const hasCompletedInitialStatsLoadRef = useRef(false);
     const [userTimeZone, setUserTimeZone] = useState<string>(() => {
         const stored = typeof window !== "undefined" ? localStorage.getItem("userTimezone") : null;
@@ -117,12 +122,13 @@ const JobDetails = () => {
         }
     };
 
-    const job = jobs.find((j) => j.id === jobId);
+    const job = jobs.find((j) => j.id === jobId) ?? fetchedJob ?? undefined;
 
     useEffect(() => {
         setStats(null);
         setStatsLoadError(false);
         setIsStatsLoading(true);
+        setFetchedJob(null);
         hasCompletedInitialStatsLoadRef.current = false;
     }, [jobId]);
 
@@ -160,6 +166,22 @@ const JobDetails = () => {
                     n_inputs: Number(payload?.n_inputs ?? 0),
                     n_results: Number(payload?.n_results ?? 0),
                     n_failed: Number(payload?.n_failed ?? 0),
+                });
+                setFetchedJob({
+                    id: jobId,
+                    status: (payload?.status as JobsStatus) ?? null,
+                    user: payload?.user || "Unknown",
+                    n_inputs: Number(payload?.n_inputs ?? 0),
+                    n_results: Number(payload?.n_results ?? 0),
+                    n_failed: Number(payload?.n_failed ?? 0),
+                    function_name:
+                        typeof payload?.function_name === "string"
+                            ? payload.function_name
+                            : "Unknown",
+                    started_at:
+                        typeof payload?.started_at === "number"
+                            ? new Date(payload.started_at * 1000)
+                            : undefined,
                 });
                 setStatsLoadError(false);
                 hasCompletedInitialStatsLoadRef.current = true;
@@ -203,22 +225,7 @@ const JobDetails = () => {
         };
     }, [jobId, job?.status]);
 
-    if (!job || isStatsLoading) {
-        return (
-            <div className="flex flex-1 flex-col items-center justify-center">
-                <div className="inline-flex items-center gap-3 text-muted-foreground">
-                    <div
-                        className="h-5 w-5 animate-spin rounded-full border-2 border-border border-t-primary"
-                        role="status"
-                        aria-label="Loading job details"
-                    />
-                    <span className="text-sm">Loading job…</span>
-                </div>
-            </div>
-        );
-    }
-
-    if (statsLoadError || !stats) {
+    if (statsLoadError) {
         return (
             <div className="flex flex-1 flex-col items-center justify-center text-center">
                 <p className="text-sm font-medium text-foreground">
@@ -230,6 +237,21 @@ const JobDetails = () => {
                 >
                     Retry
                 </button>
+            </div>
+        );
+    }
+
+    if (!job || isStatsLoading || !stats) {
+        return (
+            <div className="flex flex-1 flex-col items-center justify-center">
+                <div className="inline-flex items-center gap-3 text-muted-foreground">
+                    <div
+                        className="h-5 w-5 animate-spin rounded-full border-2 border-border border-t-primary"
+                        role="status"
+                        aria-label="Loading job details"
+                    />
+                    <span className="text-sm">Loading job…</span>
+                </div>
             </div>
         );
     }

@@ -23,6 +23,7 @@ from main_service.endpoints.cluster_lifecycle import (
     GROW_INACTIVITY_SHUTDOWN_TIME_SEC,
     _get_cluster_config,
     _start_nodes,
+    config_with_job_overrides,
 )
 from main_service.helpers import Logger
 from main_service.node import Node
@@ -211,7 +212,9 @@ async def boot_replacement_nodes(
             "slots_booted": previous["slots_booted"],
         }
 
-    config = _get_cluster_config()
+    config = config_with_job_overrides(
+        _get_cluster_config(), job.get("region"), job.get("disk_gb")
+    )
     planned = plan_grow_nodes(
         missing_slots=missing_slots,
         func_cpu=job["func_cpu"],

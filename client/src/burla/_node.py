@@ -93,6 +93,13 @@ class NoCompatibleNodes(Exception):
                 message += f"Machine types on currently-ready nodes: {available}.\n"
             message += "Pass `grow=True` to boot a GPU node, "
             message += "or add GPU machines to your cluster config.\n"
+        elif reason == "region_mismatch":
+            requested = detail.get("requested_region")
+            available = detail.get("available_regions") or []
+            message = f"\n\nNo ready nodes are in the requested region `{requested}`.\n"
+            if available:
+                message += f"Regions of currently-ready nodes: {available}.\n"
+            message += "Pass `grow=True` to boot nodes in this region.\n"
         else:
             message = "No compatible nodes available. Are the machines in your cluster large enough "
             message += "to support your `func_cpu` and `func_ram` arguments?"

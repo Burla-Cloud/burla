@@ -198,11 +198,18 @@ _DEFAULT_MACHINE_TYPES = {
 }
 
 
-def _default_region() -> str:
+def default_region() -> str:
     # Field is named gcp_region for historical reasons; on AWS/Azure it holds
     # that cloud's region (e.g. us-east-1 / eastus).
     if CLOUD_PROVIDER == "aws":
-        return os.environ.get("AWS_REGION", "us-east-1")
+        region = os.environ.get("AWS_REGION")
+        if not region and (IN_CLIENT_HOSTED_MODE or IN_LOCAL_DEV_MODE):
+            # A head on the user's own machine boots nodes with their CLI
+            # login, so an unset region should follow that login's default.
+            import boto3
+
+            region = boto3.session.Session().region_name
+        return region or "us-east-1"
     if CLOUD_PROVIDER == "azure":
         return os.environ.get("AZURE_REGION", "eastus")
     return "us-central1"
@@ -217,7 +224,7 @@ DEFAULT_CONFIG = {  # <- config used only when no config has ever been saved
                 },
             ],
             "machine_type": _DEFAULT_MACHINE_TYPES[CLOUD_PROVIDER],
-            "gcp_region": _default_region(),
+            "gcp_region": default_region(),
             "quantity": 1,
             "inactivity_shutdown_time_sec": 60 * 10,
         }

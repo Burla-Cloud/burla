@@ -17,6 +17,7 @@ from pathlib import Path
 
 import boto3
 import requests
+from botocore.exceptions import ClientError
 from burla import __version__ as burla_version
 from burla import remote_parallel_map
 from pypdf import PdfReader
@@ -195,8 +196,17 @@ def process_document(
             input_sha256, source_bytes = extract_member(
                 task, archive_urls[task["archive_name"]], input_path
             )
-            extract_seconds = time.perf_counter() - extract_started
+        except DocumentError as error:
+            return {
+                **base_result,
+                "status": "failed",
+                "error_type": type(error).__name__,
+                "error": str(error),
+                "total_seconds": time.perf_counter() - started,
+            }
+        extract_seconds = time.perf_counter() - extract_started
 
+        try:
             parse_started = time.perf_counter()
             reader = PdfReader(input_path, strict=False)
             if reader.is_encrypted:
@@ -236,45 +246,51 @@ def process_document(
             )
             text_payload = text_path.read_bytes()
             text_sha256 = hashlib.sha256(text_payload).hexdigest()
-            text_key = f"{output_prefix}/{task['text_key']}"
-            upload_started = time.perf_counter()
-            upload_text(output_post, text_key, text_payload)
-            upload_seconds = time.perf_counter() - upload_started
-            return {
-                **base_result,
-                "status": "succeeded",
-                "source_bytes": source_bytes,
-                "source_sha256": input_sha256,
-                "page_count": page_count,
-                "direct_text_pages": direct_text_pages,
-                "ocr_pages": ocr_pages,
-                "text_bytes": len(text_payload),
-                "text_sha256": text_sha256,
-                "text_key": text_key,
-                "extract_seconds": extract_seconds,
-                "parse_seconds": time.perf_counter() - parse_started,
-                "ocr_seconds": ocr_seconds,
-                "upload_seconds": upload_seconds,
-                "total_seconds": time.perf_counter() - started,
-            }
-        except (
-            DocumentError,
-            PyPdfError,
-            subprocess.CalledProcessError,
-            ValueError,
-        ) as error:
+        # Malformed PDFs make third-party parsers raise assorted built-ins;
+        # this boundary keeps one document from aborting the corpus.
+        except Exception as error:  # noqa: BLE001
             return {
                 **base_result,
                 "status": "failed",
+                "source_bytes": source_bytes,
+                "source_sha256": input_sha256,
                 "error_type": type(error).__name__,
                 "error": str(error),
                 "total_seconds": time.perf_counter() - started,
             }
 
+        text_key = f"{output_prefix}/{task['text_key']}"
+        upload_started = time.perf_counter()
+        upload_text(output_post, text_key, text_payload)
+        upload_seconds = time.perf_counter() - upload_started
+        return {
+            **base_result,
+            "status": "succeeded",
+            "source_bytes": source_bytes,
+            "source_sha256": input_sha256,
+            "page_count": page_count,
+            "direct_text_pages": direct_text_pages,
+            "ocr_pages": ocr_pages,
+            "text_bytes": len(text_payload),
+            "text_sha256": text_sha256,
+            "text_key": text_key,
+            "extract_seconds": extract_seconds,
+            "parse_seconds": time.perf_counter() - parse_started,
+            "ocr_seconds": ocr_seconds,
+            "upload_seconds": upload_seconds,
+            "total_seconds": time.perf_counter() - started,
+        }
+
 
 def load_jsonl(s3, bucket: str, key: str) -> list[dict]:
     body = s3.get_object(Bucket=bucket, Key=key)["Body"]
     return [json.loads(line) for line in body.iter_lines() if line]
+
+
+def jsonl_payload(values: list[dict]) -> bytes:
+    return b"".join(
+        json.dumps(value, separators=(",", ":")).encode() + b"\n" for value in values
+    )
 
 
 def select_documents(documents: list[dict], args) -> list[dict]:
@@ -323,7 +339,22 @@ def main() -> None:
     s3 = session.client("s3")
     member_key = f"manifests/{args.corpus_run_id}/pdf-members.jsonl"
     documents = select_documents(load_jsonl(s3, bucket, member_key), args)
-    archive_names = sorted({document["archive_name"] for document in documents})
+    run_id = args.run_id or datetime.now(UTC).strftime("burla-text-%Y%m%dT%H%M%SZ")
+    output_prefix = f"runs/{run_id}"
+    partial_key = f"{output_prefix}/results.partial.jsonl"
+    try:
+        prior_results = load_jsonl(s3, bucket, partial_key)
+    except ClientError as error:
+        if error.response["Error"]["Code"] != "NoSuchKey":
+            raise
+        prior_results = []
+    completed_ids = {result["document_id"] for result in prior_results}
+    pending_documents = [
+        document
+        for document in documents
+        if document["document_id"] not in completed_ids
+    ]
+    archive_names = sorted({document["archive_name"] for document in pending_documents})
     archive_urls = {
         archive_name: s3.generate_presigned_url(
             "get_object",
@@ -332,8 +363,6 @@ def main() -> None:
         )
         for archive_name in archive_names
     }
-    run_id = args.run_id or datetime.now(UTC).strftime("burla-text-%Y%m%dT%H%M%SZ")
-    output_prefix = f"runs/{run_id}"
     output_post = s3.generate_presigned_post(
         Bucket=bucket,
         Key=f"{output_prefix}/text/${{filename}}",
@@ -351,23 +380,36 @@ def main() -> None:
     extract_text.__name__ = "extract_text"
     started_at = datetime.now(UTC)
     started = time.perf_counter()
-    results = remote_parallel_map(
-        extract_text,
-        documents,
-        func_cpu="dynamic",
-        func_ram="dynamic",
-        image=args.image,
-        grow=True,
-        max_parallelism=args.max_parallelism,
-        spinner=False,
-    )
+    new_results = []
+    if pending_documents:
+        result_generator = remote_parallel_map(
+            extract_text,
+            pending_documents,
+            func_cpu="dynamic",
+            func_ram="dynamic",
+            image=args.image,
+            grow=True,
+            max_parallelism=args.max_parallelism,
+            generator=True,
+            spinner=False,
+        )
+        try:
+            new_results.extend(result_generator)
+        except Exception:
+            s3.put_object(
+                Bucket=bucket,
+                Key=partial_key,
+                Body=jsonl_payload(prior_results + new_results),
+            )
+            raise
     wall_seconds = time.perf_counter() - started
+    results = prior_results + new_results
     results.sort(key=lambda result: result["document_id"])
-    result_payload = b"".join(
-        json.dumps(result, separators=(",", ":")).encode() + b"\n" for result in results
-    )
+    result_payload = jsonl_payload(results)
     result_key = f"{output_prefix}/results.jsonl"
     s3.put_object(Bucket=bucket, Key=result_key, Body=result_payload)
+    if prior_results:
+        s3.delete_object(Bucket=bucket, Key=partial_key)
     succeeded = [result for result in results if result["status"] == "succeeded"]
     failed = [result for result in results if result["status"] == "failed"]
     summary = {

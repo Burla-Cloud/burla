@@ -125,6 +125,17 @@ async def get_job_result_stats(job_id: str):
     )
 
 
+@router.get("/v1/jobs/{job_id}/metrics")
+async def get_job_metrics(job_id: str):
+    return JSONResponse(await asyncio.to_thread(history.job_metrics_series, job_id))
+
+
+@router.get("/v1/jobs/{job_id}/metrics/tasks/{input_index}")
+async def get_task_metrics(job_id: str, input_index: int):
+    series = await asyncio.to_thread(history.task_metrics_series, job_id, input_index)
+    return JSONResponse(series)
+
+
 @router.get("/v1/jobs/{job_id}/logged-input-indexes")
 async def get_logged_input_indexes(job_id: str):
     indexes, failed = await asyncio.to_thread(history.job_logged_input_indexes, job_id)

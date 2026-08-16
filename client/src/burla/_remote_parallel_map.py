@@ -11,7 +11,7 @@ from threading import Event, Thread
 from time import time
 from typing import Callable, Literal, Optional, Union
 
-FuncGpu = Literal["A100", "A100_40G", "A100_80G", "H100", "H100_80G"]
+FuncGpu = Literal["T4", "A100", "A100_40G", "A100_80G", "H100", "H100_80G"]
 FuncRam = Union[int, Literal["dynamic"]]
 FuncCpu = Union[int, Literal["dynamic"]]
 from uuid import uuid4
@@ -567,8 +567,9 @@ def remote_parallel_map(
             parallelism on any node where workers run out of memory. Pass an
             integer to reserve a fixed amount of RAM per function call instead.
         func_gpu (str, optional):
-            Allocate one GPU per function call. One of: "A100" / "A100_40G",
-            "A100_80G", "H100" / "H100_80G". Defaults to None (no GPU).
+            Allocate one GPU per function call. One of: "T4" (AWS only),
+            "A100" / "A100_40G", "A100_80G", "H100" / "H100_80G".
+            Defaults to None (no GPU).
         image (str, optional):
             If provided, only nodes running this container image are eligible. When
             `grow=True` and no matching nodes are available, newly booted nodes will

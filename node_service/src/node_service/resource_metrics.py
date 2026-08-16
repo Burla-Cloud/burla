@@ -3,6 +3,7 @@ from pathlib import Path
 from time import monotonic, time
 
 import psutil
+import pynvml
 
 from node_service import INSTANCE_N_CPUS, SELF, head_client
 
@@ -10,6 +11,46 @@ SAMPLE_INTERVAL_SEC = 1
 BATCH_INTERVAL_SEC = 5
 BATCH_MAX_ROWS = 5_000
 MICROSECONDS_PER_SECOND = 1_000_000
+
+
+def _gpu_handles() -> list:
+    try:
+        pynvml.nvmlInit()
+    except pynvml.NVMLError:
+        # No NVIDIA driver: a CPU-only node.
+        return []
+    count = pynvml.nvmlDeviceGetCount()
+    return [pynvml.nvmlDeviceGetHandleByIndex(index) for index in range(count)]
+
+
+def _gpu_readings(handles: list) -> list[dict]:
+    """NVML utilization is already averaged over its last sample period
+    (~1s), so unlike the cpu/net/disk counters no previous value is needed."""
+    readings = []
+    for handle in handles:
+        utilization = pynvml.nvmlDeviceGetUtilizationRates(handle)
+        memory = pynvml.nvmlDeviceGetMemoryInfo(handle)
+        readings.append(
+            {
+                "gpu_percent": float(utilization.gpu),
+                "memory_used_bytes": int(memory.used),
+                "memory_total_bytes": int(memory.total),
+            }
+        )
+    return readings
+
+
+def _node_gpu_fields(gpu_readings: list[dict]) -> dict:
+    if not gpu_readings:
+        return {"gpu_percent": None, "gpu_memory_bytes": None, "gpu_memory_percent": None}
+    used_bytes = sum(reading["memory_used_bytes"] for reading in gpu_readings)
+    total_bytes = sum(reading["memory_total_bytes"] for reading in gpu_readings)
+    mean_percent = sum(r["gpu_percent"] for r in gpu_readings) / len(gpu_readings)
+    return {
+        "gpu_percent": mean_percent,
+        "gpu_memory_bytes": used_bytes,
+        "gpu_memory_percent": 100 * used_bytes / total_bytes,
+    }
 
 
 def _node_cpu_counters() -> tuple[float, float]:
@@ -42,6 +83,7 @@ def _node_sample(
     sampled_at: float,
     duration_sec: float,
     job_id: str | None,
+    gpu_readings: list[dict],
 ) -> dict:
     cpu_seconds = current["busy_cpu_seconds"] - previous["busy_cpu_seconds"]
     total_cpu_seconds = (
@@ -72,6 +114,7 @@ def _node_sample(
         "disk_write_bytes": (
             current["disk_write_bytes"] - previous["disk_write_bytes"]
         ),
+        **_node_gpu_fields(gpu_readings),
     }
 
 
@@ -132,6 +175,7 @@ def _worker_snapshot(worker, job_id: str | None):
         "worker_id": worker.container_name,
         "job_id": job_id,
         "input_index": input_index,
+        "gpu_index": worker.gpu_index,
         "counters": counters,
     }
 
@@ -142,8 +186,13 @@ def _task_sample(
     sampled_at: float,
     duration_sec: float,
     node_memory_bytes: int,
+    gpu_readings: list[dict],
 ) -> dict:
     current = snapshot["counters"]
+    # On GPU nodes each worker owns exactly one GPU, so that device's stats
+    # ARE this task's GPU usage.
+    gpu_index = snapshot["gpu_index"]
+    gpu = gpu_readings[gpu_index] if gpu_index is not None and gpu_readings else None
     cpu_seconds = (
         current["cpu_usage_usec"] - previous["cpu_usage_usec"]
     ) / MICROSECONDS_PER_SECOND
@@ -172,10 +221,16 @@ def _task_sample(
         "disk_write_bytes": (
             current["disk_write_bytes"] - previous["disk_write_bytes"]
         ),
+        "gpu_percent": gpu["gpu_percent"] if gpu else None,
+        "gpu_memory_bytes": gpu["memory_used_bytes"] if gpu else None,
+        "gpu_memory_percent": (
+            100 * gpu["memory_used_bytes"] / gpu["memory_total_bytes"] if gpu else None
+        ),
     }
 
 
 async def resource_metrics_loop():
+    gpu_handles = _gpu_handles()
     previous_node_counters = _node_counters()
     previous_node_at = monotonic()
     previous_worker_counters = {}
@@ -190,6 +245,7 @@ async def resource_metrics_loop():
         sampled_at = time()
         sampled_monotonic = monotonic()
         current_node_counters = _node_counters()
+        gpu_readings = _gpu_readings(gpu_handles)
         pending_samples.append(
             _node_sample(
                 current_node_counters,
@@ -197,6 +253,7 @@ async def resource_metrics_loop():
                 sampled_at,
                 sampled_monotonic - previous_node_at,
                 SELF["current_job"],
+                gpu_readings,
             )
         )
         previous_node_counters = current_node_counters
@@ -225,6 +282,7 @@ async def resource_metrics_loop():
                         sampled_at,
                         worker_sampled_at - previous_at,
                         current_node_counters["memory_total_bytes"],
+                        gpu_readings,
                     )
                 )
             previous_worker_counters[container_id] = (

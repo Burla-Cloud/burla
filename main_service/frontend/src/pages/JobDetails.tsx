@@ -2,6 +2,7 @@ import { Link, useParams } from "react-router-dom";
 import { useEffect, useRef, useState } from "react";
 import { useJobs } from "@/contexts/JobsContext";
 import JobLogs from "@/components/JobLogs";
+import JobUtilization from "@/components/JobUtilization";
 import { Button } from "@/components/ui/button";
 import { ChevronRight, PowerOff } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
@@ -385,6 +386,8 @@ const JobDetails = () => {
                         </div>
                     </div>
                 </div>
+
+                <JobUtilization jobId={job.id} jobStatus={job.status} />
 
                 {/* Logs */}
                 <div className="flex flex-1 flex-col min-h-0">

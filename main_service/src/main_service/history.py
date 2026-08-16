@@ -12,6 +12,7 @@ high-frequency logs and resource metrics arrive in batches.
 """
 
 import json
+import math
 import os
 import sqlite3
 import threading
@@ -81,7 +82,10 @@ CREATE TABLE IF NOT EXISTS resource_metrics (
     network_rx_bytes INTEGER NOT NULL,
     network_tx_bytes INTEGER NOT NULL,
     disk_read_bytes INTEGER NOT NULL,
-    disk_write_bytes INTEGER NOT NULL
+    disk_write_bytes INTEGER NOT NULL,
+    gpu_percent REAL,
+    gpu_memory_bytes INTEGER,
+    gpu_memory_percent REAL
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_resource_metrics_sample
 ON resource_metrics(instance_name, timestamp, scope, worker_id);
@@ -115,6 +119,18 @@ CREATE TABLE IF NOT EXISTS history_imports (
 );
 """
 
+# Covering index for the job-utilization charts: lets the whole-job
+# aggregation run as an index-only scan of the (small) node-scope subset
+# instead of millions of random main-table fetches. Created outside _SCHEMA
+# because it references GPU columns the migration below may need to add first.
+_NODE_SERIES_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_resource_metrics_node_series
+ON resource_metrics(job_id, timestamp, instance_name, cpu_percent,
+    memory_percent, network_rx_bytes, network_tx_bytes, disk_read_bytes,
+    disk_write_bytes, gpu_percent, gpu_memory_percent)
+WHERE scope = 'node' AND job_id IS NOT NULL
+"""
+
 _lock = threading.Lock()
 _conn: sqlite3.Connection | None = None
 
@@ -127,6 +143,16 @@ def _connection() -> sqlite3.Connection:
         _conn.execute("PRAGMA journal_mode=WAL")
         _conn.execute("PRAGMA synchronous=NORMAL")
         _conn.executescript(_SCHEMA)
+        # Metrics tables created before GPU sampling existed lack these columns.
+        existing = {row[1] for row in _conn.execute("PRAGMA table_info(resource_metrics)")}
+        for column, column_type in (
+            ("gpu_percent", "REAL"),
+            ("gpu_memory_bytes", "INTEGER"),
+            ("gpu_memory_percent", "REAL"),
+        ):
+            if column not in existing:
+                _conn.execute(f"ALTER TABLE resource_metrics ADD COLUMN {column} {column_type}")
+        _conn.execute(_NODE_SERIES_INDEX)
         _conn.commit()
     return _conn
 
@@ -149,6 +175,9 @@ def add_resource_metrics(instance_name: str, samples: list[dict]):
             sample["network_tx_bytes"],
             sample["disk_read_bytes"],
             sample["disk_write_bytes"],
+            sample["gpu_percent"],
+            sample["gpu_memory_bytes"],
+            sample["gpu_memory_percent"],
         )
         for sample in samples
     ]
@@ -158,11 +187,170 @@ def add_resource_metrics(instance_name: str, samples: list[dict]):
             "INSERT OR IGNORE INTO resource_metrics "
             "(timestamp, duration_sec, instance_name, scope, job_id, input_index, "
             "worker_id, cpu_seconds, cpu_percent, memory_bytes, memory_percent, "
-            "network_rx_bytes, network_tx_bytes, disk_read_bytes, disk_write_bytes) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "network_rx_bytes, network_tx_bytes, disk_read_bytes, disk_write_bytes, "
+            "gpu_percent, gpu_memory_bytes, gpu_memory_percent) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             rows,
         )
         conn.commit()
+
+
+# A dedicated read-only connection for dashboard analytics: WAL allows one
+# writer plus readers, so a multi-second aggregation over millions of metric
+# rows never blocks metric/log ingestion on the main connection.
+_read_lock = threading.Lock()
+_read_conn: sqlite3.Connection | None = None
+
+# Chart series are downsampled server-side to about this many points so the
+# dashboard never receives millions of raw rows.
+JOB_SERIES_TARGET_POINTS = 240
+# Per-task series stay at 1-second resolution for tasks up to 30 minutes,
+# then downsample.
+TASK_SERIES_TARGET_POINTS = 1800
+
+
+def _read_connection() -> sqlite3.Connection:
+    global _read_conn
+    if _read_conn is None:
+        _connection()  # creates the db file + schema on first boot
+        _read_conn = sqlite3.connect(
+            f"file:{DB_PATH}?mode=ro", uri=True, check_same_thread=False
+        )
+        # mmap halves large index scans vs pread on multi-GB metric tables.
+        _read_conn.execute("PRAGMA mmap_size=4294967296")
+    return _read_conn
+
+
+def job_metrics_series(job_id: str) -> dict:
+    """Cluster-wide utilization for one job, bucketed into at most
+    ~JOB_SERIES_TARGET_POINTS points. Each node reports one 'node'-scope row
+    per second while it works on the job, so COUNT(DISTINCT instance_name)
+    per bucket is the node count and SUM(bytes)/bucket_sec is cluster
+    throughput."""
+    with _read_lock:
+        conn = _read_connection()
+        first_ts, last_ts = conn.execute(
+            "SELECT MIN(timestamp), MAX(timestamp) "
+            "FROM resource_metrics INDEXED BY idx_resource_metrics_node_series "
+            "WHERE job_id = ? AND scope = 'node'",
+            (job_id,),
+        ).fetchone()
+        if first_ts is None:
+            return {"has_metrics": False, "has_gpu": False, "bucket_sec": 0, "points": []}
+        bucket_sec = max(1, math.ceil((last_ts - first_ts) / JOB_SERIES_TARGET_POINTS))
+        rows = conn.execute(
+            "SELECT CAST((timestamp - ?) / ? AS INTEGER) AS bucket, "
+            "COUNT(DISTINCT instance_name), AVG(cpu_percent), AVG(memory_percent), "
+            "SUM(network_rx_bytes), SUM(network_tx_bytes), "
+            "SUM(disk_read_bytes), SUM(disk_write_bytes), "
+            "AVG(gpu_percent), AVG(gpu_memory_percent), COUNT(gpu_percent) "
+            # INDEXED BY: the planner otherwise picks the non-covering
+            # job_task index and pays a main-table fetch per row.
+            "FROM resource_metrics INDEXED BY idx_resource_metrics_node_series "
+            "WHERE job_id = ? AND scope = 'node' "
+            "GROUP BY bucket ORDER BY bucket",
+            (first_ts, bucket_sec, job_id),
+        ).fetchall()
+    points = []
+    has_gpu = False
+    for bucket, nodes, cpu, mem, rx, tx, read, write, gpu, gpu_mem, n_gpu in rows:
+        if n_gpu:
+            has_gpu = True
+        points.append(
+            {
+                "t": first_ts + bucket * bucket_sec,
+                "nodes": nodes,
+                "cpu": round(cpu, 2),
+                "mem": round(mem, 2),
+                "net_rx": round(rx / bucket_sec),
+                "net_tx": round(tx / bucket_sec),
+                "disk_read": round(read / bucket_sec),
+                "disk_write": round(write / bucket_sec),
+                "gpu": round(gpu, 2) if gpu is not None else None,
+                "gpu_mem": round(gpu_mem, 2) if gpu_mem is not None else None,
+            }
+        )
+    return {
+        "has_metrics": True,
+        "has_gpu": has_gpu,
+        "bucket_sec": bucket_sec,
+        "points": points,
+    }
+
+
+def task_metrics_series(job_id: str, input_index: int) -> dict:
+    """One task's utilization series plus the nearest input indexes that also
+    have samples (for prev/next stepping). vCPUs = cpu_seconds/duration so the
+    number is cores, not percent-of-node."""
+    with _read_lock:
+        conn = _read_connection()
+        first_ts, last_ts, n_attempts = conn.execute(
+            "SELECT MIN(timestamp), MAX(timestamp), COUNT(DISTINCT worker_id) "
+            "FROM resource_metrics "
+            "WHERE job_id = ? AND scope = 'task' AND input_index = ?",
+            (job_id, input_index),
+        ).fetchone()
+        prev_index = conn.execute(
+            "SELECT MAX(input_index) FROM resource_metrics "
+            "WHERE job_id = ? AND scope = 'task' AND input_index < ?",
+            (job_id, input_index),
+        ).fetchone()[0]
+        next_index = conn.execute(
+            "SELECT MIN(input_index) FROM resource_metrics "
+            "WHERE job_id = ? AND scope = 'task' AND input_index > ?",
+            (job_id, input_index),
+        ).fetchone()[0]
+        if first_ts is None:
+            return {
+                "has_metrics": False,
+                "has_gpu": False,
+                "prev_index": prev_index,
+                "next_index": next_index,
+                "n_attempts": 0,
+                "bucket_sec": 0,
+                "points": [],
+            }
+        bucket_sec = max(1, math.ceil((last_ts - first_ts) / TASK_SERIES_TARGET_POINTS))
+        rows = conn.execute(
+            "SELECT CAST((timestamp - ?) / ? AS INTEGER) AS bucket, "
+            "SUM(cpu_seconds) / SUM(duration_sec), AVG(memory_bytes), "
+            "SUM(network_rx_bytes) / SUM(duration_sec), "
+            "SUM(network_tx_bytes) / SUM(duration_sec), "
+            "SUM(disk_read_bytes) / SUM(duration_sec), "
+            "SUM(disk_write_bytes) / SUM(duration_sec), "
+            "AVG(gpu_percent), AVG(gpu_memory_bytes), COUNT(gpu_percent) "
+            "FROM resource_metrics "
+            "WHERE job_id = ? AND scope = 'task' AND input_index = ? "
+            "GROUP BY bucket ORDER BY bucket",
+            (first_ts, bucket_sec, job_id, input_index),
+        ).fetchall()
+    points = []
+    has_gpu = False
+    for bucket, cpus, mem, rx, tx, read, write, gpu, gpu_mem, n_gpu in rows:
+        if n_gpu:
+            has_gpu = True
+        points.append(
+            {
+                "t": first_ts + bucket * bucket_sec,
+                "cpus": round(cpus, 3),
+                "mem": round(mem),
+                "net_rx": round(rx),
+                "net_tx": round(tx),
+                "disk_read": round(read),
+                "disk_write": round(write),
+                "gpu": round(gpu, 2) if gpu is not None else None,
+                "gpu_mem": round(gpu_mem) if gpu_mem is not None else None,
+            }
+        )
+    return {
+        "has_metrics": True,
+        "has_gpu": has_gpu,
+        "prev_index": prev_index,
+        "next_index": next_index,
+        "n_attempts": n_attempts,
+        "bucket_sec": bucket_sec,
+        "points": points,
+    }
 
 
 # ---------------------------------------------------------------- debug logs
@@ -608,11 +796,13 @@ def import_snapshot(snapshot_path: str, digest: str, cluster_config: dict | None
                 "INSERT OR IGNORE INTO resource_metrics "
                 "(timestamp, duration_sec, instance_name, scope, job_id, input_index, "
                 "worker_id, cpu_seconds, cpu_percent, memory_bytes, memory_percent, "
-                "network_rx_bytes, network_tx_bytes, disk_read_bytes, disk_write_bytes) "
+                "network_rx_bytes, network_tx_bytes, disk_read_bytes, disk_write_bytes, "
+                "gpu_percent, gpu_memory_bytes, gpu_memory_percent) "
                 "SELECT timestamp, duration_sec, instance_name, scope, job_id, "
                 "input_index, worker_id, cpu_seconds, cpu_percent, memory_bytes, "
                 "memory_percent, network_rx_bytes, network_tx_bytes, disk_read_bytes, "
-                "disk_write_bytes FROM snapshot.resource_metrics "
+                "disk_write_bytes, gpu_percent, gpu_memory_bytes, gpu_memory_percent "
+                "FROM snapshot.resource_metrics "
                 "WHERE job_id IN ("
                 "SELECT job_id FROM jobs WHERE job_id NOT IN (SELECT job_id FROM old_jobs)"
                 ") OR (scope = 'node' AND instance_name IN ("

@@ -6,6 +6,7 @@ dependencies = [
     "boto3>=1.43.72",
     "burla==1.6.6",
     "pypdf>=6.16.1",
+    "remotezip>=0.12.3",
     "requests>=2.32.4",
 ]
 

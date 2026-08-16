@@ -65,8 +65,11 @@ def load_from_history():
 def _publish(queues, event: dict):
     if _loop is None:
         return
+    # Each subscriber gets its own copy: SSE handlers mutate events (e.g.
+    # popping job_id), and a shared dict let one dashboard's stream corrupt
+    # another's.
     for queue in list(queues):
-        _loop.call_soon_threadsafe(queue.put_nowait, event)
+        _loop.call_soon_threadsafe(queue.put_nowait, dict(event))
 
 
 # ------------------------------------------------------------------ subscriptions

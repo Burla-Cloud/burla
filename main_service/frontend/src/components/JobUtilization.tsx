@@ -99,6 +99,7 @@ const MetricChart = ({
     startAt,
     format,
     domainMax,
+    integerTicks,
 }: {
     title: string;
     data: Record<string, number | null>[];
@@ -106,6 +107,7 @@ const MetricChart = ({
     startAt: number;
     format: (v: number) => string;
     domainMax?: number;
+    integerTicks?: boolean;
 }) => (
     <div className="min-w-0">
         <div className="flex items-center justify-between">
@@ -140,6 +142,7 @@ const MetricChart = ({
                     />
                     <YAxis
                         width={44}
+                        allowDecimals={!integerTicks}
                         domain={[0, domainMax ?? "auto"]}
                         tickLine={false}
                         axisLine={false}
@@ -365,6 +368,7 @@ const JobUtilization = ({ jobId, jobStatus }: { jobId: string; jobStatus: string
                                         series={[{ key: "nodes", label: "Nodes", color: PRIMARY }]}
                                         startAt={jobStartAt}
                                         format={(v) => String(Math.round(v))}
+                                        integerTicks
                                     />
                                     <MetricChart
                                         title="CPU"

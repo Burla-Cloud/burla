@@ -5,7 +5,7 @@ import { BurlaJob, JobsStatus } from "@/types/coreTypes";
 import JobLogs from "@/components/JobLogs";
 import JobUtilization from "@/components/JobUtilization";
 import { Button } from "@/components/ui/button";
-import { Check, ChevronRight, Copy, PowerOff } from "lucide-react";
+import { ChevronRight, PowerOff } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
 import { StatusBadge, jobStatusBadge } from "@/components/StatusBadge";
 import { cn } from "@/lib/utils";
@@ -17,7 +17,6 @@ type JobResultStats = {
 };
 
 type JobDoc = {
-    image?: string | null;
     max_parallelism?: number | null;
     func_cpu?: number | string | null;
     func_ram?: number | string | null;
@@ -34,29 +33,6 @@ const formatDuration = (seconds: number): string => {
 };
 
 const Unknown = () => <span className="text-muted-foreground">unknown</span>;
-
-const CopyButton = ({ value, label }: { value: string; label: string }) => {
-    const [copied, setCopied] = useState(false);
-    return (
-        <button
-            type="button"
-            onClick={() => {
-                void navigator.clipboard?.writeText(value);
-                setCopied(true);
-                window.setTimeout(() => setCopied(false), 1500);
-            }}
-            className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors duration-150 hover:bg-muted/60 hover:text-foreground"
-            aria-label={label}
-            title={copied ? "Copied" : "Copy"}
-        >
-            {copied ? (
-                <Check className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
-            ) : (
-                <Copy className="h-3.5 w-3.5" />
-            )}
-        </button>
-    );
-};
 
 const tabClass = (active: boolean) =>
     cn(
@@ -76,7 +52,6 @@ const JobDetails = () => {
     const [isStatsLoading, setIsStatsLoading] = useState(true);
     const [statsLoadError, setStatsLoadError] = useState(false);
     const [jobDoc, setJobDoc] = useState<JobDoc | null>(null);
-    const [isImageOpen, setIsImageOpen] = useState(false);
     // Deep links: jobs outside the SSE-streamed first page never appear in
     // the jobs context, so the page falls back to the job summary that
     // result-stats returns.
@@ -107,18 +82,17 @@ const JobDetails = () => {
         setSearchParams(sp);
     };
 
-    const openTaskUtilization = (index: number) => {
+    // Selecting/stepping tasks replaces the history entry so the back button
+    // leaves the page, not through every visited task.
+    const selectTask = (index: number) => {
         const sp = new URLSearchParams(searchParams);
-        sp.set("tab", "utilization");
         sp.set("task", String(index));
-        setSearchParams(sp);
+        setSearchParams(sp, { replace: true });
     };
 
-    // Stepping between tasks replaces the history entry so the back button
-    // returns to the logs, not through every visited task.
-    const stepToTask = (index: number) => {
+    const clearTask = () => {
         const sp = new URLSearchParams(searchParams);
-        sp.set("task", String(index));
+        sp.delete("task");
         setSearchParams(sp, { replace: true });
     };
 
@@ -203,7 +177,6 @@ const JobDetails = () => {
         setStatsLoadError(false);
         setIsStatsLoading(true);
         setFetchedJob(null);
-        setIsImageOpen(false);
         hasCompletedInitialStatsLoadRef.current = false;
     }, [jobId]);
 
@@ -409,8 +382,6 @@ const JobDetails = () => {
         },
     ];
 
-    const imageValue = jobDoc?.image ?? null;
-
     return (
         <div className="flex flex-1 flex-col min-h-0 min-w-0">
             <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col min-h-0">
@@ -548,47 +519,6 @@ const JobDetails = () => {
                                     </div>
                                 ))}
                             </div>
-
-                            <div className="border-t border-border/70">
-                                <button
-                                    type="button"
-                                    onClick={() => setIsImageOpen((open) => !open)}
-                                    aria-expanded={isImageOpen}
-                                    className="flex w-full items-center gap-1.5 px-5 py-2.5 text-left text-[13px] font-medium text-muted-foreground transition-colors duration-150 hover:text-foreground"
-                                >
-                                    <ChevronRight
-                                        className={cn(
-                                            "h-3.5 w-3.5 transition-transform duration-150",
-                                            isImageOpen && "rotate-90"
-                                        )}
-                                    />
-                                    Image
-                                </button>
-                                {isImageOpen && (
-                                    <div className="flex min-w-0 items-center gap-2 px-5 pb-3 pl-10">
-                                        {jobDoc == null ? (
-                                            loadingValue
-                                        ) : imageValue ? (
-                                            <>
-                                                <code
-                                                    className="min-w-0 truncate font-mono text-[13px] text-foreground"
-                                                    title={imageValue}
-                                                >
-                                                    {imageValue}
-                                                </code>
-                                                <CopyButton
-                                                    value={imageValue}
-                                                    label="Copy image reference"
-                                                />
-                                            </>
-                                        ) : (
-                                            <span className="text-[13px] text-muted-foreground">
-                                                Default image
-                                            </span>
-                                        )}
-                                    </div>
-                                )}
-                            </div>
                         </div>
 
                         {/* Logs */}
@@ -598,7 +528,6 @@ const JobDetails = () => {
                                 jobStatus={job.status}
                                 nInputs={stats.n_inputs}
                                 failedCount={safeFailedCount}
-                                onViewUtilization={openTaskUtilization}
                             />
                         </div>
                     </div>
@@ -608,7 +537,8 @@ const JobDetails = () => {
                             jobId={job.id}
                             jobStatus={job.status}
                             taskIndex={selectedTaskIndex}
-                            onSelectTask={stepToTask}
+                            onSelectTask={selectTask}
+                            onClearTask={clearTask}
                         />
                     </div>
                 )}

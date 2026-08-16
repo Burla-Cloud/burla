@@ -135,6 +135,15 @@ ON resource_metrics(job_id, timestamp, instance_name, cpu_percent,
 WHERE scope = 'node' AND job_id IS NOT NULL
 """
 
+# Covering index for the per-task summary table: the whole GROUP BY
+# input_index aggregation runs as an index-only scan.
+_TASK_SUMMARY_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_resource_metrics_task_summary
+ON resource_metrics(job_id, input_index, timestamp, worker_id, cpu_seconds,
+    duration_sec, memory_bytes)
+WHERE scope = 'task' AND job_id IS NOT NULL
+"""
+
 _lock = threading.Lock()
 _conn: sqlite3.Connection | None = None
 
@@ -161,6 +170,7 @@ def _connection() -> sqlite3.Connection:
         if "ended_at" not in existing_job_columns:
             _conn.execute("ALTER TABLE jobs ADD COLUMN ended_at REAL")
         _conn.execute(_NODE_SERIES_INDEX)
+        _conn.execute(_TASK_SUMMARY_INDEX)
         _conn.commit()
     return _conn
 
@@ -361,6 +371,86 @@ def task_metrics_series(job_id: str, input_index: int) -> dict:
         "bucket_sec": bucket_sec,
         "points": points,
     }
+
+
+TASK_SUMMARY_SORT_COLUMNS = {
+    "index": "input_index",
+    "duration": "duration",
+    "attempts": "attempts",
+    "peak_cpus": "peak_cpus",
+    "peak_mem": "peak_mem",
+}
+
+# One row per task that either has samples or has an error log. Tasks that
+# fail in under the ~2s sampling threshold have no samples, so the failed set
+# must be unioned in (with NULL stats) or the failed-only view would be empty
+# for fast failures. Filters/sort/pagination stay in SQL so 100k+ task jobs
+# never ship the whole set to the dashboard.
+_TASK_SUMMARY_CTE = """
+WITH sampled AS (
+    SELECT input_index,
+        MAX(timestamp) - MIN(timestamp) + 1 AS duration,
+        COUNT(DISTINCT worker_id) AS attempts,
+        MAX(cpu_seconds / duration_sec) AS peak_cpus,
+        MAX(memory_bytes) AS peak_mem
+    FROM resource_metrics INDEXED BY idx_resource_metrics_task_summary
+    WHERE job_id = :job_id AND scope = 'task'
+    GROUP BY input_index
+),
+failed_idx AS (
+    SELECT DISTINCT input_index FROM job_logs
+    WHERE job_id = :job_id AND is_error = 1 AND input_index IS NOT NULL
+),
+flagged AS (
+    SELECT a.input_index, s.duration, s.attempts, s.peak_cpus, s.peak_mem,
+        f.input_index IS NOT NULL AS failed
+    FROM (
+        SELECT input_index FROM sampled
+        UNION SELECT input_index FROM failed_idx
+    ) a
+    LEFT JOIN sampled s ON s.input_index = a.input_index
+    LEFT JOIN failed_idx f ON f.input_index = a.input_index
+    WHERE (:failed_only = 0 OR f.input_index IS NOT NULL)
+    AND (:index IS NULL OR a.input_index = :index)
+)
+"""
+
+
+def job_task_summaries(
+    job_id: str,
+    sort: str,
+    descending: bool,
+    failed_only: bool,
+    index: int | None,
+    offset: int,
+    limit: int,
+) -> dict:
+    direction = "DESC" if descending else "ASC"
+    order = f"{TASK_SUMMARY_SORT_COLUMNS[sort]} {direction} NULLS LAST"
+    params = {"job_id": job_id, "failed_only": 1 if failed_only else 0, "index": index}
+    with _read_lock:
+        conn = _read_connection()
+        total = conn.execute(
+            _TASK_SUMMARY_CTE + "SELECT COUNT(*) FROM flagged", params
+        ).fetchone()[0]
+        rows = conn.execute(
+            _TASK_SUMMARY_CTE
+            + f"SELECT * FROM flagged ORDER BY {order}, input_index "
+            "LIMIT :limit OFFSET :offset",
+            {**params, "limit": limit, "offset": offset},
+        ).fetchall()
+    tasks = [
+        {
+            "index": input_index,
+            "duration_sec": round(duration, 1) if duration is not None else None,
+            "attempts": attempts,
+            "peak_cpus": round(peak_cpus, 3) if peak_cpus is not None else None,
+            "peak_mem_bytes": peak_mem,
+            "failed": bool(failed),
+        }
+        for input_index, duration, attempts, peak_cpus, peak_mem, failed in rows
+    ]
+    return {"total": total, "tasks": tasks}
 
 
 def last_job_metrics_timestamp(job_id: str) -> float | None:

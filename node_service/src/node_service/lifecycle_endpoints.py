@@ -123,13 +123,21 @@ async def _pull_image_if_missing(image: str, logger: Logger, docker: aiodocker.D
             "docker", "pull", image, raise_error=False
         )
         text_output = stderr.decode() + stdout.decode()
-        no_transient_error = not (returncode != 0 and "unexpected EOF" in text_output)
+        transient_fragments = (
+            "unexpected EOF",
+            "connection refused",
+            "Temporary failure in name resolution",
+            "i/o timeout",
+        )
+        transient_error = returncode != 0 and any(
+            fragment in text_output for fragment in transient_fragments
+        )
 
-        if no_transient_error or attempt > 5:
+        if not transient_error or attempt > 5:
             break
         else:
             await logger.log(
-                f"`Unexpected EOF` error detected, retrying... (attempt {attempt})"
+                f"Transient image-pull error, retrying... (attempt {attempt})"
             )
             await asyncio.sleep(3)
 

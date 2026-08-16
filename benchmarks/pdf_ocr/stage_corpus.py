@@ -145,35 +145,42 @@ def put_bytes(url: str, payload: bytes) -> None:
 
 def copy_archive(task: dict) -> dict:
     started = time.perf_counter()
-    md5 = hashlib.md5(usedforsecurity=False)
-    sha1 = hashlib.sha1(usedforsecurity=False)
-    sha256 = hashlib.sha256()
     with tempfile.TemporaryDirectory() as scratch:
         archive_path = Path(scratch) / task["archive_name"]
-        with requests.get(
-            task["source_url"], stream=True, timeout=(30, 1800)
-        ) as response:
-            if response.status_code >= 400:
-                raise RuntimeError(
-                    f"Source download failed with status {response.status_code}"
-                )
-            with archive_path.open("wb") as output:
-                for chunk in response.iter_content(1024 * 1024):
-                    output.write(chunk)
-                    md5.update(chunk)
-                    sha1.update(chunk)
-                    sha256.update(chunk)
-        actual_size = archive_path.stat().st_size
-        if actual_size != task["source_size"]:
-            raise RuntimeError(
-                f"{task['archive_name']} size mismatch: "
-                f"{actual_size} != {task['source_size']}"
-            )
-        put_file(task["destination_put_url"], archive_path)
+        for attempt in range(3):
+            md5 = hashlib.md5(usedforsecurity=False)
+            sha1 = hashlib.sha1(usedforsecurity=False)
+            sha256 = hashlib.sha256()
+            try:
+                with requests.get(
+                    task["source_url"], stream=True, timeout=(30, 120)
+                ) as response:
+                    if response.status_code >= 400:
+                        raise RuntimeError(
+                            f"Source download failed with status {response.status_code}"
+                        )
+                    with archive_path.open("wb") as output:
+                        for chunk in response.iter_content(1024 * 1024):
+                            output.write(chunk)
+                            md5.update(chunk)
+                            sha1.update(chunk)
+                            sha256.update(chunk)
+                actual_size = archive_path.stat().st_size
+                if actual_size != task["source_size"]:
+                    raise RuntimeError(
+                        f"{task['archive_name']} size mismatch: "
+                        f"{actual_size} != {task['source_size']}"
+                    )
+                put_file(task["destination_put_url"], archive_path)
+                break
+            except (requests.RequestException, RuntimeError):
+                if attempt == 2:
+                    raise
+                time.sleep(2**attempt)
 
     actual_md5 = md5.hexdigest()
     actual_sha1 = sha1.hexdigest()
-    return {
+    result = {
         **{
             key: task[key]
             for key in (
@@ -195,6 +202,11 @@ def copy_archive(task: dict) -> dict:
         "published_sha1_matches": task["published_sha1"] == actual_sha1,
         "elapsed_seconds": time.perf_counter() - started,
     }
+    put_bytes(
+        task["result_put_url"],
+        json.dumps(result, separators=(",", ":")).encode(),
+    )
+    return result
 
 
 def index_archive(task: dict) -> dict:
@@ -261,10 +273,30 @@ def selected_archives(args) -> list[dict]:
     return archives
 
 
+def copy_sidecars(args, s3, bucket: str) -> dict[str, dict]:
+    prefix = f"manifests/{args.run_id}/archive-copy/"
+    results = {}
+    paginator = s3.get_paginator("list_objects_v2")
+    for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+        for item in page.get("Contents", []):
+            result = json.loads(
+                s3.get_object(Bucket=bucket, Key=item["Key"])["Body"].read()
+            )
+            results[result["archive_name"]] = result
+    return results
+
+
 def run_copy(args, s3, bucket: str, archives: list[dict]) -> list[dict]:
+    completed = copy_sidecars(args, s3, bucket)
     tasks = []
     for archive in archives:
+        if archive["archive_name"] in completed:
+            continue
         destination_key = f"raw/zipfiles/{archive['archive_name']}"
+        result_key = (
+            f"manifests/{args.run_id}/archive-copy/"
+            f"{Path(archive['archive_name']).stem}.json"
+        )
         tasks.append(
             {
                 **archive,
@@ -274,17 +306,29 @@ def run_copy(args, s3, bucket: str, archives: list[dict]) -> list[dict]:
                     Params={"Bucket": bucket, "Key": destination_key},
                     ExpiresIn=args.url_expiration_seconds,
                 ),
+                "result_put_url": s3.generate_presigned_url(
+                    "put_object",
+                    Params={"Bucket": bucket, "Key": result_key},
+                    ExpiresIn=args.url_expiration_seconds,
+                ),
             }
         )
-    results = remote_parallel_map(
-        copy_archive,
-        tasks,
-        func_cpu=16,
-        func_ram=4,
-        grow=True,
-        max_parallelism=min(args.copy_parallelism, len(tasks)),
-        spinner=False,
-    )
+    new_results = []
+    if tasks:
+        new_results = remote_parallel_map(
+            copy_archive,
+            tasks,
+            func_cpu=16,
+            func_ram="dynamic",
+            grow=True,
+            max_parallelism=min(args.copy_parallelism, len(tasks)),
+            spinner=False,
+        )
+    results = [
+        completed[archive["archive_name"]]
+        for archive in archives
+        if archive["archive_name"] in completed
+    ] + new_results
     results.sort(key=lambda result: result["archive_name"])
     manifest = {
         "schema_version": 1,

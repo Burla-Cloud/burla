@@ -3,6 +3,7 @@ import binascii
 import bz2
 import hashlib
 import json
+import logging
 import os
 import socket
 import struct
@@ -19,7 +20,7 @@ import requests
 from burla import __version__ as burla_version
 from burla import remote_parallel_map
 from pypdf import PdfReader
-from pypdf.errors import PdfReadError
+from pypdf.errors import PyPdfError
 
 OCR_IMAGE = (
     "public.ecr.aws/e2g5l2y4/burla-pdf-ocr-benchmark@"
@@ -28,6 +29,7 @@ OCR_IMAGE = (
 LOCAL_FILE_HEADER_FORMAT = "<IHHHHHIIIHH"
 LOCAL_FILE_HEADER_SIZE = 30
 LOCAL_FILE_SIGNATURE = 0x04034B50
+logging.getLogger("pypdf").setLevel(logging.ERROR)
 
 
 class DocumentError(RuntimeError):
@@ -35,16 +37,25 @@ class DocumentError(RuntimeError):
 
 
 def range_response(url: str, start: int, end: int):
-    response = requests.get(
-        url,
-        headers={"Range": f"bytes={start}-{end}"},
-        stream=True,
-        timeout=(30, 1800),
-    )
-    if response.status_code != 206:
-        response.close()
-        raise RuntimeError(f"S3 range read failed with status {response.status_code}")
-    return response
+    for attempt in range(5):
+        try:
+            response = requests.get(
+                url,
+                headers={"Range": f"bytes={start}-{end}"},
+                stream=True,
+                timeout=(30, 1800),
+            )
+            if response.status_code == 206:
+                return response
+            response.close()
+            if attempt == 4:
+                raise RuntimeError(
+                    f"S3 range read failed with status {response.status_code}"
+                )
+        except requests.RequestException:
+            if attempt == 4:
+                raise
+        time.sleep(2**attempt)
 
 
 def extract_member(task: dict, archive_url: str, destination: Path) -> tuple[str, int]:
@@ -127,25 +138,42 @@ def extract_member(task: dict, archive_url: str, destination: Path) -> tuple[str
 
 
 def upload_text(post: dict, key: str, payload: bytes) -> None:
-    fields = dict(post["fields"])
-    fields["key"] = key
-    response = requests.post(
-        post["url"],
-        data=fields,
-        files={"file": (Path(key).name, payload)},
-        timeout=(30, 1800),
-    )
-    if response.status_code not in {200, 201, 204}:
-        raise RuntimeError(f"S3 text upload failed with status {response.status_code}")
+    for attempt in range(5):
+        fields = dict(post["fields"])
+        fields["key"] = key
+        try:
+            response = requests.post(
+                post["url"],
+                data=fields,
+                files={"file": (Path(key).name, payload)},
+                timeout=(30, 1800),
+            )
+            if response.status_code in {200, 201, 204}:
+                return
+            if attempt == 4:
+                raise RuntimeError(
+                    f"S3 text upload failed with status {response.status_code}"
+                )
+        except requests.RequestException:
+            if attempt == 4:
+                raise
+        time.sleep(2**attempt)
 
 
 def text_pages(reader: PdfReader) -> int:
-    return sum(bool((page.extract_text() or "").strip()) for page in reader.pages)
+    count = 0
+    for page in reader.pages:
+        try:
+            count += bool((page.extract_text() or "").strip())
+        except (PyPdfError, IndexError, TypeError, ValueError):
+            pass
+    return count
 
 
 def process_document(
     task: dict, archive_urls: dict[str, str], output_post: dict, output_prefix: str
 ) -> dict:
+    logging.getLogger("pypdf").setLevel(logging.ERROR)
     started = time.perf_counter()
     base_result = {
         "document_id": task["document_id"],
@@ -231,7 +259,7 @@ def process_document(
             }
         except (
             DocumentError,
-            PdfReadError,
+            PyPdfError,
             subprocess.CalledProcessError,
             ValueError,
         ) as error:

@@ -1,4 +1,5 @@
 import os
+from threading import Lock
 from time import sleep
 
 import boto3
@@ -15,6 +16,7 @@ _CAPACITY_ERROR_CODES = (
     "InsufficientFreeAddressesInSubnet",
     "Unsupported",
 )
+_run_instances_lock = Lock()
 
 
 class AWSProvider:
@@ -129,17 +131,24 @@ class AWSProvider:
         for az, subnet in sorted(subnets_by_az.items()):
             on_log(f"Attempting to provision {machine_type} in AZ: {az}")
             try:
-                response = ec2.run_instances(
-                    **run_kwargs,
-                    NetworkInterfaces=[
-                        {
-                            "DeviceIndex": 0,
-                            "SubnetId": subnet["SubnetId"],
-                            "AssociatePublicIpAddress": subnet["MapPublicIpOnLaunch"],
-                            "Groups": [security_group_id],
-                        }
-                    ],
-                )
+                # RunInstances calls share one account-level request bucket;
+                # serialize the API edge, not VM startup, so large grows still
+                # boot concurrently without exhausting that bucket.
+                with _run_instances_lock:
+                    response = ec2.run_instances(
+                        **run_kwargs,
+                        NetworkInterfaces=[
+                            {
+                                "DeviceIndex": 0,
+                                "SubnetId": subnet["SubnetId"],
+                                "AssociatePublicIpAddress": subnet[
+                                    "MapPublicIpOnLaunch"
+                                ],
+                                "Groups": [security_group_id],
+                            }
+                        ],
+                    )
+                    sleep(0.25)
                 instance = response["Instances"][0]
                 instance_id = instance["InstanceId"]
                 associate_public_ip = subnet["MapPublicIpOnLaunch"]

@@ -19,6 +19,7 @@ from hmac import compare_digest
 from time import time
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from starlette.requests import ClientDisconnect
 from main_service.endpoints.cluster_lifecycle import (
     GROW_INACTIVITY_SHUTDOWN_TIME_SEC,
     _get_cluster_config,
@@ -61,7 +62,12 @@ _NODE_STATE_FIELDS = (
 
 @router.put("/v1/nodes/{instance_name}/state")
 async def push_node_state(instance_name: str, request: Request):
-    body = await request.json()
+    # Nodes push every ~1s and retry forever; a node dropping mid-request
+    # (e.g. while shutting down) is routine, not worth a traceback.
+    try:
+        body = await request.json()
+    except ClientDisconnect:
+        return {}
 
     updates = {key: body[key] for key in _NODE_STATE_FIELDS if key in body}
     merged = cluster_state.record_node_push(instance_name, updates)
@@ -124,7 +130,10 @@ async def push_node_logs(instance_name: str, request: Request):
 
 @router.post("/v1/nodes/{instance_name}/metrics:batch")
 async def push_resource_metrics(instance_name: str, request: Request):
-    body = await request.json()
+    try:
+        body = await request.json()
+    except ClientDisconnect:
+        return
     await asyncio.to_thread(
         history.add_resource_metrics, instance_name, body["samples"]
     )

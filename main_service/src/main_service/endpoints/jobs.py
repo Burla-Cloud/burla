@@ -181,46 +181,9 @@ async def get_task_summaries(
     return JSONResponse(result)
 
 
-@router.get("/v1/jobs/{job_id}/logged-input-indexes")
-async def get_logged_input_indexes(job_id: str):
-    indexes, failed = await asyncio.to_thread(history.job_logged_input_indexes, job_id)
-    non_failed = sorted(set(indexes) - set(failed))
-    return JSONResponse(
-        {
-            "indexes_with_logs": indexes,
-            "failed_indexes": failed,
-            "non_failed_indexes_with_logs": non_failed,
-        }
-    )
-
-
-@router.get("/v1/jobs/{job_id}/next-failed-input")
-async def get_next_failed_input_index(
-    job_id: str,
-    index: int,
-):
-    current_input_index = int(index)
-    _, ordered_failed_indexes = await asyncio.to_thread(
-        history.job_logged_input_indexes, job_id
-    )
-
-    first_failed_input_index = ordered_failed_indexes[0] if ordered_failed_indexes else None
-    next_failed_input_index = None
-    for failed_input_index in ordered_failed_indexes:
-        if failed_input_index > current_input_index:
-            next_failed_input_index = failed_input_index
-            break
-
-    return JSONResponse(
-        {
-            "next_failed_input_index": (
-                next_failed_input_index
-                if next_failed_input_index is not None
-                else first_failed_input_index
-            ),
-            "failed_input_indexes": ordered_failed_indexes,
-        }
-    )
+@router.get("/v1/jobs/{job_id}/events")
+async def get_job_events(job_id: str):
+    return JSONResponse({"events": await asyncio.to_thread(history.job_notices, job_id)})
 
 
 @router.get("/v1/jobs/{job_id}/logs")

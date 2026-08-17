@@ -56,9 +56,3 @@ export interface Settings {
   cloudAccountName?: string;
   cloudProvider?: string;
 }
-
-export interface LogEntry {
-  message: string;
-  log_timestamp: number;
-  is_error?: boolean;
-}

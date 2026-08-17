@@ -2,7 +2,7 @@ import { Link, useParams, useSearchParams } from "react-router-dom";
 import { useEffect, useRef, useState } from "react";
 import { useJobs } from "@/contexts/JobsContext";
 import { BurlaJob, JobsStatus } from "@/types/coreTypes";
-import JobLogs from "@/components/JobLogs";
+import JobCalls from "@/components/JobCalls";
 import JobUtilization from "@/components/JobUtilization";
 import { Button } from "@/components/ui/button";
 import { ChevronRight, PowerOff } from "lucide-react";
@@ -70,15 +70,27 @@ const JobDetails = () => {
         return cookieTz || Intl.DateTimeFormat().resolvedOptions().timeZone;
     });
 
-    const activeTab = searchParams.get("tab") === "utilization" ? "utilization" : "overview";
     const taskParam = searchParams.get("task");
     const selectedTaskIndex =
         taskParam !== null && /^\d+$/.test(taskParam) ? Number(taskParam) : null;
 
-    const openTab = (tab: "overview" | "utilization") => {
+    // A selected task always lives on the Function calls tab. This also
+    // reinterprets old ?tab=utilization&task=N links.
+    const tabParam = searchParams.get("tab");
+    const activeTab: "overview" | "calls" | "utilization" =
+        selectedTaskIndex != null
+            ? "calls"
+            : tabParam === "calls"
+            ? "calls"
+            : tabParam === "utilization"
+            ? "utilization"
+            : "overview";
+
+    const openTab = (tab: "overview" | "calls" | "utilization") => {
         const sp = new URLSearchParams(searchParams);
-        if (tab === "utilization") sp.set("tab", "utilization");
-        else sp.delete("tab");
+        if (tab === "overview") sp.delete("tab");
+        else sp.set("tab", tab);
+        sp.delete("task");
         setSearchParams(sp);
     };
 
@@ -86,12 +98,14 @@ const JobDetails = () => {
     // leaves the page, not through every visited task.
     const selectTask = (index: number) => {
         const sp = new URLSearchParams(searchParams);
+        sp.set("tab", "calls");
         sp.set("task", String(index));
         setSearchParams(sp, { replace: true });
     };
 
     const clearTask = () => {
         const sp = new URLSearchParams(searchParams);
+        sp.set("tab", "calls");
         sp.delete("task");
         setSearchParams(sp, { replace: true });
     };
@@ -190,6 +204,20 @@ const JobDetails = () => {
         })().catch(() => {});
         return () => controller.abort();
     }, [jobId]);
+
+    // Job-level notices (e.g. "Job canceled by user"): not function calls, so
+    // they render in a quiet events strip instead of the call table.
+    const [jobEvents, setJobEvents] = useState<{ message: string; timestamp: number }[]>([]);
+    useEffect(() => {
+        const controller = new AbortController();
+        (async () => {
+            const res = await fetch(`/v1/jobs/${jobId}/events`, { signal: controller.signal });
+            if (!res.ok) return;
+            const payload = await res.json();
+            setJobEvents(payload.events ?? []);
+        })().catch(() => {});
+        return () => controller.abort();
+    }, [jobId, job?.status]);
 
     useEffect(() => {
         const controller = new AbortController();
@@ -431,6 +459,14 @@ const JobDetails = () => {
                         </button>
                         <button
                             type="button"
+                            onClick={() => openTab("calls")}
+                            className={tabClass(activeTab === "calls")}
+                            aria-pressed={activeTab === "calls"}
+                        >
+                            Function calls
+                        </button>
+                        <button
+                            type="button"
                             onClick={() => openTab("utilization")}
                             className={tabClass(activeTab === "utilization")}
                             aria-pressed={activeTab === "utilization"}
@@ -521,25 +557,45 @@ const JobDetails = () => {
                             </div>
                         </div>
 
-                        {/* Logs */}
-                        <div className="flex flex-1 flex-col min-h-0">
-                            <JobLogs
-                                jobId={job.id}
-                                jobStatus={job.status}
-                                nInputs={stats.n_inputs}
-                                failedCount={safeFailedCount}
-                            />
-                        </div>
+                        {/* Job events */}
+                        {jobEvents.length > 0 && (
+                            <div className="mb-4 rounded-xl border border-border bg-card shadow-sm">
+                                <div className="px-5 py-4">
+                                    <div className="eyebrow">Events</div>
+                                    <div className="mt-2 space-y-1.5">
+                                        {jobEvents.map((event, i) => (
+                                            <div
+                                                key={`${event.timestamp}-${i}`}
+                                                className="flex items-baseline gap-3 text-[13px]"
+                                            >
+                                                <span className="shrink-0 tabular-nums text-muted-foreground">
+                                                    {formatDateTime(
+                                                        new Date(event.timestamp * 1000)
+                                                    )}
+                                                </span>
+                                                <span className="text-foreground/90">
+                                                    {event.message}
+                                                </span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
                     </div>
-                ) : (
+                ) : activeTab === "calls" ? (
                     <div className="mt-5">
-                        <JobUtilization
+                        <JobCalls
                             jobId={job.id}
                             jobStatus={job.status}
                             taskIndex={selectedTaskIndex}
                             onSelectTask={selectTask}
                             onClearTask={clearTask}
                         />
+                    </div>
+                ) : (
+                    <div className="mt-5">
+                        <JobUtilization jobId={job.id} jobStatus={job.status} />
                     </div>
                 )}
             </div>

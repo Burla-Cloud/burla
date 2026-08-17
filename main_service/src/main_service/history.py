@@ -381,11 +381,11 @@ TASK_SUMMARY_SORT_COLUMNS = {
     "peak_mem": "peak_mem",
 }
 
-# One row per task that either has samples or has an error log. Tasks that
-# fail in under the ~2s sampling threshold have no samples, so the failed set
-# must be unioned in (with NULL stats) or the failed-only view would be empty
-# for fast failures. Filters/sort/pagination stay in SQL so 100k+ task jobs
-# never ship the whole set to the dashboard.
+# One row per call that left any trace: samples or logs. Calls that finish
+# under the ~2s sampling threshold have no samples but may still have logs or
+# an error, so the logged set is unioned in (with NULL stats), keeping the
+# table a complete entry point. Filters/sort/pagination stay in SQL so 100k+
+# call jobs never ship the whole set to the dashboard.
 _TASK_SUMMARY_CTE = """
 WITH sampled AS (
     SELECT input_index,
@@ -397,20 +397,21 @@ WITH sampled AS (
     WHERE job_id = :job_id AND scope = 'task'
     GROUP BY input_index
 ),
-failed_idx AS (
-    SELECT DISTINCT input_index FROM job_logs
-    WHERE job_id = :job_id AND is_error = 1 AND input_index IS NOT NULL
+logged AS (
+    SELECT input_index, MAX(is_error) AS failed FROM job_logs
+    WHERE job_id = :job_id AND input_index IS NOT NULL
+    GROUP BY input_index
 ),
 flagged AS (
     SELECT a.input_index, s.duration, s.attempts, s.peak_cpus, s.peak_mem,
-        f.input_index IS NOT NULL AS failed
+        COALESCE(l.failed, 0) AS failed
     FROM (
         SELECT input_index FROM sampled
-        UNION SELECT input_index FROM failed_idx
+        UNION SELECT input_index FROM logged
     ) a
     LEFT JOIN sampled s ON s.input_index = a.input_index
-    LEFT JOIN failed_idx f ON f.input_index = a.input_index
-    WHERE (:failed_only = 0 OR f.input_index IS NOT NULL)
+    LEFT JOIN logged l ON l.input_index = a.input_index
+    WHERE (:failed_only = 0 OR COALESCE(l.failed, 0) = 1)
     AND (:index IS NULL OR a.input_index = :index)
 )
 """
@@ -684,21 +685,27 @@ def job_error_count(job_id: str) -> int:
     return row[0]
 
 
-def job_logged_input_indexes(job_id: str) -> tuple[list[int], list[int]]:
-    """Returns (all indexes with logs, indexes with error logs)."""
+def job_notices(job_id: str) -> list[dict]:
+    """Index-less log rows: job-level notices like 'Job canceled by user'.
+    These are not function calls, so they live outside the call table."""
     with _lock:
         rows = (
             _connection()
             .execute(
-                "SELECT DISTINCT input_index, MAX(is_error) FROM job_logs "
-                "WHERE job_id = ? AND input_index IS NOT NULL GROUP BY input_index",
+                "SELECT logs FROM job_logs WHERE job_id = ? AND input_index IS NULL",
                 (job_id,),
             )
             .fetchall()
         )
-    indexes = sorted(int(index) for index, _ in rows)
-    failed = sorted(int(index) for index, is_error in rows if is_error)
-    return indexes, failed
+    entries = []
+    for (logs_json,) in rows:
+        for log in json.loads(logs_json):
+            timestamp = log.get("timestamp")
+            if timestamp is None:
+                continue
+            entries.append({"message": log.get("message", ""), "timestamp": float(timestamp)})
+    entries.sort(key=lambda entry: entry["timestamp"])
+    return entries
 
 
 def job_logs_for_input(job_id: str, input_index: int) -> list[dict]:

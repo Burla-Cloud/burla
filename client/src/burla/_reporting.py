@@ -31,6 +31,10 @@ def stdio_supports_unicode() -> bool:
     return "utf" in stdout_encoding and "utf" in stderr_encoding
 
 
+def stdio_supports_spinner() -> bool:
+    return (_in_notebook() or sys.stdout.isatty()) and stdio_supports_unicode()
+
+
 def _get_project_id():
     try:
         project_id = json.loads(CONFIG_PATH.read_text()).get("project_id")

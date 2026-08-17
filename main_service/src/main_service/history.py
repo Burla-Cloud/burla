@@ -382,9 +382,10 @@ TASK_SUMMARY_SORT_COLUMNS = {
     "peak_mem": "peak_mem",
 }
 
-# A call looks running while its samples are still arriving; samples ride the
-# ~1s node state pushes, so a few seconds of slack covers push jitter.
-_RUNNING_SAMPLE_MAX_AGE_SEC = 15
+# A call looks running while its traces (samples or logs) are still arriving.
+# Nodes batch both every ~5s, so the window covers push jitter plus the gap
+# between a call's first log line and its first metric sample.
+_RUNNING_TRACE_MAX_AGE_SEC = 15
 
 # One row per call that left any trace: samples or logs. Calls that finish
 # under the ~2s sampling threshold have no samples but may still have logs or
@@ -406,7 +407,8 @@ WITH sampled AS (
     GROUP BY input_index
 ),
 logged AS (
-    SELECT input_index, MAX(is_error) AS failed, MIN(timestamp) AS first_logged
+    SELECT input_index, MAX(is_error) AS failed,
+        MIN(timestamp) AS first_logged, MAX(timestamp) AS last_logged
     FROM job_logs
     WHERE job_id = :job_id AND input_index IS NOT NULL
     GROUP BY input_index
@@ -414,7 +416,8 @@ logged AS (
 flagged AS (
     SELECT a.input_index,
         COALESCE(MIN(s.first_seen, l.first_logged), s.first_seen, l.first_logged) AS started,
-        s.last_seen, s.duration, s.attempts, s.peak_cpus, s.peak_mem,
+        COALESCE(MAX(s.last_seen, l.last_logged), s.last_seen, l.last_logged) AS last_active,
+        s.duration, s.attempts, s.peak_cpus, s.peak_mem,
         COALESCE(l.failed, 0) AS failed
     FROM (
         SELECT input_index FROM sampled
@@ -461,14 +464,10 @@ def job_task_summaries(
         ).fetchall()
     now = time()
     tasks = []
-    for input_index, started, last_seen, duration, attempts, peak_cpus, peak_mem, failed in rows:
+    for input_index, started, last_active, duration, attempts, peak_cpus, peak_mem, failed in rows:
         if failed:
             status = "failed"
-        elif (
-            job_is_running
-            and last_seen is not None
-            and now - last_seen < _RUNNING_SAMPLE_MAX_AGE_SEC
-        ):
+        elif job_is_running and now - last_active < _RUNNING_TRACE_MAX_AGE_SEC:
             status = "running"
         else:
             status = "done"

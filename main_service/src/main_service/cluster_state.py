@@ -590,3 +590,85 @@ async def job_reaper_loop(logger=None):
             )
             if logger is not None:
                 logger.log(f"Reaped stalled job {job_id}", severity="WARNING")
+
+
+# ------------------------------------------------------------------ node reaper
+
+# Nodes push state ~1x/sec, so a READY/RUNNING node silent this long is gone:
+# either the VM died without its self_delete call, or the call landed while
+# the head was down (leaving ended_at NULL, so every restart rehydrated it as
+# a live node forever). BOOTING nodes are judged on age instead of silence
+# because a wedged boot handshake keeps pushing BOOTING forever; the budget
+# sits above NODE_BOOT_TIMEOUT so Node.start's own boot watcher, when it is
+# still alive, always rules first.
+REAPER_NODE_SILENCE_SEC = 150
+REAPER_BOOTING_NODE_AGE_SEC = 15 * 60
+
+
+async def node_reaper_loop(logger=None):
+    # Lazy imports: node.py imports this module, and providers import from
+    # the main_service package, which is mid-initialization when this module
+    # is first imported.
+    from main_service.node import Node
+    from main_service.providers import get_provider
+
+    provider = get_provider()
+    # Same startup grace as the job reaper: rehydrated nodes have no
+    # last_push_at until they re-report through the relay.
+    loop_started_at = time()
+    while True:
+        await asyncio.sleep(REAPER_INTERVAL_SEC)
+        now = time()
+        if now - loop_started_at < REAPER_NODE_SILENCE_SEC:
+            continue
+
+        with _lock:
+            candidates = []
+            for node in NODES.values():
+                status = node.get("status")
+                if status == "BOOTING":
+                    dead = (
+                        now - node["started_booting_at"] > REAPER_BOOTING_NODE_AGE_SEC
+                    )
+                elif status in ("READY", "RUNNING"):
+                    dead = now - node.get("last_push_at", 0) > REAPER_NODE_SILENCE_SEC
+                else:
+                    continue
+                if dead:
+                    candidates.append(dict(node))
+
+        if not candidates:
+            continue
+
+        by_region: dict[str, list[dict]] = {}
+        for node in candidates:
+            by_region.setdefault(node["gcp_region"], []).append(node)
+
+        for region, nodes in by_region.items():
+            names = [node["instance_name"] for node in nodes]
+            try:
+                existing = await asyncio.to_thread(
+                    provider.existing_instances, names, region
+                )
+            except Exception as error:
+                print(f"Node reaper existence check failed: {error}")
+                continue
+            for node in nodes:
+                name = node["instance_name"]
+                try:
+                    if name in existing:
+                        # Same deletion path self_delete uses.
+                        node_obj = Node.from_state(logger, node, provider=provider)
+                        await asyncio.to_thread(
+                            provider.delete_instance, name, node_obj.zone
+                        )
+                    update_node(name, {"status": "DELETED", "ended_at": now})
+                    if logger is not None:
+                        cause = (
+                            "deleted its silent VM"
+                            if name in existing
+                            else "its VM no longer exists"
+                        )
+                        logger.log(f"Reaped node {name} ({cause}).", severity="WARNING")
+                except Exception as error:
+                    print(f"Node reaper failed to delete {name}: {error}")

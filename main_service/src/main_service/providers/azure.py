@@ -438,6 +438,21 @@ class AzureProvider:
             pass
         _instance_resource_groups.pop(instance_name, None)
 
+    def existing_instances(self, instance_names: list[str], region: str) -> set[str]:
+        """Which of these instances still exist, tag-scoped to this cluster."""
+        wanted = set(instance_names)
+        vms = (
+            self.compute.virtual_machines.list(self.resource_group)
+            if self.resource_group
+            else self.compute.virtual_machines.list_all()
+        )
+        found = set()
+        for vm in vms:
+            in_cluster = (vm.tags or {}).get("burla-cluster-id") == CLUSTER_NAME
+            if vm.name in wanted and in_cluster:
+                found.add(vm.name)
+        return found
+
     def delete_stopped_instances(self):
         """Sweep Burla nodes whose in-VM deletion could not finish."""
         vms = (

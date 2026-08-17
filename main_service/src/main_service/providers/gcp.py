@@ -212,6 +212,19 @@ class GCPProvider:
         items = getattr(getattr(attributes, "query_value", None), "items", [])
         return any(item.value == "true" for item in items)
 
+    def existing_instances(self, instance_names: list[str], region: str) -> set[str]:
+        """Which of these instances still exist. Any state counts (a
+        TERMINATED GCP VM still exists and bills for its disk). The names come
+        from this head's own state, which is the cluster scoping on GCP."""
+        wanted = set(instance_names)
+        found = set()
+        response = self.instance_client.aggregated_list(project=PROJECT_ID)
+        for _, vms_in_zone in response:
+            for vm in getattr(vms_in_zone, "instances", []):
+                if vm.name in wanted:
+                    found.add(vm.name)
+        return found
+
     def delete_stopped_instances(self):
         """Credential-less nodes power themselves off (they can't call the
         delete API); this finishes the job by deleting those TERMINATED VMs, so

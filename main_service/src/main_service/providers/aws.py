@@ -239,6 +239,27 @@ class AWSProvider:
             ec2.terminate_instances(InstanceIds=instance_ids)
             ec2.get_waiter("instance_terminated").wait(InstanceIds=instance_ids)
 
+    def existing_instances(self, instance_names: list[str], region: str) -> set[str]:
+        """Which of these instances still exist in any non-terminated state.
+        One batched describe, tag-scoped to this cluster's own nodes."""
+        response = self._ec2(region).describe_instances(
+            Filters=[
+                {"Name": "tag:Name", "Values": instance_names},
+                {"Name": "tag:burla-cluster-id", "Values": [CLUSTER_NAME]},
+                {
+                    "Name": "instance-state-name",
+                    "Values": ["pending", "running", "stopping", "stopped"],
+                },
+            ]
+        )
+        return {
+            tag["Value"]
+            for reservation in response["Reservations"]
+            for instance in reservation["Instances"]
+            for tag in instance["Tags"]
+            if tag["Key"] == "Name"
+        }
+
     def delete_stopped_instances(self):
         """Nothing to reap on AWS.
 

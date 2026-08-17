@@ -428,6 +428,9 @@ async def lifespan(app: FastAPI):
     cluster_state.set_event_loop(asyncio.get_running_loop())
     cluster_state.load_from_history()
     reaper_task = asyncio.create_task(cluster_state.job_reaper_loop(logger=Logger()))
+    node_reaper_task = asyncio.create_task(
+        cluster_state.node_reaper_loop(logger=Logger())
+    )
     # Client-hosted dashboards are localhost-only; there is no public DNS
     # lease to renew.
     run_lease_loop = not IN_LOCAL_DEV_MODE and not IN_CLIENT_HOSTED_MODE
@@ -458,6 +461,7 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         reaper_task.cancel()
+        node_reaper_task.cancel()
         if dashboard_lease_task is not None:
             dashboard_lease_task.cancel()
         if stopped_instance_reaper_task is not None:

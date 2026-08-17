@@ -636,7 +636,7 @@ def job_task_summaries(
             {
                 "index": input_index,
                 "started_at": started,
-                "duration_sec": round(duration, 2) if duration is not None else None,
+                "duration_sec": round(duration, 3) if duration is not None else None,
                 "attempts": attempts,
                 "peak_cpus": round(peak_cpus, 3) if peak_cpus is not None else None,
                 "peak_mem_bytes": peak_mem,

@@ -97,6 +97,19 @@ CREATE INDEX IF NOT EXISTS idx_resource_metrics_job_task
 ON resource_metrics(job_id, scope, input_index, timestamp)
 WHERE job_id IS NOT NULL;
 
+-- Exact per-call execution spans, one row per (input, attempt): a worker
+-- reports the moment it starts executing an input and the moment that attempt
+-- stops (result, error, worker death). The primary key doubles as the
+-- (job_id, input_index) index the task-summary aggregation scans.
+CREATE TABLE IF NOT EXISTS call_events (
+    job_id TEXT NOT NULL,
+    input_index INTEGER NOT NULL,
+    attempt TEXT NOT NULL,
+    started_at REAL,
+    ended_at REAL,
+    PRIMARY KEY (job_id, input_index, attempt)
+) WITHOUT ROWID;
+
 -- Structured debug events (slot accounting, scaling decisions, stall dumps).
 -- Never shown to users: node_logs is the end-user story, this is the
 -- engineering flight recorder. Pruned by retention, shipped to Burla's
@@ -209,6 +222,36 @@ def add_resource_metrics(instance_name: str, samples: list[dict]):
             "gpu_percent, gpu_memory_bytes, gpu_memory_percent) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             rows,
+        )
+        conn.commit()
+
+
+def add_call_events(events: list[dict]):
+    """`events`: [{"kind": "start"|"end", "job_id", "input_index", "attempt",
+    "timestamp"}]. Start inserts the attempt row, end fills ended_at; upserts
+    make either arrival order and redelivered batches safe."""
+    starts, ends = [], []
+    for event in events:
+        row = (
+            event["job_id"],
+            event["input_index"],
+            event["attempt"],
+            event["timestamp"],
+        )
+        (starts if event["kind"] == "start" else ends).append(row)
+    with _lock:
+        conn = _connection()
+        conn.executemany(
+            "INSERT INTO call_events (job_id, input_index, attempt, started_at) "
+            "VALUES (?, ?, ?, ?) "
+            "ON CONFLICT DO UPDATE SET started_at = excluded.started_at",
+            starts,
+        )
+        conn.executemany(
+            "INSERT INTO call_events (job_id, input_index, attempt, ended_at) "
+            "VALUES (?, ?, ?, ?) "
+            "ON CONFLICT DO UPDATE SET ended_at = excluded.ended_at",
+            ends,
         )
         conn.commit()
 
@@ -382,19 +425,96 @@ TASK_SUMMARY_SORT_COLUMNS = {
     "peak_mem": "peak_mem",
 }
 
-# A call looks running while its traces (samples or logs) are still arriving.
-# Nodes batch both every ~5s, so the window covers push jitter plus the gap
-# between a call's first log line and its first metric sample.
+# Fallback for jobs that predate call events: a call looks running while its
+# traces (samples or logs) are still arriving. Nodes batch both every ~5s, so
+# the window covers push jitter plus the gap between a call's first log line
+# and its first metric sample.
 _RUNNING_TRACE_MAX_AGE_SEC = 15
 
-# One row per call that left any trace: samples or logs. Calls that finish
-# under the ~2s sampling threshold have no samples but may still have logs or
-# an error, so the logged set is unioned in (with NULL stats), keeping the
-# table a complete entry point. A call's start is the earliest trace it left
-# (first sample or first log row). Filters/sort/pagination stay in SQL so
-# 100k+ call jobs never ship the whole set to the dashboard.
-_TASK_SUMMARY_CTE = """
-WITH sampled AS (
+# One row per call, enumerating every index 0..n_inputs-1 so calls with zero
+# traces still appear. Exact start/duration/attempts come from call_events;
+# jobs that predate events fall back to sample/log-derived values (first
+# trace as start, sample span as duration). Filters/sort/pagination stay in
+# SQL so 100k+ call jobs never ship the whole set to the dashboard.
+_CALLS_BASE_CTE = """
+WITH RECURSIVE all_calls(input_index) AS (
+    SELECT 0 WHERE :n_inputs > 0
+    UNION ALL
+    SELECT input_index + 1 FROM all_calls WHERE input_index + 1 < :n_inputs
+),
+events AS (
+    SELECT input_index,
+        MIN(started_at) AS started,
+        MAX(ended_at) AS ended,
+        COUNT(*) AS attempts,
+        COUNT(*) - COUNT(ended_at) AS open_attempts
+    FROM call_events
+    WHERE job_id = :job_id
+    GROUP BY input_index
+),
+logged AS (
+    SELECT input_index, MAX(is_error) AS failed,
+        MIN(timestamp) AS first_logged, MAX(timestamp) AS last_logged
+    FROM job_logs
+    WHERE job_id = :job_id AND input_index IS NOT NULL
+    GROUP BY input_index
+)
+"""
+
+_CALLS_FILTERS = """
+    WHERE (:failed_only = 0 OR COALESCE(l.failed, 0) = 1)
+    AND (:logs_only = 0 OR l.input_index IS NOT NULL)
+    AND (:index IS NULL OR a.input_index = :index)
+"""
+
+# Fast path, for jobs with call events. Never touches the (potentially tens of
+# millions of rows) samples table for page selection: the page is picked from
+# the events, then only its ~50 rows get per-input sample lookups for the peak
+# columns. An 18M-sample synthetic job pages in ~0.4s this way vs ~5s when the
+# full sample aggregation runs.
+_EVENT_SUMMARY_QUERY = (
+    _CALLS_BASE_CTE
+    + """,
+flagged AS (
+    SELECT a.input_index,
+        COALESCE(e.started, l.first_logged) AS started,
+        CASE
+            WHEN e.ended IS NOT NULL THEN e.ended - e.started
+            WHEN e.open_attempts > 0 AND :job_is_running THEN :now - e.started
+        END AS duration,
+        e.attempts AS attempts,
+        COALESCE(l.failed, 0) AS failed,
+        e.input_index IS NOT NULL AS has_events,
+        COALESCE(e.open_attempts, 0) AS open_attempts,
+        l.last_logged AS last_active
+    FROM all_calls a
+    LEFT JOIN events e ON e.input_index = a.input_index
+    LEFT JOIN logged l ON l.input_index = a.input_index
+"""
+    + _CALLS_FILTERS
+    + """)
+SELECT f.input_index, f.started, f.duration, f.attempts,
+    (SELECT MAX(cpu_seconds / duration_sec)
+     FROM resource_metrics INDEXED BY idx_resource_metrics_task_summary
+     WHERE job_id = :job_id AND scope = 'task'
+     AND input_index = f.input_index) AS peak_cpus,
+    (SELECT MAX(memory_bytes)
+     FROM resource_metrics INDEXED BY idx_resource_metrics_task_summary
+     WHERE job_id = :job_id AND scope = 'task'
+     AND input_index = f.input_index) AS peak_mem,
+    f.failed, f.has_events, f.open_attempts, f.last_active
+FROM (SELECT * FROM flagged ORDER BY {order}, input_index
+      LIMIT :limit OFFSET :offset) f
+"""
+)
+
+# Fallback path: jobs that predate call events (start/duration must come from
+# the sample aggregation), and peak-column sorts (which need every input's
+# sample aggregate anyway).
+_SAMPLE_SUMMARY_QUERY = (
+    _CALLS_BASE_CTE
+    + """,
+sampled AS (
     SELECT input_index,
         MIN(timestamp) AS first_seen,
         MAX(timestamp) AS last_seen,
@@ -406,34 +526,47 @@ WITH sampled AS (
     WHERE job_id = :job_id AND scope = 'task'
     GROUP BY input_index
 ),
-logged AS (
-    SELECT input_index, MAX(is_error) AS failed,
-        MIN(timestamp) AS first_logged, MAX(timestamp) AS last_logged
-    FROM job_logs
-    WHERE job_id = :job_id AND input_index IS NOT NULL
-    GROUP BY input_index
-),
 flagged AS (
     SELECT a.input_index,
-        COALESCE(MIN(s.first_seen, l.first_logged), s.first_seen, l.first_logged) AS started,
-        COALESCE(MAX(s.last_seen, l.last_logged), s.last_seen, l.last_logged) AS last_active,
-        s.duration, s.attempts, s.peak_cpus, s.peak_mem,
-        COALESCE(l.failed, 0) AS failed
-    FROM (
-        SELECT input_index FROM sampled
-        UNION SELECT input_index FROM logged
-    ) a
+        COALESCE(e.started,
+            MIN(s.first_seen, l.first_logged), s.first_seen, l.first_logged) AS started,
+        CASE
+            WHEN e.ended IS NOT NULL THEN e.ended - e.started
+            WHEN e.open_attempts > 0 AND :job_is_running THEN :now - e.started
+            ELSE s.duration
+        END AS duration,
+        COALESCE(e.attempts, s.attempts) AS attempts,
+        s.peak_cpus, s.peak_mem,
+        COALESCE(l.failed, 0) AS failed,
+        e.input_index IS NOT NULL AS has_events,
+        COALESCE(e.open_attempts, 0) AS open_attempts,
+        COALESCE(MAX(s.last_seen, l.last_logged), s.last_seen, l.last_logged) AS last_active
+    FROM all_calls a
+    LEFT JOIN events e ON e.input_index = a.input_index
     LEFT JOIN sampled s ON s.input_index = a.input_index
     LEFT JOIN logged l ON l.input_index = a.input_index
-    WHERE (:failed_only = 0 OR COALESCE(l.failed, 0) = 1)
-    AND (:logs_only = 0 OR l.input_index IS NOT NULL)
-    AND (:index IS NULL OR a.input_index = :index)
-)
 """
+    + _CALLS_FILTERS
+    + """)
+SELECT * FROM flagged ORDER BY {order}, input_index LIMIT :limit OFFSET :offset
+"""
+)
+
+# Counting filtered rows never needs the samples table: the filters only
+# reference the log aggregate and the index search.
+_COUNT_QUERY = (
+    _CALLS_BASE_CTE
+    + """
+SELECT COUNT(*) FROM all_calls a
+LEFT JOIN logged l ON l.input_index = a.input_index
+"""
+    + _CALLS_FILTERS
+)
 
 
 def job_task_summaries(
     job_id: str,
+    n_inputs: int,
     sort: str,
     descending: bool,
     failed_only: bool,
@@ -445,29 +578,57 @@ def job_task_summaries(
 ) -> dict:
     direction = "DESC" if descending else "ASC"
     order = f"{TASK_SUMMARY_SORT_COLUMNS[sort]} {direction} NULLS LAST"
+    now = time()
     params = {
         "job_id": job_id,
+        "n_inputs": n_inputs,
+        "job_is_running": 1 if job_is_running else 0,
+        "now": now,
         "failed_only": 1 if failed_only else 0,
         "logs_only": 1 if logs_only else 0,
         "index": index,
+        "limit": limit,
+        "offset": offset,
     }
+    unfiltered = not failed_only and not logs_only and index is None
     with _read_lock:
         conn = _read_connection()
-        total = conn.execute(
-            _TASK_SUMMARY_CTE + "SELECT COUNT(*) FROM flagged", params
+        has_events = conn.execute(
+            "SELECT EXISTS(SELECT 1 FROM call_events WHERE job_id = ?)", (job_id,)
         ).fetchone()[0]
-        rows = conn.execute(
-            _TASK_SUMMARY_CTE
-            + f"SELECT * FROM flagged ORDER BY {order}, input_index "
-            "LIMIT :limit OFFSET :offset",
-            {**params, "limit": limit, "offset": offset},
-        ).fetchall()
-    now = time()
+        if unfiltered:
+            total = n_inputs
+        else:
+            total = conn.execute(_COUNT_QUERY, params).fetchone()[0]
+        query = (
+            _EVENT_SUMMARY_QUERY
+            if has_events and sort not in ("peak_cpus", "peak_mem")
+            else _SAMPLE_SUMMARY_QUERY
+        )
+        rows = conn.execute(query.format(order=order), params).fetchall()
     tasks = []
-    for input_index, started, last_active, duration, attempts, peak_cpus, peak_mem, failed in rows:
+    for row in rows:
+        (
+            input_index,
+            started,
+            duration,
+            attempts,
+            peak_cpus,
+            peak_mem,
+            failed,
+            has_events,
+            open_attempts,
+            last_active,
+        ) = row
         if failed:
             status = "failed"
-        elif job_is_running and now - last_active < _RUNNING_TRACE_MAX_AGE_SEC:
+        elif has_events:
+            status = "running" if job_is_running and open_attempts > 0 else "done"
+        elif (
+            job_is_running
+            and last_active is not None
+            and now - last_active < _RUNNING_TRACE_MAX_AGE_SEC
+        ):
             status = "running"
         else:
             status = "done"
@@ -475,7 +636,7 @@ def job_task_summaries(
             {
                 "index": input_index,
                 "started_at": started,
-                "duration_sec": round(duration, 1) if duration is not None else None,
+                "duration_sec": round(duration, 2) if duration is not None else None,
                 "attempts": attempts,
                 "peak_cpus": round(peak_cpus, 3) if peak_cpus is not None else None,
                 "peak_mem_bytes": peak_mem,

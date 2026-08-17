@@ -166,11 +166,11 @@ async def post_node_logs(logs: list[dict]):
         response.raise_for_status()
 
 
-async def post_resource_metrics(samples: list[dict]):
+async def post_resource_metrics(samples: list[dict], call_events: list[dict]):
     session = _get_session()
     url = f"{MAIN_SERVICE_URL}/v1/nodes/{INSTANCE_NAME}/metrics:batch"
     async with session.post(
-        url, json={"samples": samples}, headers=_HEADERS
+        url, json={"samples": samples, "call_events": call_events}, headers=_HEADERS
     ) as response:
         response.raise_for_status()
 

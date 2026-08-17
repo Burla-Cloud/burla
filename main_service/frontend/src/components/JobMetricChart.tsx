@@ -36,6 +36,8 @@ export const formatElapsed = (seconds: number): string => {
 };
 
 export const formatDuration = (seconds: number): string => {
+    // Sub-second calls have exact event-derived durations; "0s" would hide them.
+    if (seconds > 0 && seconds < 1) return `${Number(seconds.toFixed(2))}s`;
     const s = Math.max(0, Math.round(seconds));
     if (s < 60) return `${s}s`;
     const m = Math.floor(s / 60);

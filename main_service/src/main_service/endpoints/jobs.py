@@ -171,9 +171,11 @@ async def get_task_summaries(
         sort = "started"
     job = cluster_state.get_job(job_id) or await asyncio.to_thread(history.get_job, job_id)
     job_is_running = bool(job) and job.get("status") in ("RUNNING", "PENDING")
+    n_inputs = (job or {}).get("n_inputs") or 0
     result = await asyncio.to_thread(
         history.job_task_summaries,
         job_id,
+        n_inputs,
         sort,
         dir == "desc",
         failed_only,

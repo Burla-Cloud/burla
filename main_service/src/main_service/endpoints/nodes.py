@@ -137,6 +137,10 @@ async def push_resource_metrics(instance_name: str, request: Request):
     await asyncio.to_thread(
         history.add_resource_metrics, instance_name, body["samples"]
     )
+    # .get: nodes running releases older than call events push without them.
+    call_events = body.get("call_events")
+    if call_events:
+        await asyncio.to_thread(history.add_call_events, call_events)
 
 
 @router.post("/v1/nodes/{instance_name}/certificate")

@@ -12,6 +12,24 @@ BATCH_INTERVAL_SEC = 5
 BATCH_MAX_ROWS = 5_000
 MICROSECONDS_PER_SECOND = 1_000_000
 
+# Exact per-call start/end events, recorded by worker_client._process_inputs
+# the moment an input is handed to a worker and the moment that attempt stops.
+# Module level (not SELF) so events pending flush survive REINIT_SELF between
+# jobs; they ride the same batch POST as the samples.
+PENDING_CALL_EVENTS = []
+
+
+def record_call_event(kind: str, job_id: str, input_index: int, attempt: str):
+    PENDING_CALL_EVENTS.append(
+        {
+            "kind": kind,
+            "job_id": job_id,
+            "input_index": input_index,
+            "attempt": attempt,
+            "timestamp": time(),
+        }
+    )
+
 
 def _gpu_handles() -> list:
     try:
@@ -302,8 +320,12 @@ async def resource_metrics_loop():
             or len(pending_samples) >= BATCH_MAX_ROWS
         )
         if should_flush:
+            # Snapshot length: events recorded during the await must survive.
+            n_events = len(PENDING_CALL_EVENTS)
             try:
-                await head_client.post_resource_metrics(pending_samples)
+                await head_client.post_resource_metrics(
+                    pending_samples, PENDING_CALL_EVENTS[:n_events]
+                )
             except Exception as error:
                 print(
                     f"failed to forward {len(pending_samples)} resource metrics "
@@ -311,4 +333,5 @@ async def resource_metrics_loop():
                 )
             else:
                 pending_samples = []
+                del PENDING_CALL_EVENTS[:n_events]
             last_flush_at = monotonic()

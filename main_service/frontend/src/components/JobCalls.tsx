@@ -44,13 +44,16 @@ type TaskSeries = {
     points: TaskPoint[];
 };
 
+type CallStatus = "failed" | "running" | "done";
+
 type TaskSummary = {
     index: number;
+    started_at: number | null;
     duration_sec: number | null;
     attempts: number | null;
     peak_cpus: number | null;
     peak_mem_bytes: number | null;
-    failed: boolean;
+    status: CallStatus;
 };
 
 type TaskSummaryPage = {
@@ -69,7 +72,7 @@ type CallLogs = {
     truncated: boolean;
 };
 
-type SortKey = "index" | "duration" | "attempts" | "peak_cpus" | "peak_mem";
+type SortKey = "index" | "started" | "duration" | "attempts" | "peak_cpus" | "peak_mem";
 
 const CALLS_PER_PAGE = 50;
 
@@ -80,6 +83,15 @@ const formatLogTime = (epochSec: number) =>
         second: "2-digit",
         hour12: true,
     });
+
+const callStatusBadge = (status: CallStatus) =>
+    status === "failed" ? (
+        <StatusBadge tone="danger" label="Failed" />
+    ) : status === "running" ? (
+        <StatusBadge tone="progress" label="Running" pulse />
+    ) : (
+        <StatusBadge tone="success" label="Succeeded" />
+    );
 
 const iconBtnClass = (disabled: boolean) =>
     disabled
@@ -124,14 +136,12 @@ const CallDetail = ({
     jobId,
     taskIndex,
     isLive,
-    isJobTerminal,
     onSelectTask,
     onClearTask,
 }: {
     jobId: string;
     taskIndex: number;
     isLive: boolean;
-    isJobTerminal: boolean;
     onSelectTask: (index: number) => void;
     onClearTask: () => void;
 }) => {
@@ -275,11 +285,7 @@ const CallDetail = ({
                     <h2 className="text-base font-semibold tabular-nums text-foreground">
                         Input {taskIndex.toLocaleString()}
                     </h2>
-                    {summary?.failed ? (
-                        <StatusBadge tone="danger" label="Failed" />
-                    ) : summary != null && isJobTerminal ? (
-                        <StatusBadge tone="success" label="Succeeded" />
-                    ) : null}
+                    {summary != null && callStatusBadge(summary.status)}
                 </div>
 
                 {/* Facts */}
@@ -308,50 +314,8 @@ const CallDetail = ({
                     </p>
                 )}
 
-                {/* Logs */}
-                <div className="mt-6">
-                    <div className="eyebrow">Logs</div>
-                    {isLoading ? (
-                        <Skeleton className="mt-2 h-24 w-full" />
-                    ) : logs == null || logs.entries.length === 0 ? (
-                        <p className="mt-2 text-[13px] text-muted-foreground">
-                            No logs for this call.
-                        </p>
-                    ) : (
-                        <div className="mt-2 overflow-hidden rounded-lg border border-border/70 bg-muted/30">
-                            {logs.truncated && (
-                                <div className="border-b border-border/50 px-4 py-1.5 text-[12px] text-muted-foreground">
-                                    Showing the latest {logs.entries.length.toLocaleString()} log
-                                    lines.
-                                </div>
-                            )}
-                            <div className="max-h-96 overflow-y-auto font-mono text-xs leading-5">
-                                {logs.entries.map((entry, i) => (
-                                    <div
-                                        key={`${entry.log_timestamp}-${i}`}
-                                        className="grid grid-cols-[6.5rem,1fr] gap-3 px-4 py-1.5 [&+&]:border-t [&+&]:border-border/40"
-                                    >
-                                        <span className="select-none tabular-nums text-muted-foreground">
-                                            {formatLogTime(entry.log_timestamp)}
-                                        </span>
-                                        <span
-                                            className={cn(
-                                                "whitespace-pre-wrap break-words",
-                                                entry.is_error
-                                                    ? "text-destructive"
-                                                    : "text-foreground/90"
-                                            )}
-                                        >
-                                            {entry.message}
-                                        </span>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-                    )}
-                </div>
-
-                {/* Utilization charts, collapsed by default */}
+                {/* Utilization charts, collapsed by default. They sit above the
+                    logs so the disclosure never hides below a long log scroll. */}
                 <div className="mt-6">
                     {isLoading ? (
                         <>
@@ -377,11 +341,6 @@ const CallDetail = ({
                                 <span className="eyebrow transition-colors duration-150 group-hover:text-foreground">
                                     Utilization
                                 </span>
-                                {!isChartsOpen && (
-                                    <span className="text-[13px] text-muted-foreground">
-                                        CPU, memory, I/O per second
-                                    </span>
-                                )}
                                 <ChevronDown
                                     className={cn(
                                         "h-3.5 w-3.5 text-muted-foreground transition-transform duration-150",
@@ -463,6 +422,49 @@ const CallDetail = ({
                         </>
                     )}
                 </div>
+
+                {/* Logs */}
+                <div className="mt-6">
+                    <div className="eyebrow">Logs</div>
+                    {isLoading ? (
+                        <Skeleton className="mt-2 h-24 w-full" />
+                    ) : logs == null || logs.entries.length === 0 ? (
+                        <p className="mt-2 text-[13px] text-muted-foreground">
+                            No logs for this call.
+                        </p>
+                    ) : (
+                        <div className="mt-2 overflow-hidden rounded-lg border border-border/70 bg-muted/30">
+                            {logs.truncated && (
+                                <div className="border-b border-border/50 px-4 py-1.5 text-[12px] text-muted-foreground">
+                                    Showing the latest {logs.entries.length.toLocaleString()} log
+                                    lines.
+                                </div>
+                            )}
+                            <div className="max-h-96 overflow-y-auto font-mono text-xs leading-5">
+                                {logs.entries.map((entry, i) => (
+                                    <div
+                                        key={`${entry.log_timestamp}-${i}`}
+                                        className="grid grid-cols-[6.5rem,1fr] gap-3 px-4 py-1.5 [&+&]:border-t [&+&]:border-border/40"
+                                    >
+                                        <span className="select-none tabular-nums text-muted-foreground">
+                                            {formatLogTime(entry.log_timestamp)}
+                                        </span>
+                                        <span
+                                            className={cn(
+                                                "whitespace-pre-wrap break-words",
+                                                entry.is_error
+                                                    ? "text-destructive"
+                                                    : "text-foreground/90"
+                                            )}
+                                        >
+                                            {entry.message}
+                                        </span>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+                </div>
             </div>
         </div>
     );
@@ -482,15 +484,14 @@ const JobCalls = ({
     onClearTask: () => void;
 }) => {
     const [taskPage, setTaskPage] = useState<TaskSummaryPage | null>(null);
-    const [sort, setSort] = useState<SortKey>("duration");
+    const [sort, setSort] = useState<SortKey>("started");
     const [descending, setDescending] = useState(true);
     const [failedOnly, setFailedOnly] = useState(false);
+    const [logsOnly, setLogsOnly] = useState(false);
     const [page, setPage] = useState(0);
     const [searchValue, setSearchValue] = useState("");
 
     const isLive = jobStatus === "RUNNING" || jobStatus === "PENDING";
-    const isJobTerminal =
-        jobStatus === "COMPLETED" || jobStatus === "FAILED" || jobStatus === "CANCELED";
 
     const searchIndex = /^\d+$/.test(searchValue) ? Number(searchValue) : null;
 
@@ -499,6 +500,7 @@ const JobCalls = ({
             sort,
             dir: descending ? "desc" : "asc",
             failed_only: String(failedOnly),
+            logs_only: String(logsOnly),
             offset: String(page * CALLS_PER_PAGE),
             limit: String(CALLS_PER_PAGE),
         });
@@ -510,7 +512,7 @@ const JobCalls = ({
         } catch {
             setTaskPage(null);
         }
-    }, [jobId, sort, descending, failedOnly, page, searchIndex]);
+    }, [jobId, sort, descending, failedOnly, logsOnly, page, searchIndex]);
 
     useEffect(() => {
         setTaskPage(null);
@@ -544,7 +546,6 @@ const JobCalls = ({
                 jobId={jobId}
                 taskIndex={taskIndex}
                 isLive={isLive}
-                isJobTerminal={isJobTerminal}
                 onSelectTask={onSelectTask}
                 onClearTask={onClearTask}
             />
@@ -554,12 +555,7 @@ const JobCalls = ({
     return (
         <div className="rounded-xl border border-border bg-card shadow-sm">
             <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2 px-5 py-3.5">
-                <div className="flex items-baseline gap-3">
-                    <span className="text-sm font-semibold text-foreground">Function calls</span>
-                    <span className="text-[13px] text-muted-foreground">
-                        Calls with recorded samples or logs
-                    </span>
-                </div>
+                <span className="text-sm font-semibold text-foreground">Function calls</span>
                 <div className="flex flex-wrap items-center gap-5">
                     <input
                         type="text"
@@ -572,6 +568,16 @@ const JobCalls = ({
                         placeholder="Filter by input index"
                         className="h-7 w-44 rounded-md border border-border bg-background px-2.5 text-[13px] tabular-nums text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                     />
+                    <label className="flex cursor-pointer items-center gap-2 text-[13px] text-muted-foreground">
+                        <Switch
+                            checked={logsOnly}
+                            onCheckedChange={(checked) => {
+                                setLogsOnly(checked);
+                                setPage(0);
+                            }}
+                        />
+                        <span className="whitespace-nowrap">Has logs</span>
+                    </label>
                     <label className="flex cursor-pointer items-center gap-2 text-[13px] text-muted-foreground">
                         <Switch
                             checked={failedOnly}
@@ -596,11 +602,13 @@ const JobCalls = ({
                     <p className="text-sm font-medium text-foreground">
                         {failedOnly
                             ? "No failed calls"
+                            : logsOnly
+                            ? "No calls with logs"
                             : searchIndex != null
                             ? `No call with input index ${searchIndex.toLocaleString()}`
                             : "No call data"}
                     </p>
-                    {!failedOnly && searchIndex == null && (
+                    {!failedOnly && !logsOnly && searchIndex == null && (
                         <p className="mt-1 text-[13px] text-muted-foreground">
                             {isLive
                                 ? "Calls appear here once their first samples or logs arrive."
@@ -611,7 +619,7 @@ const JobCalls = ({
             ) : (
                 <>
                     <div className="w-full min-w-0 overflow-x-auto border-t border-border/70">
-                        <Table className="w-full min-w-[640px]">
+                        <Table className="w-full min-w-[760px]">
                             <TableHeader>
                                 <TableRow className="hover:bg-transparent">
                                     <SortableHead
@@ -621,6 +629,15 @@ const JobCalls = ({
                                         descending={descending}
                                         onSort={onSort}
                                         className="pl-5"
+                                    />
+                                    <SortableHead
+                                        label="Started"
+                                        column="started"
+                                        sort={sort}
+                                        descending={descending}
+                                        onSort={onSort}
+                                        align="right"
+                                        className="text-right"
                                     />
                                     <SortableHead
                                         label="Duration"
@@ -658,7 +675,7 @@ const JobCalls = ({
                                         align="right"
                                         className="text-right"
                                     />
-                                    <TableHead className="w-20 pr-5" />
+                                    <TableHead className="w-28 pr-5" />
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
@@ -676,6 +693,11 @@ const JobCalls = ({
                                     >
                                         <TableCell className="pl-5 text-[13px] font-medium tabular-nums text-foreground">
                                             {row.index.toLocaleString()}
+                                        </TableCell>
+                                        <TableCell className="text-right text-[13px] tabular-nums text-muted-foreground">
+                                            {row.started_at != null
+                                                ? formatLogTime(row.started_at)
+                                                : ""}
                                         </TableCell>
                                         <TableCell className="text-right text-[13px] tabular-nums text-foreground">
                                             {row.duration_sec != null ? (
@@ -699,12 +721,8 @@ const JobCalls = ({
                                                 ? formatBytes(row.peak_mem_bytes)
                                                 : ""}
                                         </TableCell>
-                                        <TableCell className="w-20 pr-5 text-right">
-                                            {row.failed && (
-                                                <span className="text-[13px] font-medium text-destructive">
-                                                    Failed
-                                                </span>
-                                            )}
+                                        <TableCell className="w-28 pr-5 text-right">
+                                            {callStatusBadge(row.status)}
                                         </TableCell>
                                     </TableRow>
                                 ))}
@@ -712,14 +730,7 @@ const JobCalls = ({
                         </Table>
                     </div>
                     <div className="px-5 pb-4">
-                        <TablePagination
-                            page={page}
-                            totalPages={totalPages}
-                            onPageChange={setPage}
-                            resultsLabel={`${totalTasks.toLocaleString()} ${
-                                totalTasks === 1 ? "call" : "calls"
-                            }`}
-                        />
+                        <TablePagination page={page} totalPages={totalPages} onPageChange={setPage} />
                     </div>
                 </>
             )}

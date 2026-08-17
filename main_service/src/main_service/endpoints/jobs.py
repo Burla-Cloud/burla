@@ -159,24 +159,29 @@ async def get_task_metrics(job_id: str, input_index: int):
 @router.get("/v1/jobs/{job_id}/metrics/task-summaries")
 async def get_task_summaries(
     job_id: str,
-    sort: str = "duration",
+    sort: str = "started",
     dir: str = "desc",
     failed_only: bool = False,
+    logs_only: bool = False,
     index: int | None = None,
     offset: int = 0,
     limit: int = 50,
 ):
     if sort not in history.TASK_SUMMARY_SORT_COLUMNS:
-        sort = "duration"
+        sort = "started"
+    job = cluster_state.get_job(job_id) or await asyncio.to_thread(history.get_job, job_id)
+    job_is_running = bool(job) and job.get("status") in ("RUNNING", "PENDING")
     result = await asyncio.to_thread(
         history.job_task_summaries,
         job_id,
         sort,
         dir == "desc",
         failed_only,
+        logs_only,
         index,
         max(0, offset),
         min(max(1, limit), 200),
+        job_is_running,
     )
     return JSONResponse(result)
 

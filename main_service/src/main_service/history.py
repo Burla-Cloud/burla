@@ -375,20 +375,28 @@ def task_metrics_series(job_id: str, input_index: int) -> dict:
 
 TASK_SUMMARY_SORT_COLUMNS = {
     "index": "input_index",
+    "started": "started",
     "duration": "duration",
     "attempts": "attempts",
     "peak_cpus": "peak_cpus",
     "peak_mem": "peak_mem",
 }
 
+# A call looks running while its samples are still arriving; samples ride the
+# ~1s node state pushes, so a few seconds of slack covers push jitter.
+_RUNNING_SAMPLE_MAX_AGE_SEC = 15
+
 # One row per call that left any trace: samples or logs. Calls that finish
 # under the ~2s sampling threshold have no samples but may still have logs or
 # an error, so the logged set is unioned in (with NULL stats), keeping the
-# table a complete entry point. Filters/sort/pagination stay in SQL so 100k+
-# call jobs never ship the whole set to the dashboard.
+# table a complete entry point. A call's start is the earliest trace it left
+# (first sample or first log row). Filters/sort/pagination stay in SQL so
+# 100k+ call jobs never ship the whole set to the dashboard.
 _TASK_SUMMARY_CTE = """
 WITH sampled AS (
     SELECT input_index,
+        MIN(timestamp) AS first_seen,
+        MAX(timestamp) AS last_seen,
         MAX(timestamp) - MIN(timestamp) + 1 AS duration,
         COUNT(DISTINCT worker_id) AS attempts,
         MAX(cpu_seconds / duration_sec) AS peak_cpus,
@@ -398,12 +406,15 @@ WITH sampled AS (
     GROUP BY input_index
 ),
 logged AS (
-    SELECT input_index, MAX(is_error) AS failed FROM job_logs
+    SELECT input_index, MAX(is_error) AS failed, MIN(timestamp) AS first_logged
+    FROM job_logs
     WHERE job_id = :job_id AND input_index IS NOT NULL
     GROUP BY input_index
 ),
 flagged AS (
-    SELECT a.input_index, s.duration, s.attempts, s.peak_cpus, s.peak_mem,
+    SELECT a.input_index,
+        COALESCE(MIN(s.first_seen, l.first_logged), s.first_seen, l.first_logged) AS started,
+        s.last_seen, s.duration, s.attempts, s.peak_cpus, s.peak_mem,
         COALESCE(l.failed, 0) AS failed
     FROM (
         SELECT input_index FROM sampled
@@ -412,6 +423,7 @@ flagged AS (
     LEFT JOIN sampled s ON s.input_index = a.input_index
     LEFT JOIN logged l ON l.input_index = a.input_index
     WHERE (:failed_only = 0 OR COALESCE(l.failed, 0) = 1)
+    AND (:logs_only = 0 OR l.input_index IS NOT NULL)
     AND (:index IS NULL OR a.input_index = :index)
 )
 """
@@ -422,13 +434,20 @@ def job_task_summaries(
     sort: str,
     descending: bool,
     failed_only: bool,
+    logs_only: bool,
     index: int | None,
     offset: int,
     limit: int,
+    job_is_running: bool,
 ) -> dict:
     direction = "DESC" if descending else "ASC"
     order = f"{TASK_SUMMARY_SORT_COLUMNS[sort]} {direction} NULLS LAST"
-    params = {"job_id": job_id, "failed_only": 1 if failed_only else 0, "index": index}
+    params = {
+        "job_id": job_id,
+        "failed_only": 1 if failed_only else 0,
+        "logs_only": 1 if logs_only else 0,
+        "index": index,
+    }
     with _read_lock:
         conn = _read_connection()
         total = conn.execute(
@@ -440,17 +459,30 @@ def job_task_summaries(
             "LIMIT :limit OFFSET :offset",
             {**params, "limit": limit, "offset": offset},
         ).fetchall()
-    tasks = [
-        {
-            "index": input_index,
-            "duration_sec": round(duration, 1) if duration is not None else None,
-            "attempts": attempts,
-            "peak_cpus": round(peak_cpus, 3) if peak_cpus is not None else None,
-            "peak_mem_bytes": peak_mem,
-            "failed": bool(failed),
-        }
-        for input_index, duration, attempts, peak_cpus, peak_mem, failed in rows
-    ]
+    now = time()
+    tasks = []
+    for input_index, started, last_seen, duration, attempts, peak_cpus, peak_mem, failed in rows:
+        if failed:
+            status = "failed"
+        elif (
+            job_is_running
+            and last_seen is not None
+            and now - last_seen < _RUNNING_SAMPLE_MAX_AGE_SEC
+        ):
+            status = "running"
+        else:
+            status = "done"
+        tasks.append(
+            {
+                "index": input_index,
+                "started_at": started,
+                "duration_sec": round(duration, 1) if duration is not None else None,
+                "attempts": attempts,
+                "peak_cpus": round(peak_cpus, 3) if peak_cpus is not None else None,
+                "peak_mem_bytes": peak_mem,
+                "status": status,
+            }
+        )
     return {"total": total, "tasks": tasks}
 
 

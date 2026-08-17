@@ -62,7 +62,7 @@ from burla._node import (
 from burla._reporting import (
     RemoteParallelMapReporter,
     log_job_failure_telemetry,
-    stdio_supports_unicode,
+    stdio_supports_spinner,
 )
 
 
@@ -651,7 +651,7 @@ def remote_parallel_map(
     return_queue = Queue()
     detached_and_canceled = []
 
-    if spinner is True and not stdio_supports_unicode():
+    if spinner is True and not stdio_supports_spinner():
         spinner = False
     if spinner:
         spinner = yaspin(

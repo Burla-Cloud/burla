@@ -669,11 +669,14 @@ def add_job_logs(job_id: str, documents: list[dict]):
 
 
 def job_error_count(job_id: str) -> int:
+    # Failed inputs, not error rows: an input can log several errors, and
+    # index-less system notices (e.g. "Job canceled by user") are not inputs.
     with _lock:
         row = (
             _connection()
             .execute(
-                "SELECT COUNT(*) FROM job_logs WHERE job_id = ? AND is_error = 1",
+                "SELECT COUNT(DISTINCT input_index) FROM job_logs "
+                "WHERE job_id = ? AND is_error = 1 AND input_index IS NOT NULL",
                 (job_id,),
             )
             .fetchone()

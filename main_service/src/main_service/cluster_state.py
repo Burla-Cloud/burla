@@ -516,9 +516,15 @@ REAPER_INTERVAL_SEC = 10
 
 
 async def job_reaper_loop(logger=None):
+    # A freshly restarted head reloads RUNNING jobs from history with no
+    # last_push_at, so nodes look silent until they re-report through the
+    # relay. Give them the full silence budget before judging anything.
+    loop_started_at = time()
     while True:
         await asyncio.sleep(REAPER_INTERVAL_SEC)
         now = time()
+        if now - loop_started_at < REAPER_JOB_SILENCE_SEC:
+            continue
         with _lock:
             candidates = []
             for job_id, job in JOBS.items():

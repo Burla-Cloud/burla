@@ -220,12 +220,14 @@ def dashboard(port: int | None = None):
     import webbrowser
 
     from burla._local_head import LocalHeadError, run_local_head_for_dashboard
+    from burla._reporting import log_dashboard_start_telemetry
 
     def open_dashboard(url: str, is_foreground: bool):
         print(f"Burla dashboard is running at {url}")
         if is_foreground:
             print("Press Ctrl-C to stop it.")
         webbrowser.open(url)
+        log_dashboard_start_telemetry(__version__, is_local=is_foreground)
 
     remote_url = (
         _pinned_cluster_url or _env_dashboard_url() or _deployed_dashboard_url()

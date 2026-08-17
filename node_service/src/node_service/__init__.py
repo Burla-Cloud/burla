@@ -11,7 +11,6 @@ from pathlib import Path
 from threading import Event
 from time import monotonic, time
 from typing import Callable
-from uuid import uuid4
 
 import aiohttp
 from fastapi import BackgroundTasks, Depends, FastAPI, Request
@@ -789,7 +788,6 @@ async def validate_requests(request: Request, call_next):
 @app.middleware("http")
 async def log_and_time_requests(request: Request, call_next):
     start = time()
-    request.state.uuid = uuid4().hex
     chatty_endpoint = request.url.path.endswith(
         ("/results", "/ack_transfer", "/get_inputs")
     )

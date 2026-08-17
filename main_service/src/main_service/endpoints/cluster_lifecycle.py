@@ -318,7 +318,6 @@ def _mark_running_jobs_with_lifecycle_event(event: str, message: str):
         "logs": [{"message": message, "timestamp": timestamp}],
         "timestamp": timestamp,
         "is_error": True,
-        "event": event,
     }
     extra = (
         {"cluster_restarted": True}

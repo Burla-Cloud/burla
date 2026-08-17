@@ -20,6 +20,7 @@ from time import time
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from starlette.requests import ClientDisconnect
 
 from main_service import (
     CLOUD_PROVIDER,
@@ -79,7 +80,11 @@ async def patch_job_doc(job_id: str, request: Request):
     `fail_reason_append` - if present, that value is appended onto the
     `fail_reason` list and removed from the plain-update payload.
     """
-    body = await request.json()
+    # A client giving up mid-request (e.g. its timeout fired) is routine.
+    try:
+        body = await request.json()
+    except ClientDisconnect:
+        return
     append = body.pop("fail_reason_append", None)
     if not body and append is None:
         return

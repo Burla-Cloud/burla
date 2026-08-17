@@ -97,11 +97,14 @@ ready is not a test failure; start or reset the cluster and retry.
 For now, tests that call `remote_parallel_map` should pass `grow=True` so the job
 boots nodes itself instead of relying on an already-started cluster.
 
-All tests have a 120s default timeout. If output doesn't advance past
-`collected N items` within 10 seconds, stop and report blocked.
+Tests have a 120s default timeout, with longer limits on scenarios whose real
+silence budgets, VM recovery, or multi-node provisioning exceed it. If output
+doesn't advance past `collected N items` within 10 seconds, stop and report
+blocked. Notable exceptions:
 
-Three exceptions, all in `tests/scenarios/`, raise their own timeouts:
-
+- `test_nested_rpm.py` provisions and later removes a second local node.
+- `test_cluster_restart_mid_job.py` waits for package installation before
+  restarting, then verifies a full EC2 node recovery.
 - `test_node_lost_mid_job.py` runs ~4-5 minutes. A node that stops answering
   (with no lifecycle signal on the job doc) is only failed after the client's
   3-minute result-poll silence budget, so it cannot finish sooner.

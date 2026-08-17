@@ -589,6 +589,7 @@ dependencies = [
     { name = "cloudpickle" },
     { name = "fastapi" },
     { name = "google-auth" },
+    { name = "nvidia-ml-py" },
     { name = "packaging" },
     { name = "psutil" },
     { name = "python-multipart" },
@@ -613,6 +614,7 @@ requires-dist = [
     { name = "cloudpickle", specifier = ">=3.1.2,<4.0.0" },
     { name = "fastapi", specifier = ">=0.115.12,<0.116.0" },
     { name = "google-auth", specifier = ">=2.22.0,<3.0.0" },
+    { name = "nvidia-ml-py", specifier = ">=12.0.0" },
     { name = "packaging", specifier = ">=25.0,<26.0" },
     { name = "psutil", specifier = ">=7.1.0,<8.0.0" },
     { name = "python-multipart", specifier = ">=0.0.20,<0.0.21" },
@@ -628,6 +630,15 @@ dev = [
     { name = "pytest", specifier = ">=8.4.2" },
     { name = "pytest-asyncio", specifier = ">=0.24.0" },
     { name = "pytest-timeout", specifier = ">=2.3.1" },
+]
+
+[[package]]
+name = "nvidia-ml-py"
+version = "13.610.43"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/f0/b5/a8fbc356f768fa5c9cfd646668fd7d34bf55bdd1c6e20754642a64d930d4/nvidia_ml_py-13.610.43.tar.gz", hash = "sha256:65437eb73d68d0c62c931ca4d45038472faff03bd0b8729abba4b899f70d60f2", size = 52109, upload-time = "2026-06-01T18:54:08.829Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/23/45/caa600acfab94560807a20a64b5830d2cd3c3202b7f1328644d70b7d6bd8/nvidia_ml_py-13.610.43-py3-none-any.whl", hash = "sha256:f13c72698edef492f985cc225f14faafe68ae065a2e407f45bdf6f4b9b43fde8", size = 53163, upload-time = "2026-06-01T18:54:07.704Z" },
 ]
 
 [[package]]

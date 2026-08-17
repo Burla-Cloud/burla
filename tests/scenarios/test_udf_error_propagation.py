@@ -41,25 +41,29 @@ def test_udf_error_propagation(
     # Python 3.11+ note attached for visibility.
     assert "[burla] failed on input index 7" in tb
 
-    # Head-visible: find the matching job and check input_index=7 is recorded
-    # as a failed index (i.e. an is_error log landed for it).
-    def _failed_indexes():
+    # Client-side propagation can succeed even if the dashboard copy was lost,
+    # so verify the persisted error through the same API the dashboard uses.
+    def _failed_call():
         jobs = main_http_client.get("/v1/jobs?page=0").json()["jobs"]
         for job in jobs:
             if job.get("function_name") != "test_function":
                 continue
             if job.get("status") == "COMPLETED":
                 continue
-            resp = main_http_client.get(f"/v1/jobs/{job['jobId']}/logged-input-indexes")
-            indexes = resp.json()
-            if 7 in indexes["failed_indexes"]:
-                return indexes
+            resp = main_http_client.get(
+                f"/v1/jobs/{job['jobId']}/metrics/task-summaries",
+                params={"index": 7, "failed_only": True, "limit": 1},
+            )
+            if resp.status_code != 200:
+                continue
+            tasks = resp.json()["tasks"]
+            if tasks and tasks[0]["status"] == "failed":
+                return tasks[0]
         return None
 
-    indexes = wait_for_fixture(
-        _failed_indexes,
+    failed_call = wait_for_fixture(
+        _failed_call,
         timeout=30,
-        message="no error log recorded for input_index=7",
+        message="input_index=7 was not recorded as a failed function call",
     )
-    assert 7 in indexes["failed_indexes"]
-    assert 7 not in indexes["non_failed_indexes_with_logs"]
+    assert failed_call["index"] == 7

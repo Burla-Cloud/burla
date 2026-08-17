@@ -524,7 +524,16 @@ async def _execute_job(
             reporter.log_job_success_telemetry(time() - start_time)
         )
         session_stack.callback(job_success_telemetry_task.cancel)
-        await client.patch_job(job_id, {"client_has_all_results": True})
+        # All results are already in hand; a head that's briefly unreachable
+        # (e.g. mid-restart) must not turn this last handshake into a failure.
+        for attempt in range(12):
+            try:
+                await client.patch_job(job_id, {"client_has_all_results": True})
+                break
+            except (TimeoutError, aiohttp.ClientError):
+                if attempt == 11:
+                    raise
+                await asyncio.sleep(5)
     finally:
         [task.cancel() for task in node_tasks]
 

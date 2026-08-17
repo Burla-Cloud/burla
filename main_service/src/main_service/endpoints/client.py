@@ -20,6 +20,7 @@ from time import time
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from starlette.requests import ClientDisconnect
 
 from main_service import (
     CLOUD_PROVIDER,
@@ -50,6 +51,7 @@ from main_service.endpoints.cluster_lifecycle import (
     MAX_GROW_CPUS,
     _get_cluster_config,
     _start_nodes,
+    config_with_job_overrides,
     verify_nodes_can_reach_head,
 )
 
@@ -78,7 +80,11 @@ async def patch_job_doc(job_id: str, request: Request):
     `fail_reason_append` - if present, that value is appended onto the
     `fail_reason` list and removed from the plain-update payload.
     """
-    body = await request.json()
+    # A client giving up mid-request (e.g. its timeout fired) is routine.
+    try:
+        body = await request.json()
+    except ClientDisconnect:
+        return
     append = body.pop("fail_reason_append", None)
     if not body and append is None:
         return
@@ -99,17 +105,19 @@ def _select_ready_nodes_from_state(
     max_parallelism: int,
     image: Optional[str],
     func_gpu: Optional[str],
+    region: Optional[str],
 ):
     """Walk the live node state, picking unreserved READY nodes that fit the
     requested per-function resources, up to `max_parallelism` total slots.
     When `image` is set, only nodes running that container are eligible.
     When `func_gpu` is set, only nodes on a matching GPU family are eligible.
+    When `region` is set, only nodes in that region are eligible.
 
     Returns `(selected, total_parallelism, ready_after_filters,
-    ready_after_image, unfiltered_ready)`. The three list-tail values let
-    `start_job` tell "cluster is empty", "ready nodes exist but none have
-    the image", "ready nodes have the image but none match the GPU", and
-    "ready nodes match image+GPU but are too small" apart.
+    ready_after_gpu, ready_after_image, unfiltered_ready)`. The list-tail
+    values let `start_job` tell "cluster is empty", "no ready node has the
+    image", "none match the GPU", "none are in the requested region", and
+    "matching nodes are too small" apart.
     """
     machine_prefix = gpu_machine_prefix(func_gpu, CLOUD_PROVIDER)
     all_nodes = cluster_state.list_nodes()
@@ -128,12 +136,17 @@ def _select_ready_nodes_from_state(
             for n in unfiltered_ready
             if image in [c["image"] for c in n.get("containers") or []]
         ]
-    ready_after_filters = ready_after_image
+    ready_after_gpu = ready_after_image
     if machine_prefix:
-        ready_after_filters = [
+        ready_after_gpu = [
             n
             for n in ready_after_image
             if (n.get("machine_type") or "").startswith(machine_prefix)
+        ]
+    ready_after_filters = ready_after_gpu
+    if region:
+        ready_after_filters = [
+            n for n in ready_after_gpu if n.get("gcp_region") == region
         ]
 
     selected = []
@@ -161,6 +174,7 @@ def _select_ready_nodes_from_state(
         selected,
         total_parallelism,
         ready_after_filters,
+        ready_after_gpu,
         ready_after_image,
         unfiltered_ready,
     )
@@ -174,6 +188,8 @@ def _grow_if_needed(
     func_ram: int | str,
     image: Optional[str],
     func_gpu: Optional[str],
+    region: Optional[str],
+    disk_gb: Optional[int],
     job_id: str,
     logger: Logger,
     add_background_task,
@@ -200,7 +216,7 @@ def _grow_if_needed(
     if missing_slots <= 0:
         return [], max_additional_cpus
 
-    config = _get_cluster_config()
+    config = config_with_job_overrides(_get_cluster_config(), region, disk_gb)
     planned = plan_grow_nodes(
         missing_slots=missing_slots,
         func_cpu=func_cpu,
@@ -252,7 +268,9 @@ async def start_job(
     Request body:
         func_cpu, func_ram, n_inputs, max_parallelism, packages,
         user_python_version, burla_client_version, function_name,
-        function_size_gb, started_at, is_background_job, grow.
+        function_size_gb, started_at, is_background_job, grow,
+        region (only nodes in this region serve the job; new nodes boot
+        there), disk_gb (boot disk size for new nodes).
 
     Response on success:
         {
@@ -296,6 +314,8 @@ async def start_job(
     grow = bool(body.get("grow"))
     image = body.get("image")
     func_gpu = body.get("func_gpu")
+    region = body.get("region")
+    disk_gb = int(body["disk_gb"]) if body.get("disk_gb") else None
     client_version = body["burla_client_version"]
 
     # --- version check ---
@@ -327,6 +347,7 @@ async def start_job(
         ready,
         target_parallelism,
         all_ready,
+        ready_after_gpu,
         ready_after_image,
         unfiltered_ready,
     ) = _select_ready_nodes_from_state(
@@ -335,6 +356,7 @@ async def start_job(
         max_parallelism=max_parallelism,
         image=image,
         func_gpu=func_gpu,
+        region=region,
     )
 
     if not ready and not grow:
@@ -357,8 +379,10 @@ async def start_job(
         # most specific reason so the client can tell the user what to do.
         if image and not ready_after_image:
             reason = "image_mismatch"
-        elif func_gpu and ready_after_image and not all_ready:
+        elif func_gpu and ready_after_image and not ready_after_gpu:
             reason = "gpu_mismatch"
+        elif region and ready_after_gpu and not all_ready:
+            reason = "region_mismatch"
         else:
             reason = "insufficient_capacity"
         detail: dict = {
@@ -366,6 +390,7 @@ async def start_job(
             "reason": reason,
             "requested_image": image,
             "requested_func_gpu": func_gpu,
+            "requested_region": region,
         }
         if reason == "image_mismatch":
             detail["available_images"] = sorted(
@@ -382,6 +407,10 @@ async def start_job(
                     for n in ready_after_image
                     if n.get("machine_type")
                 }
+            )
+        elif reason == "region_mismatch":
+            detail["available_regions"] = sorted(
+                {n.get("gcp_region") for n in ready_after_gpu if n.get("gcp_region")}
             )
         raise HTTPException(status_code=409, detail=detail)
 
@@ -401,6 +430,8 @@ async def start_job(
             func_ram=func_ram,
             image=image,
             func_gpu=func_gpu,
+            region=region,
+            disk_gb=disk_gb,
             job_id=job_id,
             logger=logger,
             add_background_task=add_background_task,
@@ -413,6 +444,9 @@ async def start_job(
         "func_ram": func_ram,
         "image": image,
         "func_gpu": func_gpu,
+        # Kept on the job so mid-job replacement boots honor them too.
+        "region": region,
+        "disk_gb": disk_gb,
         "grow": grow,
         # Remaining CPU budget for mid-job replacement boots (None = uncapped).
         "grow_cpus_remaining": grow_cpus_remaining,

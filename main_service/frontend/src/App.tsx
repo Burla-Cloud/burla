@@ -11,7 +11,6 @@ import { NodesProvider } from "@/contexts/NodesContext";
 import { ClusterProvider } from "@/contexts/ClusterContext";
 import { JobsProvider } from "@/contexts/JobsContext";
 import { SettingsProvider } from "@/contexts/SettingsContext";
-import { LogsProvider } from "@/contexts/LogsContext";
 import ErrorBoundary from "@/components/ErrorBoundary";
 import ProfilePicture from "@/components/ProfilePicture";
 import { useState } from "react";
@@ -26,8 +25,10 @@ const Layout = () => {
         <Sidebar disabled={saving} />
       </div>
 
-      {/* Make the main pane scroll vertically (not the whole window) */}
-      <div className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden">
+      {/* Make the main pane scroll vertically (not the whole window).
+          scrollbar-gutter keeps the content width identical whether or not a
+          scrollbar is present, so switching tabs never shifts the layout. */}
+      <div className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden [scrollbar-gutter:stable]">
         {/* Extra right padding keeps content clear of the floating avatar */}
         <div className="min-h-full w-full min-w-0 flex items-stretch pl-10 pr-16 pt-9 pb-12">
           <Outlet context={{ saving, setSaving }} />
@@ -45,19 +46,17 @@ const App = () => (
           <Toaster />
           <JobsProvider>
             <SettingsProvider>
-              <LogsProvider>
-                <Router>
-                  <Routes>
-                    <Route element={<Layout />}>
-                      <Route path="/" element={<Dashboard />} />
-                      <Route path="/jobs" element={<Jobs />} />
-                      <Route path="/jobs/:jobId" element={<JobDetails />} />
-                      <Route path="/settings" element={<Settings />} />
-                      <Route path="/filesystem" element={<Filesystem />} />
-                    </Route>
-                  </Routes>
-                </Router>
-              </LogsProvider>
+              <Router>
+                <Routes>
+                  <Route element={<Layout />}>
+                    <Route path="/" element={<Dashboard />} />
+                    <Route path="/jobs" element={<Jobs />} />
+                    <Route path="/jobs/:jobId" element={<JobDetails />} />
+                    <Route path="/settings" element={<Settings />} />
+                    <Route path="/filesystem" element={<Filesystem />} />
+                  </Route>
+                </Routes>
+              </Router>
             </SettingsProvider>
           </JobsProvider>
         </TooltipProvider>

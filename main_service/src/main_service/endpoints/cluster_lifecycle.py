@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import hashlib
 import os
 import tempfile
@@ -18,6 +19,7 @@ from main_service import (
     LOCAL_DEV_CONFIG,
     LOCAL_DEV_NODE_PORT_BASE,
     MAIN_SERVICE_URL_FOR_NODES,
+    default_region,
     get_logger,
     get_add_background_task_function,
 )
@@ -111,6 +113,21 @@ def _get_cluster_config():
     if IN_LOCAL_DEV_MODE:
         return LOCAL_DEV_CONFIG
     return history.get_cluster_config()
+
+
+def config_with_job_overrides(config: dict, region: str | None, disk_gb: int | None):
+    """Cluster config with a job's `region` / `disk_gb` request applied, so
+    nodes booted for that job land where it asked. Copied because the input is
+    the live settings dict (LOCAL_DEV_CONFIG in local-dev)."""
+    if not region and not disk_gb:
+        return config
+    config = copy.deepcopy(config)
+    for node_spec in config["Nodes"]:
+        if region:
+            node_spec["gcp_region"] = region
+        if disk_gb:
+            node_spec["disk_size_gb"] = disk_gb
+    return config
 
 
 def verify_nodes_can_reach_head():
@@ -253,7 +270,7 @@ def _start_nodes(
             node_start_kwargs = dict(
                 logger=logger,
                 machine_type=machine_type,
-                region=node_spec["gcp_region"],
+                region=node_spec.get("gcp_region") or default_region(),
                 containers=[Container.from_dict(c) for c in spec_containers],
                 provider=provider,
                 service_port=node_service_port,

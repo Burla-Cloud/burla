@@ -1,4 +1,5 @@
 import os
+from threading import Lock
 from time import sleep
 
 import boto3
@@ -15,6 +16,7 @@ _CAPACITY_ERROR_CODES = (
     "InsufficientFreeAddressesInSubnet",
     "Unsupported",
 )
+_run_instances_lock = Lock()
 
 
 class AWSProvider:
@@ -129,17 +131,24 @@ class AWSProvider:
         for az, subnet in sorted(subnets_by_az.items()):
             on_log(f"Attempting to provision {machine_type} in AZ: {az}")
             try:
-                response = ec2.run_instances(
-                    **run_kwargs,
-                    NetworkInterfaces=[
-                        {
-                            "DeviceIndex": 0,
-                            "SubnetId": subnet["SubnetId"],
-                            "AssociatePublicIpAddress": subnet["MapPublicIpOnLaunch"],
-                            "Groups": [security_group_id],
-                        }
-                    ],
-                )
+                # RunInstances calls share one account-level request bucket;
+                # serialize the API edge, not VM startup, so large grows still
+                # boot concurrently without exhausting that bucket.
+                with _run_instances_lock:
+                    response = ec2.run_instances(
+                        **run_kwargs,
+                        NetworkInterfaces=[
+                            {
+                                "DeviceIndex": 0,
+                                "SubnetId": subnet["SubnetId"],
+                                "AssociatePublicIpAddress": subnet[
+                                    "MapPublicIpOnLaunch"
+                                ],
+                                "Groups": [security_group_id],
+                            }
+                        ],
+                    )
+                    sleep(0.25)
                 instance = response["Instances"][0]
                 instance_id = instance["InstanceId"]
                 associate_public_ip = subnet["MapPublicIpOnLaunch"]
@@ -229,6 +238,27 @@ class AWSProvider:
         if instance_ids:
             ec2.terminate_instances(InstanceIds=instance_ids)
             ec2.get_waiter("instance_terminated").wait(InstanceIds=instance_ids)
+
+    def existing_instances(self, instance_names: list[str], region: str) -> set[str]:
+        """Which of these instances still exist in any non-terminated state.
+        One batched describe, tag-scoped to this cluster's own nodes."""
+        response = self._ec2(region).describe_instances(
+            Filters=[
+                {"Name": "tag:Name", "Values": instance_names},
+                {"Name": "tag:burla-cluster-id", "Values": [CLUSTER_NAME]},
+                {
+                    "Name": "instance-state-name",
+                    "Values": ["pending", "running", "stopping", "stopped"],
+                },
+            ]
+        )
+        return {
+            tag["Value"]
+            for reservation in response["Reservations"]
+            for instance in reservation["Instances"]
+            for tag in instance["Tags"]
+            if tag["Key"] == "Name"
+        }
 
     def delete_stopped_instances(self):
         """Nothing to reap on AWS.

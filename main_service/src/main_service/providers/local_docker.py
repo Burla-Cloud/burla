@@ -171,3 +171,14 @@ class LocalDockerProvider:
         for container in docker_client.containers(all=True):
             if any(name == f"/{container_name}" for name in container["Names"]):
                 remove_container(docker_client, container["Id"])
+
+    def existing_instances(self, instance_names: list[str], region: str) -> set[str]:
+        """Which of these node containers still exist."""
+        docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
+        wanted = {f"/node_{name[11:]}": name for name in instance_names}
+        found = set()
+        for container in docker_client.containers(all=True):
+            for container_name in container["Names"]:
+                if container_name in wanted:
+                    found.add(wanted[container_name])
+        return found

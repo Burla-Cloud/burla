@@ -198,11 +198,18 @@ _DEFAULT_MACHINE_TYPES = {
 }
 
 
-def _default_region() -> str:
+def default_region() -> str:
     # Field is named gcp_region for historical reasons; on AWS/Azure it holds
     # that cloud's region (e.g. us-east-1 / eastus).
     if CLOUD_PROVIDER == "aws":
-        return os.environ.get("AWS_REGION", "us-east-1")
+        region = os.environ.get("AWS_REGION")
+        if not region and (IN_CLIENT_HOSTED_MODE or IN_LOCAL_DEV_MODE):
+            # A head on the user's own machine boots nodes with their CLI
+            # login, so an unset region should follow that login's default.
+            import boto3
+
+            region = boto3.session.Session().region_name
+        return region or "us-east-1"
     if CLOUD_PROVIDER == "azure":
         return os.environ.get("AZURE_REGION", "eastus")
     return "us-central1"
@@ -217,7 +224,7 @@ DEFAULT_CONFIG = {  # <- config used only when no config has ever been saved
                 },
             ],
             "machine_type": _DEFAULT_MACHINE_TYPES[CLOUD_PROVIDER],
-            "gcp_region": _default_region(),
+            "gcp_region": default_region(),
             "quantity": 1,
             "inactivity_shutdown_time_sec": 60 * 10,
         }
@@ -421,6 +428,9 @@ async def lifespan(app: FastAPI):
     cluster_state.set_event_loop(asyncio.get_running_loop())
     cluster_state.load_from_history()
     reaper_task = asyncio.create_task(cluster_state.job_reaper_loop(logger=Logger()))
+    node_reaper_task = asyncio.create_task(
+        cluster_state.node_reaper_loop(logger=Logger())
+    )
     # Client-hosted dashboards are localhost-only; there is no public DNS
     # lease to renew.
     run_lease_loop = not IN_LOCAL_DEV_MODE and not IN_CLIENT_HOSTED_MODE
@@ -451,6 +461,7 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         reaper_task.cancel()
+        node_reaper_task.cancel()
         if dashboard_lease_task is not None:
             dashboard_lease_task.cancel()
         if stopped_instance_reaper_task is not None:

@@ -19,6 +19,12 @@ several agents can run clusters side by side on one machine. Run
 `make cluster-info` to see a worktree's cluster name and dashboard URL; never
 assume the head is on port 5001.
 
+Every ad hoc Burla client command in a dev worktree must set both variables
+inline: `BURLA_CLUSTER_DASHBOARD_URL="$(make -s cluster-info | awk
+'/dashboard/{print $2}')" BURLA_ENVIRONMENT=test <command>`. Never rely on a
+prior shell export or automatic cluster resolution; it can select the deployed
+test cluster instead of this worktree's cluster.
+
 Start a cluster from its worktree with `make local-dev` (whole cluster local, for
 light work: frontend, dashboard, head/API behavior) or `make remote-dev` (head
 local, nodes are real EC2 in the Burla test AWS account, for real scale or

@@ -65,8 +65,11 @@ def load_from_history():
 def _publish(queues, event: dict):
     if _loop is None:
         return
+    # Each subscriber gets its own copy: SSE handlers mutate events (e.g.
+    # popping job_id), and a shared dict let one dashboard's stream corrupt
+    # another's.
     for queue in list(queues):
-        _loop.call_soon_threadsafe(queue.put_nowait, event)
+        _loop.call_soon_threadsafe(queue.put_nowait, dict(event))
 
 
 # ------------------------------------------------------------------ subscriptions
@@ -313,7 +316,15 @@ def update_job(
             updates.pop("status")
             new_status = None
         became_failed = new_status == "FAILED" and job.get("status") != "FAILED"
+        was_terminal = job.get("status") in TERMINAL_JOB_STATUSES
         job.update(updates)
+        entered_terminal = (
+            job.get("status") in TERMINAL_JOB_STATUSES and not was_terminal
+        )
+        # The reaper passes a backfilled ended_at for jobs that died silently;
+        # everything else gets the live transition time.
+        if entered_terminal and job.get("ended_at") is None:
+            job["ended_at"] = time()
         if append_fail_reason is not None:
             reasons = job.setdefault("fail_reason", [])
             if append_fail_reason not in reasons:
@@ -344,6 +355,14 @@ def update_job(
     return True
 
 
+# Result counts live in memory (per-node progress) and normally only reach
+# history on status transitions. Flushing them every few seconds bounds how
+# many counts an ungraceful head death (kill -9, SIGTERM mid-job) can lose;
+# the MAX() in history's upsert keeps the stored count monotonic.
+COUNTS_FLUSH_INTERVAL_SEC = 5
+_counts_flushed_at: dict[str, float] = {}
+
+
 def update_job_progress(
     job_id: str,
     instance_name: str,
@@ -361,7 +380,11 @@ def update_job_progress(
             progress["current_num_results"] = current_num_results
         if client_contact_last_1s is not None:
             progress["client_contact_last_1s"] = client_contact_last_1s
-        progress["last_push_at"] = time()
+        now = time()
+        progress["last_push_at"] = now
+        if now - _counts_flushed_at.get(job_id, 0) >= COUNTS_FLUSH_INTERVAL_SEC:
+            _counts_flushed_at[job_id] = now
+            history.upsert_job_and_nodes(job_id, dict(job), [])
 
 
 def job_view(job_id: str) -> dict:
@@ -471,6 +494,7 @@ def _job_summary(job: dict) -> dict:
         "n_inputs": job.get("n_inputs", 0),
         "n_results": sum(p.get("current_num_results", 0) for p in assigned.values()),
         "started_at": job.get("started_at"),
+        "ended_at": job.get("ended_at"),
     }
 
 
@@ -492,9 +516,15 @@ REAPER_INTERVAL_SEC = 10
 
 
 async def job_reaper_loop(logger=None):
+    # A freshly restarted head reloads RUNNING jobs from history with no
+    # last_push_at, so nodes look silent until they re-report through the
+    # relay. Give them the full silence budget before judging anything.
+    loop_started_at = time()
     while True:
         await asyncio.sleep(REAPER_INTERVAL_SEC)
         now = time()
+        if now - loop_started_at < REAPER_JOB_SILENCE_SEC:
+            continue
         with _lock:
             candidates = []
             for job_id, job in JOBS.items():
@@ -529,13 +559,20 @@ async def job_reaper_loop(logger=None):
                     candidates.append((job_id, "COMPLETED" if completed else "FAILED"))
 
         for job_id, status in candidates:
+            # The job actually ended when its nodes went silent, not when the
+            # reaper noticed; the last persisted sample is the closest record.
+            ended_at = history.last_job_metrics_timestamp(job_id) or now
             if status == "COMPLETED":
-                update_job(job_id, {"status": status})
+                update_job(job_id, {"status": status, "ended_at": ended_at})
                 if logger is not None:
                     logger.log(f"Reaped completed job {job_id}", severity="WARNING")
                 continue
             reason = 'main_svc: job is "running" but no nodes working on it ???'
-            update_job(job_id, {"status": "FAILED"}, append_fail_reason=reason)
+            update_job(
+                job_id,
+                {"status": "FAILED", "ended_at": ended_at},
+                append_fail_reason=reason,
+            )
             history.add_job_logs(
                 job_id,
                 [
@@ -553,3 +590,85 @@ async def job_reaper_loop(logger=None):
             )
             if logger is not None:
                 logger.log(f"Reaped stalled job {job_id}", severity="WARNING")
+
+
+# ------------------------------------------------------------------ node reaper
+
+# Nodes push state ~1x/sec, so a READY/RUNNING node silent this long is gone:
+# either the VM died without its self_delete call, or the call landed while
+# the head was down (leaving ended_at NULL, so every restart rehydrated it as
+# a live node forever). BOOTING nodes are judged on age instead of silence
+# because a wedged boot handshake keeps pushing BOOTING forever; the budget
+# sits above NODE_BOOT_TIMEOUT so Node.start's own boot watcher, when it is
+# still alive, always rules first.
+REAPER_NODE_SILENCE_SEC = 150
+REAPER_BOOTING_NODE_AGE_SEC = 15 * 60
+
+
+async def node_reaper_loop(logger=None):
+    # Lazy imports: node.py imports this module, and providers import from
+    # the main_service package, which is mid-initialization when this module
+    # is first imported.
+    from main_service.node import Node
+    from main_service.providers import get_provider
+
+    provider = get_provider()
+    # Same startup grace as the job reaper: rehydrated nodes have no
+    # last_push_at until they re-report through the relay.
+    loop_started_at = time()
+    while True:
+        await asyncio.sleep(REAPER_INTERVAL_SEC)
+        now = time()
+        if now - loop_started_at < REAPER_NODE_SILENCE_SEC:
+            continue
+
+        with _lock:
+            candidates = []
+            for node in NODES.values():
+                status = node.get("status")
+                if status == "BOOTING":
+                    dead = (
+                        now - node["started_booting_at"] > REAPER_BOOTING_NODE_AGE_SEC
+                    )
+                elif status in ("READY", "RUNNING"):
+                    dead = now - node.get("last_push_at", 0) > REAPER_NODE_SILENCE_SEC
+                else:
+                    continue
+                if dead:
+                    candidates.append(dict(node))
+
+        if not candidates:
+            continue
+
+        by_region: dict[str, list[dict]] = {}
+        for node in candidates:
+            by_region.setdefault(node["gcp_region"], []).append(node)
+
+        for region, nodes in by_region.items():
+            names = [node["instance_name"] for node in nodes]
+            try:
+                existing = await asyncio.to_thread(
+                    provider.existing_instances, names, region
+                )
+            except Exception as error:
+                print(f"Node reaper existence check failed: {error}")
+                continue
+            for node in nodes:
+                name = node["instance_name"]
+                try:
+                    if name in existing:
+                        # Same deletion path self_delete uses.
+                        node_obj = Node.from_state(logger, node, provider=provider)
+                        await asyncio.to_thread(
+                            provider.delete_instance, name, node_obj.zone
+                        )
+                    update_node(name, {"status": "DELETED", "ended_at": now})
+                    if logger is not None:
+                        cause = (
+                            "deleted its silent VM"
+                            if name in existing
+                            else "its VM no longer exists"
+                        )
+                        logger.log(f"Reaped node {name} ({cause}).", severity="WARNING")
+                except Exception as error:
+                    print(f"Node reaper failed to delete {name}: {error}")

@@ -39,6 +39,7 @@ export interface BurlaJob {
   n_results: number;
   n_failed?: number;
   started_at?: Date; // parsed from UNIX timestamp in jobContext & jobs_paginated
+  ended_at?: Date;
   function_name?: string;
 }
 
@@ -54,10 +55,4 @@ export interface Settings {
   googleCloudProjectId?: string;
   cloudAccountName?: string;
   cloudProvider?: string;
-}
-
-export interface LogEntry {
-  message: string;
-  log_timestamp: number;
-  is_error?: boolean;
 }

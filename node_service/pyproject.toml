@@ -14,6 +14,8 @@ dependencies = [
     # Only used to pull private images from Google Artifact Registry.
     "google-auth>=2.22.0,<3.0.0",
     "psutil>=7.1.0,<8.0.0",
+    # Pure-python NVML binding; harmless on CPU-only nodes (init just fails).
+    "nvidia-ml-py>=12.0.0",
     "packaging>=25.0,<26.0",
     "cloudpickle>=3.1.2,<4.0.0",
     "tblib>=3.2.2,<4.0.0",

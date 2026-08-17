@@ -5,7 +5,7 @@ Firestore was removed in 1.6.0. This file describes where every piece of state n
 ## Two stores, one owner
 
 - **Live state**: plain dicts in [main_service/src/main_service/cluster_state.py](../../../main_service/src/main_service/cluster_state.py). `NODES` (instance_name → node dict) and `JOBS` (job_id → job dict). Guarded by one `threading.RLock` because `Node.start` mutates from thread-pool threads. In-memory pub/sub (`subscribe_node_events` / `subscribe_job_events` / `subscribe_node_logs`) feeds the dashboard SSE streams.
-- **History**: SQLite (WAL) via [main_service/src/main_service/history.py](../../../main_service/src/main_service/history.py) at `HISTORY_DB_PATH` (default `/var/lib/burla/history.db`). Tables: `jobs`, `job_logs`, `nodes`, `node_logs`, `cluster_config`. Written on status transitions and log batches; read only by dashboard/history endpoints and at head startup (`cluster_state.load_from_history` reloads active nodes + RUNNING jobs).
+- **History**: SQLite (WAL) via [main_service/src/main_service/history.py](../../../main_service/src/main_service/history.py) at `HISTORY_DB_PATH` (default `/var/lib/burla/history.db`). Tables: `jobs`, `job_logs`, `nodes`, `node_logs`, `resource_metrics`, `cluster_config`. Written on status transitions and batched logs/metrics; read only by dashboard/history endpoints and at head startup (`cluster_state.load_from_history` reloads active nodes + RUNNING jobs).
 
 The client and the dashboard browser never see either store directly; everything goes through main_service HTTP/SSE.
 
@@ -64,6 +64,7 @@ Node-side: `_state_push_loop` in [node_service/src/node_service/__init__.py](../
 
 Other node → head endpoints (all in [main_service/src/main_service/endpoints/nodes.py](../../../main_service/src/main_service/endpoints/nodes.py)):
 - `POST /v1/nodes/{id}/logs:batch`: `{"logs": [{"msg", "ts"}]}` (boot/error logs, also from VM startup scripts via curl)
+- `POST /v1/nodes/{id}/metrics:batch`: per-second whole-node and active-task CPU, memory, network, and disk samples, batched without coarsening timestamps; task rows are attributed from each worker's `current_input`
 - `POST /v1/nodes/{id}/self_delete`: the head deletes the VM (inactivity shutdown, boot failure); nodes have zero cloud-API access
 - `GET /v1/jobs/{id}/peers`: `{"peers": [{"instance_name", "host"}], "booting_node_ids": [...]}`, the input-stealing ring
 - `POST /v1/jobs/{id}/logs:batch`: `{"documents": [...]}` UDF log docs from `JobLogWriter` (timestamps are epoch floats)

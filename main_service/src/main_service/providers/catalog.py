@@ -42,6 +42,7 @@ _GPU_MACHINE_SPECS = {
     "a2-ultragpu": {"cpus_per_gpu": 12, "ram_per_gpu": 170},
     "a3-highgpu": {"cpus_per_gpu": 26, "ram_per_gpu": 234},
     # AWS single-GPU-per-call machines
+    "g4dn.xlarge": {"cpus": 4, "ram_gb": 16, "gpus": 1},
     "p4d.24xlarge": {"cpus": 96, "ram_gb": 1152, "gpus": 8},
     "p4de.24xlarge": {"cpus": 96, "ram_gb": 1152, "gpus": 8},
     "p5.4xlarge": {"cpus": 16, "ram_gb": 256, "gpus": 1},
@@ -61,6 +62,7 @@ GPU_MACHINE_TYPES = {
         "H100_80G": "a3-highgpu-1g",
     },
     "aws": {
+        "T4": "g4dn.xlarge",
         "A100": "p4d.24xlarge",
         "A100_40G": "p4d.24xlarge",
         "A100_80G": "p4de.24xlarge",

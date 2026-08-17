@@ -58,11 +58,16 @@ make remote-dev     # head local, nodes are real EC2 in the test account
 
 Then point clients and tests at that cluster. `make test`, `make test-service`,
 and `make test-e2e` already default to this worktree's head port; for ad hoc
-client commands use the URL `make cluster-info` prints:
+client commands, set the worktree URL and test environment inline every time:
 
 ```bash
-export BURLA_CLUSTER_DASHBOARD_URL=$(make -s cluster-info | awk '/dashboard/{print $2}')
+BURLA_CLUSTER_DASHBOARD_URL="$(make -s cluster-info | awk '/dashboard/{print $2}')" \
+  BURLA_ENVIRONMENT=test uv run python your_script.py
 ```
+
+Do not rely on a previous shell export or automatic cluster resolution. Either
+can silently send the job to the deployed test cluster instead of this
+worktree's cluster.
 
 Tear down with `make stop` (this worktree only) or `make stop-all` (every dev
 cluster on the machine). `make stop` is label-scoped, so it cannot disturb

@@ -6,6 +6,7 @@ cluster token. These replace every node -> Firestore write and watch:
                                  response carries the head's view back down
                                  (host during boot, job signals during a job).
 - POST /v1/nodes/{id}/logs:batch node + startup-script log lines.
+- POST /v1/nodes/{id}/metrics:batch per-second node and task resource samples.
 - POST /v1/nodes/{id}/self_delete node asks the head to delete its VM
                                  (inactivity shutdown, boot failure).
 - GET  /v1/jobs/{id}/peers       input-stealing ring (replaces the firestore
@@ -18,10 +19,12 @@ from hmac import compare_digest
 from time import time
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from starlette.requests import ClientDisconnect
 from main_service.endpoints.cluster_lifecycle import (
     GROW_INACTIVITY_SHUTDOWN_TIME_SEC,
     _get_cluster_config,
     _start_nodes,
+    config_with_job_overrides,
 )
 from main_service.helpers import Logger
 from main_service.node import Node
@@ -59,7 +62,12 @@ _NODE_STATE_FIELDS = (
 
 @router.put("/v1/nodes/{instance_name}/state")
 async def push_node_state(instance_name: str, request: Request):
-    body = await request.json()
+    # Nodes push every ~1s and retry forever; a node dropping mid-request
+    # (e.g. while shutting down) is routine, not worth a traceback.
+    try:
+        body = await request.json()
+    except ClientDisconnect:
+        return {}
 
     updates = {key: body[key] for key in _NODE_STATE_FIELDS if key in body}
     merged = cluster_state.record_node_push(instance_name, updates)
@@ -118,6 +126,21 @@ async def push_node_logs(instance_name: str, request: Request):
         await asyncio.to_thread(history.add_debug_logs, instance_name, debug_entries)
     if user_logs:
         await asyncio.to_thread(cluster_state.add_node_logs, instance_name, user_logs)
+
+
+@router.post("/v1/nodes/{instance_name}/metrics:batch")
+async def push_resource_metrics(instance_name: str, request: Request):
+    try:
+        body = await request.json()
+    except ClientDisconnect:
+        return
+    await asyncio.to_thread(
+        history.add_resource_metrics, instance_name, body["samples"]
+    )
+    # .get: nodes running releases older than call events push without them.
+    call_events = body.get("call_events")
+    if call_events:
+        await asyncio.to_thread(history.add_call_events, call_events)
 
 
 @router.post("/v1/nodes/{instance_name}/certificate")
@@ -202,7 +225,9 @@ async def boot_replacement_nodes(
             "slots_booted": previous["slots_booted"],
         }
 
-    config = _get_cluster_config()
+    config = config_with_job_overrides(
+        _get_cluster_config(), job.get("region"), job.get("disk_gb")
+    )
     planned = plan_grow_nodes(
         missing_slots=missing_slots,
         func_cpu=job["func_cpu"],

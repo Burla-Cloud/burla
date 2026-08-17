@@ -1,11 +1,14 @@
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router-dom";
 import { useEffect, useRef, useState } from "react";
 import { useJobs } from "@/contexts/JobsContext";
-import JobLogs from "@/components/JobLogs";
+import { BurlaJob, JobsStatus } from "@/types/coreTypes";
+import JobCalls from "@/components/JobCalls";
+import JobUtilization from "@/components/JobUtilization";
 import { Button } from "@/components/ui/button";
 import { ChevronRight, PowerOff } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
 import { StatusBadge, jobStatusBadge } from "@/components/StatusBadge";
+import { cn } from "@/lib/utils";
 
 type JobResultStats = {
     n_inputs: number;
@@ -14,29 +17,45 @@ type JobResultStats = {
 };
 
 type JobDoc = {
-    image?: string | null;
     max_parallelism?: number | null;
     func_cpu?: number | string | null;
     func_ram?: number | string | null;
     func_gpu?: string | null;
 };
 
-const Fact = ({ label, value }: { label: string; value: React.ReactNode }) => (
-    <div className="min-w-0">
-        <div className="eyebrow">{label}</div>
-        <div className="mt-1 text-sm leading-snug text-foreground">{value}</div>
-    </div>
-);
+const formatDuration = (seconds: number): string => {
+    const s = Math.max(0, Math.round(seconds));
+    if (s < 60) return `${s}s`;
+    const m = Math.floor(s / 60);
+    if (m < 60) return `${m}m ${s % 60}s`;
+    const h = Math.floor(m / 60);
+    return `${h}h ${m % 60}m`;
+};
+
+const Unknown = () => <span className="text-muted-foreground">unknown</span>;
+
+const tabClass = (active: boolean) =>
+    cn(
+        "relative -mb-px border-b-2 px-1 pb-2.5 text-sm font-medium transition-colors duration-150 focus-visible:outline-none",
+        active
+            ? "border-primary text-foreground"
+            : "border-transparent text-muted-foreground hover:text-foreground"
+    );
 
 const JobDetails = () => {
     const jobId = useParams<{ jobId: string }>().jobId!;
     const { jobs } = useJobs();
     const { toast } = useToast();
+    const [searchParams, setSearchParams] = useSearchParams();
     const [isStopping, setIsStopping] = useState(false);
     const [stats, setStats] = useState<JobResultStats | null>(null);
     const [isStatsLoading, setIsStatsLoading] = useState(true);
     const [statsLoadError, setStatsLoadError] = useState(false);
     const [jobDoc, setJobDoc] = useState<JobDoc | null>(null);
+    // Deep links: jobs outside the SSE-streamed first page never appear in
+    // the jobs context, so the page falls back to the job summary that
+    // result-stats returns.
+    const [fetchedJob, setFetchedJob] = useState<BurlaJob | null>(null);
     const hasCompletedInitialStatsLoadRef = useRef(false);
     const [userTimeZone, setUserTimeZone] = useState<string>(() => {
         const stored = typeof window !== "undefined" ? localStorage.getItem("userTimezone") : null;
@@ -50,6 +69,42 @@ const JobDetails = () => {
                 : null;
         return cookieTz || Intl.DateTimeFormat().resolvedOptions().timeZone;
     });
+
+    const taskParam = searchParams.get("task");
+    const selectedTaskIndex =
+        taskParam !== null && /^\d+$/.test(taskParam) ? Number(taskParam) : null;
+
+    // The call table and detail live on the first tab. A selected task wins
+    // over the tab param, which also reinterprets old ?tab=utilization&task=N
+    // and ?tab=calls&task=N links.
+    const activeTab: "overview" | "utilization" =
+        selectedTaskIndex == null && searchParams.get("tab") === "utilization"
+            ? "utilization"
+            : "overview";
+
+    const openTab = (tab: "overview" | "utilization") => {
+        const sp = new URLSearchParams(searchParams);
+        if (tab === "overview") sp.delete("tab");
+        else sp.set("tab", tab);
+        sp.delete("task");
+        setSearchParams(sp);
+    };
+
+    // Selecting/stepping tasks replaces the history entry so the back button
+    // leaves the page, not through every visited task.
+    const selectTask = (index: number) => {
+        const sp = new URLSearchParams(searchParams);
+        sp.delete("tab");
+        sp.set("task", String(index));
+        setSearchParams(sp, { replace: true });
+    };
+
+    const clearTask = () => {
+        const sp = new URLSearchParams(searchParams);
+        sp.delete("tab");
+        sp.delete("task");
+        setSearchParams(sp, { replace: true });
+    };
 
     useEffect(() => {
         let cancelled = false;
@@ -82,8 +137,8 @@ const JobDetails = () => {
         };
     }, []);
 
-    const formatStartedAt = (date?: Date): string => {
-        if (!date) return "—";
+    const formatDateTime = (date?: Date): React.ReactNode => {
+        if (!date) return <Unknown />;
         const tz = userTimeZone || Intl.DateTimeFormat().resolvedOptions().timeZone;
         const monthDay = date.toLocaleDateString("en-US", {
             timeZone: tz,
@@ -116,12 +171,22 @@ const JobDetails = () => {
         }
     };
 
-    const job = jobs.find((j) => j.id === jobId);
+    const job = jobs.find((j) => j.id === jobId) ?? fetchedJob ?? undefined;
+    const isLiveJob = job?.status === "RUNNING" || job?.status === "PENDING";
+
+    // Live duration ticks once per second while the job runs.
+    const [nowMs, setNowMs] = useState(() => Date.now());
+    useEffect(() => {
+        if (!isLiveJob) return;
+        const id = window.setInterval(() => setNowMs(Date.now()), 1000);
+        return () => window.clearInterval(id);
+    }, [isLiveJob]);
 
     useEffect(() => {
         setStats(null);
         setStatsLoadError(false);
         setIsStatsLoading(true);
+        setFetchedJob(null);
         hasCompletedInitialStatsLoadRef.current = false;
     }, [jobId]);
 
@@ -135,6 +200,20 @@ const JobDetails = () => {
         })().catch(() => {});
         return () => controller.abort();
     }, [jobId]);
+
+    // Job-level notices (e.g. "Job canceled by user"): not function calls, so
+    // they render in a quiet events strip instead of the call table.
+    const [jobEvents, setJobEvents] = useState<{ message: string; timestamp: number }[]>([]);
+    useEffect(() => {
+        const controller = new AbortController();
+        (async () => {
+            const res = await fetch(`/v1/jobs/${jobId}/events`, { signal: controller.signal });
+            if (!res.ok) return;
+            const payload = await res.json();
+            setJobEvents(payload.events ?? []);
+        })().catch(() => {});
+        return () => controller.abort();
+    }, [jobId, job?.status]);
 
     useEffect(() => {
         const controller = new AbortController();
@@ -159,6 +238,26 @@ const JobDetails = () => {
                     n_inputs: Number(payload?.n_inputs ?? 0),
                     n_results: Number(payload?.n_results ?? 0),
                     n_failed: Number(payload?.n_failed ?? 0),
+                });
+                setFetchedJob({
+                    id: jobId,
+                    status: (payload?.status as JobsStatus) ?? null,
+                    user: payload?.user || "Unknown",
+                    n_inputs: Number(payload?.n_inputs ?? 0),
+                    n_results: Number(payload?.n_results ?? 0),
+                    n_failed: Number(payload?.n_failed ?? 0),
+                    function_name:
+                        typeof payload?.function_name === "string"
+                            ? payload.function_name
+                            : "Unknown",
+                    started_at:
+                        typeof payload?.started_at === "number"
+                            ? new Date(payload.started_at * 1000)
+                            : undefined,
+                    ended_at:
+                        typeof payload?.ended_at === "number"
+                            ? new Date(payload.ended_at * 1000)
+                            : undefined,
                 });
                 setStatsLoadError(false);
                 hasCompletedInitialStatsLoadRef.current = true;
@@ -202,22 +301,7 @@ const JobDetails = () => {
         };
     }, [jobId, job?.status]);
 
-    if (!job || isStatsLoading) {
-        return (
-            <div className="flex flex-1 flex-col items-center justify-center">
-                <div className="inline-flex items-center gap-3 text-muted-foreground">
-                    <div
-                        className="h-5 w-5 animate-spin rounded-full border-2 border-border border-t-primary"
-                        role="status"
-                        aria-label="Loading job details"
-                    />
-                    <span className="text-sm">Loading job…</span>
-                </div>
-            </div>
-        );
-    }
-
-    if (statsLoadError || !stats) {
+    if (statsLoadError) {
         return (
             <div className="flex flex-1 flex-col items-center justify-center text-center">
                 <p className="text-sm font-medium text-foreground">
@@ -233,6 +317,21 @@ const JobDetails = () => {
         );
     }
 
+    if (!job || isStatsLoading || !stats) {
+        return (
+            <div className="flex flex-1 flex-col items-center justify-center">
+                <div className="inline-flex items-center gap-3 text-muted-foreground">
+                    <div
+                        className="h-5 w-5 animate-spin rounded-full border-2 border-border border-t-primary"
+                        role="status"
+                        aria-label="Loading job details"
+                    />
+                    <span className="text-sm">Loading job…</span>
+                </div>
+            </div>
+        );
+    }
+
     const safeFailedCount = Math.max(0, stats.n_failed);
     // n_results counts every finished call, including failed ones.
     const finishedCount = Math.max(0, stats.n_results);
@@ -244,6 +343,68 @@ const JobDetails = () => {
 
     const badge = jobStatusBadge(job.status);
     const canStop = job.status === "RUNNING" || job.status === "PENDING";
+
+    const startedAtMs = job.started_at?.getTime();
+    const endedAtMs = job.ended_at?.getTime();
+    let durationValue: React.ReactNode = <Unknown />;
+    if (startedAtMs != null && isLiveJob) {
+        durationValue = formatDuration((nowMs - startedAtMs) / 1000);
+    } else if (startedAtMs != null && endedAtMs != null) {
+        durationValue = formatDuration((endedAtMs - startedAtMs) / 1000);
+    }
+
+    const loadingValue = <span className="text-muted-foreground">…</span>;
+    const resourceValue = (
+        value: number | string | null | undefined,
+        unit: string
+    ): React.ReactNode => {
+        if (jobDoc == null) return loadingValue;
+        if (value == null) return <Unknown />;
+        if (value === "dynamic") return "Dynamic";
+        return `${value} ${unit}`;
+    };
+
+    const facts: { label: string; value: React.ReactNode }[] = [
+        {
+            label: "Started",
+            value: <span className="tabular-nums">{formatDateTime(job.started_at)}</span>,
+        },
+        ...(isLiveJob
+            ? []
+            : [
+                  {
+                      label: "Ended",
+                      value: <span className="tabular-nums">{formatDateTime(job.ended_at)}</span>,
+                  },
+              ]),
+        { label: "Duration", value: <span className="tabular-nums">{durationValue}</span> },
+        {
+            label: "Max parallelism",
+            value: (
+                <span className="tabular-nums">
+                    {jobDoc == null ? (
+                        loadingValue
+                    ) : jobDoc.max_parallelism != null ? (
+                        jobDoc.max_parallelism.toLocaleString()
+                    ) : (
+                        <Unknown />
+                    )}
+                </span>
+            ),
+        },
+        {
+            label: "CPU / call",
+            value: <span className="tabular-nums">{resourceValue(jobDoc?.func_cpu, "vCPU")}</span>,
+        },
+        {
+            label: "RAM / call",
+            value: <span className="tabular-nums">{resourceValue(jobDoc?.func_ram, "GB")}</span>,
+        },
+        {
+            label: "GPU / call",
+            value: jobDoc == null ? loadingValue : jobDoc.func_gpu ?? "None",
+        },
+    ];
 
     return (
         <div className="flex flex-1 flex-col min-h-0 min-w-0">
@@ -261,7 +422,7 @@ const JobDetails = () => {
                 </nav>
 
                 {/* Title row */}
-                <div className="mt-3 flex flex-wrap items-start justify-between gap-x-6 gap-y-3 pb-5">
+                <div className="mt-3 flex flex-wrap items-start justify-between gap-x-6 gap-y-3 pb-4">
                     <div className="min-w-0">
                         <div className="flex items-center gap-3">
                             <h1 className="truncate font-mono text-xl font-semibold tracking-tight text-foreground">
@@ -281,120 +442,151 @@ const JobDetails = () => {
                     </Button>
                 </div>
 
-                {/* Details + progress */}
-                <div className="mb-4 rounded-xl border border-border bg-card shadow-sm">
-                    <div className="grid grid-cols-2 gap-x-8 gap-y-4 px-5 py-4 sm:grid-cols-3 lg:grid-cols-6">
-                        <Fact
-                            label="Started"
-                            value={
-                                <span className="tabular-nums">
-                                    {formatStartedAt(job.started_at)}
-                                </span>
-                            }
-                        />
-                        <Fact
-                            label="Image"
-                            value={
-                                <span className="break-all font-mono text-[13px]">
-                                    {jobDoc?.image ?? (jobDoc ? "default" : "—")}
-                                </span>
-                            }
-                        />
-                        <Fact
-                            label="Max parallelism"
-                            value={
-                                <span className="tabular-nums">
-                                    {jobDoc?.max_parallelism ?? "—"}
-                                </span>
-                            }
-                        />
-                        <Fact
-                            label="CPU / call"
-                            value={
-                                <span className="tabular-nums">
-                                    {jobDoc?.func_cpu != null ? `${jobDoc.func_cpu} vCPU` : "—"}
-                                </span>
-                            }
-                        />
-                        <Fact
-                            label="RAM / call"
-                            value={
-                                <span className="tabular-nums">
-                                    {jobDoc?.func_ram != null ? `${jobDoc.func_ram} GB` : "—"}
-                                </span>
-                            }
-                        />
-                        <Fact label="GPU / call" value={jobDoc?.func_gpu ?? (jobDoc ? "None" : "—")} />
-                    </div>
+                {/* Tabs (same pattern as the settings page) */}
+                <div className="border-b border-border">
+                    <nav className="flex items-center gap-5" aria-label="Job sections">
+                        <button
+                            type="button"
+                            onClick={() => openTab("overview")}
+                            className={tabClass(activeTab === "overview")}
+                            aria-pressed={activeTab === "overview"}
+                        >
+                            Overview
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => openTab("utilization")}
+                            className={tabClass(activeTab === "utilization")}
+                            aria-pressed={activeTab === "utilization"}
+                        >
+                            Utilization
+                        </button>
+                    </nav>
+                </div>
 
-                    <div className="border-t border-border/70 px-5 py-4">
-                        <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2">
-                            <span className="text-sm tabular-nums text-foreground">
-                                <span className="font-semibold">
-                                    {finishedCount.toLocaleString()}
+                {activeTab === "overview" ? (
+                    <div className="mt-5 flex flex-1 flex-col min-h-0">
+                        {/* Progress */}
+                        <div className="mb-4 rounded-xl border border-border bg-card px-5 py-4 shadow-sm">
+                            <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-2">
+                                <span className="tabular-nums text-foreground">
+                                    <span className="text-xl font-semibold">
+                                        {finishedCount.toLocaleString()}
+                                    </span>
+                                    <span className="text-sm text-muted-foreground">
+                                        {" "}
+                                        / {stats.n_inputs.toLocaleString()} function calls complete
+                                    </span>
                                 </span>
-                                <span className="text-muted-foreground">
-                                    {" "}
-                                    / {stats.n_inputs.toLocaleString()} function calls complete
-                                </span>
-                            </span>
 
-                            <div className="flex flex-wrap items-center gap-4 text-[13px] text-muted-foreground">
-                                <span className="inline-flex items-center gap-1.5">
-                                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 dark:bg-emerald-400" />
-                                    Succeeded
-                                    <span className="tabular-nums text-foreground">
-                                        {succeededCount.toLocaleString()}
+                                <div className="flex flex-wrap items-center gap-4 text-[13px] text-muted-foreground">
+                                    <span className="inline-flex items-center gap-1.5">
+                                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 dark:bg-emerald-400" />
+                                        Succeeded
+                                        <span className="tabular-nums text-foreground">
+                                            {succeededCount.toLocaleString()}
+                                        </span>
                                     </span>
-                                </span>
-                                <span className="inline-flex items-center gap-1.5">
-                                    <span className="h-1.5 w-1.5 rounded-full bg-destructive" />
-                                    Failed
-                                    <span className="tabular-nums text-foreground">
-                                        {safeFailedCount.toLocaleString()}
+                                    <span className="inline-flex items-center gap-1.5">
+                                        <span className="h-1.5 w-1.5 rounded-full bg-destructive" />
+                                        Failed
+                                        <span className="tabular-nums text-foreground">
+                                            {safeFailedCount.toLocaleString()}
+                                        </span>
                                     </span>
-                                </span>
-                                <span className="inline-flex items-center gap-1.5">
-                                    <span className="h-1.5 w-1.5 rounded-full bg-amber-400" />
-                                    Remaining
-                                    <span className="tabular-nums text-foreground">
-                                        {remainingCount.toLocaleString()}
+                                    <span className="inline-flex items-center gap-1.5">
+                                        <span className="h-1.5 w-1.5 rounded-full bg-amber-400" />
+                                        Remaining
+                                        <span className="tabular-nums text-foreground">
+                                            {remainingCount.toLocaleString()}
+                                        </span>
                                     </span>
-                                </span>
+                                </div>
+                            </div>
+
+                            <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-secondary">
+                                <div className="flex h-full w-full">
+                                    <div
+                                        className="h-full bg-emerald-500 transition-all dark:bg-emerald-400"
+                                        style={{ width: `${succeededPct}%` }}
+                                        aria-hidden="true"
+                                    />
+                                    <div
+                                        className="h-full bg-destructive transition-all"
+                                        style={{ width: `${failedPct}%` }}
+                                        aria-hidden="true"
+                                    />
+                                    <div
+                                        className="h-full bg-amber-400 transition-all"
+                                        style={{ width: `${remainingPct}%` }}
+                                        aria-hidden="true"
+                                    />
+                                </div>
                             </div>
                         </div>
 
-                        <div className="mt-2.5 h-1.5 w-full overflow-hidden rounded-full bg-secondary">
-                            <div className="flex h-full w-full">
-                                <div
-                                    className="h-full bg-emerald-500 transition-all dark:bg-emerald-400"
-                                    style={{ width: `${succeededPct}%` }}
-                                    aria-hidden="true"
-                                />
-                                <div
-                                    className="h-full bg-destructive transition-all"
-                                    style={{ width: `${failedPct}%` }}
-                                    aria-hidden="true"
-                                />
-                                <div
-                                    className="h-full bg-amber-400 transition-all"
-                                    style={{ width: `${remainingPct}%` }}
-                                    aria-hidden="true"
-                                />
+                        {/* Details */}
+                        <div className="mb-4 rounded-xl border border-border bg-card shadow-sm">
+                            <div className="flex flex-wrap gap-y-4 px-5 py-4">
+                                {facts.map((fact, i) => (
+                                    <div
+                                        key={fact.label}
+                                        className={cn(
+                                            "min-w-0 pr-7",
+                                            i > 0 && "border-l border-border/70 pl-7"
+                                        )}
+                                    >
+                                        <div className="eyebrow">{fact.label}</div>
+                                        <div className="mt-1 text-sm leading-snug text-foreground">
+                                            {fact.value}
+                                        </div>
+                                    </div>
+                                ))}
                             </div>
                         </div>
-                    </div>
-                </div>
 
-                {/* Logs */}
-                <div className="flex flex-1 flex-col min-h-0">
-                    <JobLogs
-                        jobId={job.id}
-                        jobStatus={job.status}
-                        nInputs={stats.n_inputs}
-                        failedCount={safeFailedCount}
-                    />
-                </div>
+                        {/* Job events */}
+                        {jobEvents.length > 0 && (
+                            <div className="mb-4 rounded-xl border border-border bg-card shadow-sm">
+                                <div className="px-5 py-4">
+                                    <div className="eyebrow">Events</div>
+                                    <div className="mt-2 space-y-1.5">
+                                        {jobEvents.map((event, i) => (
+                                            <div
+                                                key={`${event.timestamp}-${i}`}
+                                                className="flex items-baseline gap-3 text-[13px]"
+                                            >
+                                                <span className="shrink-0 tabular-nums text-muted-foreground">
+                                                    {formatDateTime(
+                                                        new Date(event.timestamp * 1000)
+                                                    )}
+                                                </span>
+                                                <span className="text-foreground/90">
+                                                    {event.message}
+                                                </span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Function calls */}
+                        <div className="mb-4">
+                            <JobCalls
+                                jobId={job.id}
+                                jobStatus={job.status}
+                                taskIndex={selectedTaskIndex}
+                                onSelectTask={selectTask}
+                                onClearTask={clearTask}
+                            />
+                        </div>
+                    </div>
+                ) : (
+                    <div className="mt-5">
+                        <JobUtilization jobId={job.id} jobStatus={job.status} />
+                    </div>
+                )}
             </div>
         </div>
     );

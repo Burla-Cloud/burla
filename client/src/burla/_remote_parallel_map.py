@@ -11,7 +11,7 @@ from threading import Event, Thread
 from time import time
 from typing import Callable, Literal, Optional, Union
 
-FuncGpu = Literal["A100", "A100_40G", "A100_80G", "H100", "H100_80G"]
+FuncGpu = Literal["T4", "A100", "A100_40G", "A100_80G", "H100", "H100_80G"]
 FuncRam = Union[int, Literal["dynamic"]]
 FuncCpu = Union[int, Literal["dynamic"]]
 from uuid import uuid4
@@ -199,6 +199,8 @@ async def _execute_job(
     grow: bool,
     image: Optional[str],
     func_gpu: Optional[FuncGpu],
+    region: Optional[str],
+    disk_gb: Optional[int],
     session: aiohttp.ClientSession,
     session_stack: AsyncExitStack,
     reporter: RemoteParallelMapReporter,
@@ -251,6 +253,8 @@ async def _execute_job(
         "grow": grow,
         "image": image,
         "func_gpu": func_gpu,
+        "region": region,
+        "disk_gb": disk_gb,
     }
     # On 503 nodes_busy, show boot progress via the polling loop then try
     # once more. Any other known error surfaces as its domain exception
@@ -520,7 +524,16 @@ async def _execute_job(
             reporter.log_job_success_telemetry(time() - start_time)
         )
         session_stack.callback(job_success_telemetry_task.cancel)
-        await client.patch_job(job_id, {"client_has_all_results": True})
+        # All results are already in hand; a head that's briefly unreachable
+        # (e.g. mid-restart) must not turn this last handshake into a failure.
+        for attempt in range(12):
+            try:
+                await client.patch_job(job_id, {"client_has_all_results": True})
+                break
+            except (TimeoutError, aiohttp.ClientError):
+                if attempt == 11:
+                    raise
+                await asyncio.sleep(5)
     finally:
         [task.cancel() for task in node_tasks]
 
@@ -537,6 +550,8 @@ def remote_parallel_map(
     detach: bool = False,
     generator: bool = False,
     spinner: bool = True,
+    region: Optional[str] = None,
+    disk_gb: Optional[int] = None,
 ):
     """
     Run a Python function on many remote computers in parallel.
@@ -567,8 +582,9 @@ def remote_parallel_map(
             parallelism on any node where workers run out of memory. Pass an
             integer to reserve a fixed amount of RAM per function call instead.
         func_gpu (str, optional):
-            Allocate one GPU per function call. One of: "A100" / "A100_40G",
-            "A100_80G", "H100" / "H100_80G". Defaults to None (no GPU).
+            Allocate one GPU per function call. One of: "T4" (AWS only),
+            "A100" / "A100_40G", "A100_80G", "H100" / "H100_80G".
+            Defaults to None (no GPU).
         image (str, optional):
             If provided, only nodes running this container image are eligible. When
             `grow=True` and no matching nodes are available, newly booted nodes will
@@ -591,6 +607,17 @@ def remote_parallel_map(
             returns a list of outputs once all have been processed. Defaults to False.
         spinner (bool, optional):
             If set to False, disables the display of the status indicator/spinner. Defaults to True.
+        region (str, optional):
+            Cloud region to run this job in (e.g. "us-east-2"). Only idle nodes
+            already in this region are eligible, and any nodes booted for this
+            job are booted there. Defaults to None: idle nodes in any region are
+            eligible, and new nodes boot in the region from the cluster settings
+            page (which itself defaults to your cloud CLI's default region when
+            the dashboard runs on your own machine).
+        disk_gb (int, optional):
+            Boot disk size in GB for any nodes booted for this job. Defaults to
+            None: nodes use the disk size from the cluster settings page. Idle
+            nodes are eligible regardless of their disk size.
 
     Returns:
         List[Any] or Generator[Any, None, None]:
@@ -689,6 +716,8 @@ def remote_parallel_map(
                     grow=grow,
                     image=image,
                     func_gpu=func_gpu,
+                    region=region,
+                    disk_gb=disk_gb,
                 )
             )
         except BaseException:

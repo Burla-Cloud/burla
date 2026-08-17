@@ -32,9 +32,14 @@ async def _job_summaries_page(page: int) -> tuple[list[dict], int]:
             "user": job.get("user", "Unknown"),
             "function_name": job.get("function_name", "Unknown"),
             "n_inputs": job.get("n_inputs", 0),
-            "n_results": job.get("n_results", 0),
             "started_at": job.get("started_at"),
+            "ended_at": job.get("ended_at"),
         }
+        # Live counts restart at 0 when a restarted head reloads a job
+        # (per-node progress is memory-only), so history's count still wins.
+        summary["n_results"] = max(
+            int((live or {}).get("n_results") or 0), int(job.get("n_results") or 0)
+        )
         n_failed = await asyncio.to_thread(history.job_error_count, job_id)
         jobs.append({"jobId": job_id, "n_failed": n_failed, **summary})
     return jobs, total
@@ -110,61 +115,82 @@ async def stop_job(job_id: str, request: Request):
 
 @router.get("/v1/jobs/{job_id}/result-stats")
 async def get_job_result_stats(job_id: str):
-    job = cluster_state.get_job(job_id)
-    if job is None:
+    """Counts plus the summary fields the job page needs, resolved from live
+    state first and history second, so a deep link to any job id works even
+    when the job is outside the paginated jobs list (and after head restarts,
+    which reset live per-node result counts to 0)."""
+    live = cluster_state.get_job(job_id)
+    stored = await asyncio.to_thread(history.get_job, job_id)
+    if live is None and stored is None:
         raise HTTPException(status_code=404, detail="Job not found")
 
+    job = live or stored
+    n_results = max(
+        int((live or {}).get("n_results") or 0),
+        int((stored or {}).get("n_results") or 0),
+    )
     n_failed = await asyncio.to_thread(history.job_error_count, job_id)
     return JSONResponse(
         {
             "job_id": job_id,
             "n_inputs": int(job.get("n_inputs", 0) or 0),
-            "n_results": job.get("n_results", 0),
+            "n_results": n_results,
             "n_failed": n_failed,
+            "status": job.get("status"),
+            "user": job.get("user", "Unknown"),
+            "function_name": job.get("function_name", "Unknown"),
+            "started_at": job.get("started_at"),
+            "ended_at": job.get("ended_at"),
         }
     )
 
 
-@router.get("/v1/jobs/{job_id}/logged-input-indexes")
-async def get_logged_input_indexes(job_id: str):
-    indexes, failed = await asyncio.to_thread(history.job_logged_input_indexes, job_id)
-    non_failed = sorted(set(indexes) - set(failed))
-    return JSONResponse(
-        {
-            "indexes_with_logs": indexes,
-            "failed_indexes": failed,
-            "non_failed_indexes_with_logs": non_failed,
-        }
-    )
+@router.get("/v1/jobs/{job_id}/metrics")
+async def get_job_metrics(job_id: str):
+    return JSONResponse(await asyncio.to_thread(history.job_metrics_series, job_id))
 
 
-@router.get("/v1/jobs/{job_id}/next-failed-input")
-async def get_next_failed_input_index(
+@router.get("/v1/jobs/{job_id}/metrics/tasks/{input_index}")
+async def get_task_metrics(job_id: str, input_index: int):
+    series = await asyncio.to_thread(history.task_metrics_series, job_id, input_index)
+    return JSONResponse(series)
+
+
+@router.get("/v1/jobs/{job_id}/metrics/task-summaries")
+async def get_task_summaries(
     job_id: str,
-    index: int,
+    sort: str = "started",
+    dir: str = "desc",
+    failed_only: bool = False,
+    logs_only: bool = False,
+    index: int | None = None,
+    offset: int = 0,
+    limit: int = 50,
 ):
-    current_input_index = int(index)
-    _, ordered_failed_indexes = await asyncio.to_thread(
-        history.job_logged_input_indexes, job_id
+    if sort not in history.TASK_SUMMARY_SORT_COLUMNS:
+        sort = "started"
+    job = cluster_state.get_job(job_id) or await asyncio.to_thread(history.get_job, job_id)
+    job_is_running = bool(job) and job.get("status") in ("RUNNING", "PENDING")
+    n_inputs = (job or {}).get("n_inputs") or 0
+    result = await asyncio.to_thread(
+        history.job_task_summaries,
+        job_id,
+        n_inputs,
+        sort,
+        dir == "desc",
+        failed_only,
+        logs_only,
+        index,
+        max(0, offset),
+        min(max(1, limit), 200),
+        job_is_running,
     )
+    return JSONResponse(result)
 
-    first_failed_input_index = ordered_failed_indexes[0] if ordered_failed_indexes else None
-    next_failed_input_index = None
-    for failed_input_index in ordered_failed_indexes:
-        if failed_input_index > current_input_index:
-            next_failed_input_index = failed_input_index
-            break
 
-    return JSONResponse(
-        {
-            "next_failed_input_index": (
-                next_failed_input_index
-                if next_failed_input_index is not None
-                else first_failed_input_index
-            ),
-            "failed_input_indexes": ordered_failed_indexes,
-        }
-    )
+@router.get("/v1/jobs/{job_id}/events")
+async def get_job_events(job_id: str):
+    return JSONResponse({"events": await asyncio.to_thread(history.job_notices, job_id)})
 
 
 @router.get("/v1/jobs/{job_id}/logs")

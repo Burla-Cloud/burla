@@ -22,6 +22,7 @@ from node_service import (
     head_client,
 )
 from node_service.helpers import debug_log
+from node_service.resource_metrics import record_call_event
 
 # Sized so node_service's buffering fits inside its own memory reservation
 # (NODE_SERVICE_RESERVED_MEMORY_GB, 4GB on real VMs): workers own the rest of
@@ -717,11 +718,14 @@ async def retire_workers_for_pressure(
         if not selected_workers:
             return
 
+        current_inputs = [
+            (worker, worker.current_input) for _, worker in selected_workers
+        ]
         old_parallelism = len(active_workers)
-        new_parallelism = old_parallelism - len(selected_workers)
+        new_parallelism = old_parallelism - len(current_inputs)
         input_indexes = []
-        for _, worker in selected_workers:
-            input_index, input_pkl = worker.current_input
+        for worker, current_input in current_inputs:
+            input_index, input_pkl = current_input
             input_indexes.append(input_index)
             worker.retired = True
             worker.is_idle = True
@@ -742,15 +746,11 @@ async def retire_workers_for_pressure(
             new_parallelism=new_parallelism,
         )
 
-        current_inputs = []
-        for _, worker in selected_workers:
-            input_index = worker.current_input[0]
-            current_inputs.append((worker, input_index))
-        for worker, input_index in current_inputs:
+        for worker, _ in current_inputs:
             worker.current_input = None
 
         await asyncio.gather(
-            *(worker.retire_for_pressure() for _, worker in selected_workers)
+            *(worker.retire_for_pressure() for worker, _ in current_inputs)
         )
 
 
@@ -1117,6 +1117,12 @@ class WorkerClient:
             self.is_idle = False
             self.current_input = (input_index, input_pkl)
             await self._ensure_log_writer()
+            # Exact call tracking: this is the moment the input is handed to
+            # the worker, and the finally below is the moment this attempt
+            # stops for any reason (result, error, worker death, cancel).
+            job_id = SELF["current_job"]
+            attempt = uuid4().hex[:12]
+            record_call_event("start", job_id, input_index, attempt)
             stop_after_result = False
             try:
                 result_pkl = await self.call_function(input_index, input_pkl)
@@ -1156,6 +1162,7 @@ class WorkerClient:
                     )
                 result = (input_index, True, self._serialize_error(error))
             finally:
+                record_call_event("end", job_id, input_index, attempt)
                 if self.log_writer is not None:
                     await self.log_writer.finish_input(input_index)
                 self.current_input = None

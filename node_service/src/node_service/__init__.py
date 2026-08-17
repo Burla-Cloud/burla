@@ -218,6 +218,7 @@ from node_service.lifecycle_endpoints import (
 from node_service.lifecycle_endpoints import (
     router as lifecycle_endpoints_router,
 )
+from node_service.resource_metrics import resource_metrics_loop
 
 
 def _poweroff_self():
@@ -400,6 +401,36 @@ def _head_is_gone() -> bool:
     return SELF["head_unreachable_sec"] >= ORPHANED_SHUTDOWN_TIME_SEC
 
 
+# A node whose boot handshake fails parks in BOOTING forever: the inactivity
+# watchdog below never starts counting (it waits out BOOTING), and the orphan
+# check never fires while the head stays reachable. Deliberately longer than
+# any legitimate boot (the head fails boots at 10 minutes) and separate from
+# INACTIVITY_SHUTDOWN_TIME_SEC, which still arms at READY exactly as before.
+# The env var exists so tests can shorten it.
+NEVER_READY_SHUTDOWN_TIME_SEC = int(
+    os.environ.get("NEVER_READY_SHUTDOWN_TIME_SEC", 20 * 60)
+)
+
+
+async def shutdown_if_never_ready(logger: Logger):
+    deadline = time() + NEVER_READY_SHUTDOWN_TIME_SEC
+    while time() < deadline:
+        if SELF["reported_status"] in ("READY", "RUNNING") or SELF["SHUTTING_DOWN"]:
+            return
+        await asyncio.sleep(5)
+
+    SELF["SHUTTING_DOWN"] = True
+    try:
+        if not SELF["FAILED"]:
+            SELF["reported_status"] = "DELETED"
+            await head_client.push_state(status="DELETED", ended_at=time())
+        msg = f"Node never became READY within {NEVER_READY_SHUTDOWN_TIME_SEC // 60} "
+        msg += f"minutes.\nSHUTTING DOWN NODE {INSTANCE_NAME}."
+        await logger.log(msg, severity="WARNING")
+    finally:
+        await _shutdown_self()
+
+
 async def shutdown_if_idle_for_too_long(logger: Logger):
     """WARNING: Errors from this function are completely hidden!"""
 
@@ -516,7 +547,11 @@ async def lifespan(app: FastAPI):
         msg = f"This node will shutdown if idle for {INACTIVITY_SHUTDOWN_TIME_SEC//60} minutes!"
         await logger.log(msg)
 
+    if not IN_LOCAL_DEV_MODE:
+        asyncio.create_task(shutdown_if_never_ready(logger=logger))
+
     asyncio.create_task(_state_push_loop(logger=logger))
+    resource_metrics_task = asyncio.create_task(resource_metrics_loop())
 
     # boot containers before accepting any requests.
     # `reboot_containers` will ask the head to delete this VM if it fails, no need to do that here.
@@ -531,6 +566,7 @@ async def lifespan(app: FastAPI):
 
     yield
 
+    resource_metrics_task.cancel()
     if certificate_renewal_task is not None:
         certificate_renewal_task.cancel()
 

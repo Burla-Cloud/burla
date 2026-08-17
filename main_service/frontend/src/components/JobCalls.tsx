@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ArrowDown, ArrowUp, ChevronLeft, ChevronRight } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronDown, ChevronLeft, ChevronRight } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -13,7 +13,6 @@ import {
 import { TablePagination } from "@/components/TablePagination";
 import { StatusBadge } from "@/components/StatusBadge";
 import {
-    ChartSkeletons,
     MetricChart,
     PRIMARY,
     SECONDARY,
@@ -140,6 +139,8 @@ const CallDetail = ({
     const [summary, setSummary] = useState<TaskSummary | null>(null);
     const [logs, setLogs] = useState<CallLogs | null>(null);
     const [isLoading, setIsLoading] = useState(true);
+    // Charts are secondary to status/logs, so they start collapsed.
+    const [isChartsOpen, setIsChartsOpen] = useState(false);
 
     const load = useCallback(async () => {
         const [seriesRes, summaryRes, logsRes] = await Promise.all([
@@ -167,6 +168,7 @@ const CallDetail = ({
         setSummary(null);
         setLogs(null);
         setIsLoading(true);
+        setIsChartsOpen(false);
         (async () => {
             await load().catch(() => {});
             if (!cancelled) setIsLoading(false);
@@ -349,76 +351,116 @@ const CallDetail = ({
                     )}
                 </div>
 
-                {/* Utilization charts */}
+                {/* Utilization charts, collapsed by default */}
                 <div className="mt-6">
-                    <div className="eyebrow">Utilization</div>
                     {isLoading ? (
-                        <div className="mt-3">
-                            <ChartSkeletons />
-                        </div>
+                        <>
+                            <div className="eyebrow">Utilization</div>
+                            <Skeleton className="mt-2 h-5 w-48" />
+                        </>
                     ) : series == null || !series.has_metrics ? (
-                        <p className="mt-2 text-[13px] text-muted-foreground">
-                            No samples for this call. Calls shorter than about two seconds are not
-                            sampled.
-                        </p>
+                        <>
+                            <div className="eyebrow">Utilization</div>
+                            <p className="mt-2 text-[13px] text-muted-foreground">
+                                No samples for this call. Calls shorter than about two seconds are
+                                not sampled.
+                            </p>
+                        </>
                     ) : (
-                        <div className="mt-3 space-y-7">
-                            <MetricChart
-                                title="CPU (vCPUs)"
-                                data={taskData}
-                                series={[{ key: "cpus", label: "vCPUs", color: PRIMARY }]}
-                                startAt={taskStartAt}
-                                format={(v) => v.toFixed(2)}
-                            />
-                            <MetricChart
-                                title="Memory"
-                                data={taskData}
-                                series={[{ key: "mem", label: "Memory", color: PRIMARY }]}
-                                startAt={taskStartAt}
-                                format={formatBytes}
-                            />
-                            <MetricChart
-                                title="Network I/O"
-                                data={taskData}
-                                series={[
-                                    { key: "net_rx", label: "In", color: PRIMARY },
-                                    { key: "net_tx", label: "Out", color: SECONDARY },
-                                ]}
-                                startAt={taskStartAt}
-                                format={formatRate}
-                            />
-                            <MetricChart
-                                title="Disk I/O"
-                                data={taskData}
-                                series={[
-                                    { key: "disk_read", label: "Read", color: PRIMARY },
-                                    { key: "disk_write", label: "Write", color: SECONDARY },
-                                ]}
-                                startAt={taskStartAt}
-                                format={formatRate}
-                            />
-                            {series.has_gpu && (
-                                <>
+                        <>
+                            <button
+                                type="button"
+                                onClick={() => setIsChartsOpen((open) => !open)}
+                                aria-expanded={isChartsOpen}
+                                className="group flex items-center gap-2 focus-visible:outline-none"
+                            >
+                                <span className="eyebrow transition-colors duration-150 group-hover:text-foreground">
+                                    Utilization
+                                </span>
+                                {!isChartsOpen && (
+                                    <span className="text-[13px] text-muted-foreground">
+                                        CPU, memory, I/O per second
+                                    </span>
+                                )}
+                                <ChevronDown
+                                    className={cn(
+                                        "h-3.5 w-3.5 text-muted-foreground transition-transform duration-150",
+                                        isChartsOpen && "rotate-180"
+                                    )}
+                                />
+                            </button>
+                            {isChartsOpen && (
+                                <div className="mt-3 grid gap-x-8 gap-y-5 lg:grid-cols-2">
                                     <MetricChart
-                                        title="GPU"
+                                        title="CPU (vCPUs)"
                                         data={taskData}
-                                        series={[{ key: "gpu", label: "GPU", color: PRIMARY }]}
+                                        series={[{ key: "cpus", label: "vCPUs", color: PRIMARY }]}
                                         startAt={taskStartAt}
-                                        format={(v) => `${Math.round(v)}%`}
-                                        domainMax={100}
+                                        format={(v) => v.toFixed(2)}
+                                        compact
                                     />
                                     <MetricChart
-                                        title="GPU memory"
+                                        title="Memory"
                                         data={taskData}
-                                        series={[
-                                            { key: "gpu_mem", label: "GPU memory", color: PRIMARY },
-                                        ]}
+                                        series={[{ key: "mem", label: "Memory", color: PRIMARY }]}
                                         startAt={taskStartAt}
                                         format={formatBytes}
+                                        compact
                                     />
-                                </>
+                                    <MetricChart
+                                        title="Network I/O"
+                                        data={taskData}
+                                        series={[
+                                            { key: "net_rx", label: "In", color: PRIMARY },
+                                            { key: "net_tx", label: "Out", color: SECONDARY },
+                                        ]}
+                                        startAt={taskStartAt}
+                                        format={formatRate}
+                                        compact
+                                    />
+                                    <MetricChart
+                                        title="Disk I/O"
+                                        data={taskData}
+                                        series={[
+                                            { key: "disk_read", label: "Read", color: PRIMARY },
+                                            { key: "disk_write", label: "Write", color: SECONDARY },
+                                        ]}
+                                        startAt={taskStartAt}
+                                        format={formatRate}
+                                        compact
+                                    />
+                                    {series.has_gpu && (
+                                        <>
+                                            <MetricChart
+                                                title="GPU"
+                                                data={taskData}
+                                                series={[
+                                                    { key: "gpu", label: "GPU", color: PRIMARY },
+                                                ]}
+                                                startAt={taskStartAt}
+                                                format={(v) => `${Math.round(v)}%`}
+                                                domainMax={100}
+                                                compact
+                                            />
+                                            <MetricChart
+                                                title="GPU memory"
+                                                data={taskData}
+                                                series={[
+                                                    {
+                                                        key: "gpu_mem",
+                                                        label: "GPU memory",
+                                                        color: PRIMARY,
+                                                    },
+                                                ]}
+                                                startAt={taskStartAt}
+                                                format={formatBytes}
+                                                compact
+                                            />
+                                        </>
+                                    )}
+                                </div>
                             )}
-                        </div>
+                        </>
                     )}
                 </div>
             </div>

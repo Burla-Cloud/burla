@@ -74,19 +74,15 @@ const JobDetails = () => {
     const selectedTaskIndex =
         taskParam !== null && /^\d+$/.test(taskParam) ? Number(taskParam) : null;
 
-    // A selected task always lives on the Function calls tab. This also
-    // reinterprets old ?tab=utilization&task=N links.
-    const tabParam = searchParams.get("tab");
-    const activeTab: "overview" | "calls" | "utilization" =
-        selectedTaskIndex != null
-            ? "calls"
-            : tabParam === "calls"
-            ? "calls"
-            : tabParam === "utilization"
+    // The call table and detail live on the first tab. A selected task wins
+    // over the tab param, which also reinterprets old ?tab=utilization&task=N
+    // and ?tab=calls&task=N links.
+    const activeTab: "overview" | "utilization" =
+        selectedTaskIndex == null && searchParams.get("tab") === "utilization"
             ? "utilization"
             : "overview";
 
-    const openTab = (tab: "overview" | "calls" | "utilization") => {
+    const openTab = (tab: "overview" | "utilization") => {
         const sp = new URLSearchParams(searchParams);
         if (tab === "overview") sp.delete("tab");
         else sp.set("tab", tab);
@@ -98,14 +94,14 @@ const JobDetails = () => {
     // leaves the page, not through every visited task.
     const selectTask = (index: number) => {
         const sp = new URLSearchParams(searchParams);
-        sp.set("tab", "calls");
+        sp.delete("tab");
         sp.set("task", String(index));
         setSearchParams(sp, { replace: true });
     };
 
     const clearTask = () => {
         const sp = new URLSearchParams(searchParams);
-        sp.set("tab", "calls");
+        sp.delete("tab");
         sp.delete("task");
         setSearchParams(sp, { replace: true });
     };
@@ -459,14 +455,6 @@ const JobDetails = () => {
                         </button>
                         <button
                             type="button"
-                            onClick={() => openTab("calls")}
-                            className={tabClass(activeTab === "calls")}
-                            aria-pressed={activeTab === "calls"}
-                        >
-                            Function calls
-                        </button>
-                        <button
-                            type="button"
                             onClick={() => openTab("utilization")}
                             className={tabClass(activeTab === "utilization")}
                             aria-pressed={activeTab === "utilization"}
@@ -582,16 +570,17 @@ const JobDetails = () => {
                                 </div>
                             </div>
                         )}
-                    </div>
-                ) : activeTab === "calls" ? (
-                    <div className="mt-5">
-                        <JobCalls
-                            jobId={job.id}
-                            jobStatus={job.status}
-                            taskIndex={selectedTaskIndex}
-                            onSelectTask={selectTask}
-                            onClearTask={clearTask}
-                        />
+
+                        {/* Function calls */}
+                        <div className="mb-4">
+                            <JobCalls
+                                jobId={job.id}
+                                jobStatus={job.status}
+                                taskIndex={selectedTaskIndex}
+                                onSelectTask={selectTask}
+                                onClearTask={clearTask}
+                            />
+                        </div>
                     </div>
                 ) : (
                     <div className="mt-5">

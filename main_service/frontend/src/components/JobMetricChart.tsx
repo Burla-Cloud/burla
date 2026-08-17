@@ -66,6 +66,7 @@ export const MetricChart = ({
     format,
     domainMax,
     integerTicks,
+    compact,
 }: {
     title: string;
     data: Record<string, number | null>[];
@@ -74,6 +75,7 @@ export const MetricChart = ({
     format: (v: number) => string;
     domainMax?: number;
     integerTicks?: boolean;
+    compact?: boolean;
 }) => (
     <div className="min-w-0">
         <div className="flex items-center justify-between">
@@ -92,7 +94,7 @@ export const MetricChart = ({
                 </span>
             )}
         </div>
-        <div className="mt-2 h-56">
+        <div className={compact ? "mt-2 h-36" : "mt-2 h-56"}>
             <ResponsiveContainer width="100%" height="100%">
                 <AreaChart data={data} margin={{ top: 8, right: 4, left: 0, bottom: 0 }}>
                     <CartesianGrid stroke="hsl(var(--border) / 0.5)" vertical={false} />

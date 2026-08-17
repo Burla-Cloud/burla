@@ -1,10 +1,13 @@
 import os
 import json
 import sys
+from uuid import uuid4
 
 import requests
 
 from burla import CONFIG_PATH, _BURLA_BACKEND_URL
+
+TELEMETRY_STATE_PATH = CONFIG_PATH.with_name("telemetry.json")
 
 
 def _in_notebook() -> bool:
@@ -43,14 +46,50 @@ def _get_project_id():
     return project_id if project_id else "unknown"
 
 
-def log_telemetry(message: str, severity: str = "INFO", **kwargs):
+def _send_telemetry(message: str, severity: str = "INFO", **kwargs) -> bool:
     if os.environ.get("DISABLE_BURLA_TELEMETRY") == "True":
-        return
+        return False
     try:
         json_payload = {"message": message, **kwargs}
         url = f"{_BURLA_BACKEND_URL}/v1/telemetry/log/{severity}"
-        response = requests.post(url, json=json_payload)
+        response = requests.post(url, json=json_payload, timeout=5)
         response.raise_for_status()
+        return True
+    except Exception:
+        return False
+
+
+def log_telemetry(message: str, severity: str = "INFO", **kwargs):
+    _send_telemetry(message, severity, **kwargs)
+
+
+def log_dashboard_start_telemetry(client_version: str, is_local: bool):
+    if os.environ.get("DISABLE_BURLA_TELEMETRY") == "True":
+        return
+    try:
+        auth_info = json.loads(CONFIG_PATH.read_text())
+        identity = {
+            "project_id": auth_info["project_id"],
+            "email": auth_info["email"],
+        }
+        if TELEMETRY_STATE_PATH.exists():
+            state = json.loads(TELEMETRY_STATE_PATH.read_text())
+        else:
+            state = {"installation_id": uuid4().hex, "dashboard_identities": []}
+            TELEMETRY_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+            TELEMETRY_STATE_PATH.write_text(json.dumps(state))
+
+        if identity in state["dashboard_identities"]:
+            return
+
+        dashboard_type = "local" if is_local else "deployed"
+        message = (
+            f"New `burla dashboard` user or machine: `{identity['email']}` on installation "
+            f"`{state['installation_id'][:12]}` ({dashboard_type}, Burla {client_version})."
+        )
+        if _send_telemetry(message, project_id=identity["project_id"]):
+            state["dashboard_identities"].append(identity)
+            TELEMETRY_STATE_PATH.write_text(json.dumps(state))
     except Exception:
         pass
 
@@ -212,19 +251,6 @@ class RemoteParallelMapReporter:
         message += '\nPlease wait until the message "Done uploading inputs!" '
         message += "appears before canceling.\n\n-"
         return message
-
-    def log_job_failure_telemetry(
-        self,
-        exception: Exception,
-        traceback_str: str,
-        chill_exception: bool,
-    ):
-        log_job_failure_telemetry(
-            job_id=self.job_id,
-            exception=exception,
-            traceback_str=traceback_str,
-            chill_exception=chill_exception,
-        )
 
     @classmethod
     async def log_user_function_error_async(cls, job_id: str, session):

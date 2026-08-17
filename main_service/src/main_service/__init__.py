@@ -10,7 +10,6 @@ from pathlib import Path
 from time import sleep, time
 from typing import Callable
 from urllib.parse import urlparse
-from uuid import uuid4
 
 import aiohttp
 from fastapi import BackgroundTasks, Depends, FastAPI, Request, status
@@ -809,7 +808,6 @@ async def validate_requests(request: Request, call_next):
 @app.middleware("http")
 async def log_and_time_requests(request: Request, call_next):
     start = time()
-    request.state.uuid = uuid4().hex
 
     response = await call_next(request)
 

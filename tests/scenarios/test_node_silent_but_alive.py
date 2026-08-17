@@ -62,7 +62,7 @@ def _signal_node_service(container: str, signal: str, pids: list[str]):
 
 def _busy_node(main_http_client):
     for node in main_http_client.get("/v1/cluster/nodes").json()["nodes"]:
-        if node.get("current_job"):
+        if node.get("status") == "RUNNING" and node.get("current_job"):
             return node
     return None
 

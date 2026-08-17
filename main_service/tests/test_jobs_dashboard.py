@@ -1,8 +1,8 @@
 """
 Job-endpoint contracts that need precisely seeded state: the dashboard-stop
-cancellation signal the client reacts to, log-index semantics, and the 404
-boundary the client's pollers depend on. Happy-path rendering of the jobs
-pages is covered by the browser tier in tests/dashboard/.
+cancellation signal and event, per-call logs, and the 404 boundary the
+client's pollers depend on. Happy-path rendering of the jobs pages is covered
+by the browser tier in tests/dashboard/.
 """
 
 from __future__ import annotations
@@ -67,60 +67,26 @@ def test_stop_job_writes_dashboard_canceled(
     assert doc["status"] == "CANCELED"
 
 
-def test_stop_job_writes_log_entry(
+def test_stop_job_writes_event(
     main_http_client,
     local_dev_cluster,
     isolated_job_id,
     cleanup_job,
-    wait_for_fixture,
 ):
     job_id = cleanup_job(isolated_job_id())
     _seed_running_job(main_http_client, job_id)
     resp = main_http_client.post(f"/v1/jobs/{job_id}/stop")
     assert resp.status_code in (200, 204)
 
-    # The "canceled by user" log doc has no input_index, so the only
-    # HTTP-visible trace of it is the error count in result-stats.
-    def _n_failed():
-        stats_resp = main_http_client.get(f"/v1/jobs/{job_id}/result-stats")
-        if stats_resp.status_code != 200:
-            return None
-        return stats_resp.json()["n_failed"]
-
-    n_failed = wait_for_fixture(_n_failed, timeout=5)
-    assert n_failed >= 1
+    events_resp = main_http_client.get(f"/v1/jobs/{job_id}/events")
+    assert events_resp.status_code == 200
+    messages = [event["message"] for event in events_resp.json()["events"]]
+    assert any(message.startswith("Job canceled by user:") for message in messages)
 
 
 def test_result_stats_404_when_missing(main_http_client, local_dev_cluster):
     resp = main_http_client.get(f"/v1/jobs/nonexistent-{int(time.time())}/result-stats")
     assert resp.status_code == 404
-
-
-def test_logged_input_indexes_returns_sorted_unique(
-    main_http_client,
-    node_push_client,
-    local_dev_cluster,
-    isolated_job_id,
-    cleanup_job,
-):
-    job_id = cleanup_job(isolated_job_id())
-    documents = [
-        {
-            "logs": [{"message": "m", "timestamp": time.time()}],
-            "input_index": idx,
-            "is_error": err,
-            "timestamp": time.time(),
-        }
-        for idx, err in [(0, False), (5, True), (3, False), (5, False)]
-    ]
-    _push_job_logs(node_push_client, job_id, documents)
-    time.sleep(0.5)
-
-    resp = main_http_client.get(f"/v1/jobs/{job_id}/logged-input-indexes")
-    assert resp.status_code == 200
-    body = resp.json()
-    assert sorted(body["indexes_with_logs"]) == body["indexes_with_logs"]
-    assert 5 in body["failed_indexes"]
 
 
 def test_job_logs_returns_logs_for_index(

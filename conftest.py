@@ -164,10 +164,17 @@ def _set_local_dev_node_quantity(quantity: int) -> None:
 
 def _wait_for_ready_nodes(n: int, timeout: float) -> list[dict[str, Any]]:
     deadline = time.time() + timeout
+    saw_booting_node = False
     while time.time() < deadline:
-        ready_nodes = _cluster_state_via_http()["ready_nodes"]
+        state = _cluster_state_via_http()
+        ready_nodes = state["ready_nodes"]
         if len(ready_nodes) >= n:
             return ready_nodes
+        saw_booting_node = saw_booting_node or state["booting_count"] > 0
+        if saw_booting_node and state["booting_count"] == 0:
+            raise AssertionError(
+                f"cluster stopped booting with {len(ready_nodes)}/{n} READY nodes"
+            )
         time.sleep(0.5)
     raise AssertionError(f"cluster never reached {n} READY nodes within {timeout}s")
 
@@ -193,6 +200,11 @@ def _cluster_dirty_reason(
     if len(state["ready_nodes"]) < expected_ready_nodes:
         return f"{len(state['ready_nodes'])}/{expected_ready_nodes} ready nodes"
 
+    active_nodes = [
+        node
+        for node in active_nodes
+        if node.get("status") in {"BOOTING", "READY", "RUNNING"}
+    ]
     dirty_nodes = [
         node
         for node in active_nodes
@@ -372,7 +384,7 @@ def clean_local_dev_cluster_before_cluster_tests(request):
 
 
 @pytest.fixture
-def cluster_with_n_nodes(main_http_client, local_dev_cluster):
+def cluster_with_n_nodes(local_dev_cluster):
     """Grow this checkout's cluster to `n` READY nodes for tests that need
     more than one, then put it back. local-dev fixes the node count at head
     startup and resets it on every settings write, so the head exposes a
@@ -394,14 +406,21 @@ def cluster_with_n_nodes(main_http_client, local_dev_cluster):
 
         original_quantity = _expected_ready_node_count(_request_headers())
         _set_local_dev_node_quantity(n)
-        main_http_client.post("/v1/cluster/restart").raise_for_status()
-        return _wait_for_ready_nodes(n, CLEAN_CLUSTER_TIMEOUT_SEC)
+        for attempt in range(2):
+            old_names = _restart_cluster(_request_headers())
+            _wait_for_replacement_nodes(old_names, CLEAN_CLUSTER_TIMEOUT_SEC)
+            try:
+                return _wait_for_ready_nodes(n, CLEAN_CLUSTER_TIMEOUT_SEC)
+            except AssertionError:
+                if attempt == 1:
+                    raise
 
     yield _ensure
 
     if original_quantity is not None:
         _set_local_dev_node_quantity(original_quantity)
-        main_http_client.post("/v1/cluster/restart")
+        old_names = _restart_cluster(_request_headers())
+        _wait_for_replacement_nodes(old_names, CLEAN_CLUSTER_TIMEOUT_SEC)
         _wait_for_ready_nodes(original_quantity, CLEAN_CLUSTER_TIMEOUT_SEC)
 
 

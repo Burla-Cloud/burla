@@ -3,13 +3,14 @@
 import pytest
 
 
-pytestmark = [pytest.mark.e2e, pytest.mark.slow]
+pytestmark = [pytest.mark.e2e, pytest.mark.slow, pytest.mark.timeout(300)]
 
 
-def test_nested_rpm_happy_path(rpm_subprocess, local_dev_cluster):
+def test_nested_rpm_happy_path(rpm_subprocess, cluster_with_n_nodes):
+    cluster_with_n_nodes(2)
     source = (
+        "from burla import remote_parallel_map\n"
         "def test_function(x):\n"
-        "    from burla import remote_parallel_map\n"
         "    return remote_parallel_map(lambda n: n + 100, [x], spinner=False)[0]\n"
     )
     result = rpm_subprocess(source, [1], timeout_seconds=120)

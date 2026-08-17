@@ -32,6 +32,18 @@ def test_udf_error_preserves_traceback(rpm_subprocess, local_dev_cluster):
     assert "inner" in result["traceback"]
 
 
+def test_burla_exception_re_raised_on_client(rpm_subprocess, local_dev_cluster):
+    source = (
+        "from burla._node import AllNodesBusy\n"
+        "def test_function(x):\n"
+        "    raise AllNodesBusy()\n"
+    )
+    result = rpm_subprocess(source, [1], timeout_seconds=30)
+    assert not result["ok"]
+    assert result["exception_type"] == "AllNodesBusy"
+    assert result["exception_message"] == "All nodes are busy, please try again later."
+
+
 def test_udf_error_adds_burla_note_py311plus(rpm_subprocess, local_dev_cluster):
     source = (
         "def test_function(x):\n"

@@ -70,8 +70,10 @@ class NoNodes(Exception):
 
 
 class AllNodesBusy(Exception):
-    def __init__(self):
-        super().__init__("All nodes are busy, please try again later.")
+    def __init__(
+        self, message: str = "All nodes are busy, please try again later."
+    ):
+        super().__init__(message)
 
 
 class NoCompatibleNodes(Exception):

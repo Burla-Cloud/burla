@@ -16,7 +16,7 @@ import pytest
 
 # Restart is `docker rm` locally but a real terminate-and-reboot on VMs, and
 # the client-visible behavior that matters is the latter. Recovery means a
-# full EC2 node boot (~2 min), which doesn't fit the default 120s timeout.
+# full EC2 node boot (~3-4 min), which doesn't fit the default 120s timeout.
 pytestmark = [
     pytest.mark.e2e,
     pytest.mark.slow,
@@ -44,43 +44,44 @@ def test_cluster_restart_mid_job(
 
     def _run_slow():
         rpm_result_box["result"] = rpm_subprocess(
-            slow_source, list(range(4)), timeout_seconds=120, grow=True
+            slow_source, list(range(4)), timeout_seconds=300, grow=True
         )
 
+    started_after = time.time()
     slow_thread = threading.Thread(target=_run_slow, daemon=True)
     slow_thread.start()
 
-    # Give the client ~4s to actually start uploading inputs, then restart.
-    time.sleep(4)
+    def _running_job_with_inputs_uploaded():
+        jobs = main_http_client.get("/v1/jobs?page=0").json()["jobs"]
+        for summary in jobs:
+            if summary.get("function_name") != "test_function":
+                continue
+            if summary.get("started_at", 0) < started_after:
+                continue
+            job = main_http_client.get(f"/v1/jobs/{summary['jobId']}").json()
+            if job.get("status") == "RUNNING" and job.get("all_inputs_uploaded"):
+                return summary["jobId"]
+        return None
+
+    job_id = wait_for_fixture(
+        _running_job_with_inputs_uploaded,
+        timeout=240,
+        message="slow job never reached active execution before restart",
+    )
     restart_resp = main_http_client.post("/v1/cluster/restart")
     assert restart_resp.status_code in (200, 204)
 
-    # Client should see the restart and either raise ClusterRestarted or
-    # exit with a related domain exception. Wait up to 30s.
     slow_thread.join(timeout=60)
     assert not slow_thread.is_alive(), "client never exited after cluster restart"
     assert "result" in rpm_result_box
 
     result = rpm_result_box["result"]
     assert not result["ok"], f"client succeeded after cluster restart: {result['outputs']}"
-    assert result["exception_type"] in (
-        "ClusterRestarted",
-        "NodeDisconnected",
-        "JobStalled",
-    ), f"unexpected exception {result['exception_type']}: {result['exception_message']}"
+    assert result["exception_type"] == "ClusterRestarted", result["exception_message"]
 
-    # Head-visible: at least one test_function job should have cluster_restarted=True.
     def _restarted_job():
-        jobs = main_http_client.get("/v1/jobs?page=0").json()["jobs"]
-        most_recent = None
-        for summary in jobs:
-            if summary.get("function_name") != "test_function":
-                continue
-            data = main_http_client.get(f"/v1/jobs/{summary['jobId']}").json()
-            if data.get("cluster_restarted") is True:
-                if most_recent is None or data.get("started_at", 0) > most_recent.get("started_at", 0):
-                    most_recent = data
-        return most_recent
+        job = main_http_client.get(f"/v1/jobs/{job_id}").json()
+        return job if job.get("cluster_restarted") is True else None
 
     job = wait_for_fixture(_restarted_job, timeout=15)
     assert job["cluster_restarted"] is True
@@ -92,7 +93,7 @@ def test_cluster_restart_mid_job(
         state = main_http_client.get("/v1/cluster/state").json()
         return state["ready_nodes"] if state.get("ready_nodes") else None
 
-    wait_for_fixture(_ready, timeout=180, message="cluster never recovered after restart")
+    wait_for_fixture(_ready, timeout=300, message="cluster never recovered after restart")
 
     recover_source = "def test_function(x):\n    return x + 1\n"
     recover_result = rpm_subprocess(recover_source, [1, 2, 3], timeout_seconds=60, grow=True)

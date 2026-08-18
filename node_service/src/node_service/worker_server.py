@@ -234,10 +234,46 @@ def install_client_environment(packages):
         "install_workers": min(3, len(packages_to_install)),
     }
     if not packages_to_install:
+        metrics["install_mode"] = "cached"
         metrics.update(stage_seconds=0, uninstall_seconds=0, merge_seconds=0)
         metrics["total_seconds"] = time.perf_counter() - total_started_at
         return metrics
 
+    if "pyspark" not in {name for name, _ in packages_to_install}:
+        single_install_started_at = time.perf_counter()
+        result = subprocess.run(
+            [
+                "uv",
+                "pip",
+                "install",
+                "--python",
+                "python",
+                "--target",
+                "/worker_service_python_env",
+                "--no-deps",
+                *(requirement for _, requirement in packages_to_install),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode:
+            raise RuntimeError(
+                "uv failed to install the client environment "
+                f"(exit status {result.returncode}).\n\n"
+                f"{_subprocess_output(result)}"
+            )
+        importlib.invalidate_caches()
+        metrics["install_mode"] = "single"
+        metrics["install_workers"] = 1
+        metrics.update(
+            stage_seconds=time.perf_counter() - single_install_started_at,
+            uninstall_seconds=0,
+            merge_seconds=0,
+        )
+        metrics["total_seconds"] = time.perf_counter() - total_started_at
+        return metrics
+
+    metrics["install_mode"] = "staged"
     staging_root = "/worker_service_storage/package_staging"
     shutil.rmtree(staging_root, ignore_errors=True)
     os.makedirs(staging_root)

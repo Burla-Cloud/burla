@@ -131,6 +131,20 @@ def _resolve_cluster_id_token() -> str:
 
 
 CLUSTER_ID_TOKEN = _resolve_cluster_id_token()
+SYNCFUSION_LICENSE_KEY = os.environ.get("SYNCFUSION_LICENSE_KEY", "")
+
+
+async def _load_syncfusion_license_key():
+    global SYNCFUSION_LICENSE_KEY
+    if SYNCFUSION_LICENSE_KEY:
+        return
+    headers = {"Authorization": f"Bearer {CLUSTER_ID_TOKEN}"}
+    url = f"{BURLA_BACKEND_URL}/v1/clusters/{PROJECT_ID}/syncfusion_license"
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url, headers=headers) as response:
+            response.raise_for_status()
+            SYNCFUSION_LICENSE_KEY = (await response.json())["license_key"]
+
 
 # Base URL node VMs use to reach this service. Every non-local head connects
 # outward to the relay, so nodes can reach it from any cloud region without
@@ -383,6 +397,7 @@ async def _stopped_instance_reaper_loop():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    await _load_syncfusion_license_key()
 
     # The marker only exists once `make build-frontend` has run; without it
     # (fresh worktree) the head serves the committed static assets and there
@@ -551,10 +566,6 @@ def version():
     }
 
 
-# Injected at request time so the key never lives in the public repo's committed bundles.
-SYNCFUSION_LICENSE_KEY = os.environ.get("SYNCFUSION_LICENSE_KEY", "")
-
-
 # don't move this! must be declared before static files are mounted to the same path below.
 @app.get("/")
 @app.get("/jobs")
@@ -566,7 +577,8 @@ def dashboard():
     filesystem_enabled = bool(
         (history.get_cluster_config() or {}).get("gcs_bucket_name")
     )
-    inject = f'<script>window.__SYNCFUSION_LICENSE_KEY__ = "{SYNCFUSION_LICENSE_KEY}";'
+    license_key = json.dumps(SYNCFUSION_LICENSE_KEY)
+    inject = f"<script>window.__SYNCFUSION_LICENSE_KEY__ = {license_key};"
     inject += f"window.__BURLA_FILESYSTEM_ENABLED__ = {json.dumps(filesystem_enabled)};"
     inject += (
         f"window.__BURLA_CLIENT_HOSTED_MODE__ = "

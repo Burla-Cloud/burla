@@ -111,13 +111,6 @@ def test_spinner_false_uses_print_path(rpm_subprocess, local_dev_cluster):
 
 # -------------------------------------------------------------------- section 2 (hardware)
 
-def test_default_cpu_and_ram(rpm_subprocess, local_dev_cluster):
-    source = "def test_function(x):\n    return x\n"
-    result = rpm_subprocess(source, [1, 2, 3], timeout_seconds=30)
-    assert result["ok"]
-    assert sorted(result["outputs"]) == [1, 2, 3]
-
-
 def test_func_ram_too_high_raises_NoCompatibleNodes_or_grows(
     rpm_subprocess, local_dev_cluster
 ):

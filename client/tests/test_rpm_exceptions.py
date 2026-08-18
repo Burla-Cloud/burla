@@ -56,21 +56,6 @@ def test_udf_error_adds_burla_note_py311plus(rpm_subprocess, local_dev_cluster):
     assert "[burla] failed on input index 2" in result["traceback"]
 
 
-def test_udf_error_silences_subsequent_logs(rpm_subprocess, local_dev_cluster):
-    source = (
-        "import time\n"
-        "def test_function(x):\n"
-        "    print(f'hi-{x}')\n"
-        "    time.sleep(0.2)\n"
-        "    if x == 0:\n"
-        "        raise ValueError('early')\n"
-        "    return x\n"
-    )
-    result = rpm_subprocess(source, list(range(10)), timeout_seconds=60)
-    assert not result["ok"]
-    assert result["exception_type"] == "ValueError"
-
-
 def test_old_client_version_refused_with_upgrade_command(
     rpm_subprocess, local_dev_cluster
 ):

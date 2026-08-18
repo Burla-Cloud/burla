@@ -1,0 +1,12 @@
+serverAddr = "frps"
+serverPort = 7000
+user = "other-project"
+metadatas.token = "other-token"
+
+[[proxies]]
+name = "mixed--other-project"
+type = "https"
+localIP = "node"
+localPort = 5001
+subdomain = "head-deadbeef--other-project"
+customDomains = ["unassigned.burla.test"]

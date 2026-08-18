@@ -15,6 +15,7 @@ import os
 import re
 import threading
 from time import time
+from urllib.parse import urlparse
 
 import requests
 from fastapi import FastAPI, Request
@@ -43,9 +44,12 @@ def _token_is_valid(project_id: str, token: str) -> bool:
             return True
 
     url = f"{BURLA_BACKEND_URL}/v1/clusters/{project_id}/dashboard_url"
-    response = requests.get(
-        url, headers={"Authorization": f"Bearer {token}"}, timeout=10
-    )
+    try:
+        response = requests.get(
+            url, headers={"Authorization": f"Bearer {token}"}, timeout=10
+        )
+    except requests.RequestException:
+        return False
     # 409 = token accepted but no dashboard registered yet (fresh cluster);
     # 401/403/404/5xx all mean we can't prove ownership, so reject.
     if response.status_code not in (200, 409):
@@ -59,6 +63,19 @@ def _token_is_valid(project_id: str, token: str) -> bool:
                 if expiry <= now:
                     _token_cache.pop(key, None)
     return True
+
+
+def _routing_state(project_id: str, token: str) -> dict | None:
+    url = f"{BURLA_BACKEND_URL}/v1/clusters/{project_id}/dashboard_url"
+    try:
+        response = requests.get(
+            url, headers={"Authorization": f"Bearer {token}"}, timeout=10
+        )
+    except requests.RequestException:
+        return None
+    if response.status_code != 200:
+        return None
+    return response.json()
 
 
 def _subdomain_belongs_to_project(subdomain: str, project_id: str) -> bool:
@@ -83,10 +100,38 @@ def handler(request: Request, payload: dict):
         return ALLOW
 
     if op == "NewProxy":
-        project_id = (content.get("user") or {}).get("user") or ""
+        user = content.get("user") or {}
+        project_id = user.get("user") or ""
+        token = (user.get("metas") or {}).get("token") or ""
         subdomain = content.get("subdomain") or ""
+        custom_domains = content.get("custom_domains") or []
         if content.get("proxy_type") != "https":
             return _reject("only https (SNI passthrough) proxies are allowed")
+        if subdomain and custom_domains:
+            return _reject("canonical and custom hostnames require separate proxies")
+        if custom_domains:
+            if len(custom_domains) != 1 or "*" in custom_domains[0]:
+                return _reject(
+                    "custom proxies must set exactly one non-wildcard hostname"
+                )
+            routing_state = _routing_state(project_id, token)
+            if routing_state is None:
+                return _reject(f"custom hostname authorization failed for {project_id}")
+            relay_hostname = urlparse(
+                routing_state.get("relay_dashboard_url") or ""
+            ).hostname
+            active_hostname = urlparse(
+                routing_state.get("dashboard_url") or ""
+            ).hostname
+            allowed_hostnames = {routing_state.get("pending_custom_hostname")}
+            if active_hostname and active_hostname != relay_hostname:
+                allowed_hostnames.add(active_hostname)
+            custom_hostname = custom_domains[0]
+            if custom_hostname not in allowed_hostnames:
+                return _reject(
+                    f"custom hostname {custom_hostname} is not assigned to {project_id}"
+                )
+            return ALLOW
         if not subdomain:
             return _reject("proxies must set a subdomain")
         if not _subdomain_belongs_to_project(subdomain, project_id):

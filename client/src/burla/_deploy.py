@@ -70,6 +70,7 @@ def _register_dashboard(
     }
     response = requests.post(url, json=payload, headers=headers)
     response.raise_for_status()
+    return response.json()
 
 
 def _shutdown_cluster_for_upgrade(
@@ -88,9 +89,9 @@ def _shutdown_cluster_for_upgrade(
         if response.status_code == 200
         else fallback_url
     )
-    urls = [dashboard_url]
-    if _BURLA_BACKEND_URL != "https://backend.burla.dev" and fallback_url not in urls:
-        urls.append(fallback_url)
+    urls = [fallback_url]
+    if dashboard_url not in urls:
+        urls.append(dashboard_url)
 
     timeout_sec = 10 if _BURLA_BACKEND_URL != "https://backend.burla.dev" else 60
     for candidate_url in urls:
@@ -121,16 +122,29 @@ def _head_startup_script(
     project_id: str,
     cluster_id_token: str,
     dashboard_hostname: str,
+    custom_dashboard_hostname: str | None = None,
 ) -> str:
     node_source_ref = _BURLA_NODE_SOURCE_REF
     install_spec = head_install_spec()
     relay_subdomain = f"head--{project_id}"
-    caddy_config = f"""{dashboard_hostname} {{
+    dashboard_hostnames = [dashboard_hostname]
+    if custom_dashboard_hostname:
+        dashboard_hostnames.append(custom_dashboard_hostname)
+    caddy_config = "\n\n".join(f"""{hostname} {{
   reverse_proxy burla-main-service:5001
-}}
-"""
+}}""" for hostname in dashboard_hostnames)
     caddy_config_b64 = base64.b64encode(caddy_config.encode()).decode()
 
+    custom_proxy = ""
+    if custom_dashboard_hostname:
+        custom_proxy = f"""
+
+[[proxies]]
+name = "custom-dashboard--{project_id}"
+type = "https"
+localIP = "burla-head-caddy"
+localPort = 443
+customDomains = ["{custom_dashboard_hostname}"]"""
     frpc_config = f"""serverAddr = "{RELAY_SERVER_ADDR}"
 serverPort = {RELAY_SERVER_PORT}
 loginFailExit = false
@@ -144,6 +158,7 @@ type = "https"
 localIP = "burla-head-caddy"
 localPort = 443
 subdomain = "{relay_subdomain}"
+{custom_proxy}
 """
     frpc_config_b64 = base64.b64encode(frpc_config.encode()).decode()
 
@@ -180,21 +195,22 @@ subdomain = "{relay_subdomain}"
     done
     rm -rf /etc/burla/Caddyfile
     echo "{caddy_config_b64}" | base64 -d > /etc/burla/Caddyfile
-    docker run -d --restart=always --network=burla-head --name=burla-head-caddy \\
+    echo "{frpc_config_b64}" | base64 -d > /etc/burla/frpc.toml
+    chmod 600 /etc/burla/frpc.toml
+    docker pull fatedier/frpc:v{FRP_VERSION}
+    docker create --restart=always --network=burla-head --name=burla-head-caddy \\
       -v /etc/burla/Caddyfile:/etc/caddy/Caddyfile:ro \\
       -v /var/lib/burla/caddy:/data \\
       caddy:2.10.2-alpine caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
+    docker run -d --restart=always --network=burla-head --name=burla-head-frpc \\
+      -v /etc/burla/frpc.toml:/etc/frp/frpc.toml:ro \\
+      fatedier/frpc:v{FRP_VERSION} -c /etc/frp/frpc.toml
+    docker start burla-head-caddy
     sleep 3
     if [ "$(docker inspect --format '{{{{.State.Running}}}}' burla-head-caddy)" != "true" ]; then
       docker logs burla-head-caddy
       exit 1
     fi
-    echo "{frpc_config_b64}" | base64 -d > /etc/burla/frpc.toml
-    chmod 600 /etc/burla/frpc.toml
-    docker pull fatedier/frpc:v{FRP_VERSION}
-    docker run -d --restart=always --network=burla-head --name=burla-head-frpc \\
-      -v /etc/burla/frpc.toml:/etc/frp/frpc.toml:ro \\
-      fatedier/frpc:v{FRP_VERSION} -c /etc/frp/frpc.toml
     """
     return textwrap.dedent(script)
 
@@ -369,10 +385,6 @@ def _deploy_gcp(spinner):
         if snapshot_path:
             os.remove(snapshot_path)
 
-    # remove the old Cloud Run deployment if upgrading from a pre-1.6 cluster.
-    cmd = "gcloud run services delete burla-main-service --region=us-central1 --quiet"
-    run_command(cmd, raise_error=False)
-
     headers = {"Authorization": f"Bearer {cluster_id_token}"}
     url = f"{_BURLA_BACKEND_URL}/v1/clusters/{PROJECT_ID}/version"
     response = requests.put(url, json={"version": __version__}, headers=headers)
@@ -431,17 +443,28 @@ def _deploy_head_vm(spinner, PROJECT_ID, main_svc_account_email, cluster_id_toke
             dashboard_url,
         )
 
-    _register_dashboard(
+    routing_state = _register_dashboard(
         PROJECT_ID,
         cluster_id_token,
         static_ip,
         _gcp_ownership_payload(),
         dashboard_url,
     )
+    custom_dashboard_hostname = routing_state.get("pending_custom_hostname")
+    active_dashboard_hostname = urlparse(
+        routing_state.get("dashboard_url") or ""
+    ).hostname
+    canonical_dashboard_hostname = urlparse(dashboard_url).hostname
+    if (
+        custom_dashboard_hostname is None
+        and active_dashboard_hostname != canonical_dashboard_hostname
+    ):
+        custom_dashboard_hostname = active_dashboard_hostname
     startup_script = _head_startup_script(
         PROJECT_ID,
         cluster_id_token,
-        urlparse(dashboard_url).hostname,
+        canonical_dashboard_hostname,
+        custom_dashboard_hostname,
     )
     with tempfile.NamedTemporaryFile("w", suffix=".sh") as startup_file:
         startup_file.write(startup_script)

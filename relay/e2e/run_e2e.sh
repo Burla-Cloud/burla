@@ -4,11 +4,6 @@
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
-echo "--- validating generated node + head startup scripts"
-uv run --project ../../main_service --group dev python render_startup_scripts.py node
-uv run --project ../../main_service --group dev python render_startup_scripts.py node-client-hosted
-uv run --project ../../client --group dev python render_startup_scripts.py head
-
 echo "--- generating test CA + node cert (mirrors cluster CA + node cert)"
 rm -rf certs && mkdir certs
 openssl ecparam -name prime256v1 -genkey -noout -out certs/ca.key
@@ -23,7 +18,7 @@ openssl ecparam -name prime256v1 -genkey -noout -out certs/head.key
 openssl req -new -key certs/head.key -subj "/CN=Burla head" -out certs/head.csr
 openssl x509 -req -in certs/head.csr -CA certs/ca.pem -CAkey certs/ca.key \
     -CAcreateserial -days 7 -out certs/head.pem \
-    -extfile <(printf "subjectAltName=DNS:head--test-project.relay.test")
+    -extfile <(printf "subjectAltName=DNS:head--test-project.relay.test,DNS:head--other-project.relay.test,DNS:head--conflict-project.relay.test,DNS:tract.burla.test")
 
 echo "--- starting relay stack"
 docker compose down -v --remove-orphans >/dev/null 2>&1 || true
@@ -62,6 +57,17 @@ if ! curl -sS --max-time 5 --cacert certs/ca.pem \
 fi
 echo "PASS: deployed head API routes through the relay"
 
+echo "--- assigned custom hostname must route to its head"
+CUSTOM_HOST="tract.burla.test"
+if ! curl -sS --max-time 5 --cacert certs/ca.pem \
+    --resolve "$CUSTOM_HOST:8443:127.0.0.1" "https://$CUSTOM_HOST:8443/" \
+    | grep -q hello-from-head; then
+    echo "FAIL: assigned custom hostname is unreachable"
+    docker compose logs
+    exit 1
+fi
+echo "PASS: assigned custom hostname routes through the relay"
+
 echo "--- unknown SNI must not route anywhere"
 if curl -sS --max-time 5 --insecure \
     --resolve "unknown.relay.test:8443:127.0.0.1" \
@@ -88,6 +94,79 @@ if ! echo "$SQUAT_OUTPUT" | grep -q "does not belong"; then
     exit 1
 fi
 echo "PASS: cross-tenant subdomain rejected"
+
+echo "--- mixed canonical and custom proxy must be rejected"
+MIXED_OUTPUT=$(timeout 20 docker compose --profile manual run --rm frpc-mixed 2>&1 || true)
+if ! echo "$MIXED_OUTPUT" | grep -q "require separate proxies"; then
+    echo "FAIL: mixed canonical/custom proxy was not rejected. frpc output:"
+    echo "$MIXED_OUTPUT"
+    exit 1
+fi
+echo "PASS: mixed canonical/custom proxy rejected"
+
+echo "--- unassigned custom rejection must not break its canonical proxy"
+docker compose --profile manual up -d frpc-unassigned
+UNASSIGNED_REJECTED=""
+for _ in $(seq 1 30); do
+    if docker compose logs frpc-unassigned 2>&1 | grep -q "is not assigned"; then
+        UNASSIGNED_REJECTED=1
+        break
+    fi
+    sleep 1
+done
+if [ -z "$UNASSIGNED_REJECTED" ]; then
+    echo "FAIL: unassigned custom hostname was not rejected"
+    docker compose logs frpc-unassigned
+    exit 1
+fi
+OTHER_HEAD="head--other-project.relay.test"
+if ! curl -sS --max-time 5 --cacert certs/ca.pem \
+    --resolve "$OTHER_HEAD:8443:127.0.0.1" "https://$OTHER_HEAD:8443/" \
+    | grep -q hello-from-head; then
+    echo "FAIL: canonical route died after custom rejection"
+    docker compose logs frpc-unassigned
+    exit 1
+fi
+echo "PASS: unassigned custom rejected while canonical stayed healthy"
+
+echo "--- custom-domain conflict must not break either canonical proxy"
+docker compose --profile manual up -d frpc-conflict
+CONFLICT_REJECTED=""
+for _ in $(seq 1 30); do
+    if docker compose logs frpc-conflict 2>&1 | grep -q "router config conflict"; then
+        CONFLICT_REJECTED=1
+        break
+    fi
+    sleep 1
+done
+if [ -z "$CONFLICT_REJECTED" ]; then
+    echo "FAIL: duplicate custom hostname did not report a routing conflict"
+    docker compose logs frpc-conflict
+    exit 1
+fi
+CONFLICT_HEAD="head--conflict-project.relay.test"
+if ! curl -sS --max-time 5 --cacert certs/ca.pem \
+    --resolve "$CONFLICT_HEAD:8443:127.0.0.1" "https://$CONFLICT_HEAD:8443/" \
+    | grep -q hello-from-head; then
+    echo "FAIL: conflicting client's canonical route is unreachable"
+    docker compose logs frpc-conflict
+    exit 1
+fi
+if ! curl -sS --max-time 5 --cacert certs/ca.pem \
+    --resolve "$CUSTOM_HOST:8443:127.0.0.1" "https://$CUSTOM_HOST:8443/" \
+    | grep -q hello-from-head; then
+    echo "FAIL: original custom route died after a conflicting registration"
+    docker compose logs
+    exit 1
+fi
+if ! curl -sS --max-time 5 --cacert certs/ca.pem \
+    --resolve "$HEAD_HOST:8443:127.0.0.1" "https://$HEAD_HOST:8443/" \
+    | grep -q hello-from-head; then
+    echo "FAIL: original canonical route died after a conflicting registration"
+    docker compose logs
+    exit 1
+fi
+echo "PASS: custom conflict left both canonical routes and original custom route healthy"
 
 echo ""
 echo "ALL RELAY E2E CHECKS PASSED"

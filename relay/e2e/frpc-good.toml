@@ -19,3 +19,10 @@ type = "https"
 localIP = "node"
 localPort = 5001
 subdomain = "head--test-project"
+
+[[proxies]]
+name = "custom-dashboard--test-project"
+type = "https"
+localIP = "node"
+localPort = 5001
+customDomains = ["tract.burla.test"]

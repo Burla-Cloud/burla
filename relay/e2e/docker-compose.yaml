@@ -55,3 +55,30 @@ services:
     command: ["-c", "/etc/frp/frpc.toml"]
     volumes:
       - ./frpc-squat.toml:/etc/frp/frpc.toml:ro
+
+  frpc-unassigned:
+    profiles: ["manual"]
+    image: fatedier/frpc:v0.70.1
+    command: ["-c", "/etc/frp/frpc.toml"]
+    volumes:
+      - ./frpc-unassigned.toml:/etc/frp/frpc.toml:ro
+    depends_on:
+      - frps
+      - node
+
+  frpc-conflict:
+    profiles: ["manual"]
+    image: fatedier/frpc:v0.70.1
+    command: ["-c", "/etc/frp/frpc.toml"]
+    volumes:
+      - ./frpc-conflict.toml:/etc/frp/frpc.toml:ro
+    depends_on:
+      - frps
+      - node
+
+  frpc-mixed:
+    profiles: ["manual"]
+    image: fatedier/frpc:v0.70.1
+    command: ["-c", "/etc/frp/frpc.toml"]
+    volumes:
+      - ./frpc-mixed.toml:/etc/frp/frpc.toml:ro

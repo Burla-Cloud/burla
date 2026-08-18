@@ -1,0 +1,19 @@
+serverAddr = "frps"
+serverPort = 7000
+loginFailExit = false
+user = "conflict-project"
+metadatas.token = "conflict-token"
+
+[[proxies]]
+name = "head--conflict-project"
+type = "https"
+localIP = "node"
+localPort = 5001
+subdomain = "head--conflict-project"
+
+[[proxies]]
+name = "custom-dashboard--conflict-project"
+type = "https"
+localIP = "node"
+localPort = 5001
+customDomains = ["tract.burla.test"]

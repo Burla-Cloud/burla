@@ -160,6 +160,7 @@ subdomain = "{relay_subdomain}"
       -v /var/lib/burla:/var/lib/burla \\
       -e PROJECT_ID="{project_id}" \\
       -e CLUSTER_ID_TOKEN="{cluster_id_token}" \\
+      -e BURLA_HEAD_RUNTIME=True \\
       -e CLOUD_PROVIDER=gcp \\
       -e BIND_HOST=0.0.0.0 \\
       -e PORT=5001 \\

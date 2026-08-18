@@ -63,6 +63,7 @@ def _head_setup_commands(
             "-v /var/lib/burla:/var/lib/burla "
             f'-e PROJECT_ID="{project_id}" '
             '-e CLUSTER_ID_TOKEN="$CLUSTER_ID_TOKEN" '
+            "-e BURLA_HEAD_RUNTIME=True "
             "-e CLOUD_PROVIDER=aws "
             f'-e AWS_REGION="{region}" '
             f'-e CLOUD_ACCOUNT_NAME="{account_name}" '
@@ -404,22 +405,14 @@ def _aws_ownership_payload(region: str) -> dict:
         ExpiresIn=60,
     )
     ec2 = boto3.client("ec2", region_name=region)
-    run_instances_params = {
-        "ImageId": public_node_ami_id(ec2, gpu=False),
-        "InstanceType": "m7i.large",
-        "MinCount": 1,
-        "MaxCount": 1,
+    create_security_group_params = {
+        "GroupName": "burla-ownership-check",
+        "Description": "Burla ownership permission check",
         "DryRun": True,
     }
-    subnet_id = os.environ.get("AWS_SUBNET_ID")
-    if subnet_id:
-        run_instances_params["SubnetId"] = subnet_id
-    security_group_id = os.environ.get("AWS_SECURITY_GROUP_ID")
-    if security_group_id:
-        run_instances_params["SecurityGroupIds"] = [security_group_id]
     ec2_dry_run_url = ec2.generate_presigned_url(
-        "run_instances",
-        Params=run_instances_params,
+        "create_security_group",
+        Params=create_security_group_params,
         ExpiresIn=60,
     )
     return {

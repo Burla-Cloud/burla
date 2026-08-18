@@ -18,10 +18,11 @@ _IN_SOURCE_CHECKOUT = _SOURCE_ROOT is not None and (
     (_SOURCE_ROOT / ".git").exists()
     and (_SOURCE_ROOT / "client" / "pyproject.toml").exists()
 )
+_IN_HEAD_RUNTIME = os.environ.get("BURLA_HEAD_RUNTIME") == "True"
 _BURLA_ENVIRONMENT = os.environ.get("BURLA_ENVIRONMENT", "production").lower()
 if _BURLA_ENVIRONMENT not in {"production", "test"}:
     raise ValueError("BURLA_ENVIRONMENT must be `production` or `test`.")
-if _BURLA_ENVIRONMENT == "test" and not _IN_SOURCE_CHECKOUT:
+if _BURLA_ENVIRONMENT == "test" and not (_IN_SOURCE_CHECKOUT or _IN_HEAD_RUNTIME):
     raise RuntimeError(
         "Burla's internal test environment is only available from an editable "
         "source checkout."
@@ -42,7 +43,9 @@ _DEFAULT_NODE_SOURCE_REF = "dev" if _BURLA_ENVIRONMENT == "test" else __version_
 _BURLA_BACKEND_URL = os.environ.get(
     "BURLA_BACKEND_URL", _DEFAULT_BACKEND_URL
 ).rstrip("/")
-if _BURLA_BACKEND_URL != "https://backend.burla.dev" and not _IN_SOURCE_CHECKOUT:
+if _BURLA_BACKEND_URL != "https://backend.burla.dev" and not (
+    _IN_SOURCE_CHECKOUT or _IN_HEAD_RUNTIME
+):
     raise RuntimeError(
         "Non-production Burla backends are only available from an editable "
         "source checkout."

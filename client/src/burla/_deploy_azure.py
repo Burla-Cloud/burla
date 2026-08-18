@@ -414,6 +414,7 @@ def _head_setup_commands(
             "-v /var/lib/burla:/var/lib/burla "
             f'-e PROJECT_ID="{project_id}" '
             '-e CLUSTER_ID_TOKEN="$CLUSTER_ID_TOKEN" '
+            "-e BURLA_HEAD_RUNTIME=True "
             "-e CLOUD_PROVIDER=azure "
             f'-e AZURE_SUBSCRIPTION_ID="{subscription_id}" '
             f'-e AZURE_RESOURCE_GROUP="{RESOURCE_GROUP}" '

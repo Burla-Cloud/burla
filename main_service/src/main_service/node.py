@@ -458,11 +458,11 @@ class Node:
         set -Eeuo pipefail
 
         HEAD_URL="{MAIN_SERVICE_URL_FOR_NODES}"
+        TLS_DIR="/etc/burla/tls"
         HEAD_CA_PATH="{main_service_ca_path}"
         AUTH_HEADER="Authorization: Bearer {CLUSTER_ID_TOKEN}"
         NODE_NAME="{self.instance_name}"
         NODE_AUTH_TOKEN="{node_auth_token(self.instance_name)}"
-        TLS_DIR="/etc/burla/tls"
         mkdir -p "$TLS_DIR" /etc/burla/caddy
         echo "{ca_pem_b64}" | base64 -d > "$TLS_DIR/ca.pem"
         {azure_delete_lease_script}

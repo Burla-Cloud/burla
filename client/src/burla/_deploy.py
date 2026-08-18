@@ -193,7 +193,7 @@ subdomain = "{relay_subdomain}"
       >/dev/null 2>&1; do
       sleep 1
     done
-    rm -rf /etc/burla/Caddyfile
+    rm -rf /etc/burla/Caddyfile /etc/burla/frpc.toml
     echo "{caddy_config_b64}" | base64 -d > /etc/burla/Caddyfile
     echo "{frpc_config_b64}" | base64 -d > /etc/burla/frpc.toml
     chmod 600 /etc/burla/frpc.toml

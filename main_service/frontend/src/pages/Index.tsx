@@ -9,7 +9,6 @@ import { useCluster } from "@/contexts/ClusterContext";
 import { useEffect, useMemo, useState } from "react";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { extractCpuCount, parseGpuDisplay, parseRamDisplay } from "@/lib/machineSpecs";
 
 const ACTIVE_STATUSES = new Set(["BOOTING", "READY", "RUNNING"]);
 
@@ -46,9 +45,7 @@ const Dashboard = () => {
         return localStorage.getItem(SHOW_DELETED_STORAGE_KEY) === "true";
     });
 
-    const [welcomeVisible, setWelcomeVisible] = useState(
-        () => localStorage.getItem("welcomeMessageHidden") !== "true",
-    );
+    const [welcomeVisible, setWelcomeVisible] = useState(() => localStorage.getItem("welcomeMessageHidden") !== "true");
 
     const dismissWelcome = () => {
         setWelcomeVisible(false);
@@ -69,8 +66,7 @@ const Dashboard = () => {
     const parallelism = useMemo(
         () =>
             countedNodes.reduce((sum, node) => {
-                const cpus = node.cpus ?? extractCpuCount(node.type) ?? 0;
-                return sum + cpus;
+                return sum + (node.cpus ?? 0);
             }, 0),
         [countedNodes],
     );
@@ -78,21 +74,12 @@ const Dashboard = () => {
     const totalRamGB = useMemo(
         () =>
             countedNodes.reduce((sum, node) => {
-                const ramStr = node.memory || parseRamDisplay(node.type);
-                return sum + parseRamGB(ramStr);
+                return sum + parseRamGB(node.memory ?? "");
             }, 0),
         [countedNodes],
     );
 
-    const gpuTotalCount = useMemo(() => {
-        let total = 0;
-        countedNodes.forEach((node) => {
-            const gpuStr = parseGpuDisplay(node.type);
-            const match = gpuStr.match(/^(\d+)x /);
-            if (match) total += parseInt(match[1], 10);
-        });
-        return total;
-    }, [countedNodes]);
+    const gpuTotalCount = useMemo(() => countedNodes.reduce((sum, node) => sum + (node.gpus ?? 0), 0), [countedNodes]);
 
     const handleReboot = async () => {
         setDisableStartButton(true);
@@ -135,17 +122,9 @@ const Dashboard = () => {
                     {welcomeVisible && <QuickstartCard onDismiss={dismissWelcome} />}
 
                     <Card className="grid grid-cols-2 divide-y divide-border/70 sm:grid-cols-4 sm:divide-x sm:divide-y-0">
-                        <Stat
-                            label="Nodes"
-                            value={countedNodes.length.toLocaleString()}
-                            loading={loading}
-                        />
+                        <Stat label="Nodes" value={countedNodes.length.toLocaleString()} loading={loading} />
                         <Stat label="vCPUs" value={parallelism.toLocaleString()} loading={loading} />
-                        <Stat
-                            label="RAM"
-                            value={totalRamGB > 0 ? `${totalRamGB}G` : "—"}
-                            loading={loading}
-                        />
+                        <Stat label="RAM" value={totalRamGB > 0 ? `${totalRamGB}G` : "—"} loading={loading} />
                         <Stat
                             label="GPUs"
                             value={gpuTotalCount > 0 ? gpuTotalCount.toLocaleString() : "—"}

@@ -56,7 +56,10 @@ def _remove_local_dev_cluster_containers():
         remove_container(docker_client, container["Id"])
 
 
-def _shutdown_cluster(logger: Logger):
+def _shutdown_cluster(
+    logger: Logger,
+    terminal_reason: dict | None = None,
+):
     futures = []
     executor = ThreadPoolExecutor(max_workers=32)
     provider = get_provider()
@@ -66,6 +69,17 @@ def _shutdown_cluster(logger: Logger):
         n for n in cluster_state.list_nodes() if n.get("status") in active_statuses
     ]
     for node_dict in active_nodes:
+        cluster_state.update_node(
+            node_dict["instance_name"],
+            {
+                "terminal_reason": terminal_reason
+                or {
+                    "code": "cluster_shutdown",
+                    "source": "cluster_lifecycle",
+                    "message": "The cluster was shut down.",
+                }
+            },
+        )
         node = Node.from_state(logger, node_dict, provider)
         futures.append(executor.submit(node.delete))
     [future.result() for future in futures]
@@ -324,13 +338,31 @@ def _mark_running_jobs_with_lifecycle_event(event: str, message: str):
     )
     for job_id in running_job_ids:
         history.add_job_logs(job_id, [log_doc])
-        cluster_state.update_job(job_id, {"status": "CANCELED", **extra})
+        cluster_state.update_job(
+            job_id,
+            {
+                "status": "CANCELED",
+                "terminal_reason": {
+                    "code": event,
+                    "source": "cluster_lifecycle",
+                    "message": message,
+                },
+                **extra,
+            },
+        )
 
 
 def _restart_cluster(logger: Logger):
     start = time()
 
-    _shutdown_cluster(logger)
+    _shutdown_cluster(
+        logger,
+        terminal_reason={
+            "code": "cluster_restarted",
+            "source": "cluster_lifecycle",
+            "message": "The cluster was restarted.",
+        },
+    )
     _remove_local_dev_cluster_containers()
 
     config = _get_cluster_config()

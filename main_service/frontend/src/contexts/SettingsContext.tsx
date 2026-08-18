@@ -1,6 +1,7 @@
 // src/contexts/SettingsContext.tsx
 import React, { createContext, useContext, useEffect, useState } from "react";
 import { Settings as SettingsData } from "@/types/coreTypes";
+import { managementJson } from "@/lib/managementApi";
 
 interface SettingsContextType {
     settings: SettingsData;
@@ -33,10 +34,28 @@ export const SettingsProvider = ({ children }: { children: React.ReactNode }) =>
     useEffect(() => {
         const fetchSettings = async () => {
             try {
-                const response = await fetch("/v1/settings", { credentials: "include" });
-                if (!response.ok) throw new Error(`HTTP ${response.status}`);
-                const data = await response.json();
-                setSettings((previous) => ({ ...previous, ...data }));
+                const [data, legacy] = await Promise.all([
+                    managementJson<any>("/settings"),
+                    fetch("/v1/settings", { credentials: "include" }).then((response) =>
+                        response.json()
+                    ),
+                ]);
+                setSettings((previous) => ({
+                    ...previous,
+                    containerImage: data.image,
+                    machineType: data.machine_type,
+                    machineQuantity: data.quantity,
+                    diskSize: data.disk_gb,
+                    inactivityTimeout: Math.round(data.inactivity_timeout_seconds / 60),
+                    gcpRegion: data.region,
+                    burlaVersion: data.burla_version,
+                    googleCloudProjectId: data.project_id,
+                    cloudAccountName: data.cloud_account_name,
+                    cloudProvider: data.cloud_provider,
+                    options: data.options,
+                    users: legacy.users ?? [],
+                    filesystemEnabled: legacy.filesystemEnabled,
+                }));
             } catch {
                 setError("Could not load settings");
             } finally {

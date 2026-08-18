@@ -13,8 +13,16 @@ from urllib.parse import urlparse
 
 import aiohttp
 from fastapi import BackgroundTasks, Depends, FastAPI, Request, status
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    Response,
+)
 from fastapi.staticfiles import StaticFiles
 from jinja2 import Environment, FileSystemLoader
 from starlette.datastructures import UploadFile
@@ -337,6 +345,11 @@ from main_service.endpoints.client import router as client_router
 from main_service.endpoints.cluster_lifecycle import router as cluster_lifecycle_router
 from main_service.endpoints.cluster_views import router as cluster_views_router
 from main_service.endpoints.jobs import router as jobs_router
+from main_service.endpoints.management import (
+    ManagementAPIError,
+    management_error_handler,
+    router as management_router,
+)
 from main_service.endpoints.nodes import router as nodes_router
 from main_service.endpoints.settings import router as settings_router
 from main_service.endpoints.storage import router as storage_router
@@ -446,9 +459,34 @@ app.include_router(cluster_views_router)
 app.include_router(usage_router)
 app.include_router(settings_router)
 app.include_router(jobs_router)
+app.include_router(management_router)
 app.include_router(storage_router)
 app.include_router(client_router)
 app.include_router(nodes_router)
+app.add_exception_handler(ManagementAPIError, management_error_handler)
+
+
+async def management_validation_error_handler(
+    request: Request, error: RequestValidationError
+):
+    if request.url.path.startswith("/v1/management"):
+        request_id = getattr(request.state, "uuid", None)
+        return JSONResponse(
+            status_code=422,
+            content={
+                "request_id": request_id,
+                "error": {
+                    "code": "INVALID_ARGUMENT",
+                    "message": "Invalid management request.",
+                    "retryable": False,
+                    "details": {"errors": error.errors()},
+                },
+            },
+        )
+    return await request_validation_exception_handler(request, error)
+
+
+app.add_exception_handler(RequestValidationError, management_validation_error_handler)
 
 # Allow cross-origin requests for local development and to satisfy Syncfusion preflights
 app.add_middleware(
@@ -633,6 +671,8 @@ async def validate_requests(request: Request, call_next):
       - use client_id to get auth info, set auth cookie -> redirect here again but with auth cookie
       - here again with auth cookie -> access granted
     """
+    management_request = request.url.path.startswith("/v1/management")
+
     # Node services (and VM startup scripts) authenticate with the cluster
     # token - they push state / logs and read job + peer views.
     if request.headers.get("Authorization") == f"Bearer {CLUSTER_ID_TOKEN}":
@@ -756,6 +796,19 @@ async def validate_requests(request: Request, call_next):
                 elif response.status != 401:
                     response.raise_for_status()
                 else:
+                    if management_request:
+                        return JSONResponse(
+                            status_code=401,
+                            content={
+                                "request_id": getattr(request.state, "uuid", None),
+                                "error": {
+                                    "code": "AUTH_REQUIRED",
+                                    "message": "The supplied Burla credentials are invalid.",
+                                    "retryable": False,
+                                    "details": {},
+                                },
+                            },
+                        )
                     first_name = await get_welcome_name(session)
                     rendered = STATIC_FILES_ENV.get_template("login.html.j2").render(
                         redirect_locally=REDIRECT_LOCALLY_ON_LOGIN,
@@ -767,6 +820,19 @@ async def validate_requests(request: Request, call_next):
                         content=rendered, status_code=200, media_type="text/html"
                     )
 
+        if management_request:
+            return JSONResponse(
+                status_code=401,
+                content={
+                    "request_id": getattr(request.state, "uuid", None),
+                    "error": {
+                        "code": "AUTH_REQUIRED",
+                        "message": "Authentication is required.",
+                        "retryable": False,
+                        "details": {},
+                    },
+                },
+            )
         first_name = await get_welcome_name(session)
         rendered = STATIC_FILES_ENV.get_template("login.html.j2").render(
             redirect_locally=REDIRECT_LOCALLY_ON_LOGIN,

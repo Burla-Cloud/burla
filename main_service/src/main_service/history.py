@@ -12,8 +12,10 @@ high-frequency logs and resource metrics arrive in batches.
 """
 
 import json
+import hashlib
 import math
 import os
+import re
 import sqlite3
 import threading
 from pathlib import Path
@@ -419,8 +421,10 @@ def task_metrics_series(job_id: str, input_index: int) -> dict:
 TASK_SUMMARY_SORT_COLUMNS = {
     "index": "input_index",
     "started": "started",
+    "ended": "started + duration",
     "duration": "duration",
     "attempts": "attempts",
+    "status": "failed",
     "peak_cpus": "peak_cpus",
     "peak_mem": "peak_mem",
 }
@@ -464,7 +468,27 @@ logged AS (
 _CALLS_FILTERS = """
     WHERE (:failed_only = 0 OR COALESCE(l.failed, 0) = 1)
     AND (:logs_only = 0 OR l.input_index IS NOT NULL)
+    AND (:has_metrics = 0 OR EXISTS (
+        SELECT 1 FROM resource_metrics
+        WHERE job_id = :job_id AND scope = 'task'
+        AND input_index = a.input_index
+    ))
     AND (:index IS NULL OR a.input_index = :index)
+"""
+
+_CALL_STATUS_SQL = """
+CASE
+    WHEN failed = 1 THEN 'failed'
+    WHEN has_events = 1 AND :job_is_running AND open_attempts > 0 THEN 'running'
+    WHEN has_events = 0 AND :job_is_running
+        AND last_active IS NOT NULL
+        AND :now - last_active < 15 THEN 'running'
+    WHEN started IS NOT NULL AND :job_is_canceled THEN 'canceled'
+    WHEN started IS NOT NULL THEN 'succeeded'
+    WHEN :job_is_running THEN 'pending'
+    WHEN :job_is_canceled THEN 'not_run'
+    ELSE 'unknown'
+END
 """
 
 # Fast path, for jobs with call events. Never touches the (potentially tens of
@@ -472,10 +496,10 @@ _CALLS_FILTERS = """
 # the events, then only its ~50 rows get per-input sample lookups for the peak
 # columns. An 18M-sample synthetic job pages in ~0.4s this way vs ~5s when the
 # full sample aggregation runs.
-_EVENT_SUMMARY_QUERY = (
+_EVENT_SUMMARY_CTE = (
     _CALLS_BASE_CTE
     + """,
-flagged AS (
+summarized AS (
     SELECT a.input_index,
         COALESCE(e.started, l.first_logged) AS started,
         CASE
@@ -484,6 +508,7 @@ flagged AS (
         END AS duration,
         e.attempts AS attempts,
         COALESCE(l.failed, 0) AS failed,
+        l.input_index IS NOT NULL AS has_logs,
         e.input_index IS NOT NULL AS has_events,
         COALESCE(e.open_attempts, 0) AS open_attempts,
         l.last_logged AS last_active
@@ -492,7 +517,16 @@ flagged AS (
     LEFT JOIN logged l ON l.input_index = a.input_index
 """
     + _CALLS_FILTERS
-    + """)
+    + f"""),
+flagged AS (
+    SELECT *, {_CALL_STATUS_SQL} AS api_status FROM summarized
+)
+"""
+)
+
+_EVENT_SUMMARY_QUERY = (
+    _EVENT_SUMMARY_CTE
+    + """
 SELECT f.input_index, f.started, f.duration, f.attempts,
     (SELECT MAX(cpu_seconds / duration_sec)
      FROM resource_metrics INDEXED BY idx_resource_metrics_task_summary
@@ -502,8 +536,10 @@ SELECT f.input_index, f.started, f.duration, f.attempts,
      FROM resource_metrics INDEXED BY idx_resource_metrics_task_summary
      WHERE job_id = :job_id AND scope = 'task'
      AND input_index = f.input_index) AS peak_mem,
-    f.failed, f.has_events, f.open_attempts, f.last_active
-FROM (SELECT * FROM flagged ORDER BY {order}, input_index
+    f.failed, f.has_logs, f.has_events, f.open_attempts, f.last_active,
+    f.cursor_value
+FROM (SELECT *, {sort_column} AS cursor_value FROM flagged {selection_where}
+      ORDER BY {order}, input_index {direction}
       LIMIT :limit OFFSET :offset) f
 """
 )
@@ -511,7 +547,7 @@ FROM (SELECT * FROM flagged ORDER BY {order}, input_index
 # Fallback path: jobs that predate call events (start/duration must come from
 # the sample aggregation), and peak-column sorts (which need every input's
 # sample aggregate anyway).
-_SAMPLE_SUMMARY_QUERY = (
+_SAMPLE_SUMMARY_CTE = (
     _CALLS_BASE_CTE
     + """,
 sampled AS (
@@ -526,7 +562,7 @@ sampled AS (
     WHERE job_id = :job_id AND scope = 'task'
     GROUP BY input_index
 ),
-flagged AS (
+summarized AS (
     SELECT a.input_index,
         COALESCE(e.started,
             MIN(s.first_seen, l.first_logged), s.first_seen, l.first_logged) AS started,
@@ -538,6 +574,7 @@ flagged AS (
         COALESCE(e.attempts, s.attempts) AS attempts,
         s.peak_cpus, s.peak_mem,
         COALESCE(l.failed, 0) AS failed,
+        l.input_index IS NOT NULL AS has_logs,
         e.input_index IS NOT NULL AS has_events,
         COALESCE(e.open_attempts, 0) AS open_attempts,
         COALESCE(MAX(s.last_seen, l.last_logged), s.last_seen, l.last_logged) AS last_active
@@ -547,8 +584,21 @@ flagged AS (
     LEFT JOIN logged l ON l.input_index = a.input_index
 """
     + _CALLS_FILTERS
-    + """)
-SELECT * FROM flagged ORDER BY {order}, input_index LIMIT :limit OFFSET :offset
+    + f"""),
+flagged AS (
+    SELECT *, {_CALL_STATUS_SQL} AS api_status FROM summarized
+)
+"""
+)
+
+_SAMPLE_SUMMARY_QUERY = (
+    _SAMPLE_SUMMARY_CTE
+    + """
+SELECT input_index, started, duration, attempts, peak_cpus, peak_mem,
+    failed, has_logs, has_events, open_attempts, last_active,
+    {sort_column} AS cursor_value
+FROM flagged {selection_where}
+ORDER BY {order}, input_index {direction} LIMIT :limit OFFSET :offset
 """
 )
 
@@ -575,29 +625,70 @@ def job_task_summaries(
     offset: int,
     limit: int,
     job_is_running: bool,
+    has_metrics: bool = False,
+    after_key: tuple | None = None,
+    status: str | None = None,
+    job_is_canceled: bool = False,
 ) -> dict:
     direction = "DESC" if descending else "ASC"
-    order = f"{TASK_SUMMARY_SORT_COLUMNS[sort]} {direction} NULLS LAST"
+    sort_column = TASK_SUMMARY_SORT_COLUMNS[sort]
+    order = f"{sort_column} {direction} NULLS LAST"
+    selection_conditions = []
+    cursor_params = {}
+    if after_key is not None:
+        null_rank, value, input_index = after_key
+        comparator = "<" if descending else ">"
+        selection_conditions.append(
+            f"(({sort_column} IS NULL) > :cursor_null_rank OR ("
+            f"({sort_column} IS NULL) = :cursor_null_rank AND ("
+            f"(:cursor_null_rank = 0 AND ({sort_column} {comparator} :cursor_value "
+            f"OR ({sort_column} = :cursor_value AND input_index "
+            f"{comparator} :cursor_index))) OR "
+            f"(:cursor_null_rank = 1 AND input_index "
+            f"{comparator} :cursor_index))))"
+        )
+        cursor_params = {
+            "cursor_null_rank": null_rank,
+            "cursor_value": value,
+            "cursor_index": input_index,
+        }
+    if status is not None:
+        selection_conditions.append("api_status = :status")
+    selection_where = "WHERE " + " AND ".join(selection_conditions) if selection_conditions else ""
     now = time()
     params = {
         "job_id": job_id,
         "n_inputs": n_inputs,
         "job_is_running": 1 if job_is_running else 0,
+        "job_is_canceled": 1 if job_is_canceled else 0,
         "now": now,
         "failed_only": 1 if failed_only else 0,
         "logs_only": 1 if logs_only else 0,
+        "has_metrics": 1 if has_metrics else 0,
         "index": index,
+        "status": status,
         "limit": limit,
         "offset": offset,
+        **cursor_params,
     }
-    unfiltered = not failed_only and not logs_only and index is None
+    unfiltered = not failed_only and not logs_only and not has_metrics and index is None
     with _read_lock:
         conn = _read_connection()
         has_events = conn.execute(
             "SELECT EXISTS(SELECT 1 FROM call_events WHERE job_id = ?)", (job_id,)
         ).fetchone()[0]
-        if unfiltered:
+        if unfiltered and status is None:
             total = n_inputs
+        elif status is not None:
+            count_query = (
+                _EVENT_SUMMARY_CTE
+                if has_events and sort not in ("peak_cpus", "peak_mem")
+                else _SAMPLE_SUMMARY_CTE
+            )
+            total = conn.execute(
+                count_query + "SELECT COUNT(*) FROM flagged WHERE api_status = :status",
+                params,
+            ).fetchone()[0]
         else:
             total = conn.execute(_COUNT_QUERY, params).fetchone()[0]
         query = (
@@ -605,7 +696,15 @@ def job_task_summaries(
             if has_events and sort not in ("peak_cpus", "peak_mem")
             else _SAMPLE_SUMMARY_QUERY
         )
-        rows = conn.execute(query.format(order=order), params).fetchall()
+        rows = conn.execute(
+            query.format(
+                order=order,
+                sort_column=sort_column,
+                selection_where=selection_where,
+                direction=direction,
+            ),
+            params,
+        ).fetchall()
     tasks = []
     for row in rows:
         (
@@ -616,9 +715,11 @@ def job_task_summaries(
             peak_cpus,
             peak_mem,
             failed,
+            has_logs,
             has_events,
             open_attempts,
             last_active,
+            cursor_value,
         ) = row
         if failed:
             status = "failed"
@@ -640,7 +741,14 @@ def job_task_summaries(
                 "attempts": attempts,
                 "peak_cpus": round(peak_cpus, 3) if peak_cpus is not None else None,
                 "peak_mem_bytes": peak_mem,
+                "has_logs": bool(has_logs),
+                "has_error": bool(failed),
                 "status": status,
+                "_cursor_key": [
+                    1 if cursor_value is None else 0,
+                    cursor_value,
+                    input_index,
+                ],
             }
         )
     return {"total": total, "tasks": tasks}
@@ -1017,14 +1125,17 @@ def add_node_logs(instance_name: str, logs: list[dict]):
         conn.commit()
 
 
-def node_logs_after(instance_name: str, after_id: int) -> list[tuple[int, float, str]]:
+def node_logs_after(
+    instance_name: str, after_id: int, limit: int = 1000
+) -> list[tuple[int, float, str]]:
     """Log rows with id > after_id, oldest first. Pass 0 for a full replay."""
     with _lock:
         rows = (
             _connection()
             .execute(
-                "SELECT id, ts, msg FROM node_logs WHERE instance_name = ? AND id > ? ORDER BY id",
-                (instance_name, after_id),
+                "SELECT id, ts, msg FROM node_logs "
+                "WHERE instance_name = ? AND id > ? ORDER BY id LIMIT ?",
+                (instance_name, after_id, limit),
             )
             .fetchall()
         )
@@ -1146,3 +1257,450 @@ def import_snapshot(snapshot_path: str, digest: str, cluster_config: dict | None
             conn.execute("DROP TABLE IF EXISTS old_nodes")
             conn.execute("DETACH DATABASE snapshot")
     return True
+
+
+# ---------------------------------------------------------------- management reads
+
+
+def management_jobs_page(
+    *,
+    status: str | None,
+    user: str | None,
+    function_name: str | None,
+    started_after: float | None,
+    started_before: float | None,
+    sort: str,
+    descending: bool,
+    after_key: tuple | None,
+    limit: int,
+) -> dict:
+    sort_expressions = {
+        "started_at": "j.started_at",
+        "ended_at": "j.ended_at",
+        "duration": "COALESCE(j.ended_at, ?) - j.started_at",
+        "status": "LOWER(j.status)",
+        "input_count": "j.n_inputs",
+        "result_count": "j.n_results",
+        "failed_count": (
+            "(SELECT COUNT(DISTINCT input_index) FROM job_logs "
+            "WHERE job_id = j.job_id AND input_index IS NOT NULL AND is_error = 1)"
+        ),
+    }
+    where = []
+    params = []
+    if status is not None:
+        where.append("LOWER(j.status) = ?")
+        params.append(status)
+    if user is not None:
+        where.append("j.user = ?")
+        params.append(user)
+    if function_name is not None:
+        where.append("j.function_name = ?")
+        params.append(function_name)
+    if started_after is not None:
+        where.append("j.started_at >= ?")
+        params.append(started_after)
+    if started_before is not None:
+        where.append("j.started_at <= ?")
+        params.append(started_before)
+    where_sql = "WHERE " + " AND ".join(where) if where else ""
+    direction = "DESC" if descending else "ASC"
+    sort_expression = sort_expressions[sort]
+    sort_params = [time()] if sort == "duration" else []
+    page_where = ""
+    page_params = []
+    if after_key is not None:
+        null_rank, value, job_id = after_key
+        comparator = "<" if descending else ">"
+        page_where = (
+            "WHERE (sort_value IS NULL) > ? OR ("
+            "(sort_value IS NULL) = ? AND ("
+            "(? = 0 AND (sort_value "
+            f"{comparator} ? OR (sort_value = ? AND job_id {comparator} ?))) "
+            f"OR (? = 1 AND job_id {comparator} ?)))"
+        )
+        page_params = [
+            null_rank,
+            null_rank,
+            null_rank,
+            value,
+            value,
+            job_id,
+            null_rank,
+            job_id,
+        ]
+    with _lock:
+        conn = _connection()
+        total = conn.execute(
+            f"SELECT COUNT(*) FROM jobs j {where_sql}", params
+        ).fetchone()[0]
+        rows = conn.execute(
+            f"WITH filtered AS ("
+            f"SELECT j.job_id, j.data, j.n_results, "
+            f"{sort_expression} AS sort_value FROM jobs j {where_sql}"
+            f") SELECT job_id, data, n_results, sort_value FROM filtered "
+            f"{page_where} ORDER BY sort_value {direction} NULLS LAST, "
+            f"job_id {direction} LIMIT ?",
+            sort_params + params + page_params + [limit],
+        ).fetchall()
+    jobs = []
+    for job_id, data, n_results, sort_value in rows:
+        job = json.loads(data)
+        job["job_id"] = job_id
+        job["n_results"] = n_results
+        job["_cursor_key"] = [1 if sort_value is None else 0, sort_value, job_id]
+        jobs.append(job)
+    return {"total": total, "items": jobs}
+
+
+def management_job(job_id: str) -> dict | None:
+    with _lock:
+        row = (
+            _connection()
+            .execute(
+                "SELECT job_id, data, n_results FROM jobs WHERE job_id = ?",
+                (job_id,),
+            )
+            .fetchone()
+        )
+    if row is None:
+        return None
+    job = json.loads(row[1])
+    job["job_id"] = row[0]
+    job["n_results"] = row[2]
+    return job
+
+
+def management_nodes_page(
+    *,
+    status: str,
+    region: str | None,
+    job_id: str | None,
+    started_after: float | None,
+    ended_after: float | None,
+    sort: str,
+    descending: bool,
+    after_key: tuple | None,
+    limit: int,
+) -> dict:
+    sort_expressions = {
+        "started_at": "started_booting_at",
+        "ended_at": "ended_at",
+        "status": "LOWER(status)",
+        "machine_type": "machine_type",
+    }
+    where = []
+    params = []
+    if status == "active":
+        where.append("UPPER(status) IN ('BOOTING', 'READY', 'RUNNING')")
+    elif status != "all":
+        where.append("LOWER(status) = ?")
+        params.append(status)
+    if region is not None:
+        where.append("gcp_region = ?")
+        params.append(region)
+    if job_id is not None:
+        where.append(
+            "(json_extract(data, '$.current_job') = ? "
+            "OR json_extract(data, '$.reserved_for_job') = ?)"
+        )
+        params.extend((job_id, job_id))
+    if started_after is not None:
+        where.append("started_booting_at >= ?")
+        params.append(started_after)
+    if ended_after is not None:
+        where.append("ended_at >= ?")
+        params.append(ended_after)
+    where_sql = "WHERE " + " AND ".join(where) if where else ""
+    direction = "DESC" if descending else "ASC"
+    page_where = ""
+    page_params = []
+    if after_key is not None:
+        null_rank, value, instance_name = after_key
+        comparator = "<" if descending else ">"
+        page_where = (
+            "WHERE (sort_value IS NULL) > ? OR ("
+            "(sort_value IS NULL) = ? AND ("
+            "(? = 0 AND (sort_value "
+            f"{comparator} ? OR (sort_value = ? AND instance_name "
+            f"{comparator} ?))) OR (? = 1 AND instance_name "
+            f"{comparator} ?)))"
+        )
+        page_params = [
+            null_rank,
+            null_rank,
+            null_rank,
+            value,
+            value,
+            instance_name,
+            null_rank,
+            instance_name,
+        ]
+    with _lock:
+        conn = _connection()
+        total = conn.execute(
+            f"SELECT COUNT(*) FROM nodes {where_sql}", params
+        ).fetchone()[0]
+        rows = conn.execute(
+            f"WITH filtered AS ("
+            f"SELECT instance_name, status, machine_type, gcp_region, spot, "
+            f"started_booting_at, ended_at, data, "
+            f"{sort_expressions[sort]} AS sort_value "
+            f"FROM nodes {where_sql}"
+            f") SELECT instance_name, status, machine_type, gcp_region, spot, "
+            f"started_booting_at, ended_at, data, sort_value "
+            f"FROM filtered {page_where} "
+            f"ORDER BY sort_value {direction} NULLS LAST, "
+            f"instance_name {direction} LIMIT ?",
+            params + page_params + [limit],
+        ).fetchall()
+    items = []
+    for (
+        instance_name,
+        status,
+        machine_type,
+        gcp_region,
+        spot,
+        started_booting_at,
+        ended_at,
+        data,
+        sort_value,
+    ) in rows:
+        node = json.loads(data)
+        node.update(
+            {
+                "instance_name": instance_name,
+                "status": status,
+                "machine_type": machine_type,
+                "gcp_region": gcp_region,
+                "spot": spot,
+                "started_booting_at": started_booting_at,
+                "ended_at": ended_at,
+            }
+        )
+        node["_cursor_key"] = [
+            1 if sort_value is None else 0,
+            sort_value,
+            instance_name,
+        ]
+        items.append(node)
+    return {"total": total, "items": items}
+
+
+def management_node(instance_name: str) -> dict | None:
+    with _lock:
+        row = (
+            _connection()
+            .execute("SELECT data FROM nodes WHERE instance_name = ?", (instance_name,))
+            .fetchone()
+        )
+    return json.loads(row[0]) if row else None
+
+
+def management_node_logs(
+    instance_name: str,
+    *,
+    before_id: int | None = None,
+    after_id: int | None = None,
+    limit: int = 501,
+) -> list[dict]:
+    where = "instance_name = ?"
+    params: list = [instance_name]
+    descending = before_id is not None
+    if before_id is not None:
+        where += " AND id < ?"
+        params.append(before_id)
+    elif after_id is not None:
+        where += " AND id > ?"
+        params.append(after_id)
+    params.append(limit)
+    with _lock:
+        rows = (
+            _connection()
+            .execute(
+                f"SELECT id, ts, msg FROM node_logs WHERE {where} "
+                f"ORDER BY id {'DESC' if descending else 'ASC'} LIMIT ?",
+                params,
+            )
+            .fetchall()
+        )
+    if descending:
+        rows.reverse()
+    return [
+        {"id": row_id, "timestamp": timestamp, "message": message}
+        for row_id, timestamp, message in rows
+    ]
+
+
+def management_job_logs(
+    job_id: str,
+    input_index: int | None,
+    *,
+    include_notices: bool = False,
+    row_limit: int | None = None,
+    before_row_id: int | None = None,
+    after_row_id: int | None = None,
+    errors_only: bool = False,
+) -> list[dict]:
+    if include_notices:
+        where = "job_id = ? AND input_index IS NULL"
+        params = (job_id,)
+    else:
+        where = "job_id = ? AND input_index = ?"
+        params = (job_id, input_index)
+    if errors_only:
+        where += " AND is_error = 1"
+    descending = before_row_id is not None
+    if before_row_id is not None:
+        where += " AND id <= ?"
+        params = (*params, before_row_id)
+    elif after_row_id is not None:
+        where += " AND id >= ?"
+        params = (*params, after_row_id)
+    limit_sql = " LIMIT ?" if row_limit is not None else ""
+    if row_limit is not None:
+        params = (*params, row_limit)
+    with _lock:
+        rows = (
+            _connection()
+            .execute(
+                f"SELECT id, input_index, is_error, logs FROM job_logs "
+                f"WHERE {where} ORDER BY id {'DESC' if descending else 'ASC'}"
+                f"{limit_sql}",
+                params,
+            )
+            .fetchall()
+        )
+    if descending:
+        rows.reverse()
+    entries = []
+    for row_id, row_input_index, document_is_error, logs_json in rows:
+        for offset, log in enumerate(json.loads(logs_json)):
+            timestamp = log.get("timestamp")
+            if timestamp is None:
+                continue
+            entries.append(
+                {
+                    "row_id": row_id,
+                    "offset": offset,
+                    "input_index": row_input_index,
+                    "timestamp": float(timestamp),
+                    "message": log.get("message", ""),
+                    "is_error": bool(log.get("is_error") or document_is_error),
+                }
+            )
+    return entries
+
+
+def _management_error_signature(message: str) -> str:
+    normalized = re.sub(r"\bline \d+\b", "line", message)
+    normalized = re.sub(r"0x[0-9a-fA-F]+", "0x", normalized)
+    return hashlib.sha256(normalized.encode()).hexdigest()[:24]
+
+
+def management_error_groups(
+    job_id: str, after_key: tuple | None, limit: int
+) -> dict:
+    entries = """
+        SELECT input_index,
+            json_extract(entry.value, '$.message') AS message
+        FROM job_logs, json_each(job_logs.logs) AS entry
+        WHERE job_id = ? AND input_index IS NOT NULL AND is_error = 1
+        AND json_extract(entry.value, '$.timestamp') IS NOT NULL
+    """
+    grouped = f"""
+        SELECT management_error_signature(message) AS signature,
+            COUNT(*) AS count, MIN(message) AS representative_error,
+            MIN(input_index) AS sample_input_index
+        FROM ({entries})
+        GROUP BY signature
+    """
+    page_where = ""
+    page_params = []
+    if after_key is not None:
+        count, signature = after_key
+        page_where = "WHERE count < ? OR (count = ? AND signature < ?)"
+        page_params = [count, count, signature]
+    with _lock:
+        conn = _connection()
+        conn.create_function(
+            "management_error_signature", 1, _management_error_signature
+        )
+        total = conn.execute(f"SELECT COUNT(*) FROM ({grouped})", (job_id,)).fetchone()[0]
+        rows = conn.execute(
+            f"SELECT signature, count, representative_error, sample_input_index "
+            f"FROM ({grouped}) {page_where} "
+            f"ORDER BY count DESC, signature DESC LIMIT ?",
+            (job_id, *page_params, limit),
+        ).fetchall()
+    return {
+        "total": total,
+        "items": [
+            {
+                "signature": signature,
+                "count": count,
+                "representative_error": representative_error,
+                "sample_input_indexes": [sample_input_index],
+            }
+            for signature, count, representative_error, sample_input_index in rows
+        ],
+    }
+
+
+def management_raw_metrics(
+    job_id: str,
+    scope: str,
+    input_index: int | None,
+    after_timestamp: float,
+    after_id: int,
+    limit: int,
+) -> list[dict]:
+    where = (
+        "job_id = ? AND scope = ? "
+        "AND (timestamp > ? OR (timestamp = ? AND id > ?))"
+    )
+    params: list = [
+        job_id,
+        scope,
+        after_timestamp,
+        after_timestamp,
+        after_id,
+    ]
+    if input_index is not None:
+        where += " AND input_index = ?"
+        params.append(input_index)
+    params.append(limit)
+    with _read_lock:
+        rows = (
+            _read_connection()
+            .execute(
+                "SELECT id, timestamp, duration_sec, instance_name, scope, input_index, "
+                "worker_id, cpu_seconds, cpu_percent, memory_bytes, memory_percent, "
+                "network_rx_bytes, network_tx_bytes, disk_read_bytes, disk_write_bytes, "
+                "gpu_percent, gpu_memory_bytes, gpu_memory_percent "
+                f"FROM resource_metrics WHERE {where} ORDER BY timestamp, id LIMIT ?",
+                params,
+            )
+            .fetchall()
+        )
+    fields = (
+        "id",
+        "timestamp",
+        "duration_seconds",
+        "node_id",
+        "scope",
+        "input_index",
+        "worker_id",
+        "cpu_seconds",
+        "cpu_percent",
+        "memory_bytes",
+        "memory_percent",
+        "network_rx_bytes",
+        "network_tx_bytes",
+        "disk_read_bytes",
+        "disk_write_bytes",
+        "gpu_percent",
+        "gpu_memory_bytes",
+        "gpu_memory_percent",
+    )
+    return [dict(zip(fields, row)) for row in rows]

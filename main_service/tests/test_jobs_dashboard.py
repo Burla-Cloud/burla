@@ -66,7 +66,7 @@ def test_stop_job_writes_dashboard_canceled(
     assert doc["status"] == "CANCELED"
 
 
-def test_stop_job_writes_event(
+def test_stop_job_writes_job_notice(
     main_http_client,
     local_dev_cluster,
     isolated_job_id,
@@ -77,10 +77,12 @@ def test_stop_job_writes_event(
     resp = main_http_client.post(f"/v1/jobs/{job_id}/stop")
     assert resp.status_code in (200, 204)
 
-    events_resp = main_http_client.get(f"/v1/jobs/{job_id}/events")
-    assert events_resp.status_code == 200
-    messages = [event["message"] for event in events_resp.json()["events"]]
-    assert any(message.startswith("Job canceled by user:") for message in messages)
+    response = main_http_client.get(f"/v1/management/jobs/{job_id}")
+    assert response.status_code == 200
+    body = response.json()
+    notice = body["notices"][0]
+    assert body["failed_count"] == 0
+    assert "canceled by user" in notice["message"].lower()
 
 
 def test_result_stats_404_when_missing(main_http_client, local_dev_cluster):

@@ -1,5 +1,6 @@
-import { createContext, useContext, useEffect, useState, useCallback } from "react";
+import { createContext, useContext, useEffect, useState, useCallback, useRef } from "react";
 import { BurlaJob, JobsStatus } from "@/types/coreTypes";
+import { managementEvents, managementJson } from "@/lib/managementApi";
 
 interface JobsContextType {
     jobs: BurlaJob[];
@@ -22,33 +23,19 @@ export const JobsProvider = ({ children }: { children: React.ReactNode }) => {
     const [page, setPage] = useState(0);
     const [totalPages, setTotalPages] = useState(1);
     const [isLoading, setIsLoading] = useState(false);
+    const pageCursors = useRef<Record<number, string | null>>({ 0: null });
 
     const fetchJobs = useCallback(async () => { 
         setIsLoading(true);
         try {
-            const response = await fetch(`/v1/jobs?page=${page}`);
-            const json = await response.json();
-            const jobList = (json.jobs ?? []).map(createNewJob); 
-
-            setJobs((prev) => {
-                if (page !== 0) {
-                    return jobList; 
-                }
-
-                const existingIds = new Set(jobList.map((j) => j.id));
-                const preservedFromSSE = prev.filter((j) => !existingIds.has(j.id));
-
-                return [...jobList, ...preservedFromSSE]
-                    .filter((job, index, arr) => arr.findIndex((j) => j.id === job.id) === index)
-                    .sort((a, b) => (b.started_at?.getTime() || 0) - (a.started_at?.getTime() || 0))
-                    .slice(0, 15);
-            });
-
-            if (json.total && json.limit) {
-                setTotalPages(Math.max(1, Math.ceil(json.total / json.limit)));
-            } else {
-                setTotalPages(1);
-            }
+            const cursor = pageCursors.current[page];
+            const query = new URLSearchParams({ limit: "15", sort: "started_at", order: "desc" });
+            if (cursor) query.set("cursor", cursor);
+            const json = await managementJson<any>(`/jobs?${query}`);
+            const jobList = (json.items ?? []).map(createNewJob);
+            setJobs(jobList);
+            pageCursors.current[page + 1] = json.next_cursor;
+            setTotalPages(Math.max(1, Math.ceil((json.total_count ?? jobList.length) / 15)));
         } catch (err) {
             console.error("Error fetching jobs:", err);
         } finally {
@@ -61,101 +48,28 @@ export const JobsProvider = ({ children }: { children: React.ReactNode }) => {
     }, [page, fetchJobs]);
 
     useEffect(() => {
-        let source: EventSource | null = null;
-        let rotateTimeoutId: number | undefined;
-        let closingForRotate = false;
-        let stopped = false;
-
-        const ROTATE_MS = 55_000;
-
-        const armRotationTimer = () => {
-            if (rotateTimeoutId) window.clearTimeout(rotateTimeoutId);
-            rotateTimeoutId = window.setTimeout(() => {
-                if (stopped) return;
-                closingForRotate = true;
-                if (source) source.close();
-                window.setTimeout(() => {
-                    closingForRotate = false;
-                    open();
-                }, 0);
-            }, ROTATE_MS);
+        const update = (data: any) => {
+            if (page !== 0) return;
+            const newJob = createNewJob(data);
+            setJobs((previous) => {
+                const without = previous.filter((job) => job.id !== newJob.id);
+                return [newJob, ...without]
+                    .sort(
+                        (a, b) =>
+                            (b.started_at?.getTime() || 0) -
+                            (a.started_at?.getTime() || 0)
+                    )
+                    .slice(0, 15);
+            });
         };
-
-        const open = () => {
-            if (stopped) return;
-            if (source) source.close();
-            source = new EventSource(`/v1/jobs?stream=true&page=${page}`);
-
-            source.onopen = () => {
-                armRotationTimer();
-            };
-
-            source.onmessage = (event) => {
-                try {
-                    const data = JSON.parse(event.data);
-                    if (data.deleted) return;
-
-                    const newJob: BurlaJob = {
-                        id: data.jobId,
-                        status: data.status as JobsStatus,
-                        user: data.user || "Unknown",
-                        n_inputs: typeof data.n_inputs === "number" ? data.n_inputs : 0,
-                        n_results: typeof data.n_results === "number" ? data.n_results : 0,
-                        n_failed: typeof data.n_failed === "number" ? data.n_failed : 0,
-                        function_name:
-                            typeof data.function_name === "string" ? data.function_name : "Unknown",
-                        started_at:
-                            typeof data.started_at === "number"
-                                ? new Date(data.started_at * 1000)
-                                : undefined,
-                        ended_at:
-                            typeof data.ended_at === "number"
-                                ? new Date(data.ended_at * 1000)
-                                : undefined,
-                    };
-
-                    setJobs((prevJobs) => {
-                        const idx = prevJobs.findIndex((j) => j.id === newJob.id);
-                        if (idx !== -1) {
-                            const updated = [...prevJobs];
-                            updated[idx] = { ...updated[idx], ...newJob };
-                            return updated;
-                        }
-
-                        if (page === 0) {
-                            return [newJob, ...prevJobs]
-                                .filter(
-                                    (job, index, arr) =>
-                                        arr.findIndex((j) => j.id === job.id) === index
-                                )
-                                .sort(
-                                    (a, b) =>
-                                        (b.started_at?.getTime() || 0) -
-                                        (a.started_at?.getTime() || 0)
-                                )
-                                .slice(0, 15);
-                        }
-
-                        return prevJobs;
-                    });
-                } catch (err) {
-                    console.error("Failed to parse SSE job update:", err);
-                }
-            };
-
-            source.onerror = (err) => {
-                if (closingForRotate) return; // intentional close
-                if (rotateTimeoutId) window.clearTimeout(rotateTimeoutId);
-                console.error("SSE error (jobs_paginated), retry in 5s:", err);
-            };
-        };
-
-        open();
-
+        const source = managementEvents("/jobs/watch", {
+            snapshot: (data) => {
+                if (page === 0) setJobs((data.items ?? []).slice(0, 15).map(createNewJob));
+            },
+            update,
+        });
         return () => {
-            stopped = true;
-            if (rotateTimeoutId) window.clearTimeout(rotateTimeoutId);
-            if (source) source.close();
+            source.close();
         };
     }, [page]);
 
@@ -167,15 +81,15 @@ export const JobsProvider = ({ children }: { children: React.ReactNode }) => {
 };
 
 const createNewJob = (data: any): BurlaJob => ({
-    id: data.jobId,
-    status: data.status as JobsStatus,
+    id: data.job_id,
+    status: String(data.status || "unknown").toUpperCase() as JobsStatus,
     user: data.user || "Unknown",
-    n_inputs: typeof data.n_inputs === "number" ? data.n_inputs : 0,
-    n_results: typeof data.n_results === "number" ? data.n_results : 0,
-    n_failed: typeof data.n_failed === "number" ? data.n_failed : 0,
+    n_inputs: typeof data.input_count === "number" ? data.input_count : 0,
+    n_results: typeof data.result_count === "number" ? data.result_count : 0,
+    n_failed: typeof data.failed_count === "number" ? data.failed_count : 0,
     function_name: typeof data.function_name === "string" ? data.function_name : "Unknown",
-    started_at: typeof data.started_at === "number" ? new Date(data.started_at * 1000) : undefined,
-    ended_at: typeof data.ended_at === "number" ? new Date(data.ended_at * 1000) : undefined,
+    started_at: data.started_at ? new Date(data.started_at) : undefined,
+    ended_at: data.ended_at ? new Date(data.ended_at) : undefined,
 });
 
 export const useJobs = () => useContext(JobsContext);

@@ -41,29 +41,30 @@ def test_udf_error_propagation(
     # Python 3.11+ note attached for visibility.
     assert "[burla] failed on input index 7" in tb
 
-    # Client-side propagation can succeed even if the dashboard copy was lost,
-    # so verify the persisted error through the same API the dashboard uses.
+    # Head-visible: find the matching job and check the management call/error
+    # resources agree that input 7 failed.
     def _failed_call():
-        jobs = main_http_client.get("/v1/jobs?page=0").json()["jobs"]
+        jobs = main_http_client.get("/v1/management/jobs?limit=100").json()["items"]
         for job in jobs:
             if job.get("function_name") != "test_function":
                 continue
-            if job.get("status") == "COMPLETED":
+            if job.get("status") == "completed":
                 continue
-            resp = main_http_client.get(
-                f"/v1/jobs/{job['jobId']}/metrics/task-summaries",
-                params={"index": 7, "failed_only": True, "limit": 1},
-            )
-            if resp.status_code != 200:
-                continue
-            tasks = resp.json()["tasks"]
-            if tasks and tasks[0]["status"] == "failed":
-                return tasks[0]
+            job_id = job["job_id"]
+            calls = main_http_client.get(
+                f"/v1/management/jobs/{job_id}/calls?failed_only=true"
+            ).json()["items"]
+            errors = main_http_client.get(
+                f"/v1/management/jobs/{job_id}/errors"
+            ).json()["items"]
+            if any(call["input_index"] == 7 for call in calls):
+                return calls, errors
         return None
 
-    failed_call = wait_for_fixture(
+    calls, errors = wait_for_fixture(
         _failed_call,
         timeout=30,
         message="input_index=7 was not recorded as a failed function call",
     )
-    assert failed_call["index"] == 7
+    assert any(call["input_index"] == 7 for call in calls)
+    assert any(7 in group["sample_input_indexes"] for group in errors)

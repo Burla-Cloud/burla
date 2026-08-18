@@ -628,6 +628,7 @@ class Node:
             --setenv=BURLA_NODE_AUTH_TOKEN="$NODE_AUTH_TOKEN" \\
             --setenv=BURLA_BACKEND_URL="$BURLA_BACKEND_URL" \\
             --setenv=CLUSTER_CA_PATH="$TLS_DIR/ca.pem" \\
+            --setenv=MAIN_SERVICE_CA_PATH="$TLS_DIR/ca.pem" \\
             --setenv=NODE_TLS_KEY_PATH="$TLS_DIR/node.key" \\
             --setenv=NODE_TLS_CERT_PATH="$TLS_DIR/node.pem" \\
             --collect \\

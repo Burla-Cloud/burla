@@ -1,13 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import {
-    Table,
-    TableBody,
-    TableCell,
-    TableHead,
-    TableHeader,
-    TableRow,
-} from "@/components/ui/table";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { ChevronRight, Server } from "lucide-react";
@@ -15,7 +8,7 @@ import { cn } from "@/lib/utils";
 import { BurlaNode, NodeStatus } from "@/types/coreTypes";
 import { StatusBadge, nodeStatusBadge } from "@/components/StatusBadge";
 import { TablePagination } from "@/components/TablePagination";
-import { extractCpuCount, parseGpuDisplay, parseRamDisplay } from "@/lib/machineSpecs";
+import { managementEvents, managementJson } from "@/lib/managementApi";
 
 interface NodesListProps {
     nodes: BurlaNode[];
@@ -28,12 +21,7 @@ const PAGE_SIZE = 15;
 
 const ACTIVE_STATUSES = new Set<string>(["RUNNING", "READY", "BOOTING"]);
 
-export const NodesList: React.FC<NodesListProps> = ({
-    nodes,
-    loading,
-    showDeleted,
-    onShowDeletedChange,
-}) => {
+export const NodesList: React.FC<NodesListProps> = ({ nodes, loading, showDeleted, onShowDeletedChange }) => {
     const [expandedNodeId, setExpandedNodeId] = useState<string | null>(null);
     const [nodeLogs, setNodeLogs] = useState<Record<string, string[]>>({});
     const [logsLoading, setLogsLoading] = useState<Record<string, boolean>>({});
@@ -46,6 +34,7 @@ export const NodesList: React.FC<NodesListProps> = ({
     const [deletedLoading, setDeletedLoading] = useState(false);
     const [deletedError, setDeletedError] = useState<string | null>(null);
     const deletedRequestIdRef = useRef(0);
+    const deletedCursorsRef = useRef<Record<number, string | null>>({ 0: null });
 
     // UX: when switching showDeleted on, show loader until first deleted page returns
     const [showDeletedHydrating, setShowDeletedHydrating] = useState(false);
@@ -57,64 +46,22 @@ export const NodesList: React.FC<NodesListProps> = ({
         setNodeLogs((prev) => ({ ...prev, [expandedNodeId]: [] }));
         setLogsLoading((prev) => ({ ...prev, [expandedNodeId]: true }));
 
-        let source: EventSource | null = null;
-        let rotateTimeoutId: number | undefined;
-        let closingForRotate = false;
-        let stopped = false;
-        const ROTATE_MS = 55_000;
-
-        const armRotationTimer = () => {
-            if (rotateTimeoutId) window.clearTimeout(rotateTimeoutId);
-            rotateTimeoutId = window.setTimeout(() => {
-                if (stopped) return;
-                closingForRotate = true;
-                if (source) source.close();
-                window.setTimeout(() => {
-                    closingForRotate = false;
-                    open();
-                }, 0);
-            }, ROTATE_MS);
-        };
-
-        const open = () => {
-            if (stopped) return;
-            if (source) source.close();
-            let clearedOnThisConnection = false;
-
-            source = new EventSource(`/v1/cluster/${expandedNodeId}/logs`);
-
-            source.onopen = () => {
-                armRotationTimer();
-            };
-
-            source.onmessage = (event) => {
-                const data = JSON.parse(event.data);
-                if (!clearedOnThisConnection) {
-                    setNodeLogs((prev) => ({ ...prev, [expandedNodeId]: [] }));
-                    setLogsLoading((prev) => ({ ...prev, [expandedNodeId]: false }));
-                    clearedOnThisConnection = true;
-                }
+        const source = managementEvents(`/nodes/${expandedNodeId}/logs/stream`, {
+            log: (data) => {
                 setNodeLogs((prev) => {
                     const existing = prev[expandedNodeId] || [];
                     return { ...prev, [expandedNodeId]: [...existing, data.message] };
                 });
                 setLogsLoading((prev) => ({ ...prev, [expandedNodeId]: false }));
-            };
-
-            source.onerror = (error) => {
-                if (closingForRotate) return;
-                if (rotateTimeoutId) window.clearTimeout(rotateTimeoutId);
-                console.error("Node logs stream error", error);
-                setLogsLoading((prev) => ({ ...prev, [expandedNodeId]: false }));
-            };
+            },
+        });
+        source.onerror = (error) => {
+            console.error("Node logs stream error", error);
+            setLogsLoading((prev) => ({ ...prev, [expandedNodeId]: false }));
         };
 
-        open();
-
         return () => {
-            stopped = true;
-            if (rotateTimeoutId) window.clearTimeout(rotateTimeoutId);
-            if (source) source.close();
+            source.close();
         };
     }, [expandedNodeId]);
 
@@ -128,9 +75,7 @@ export const NodesList: React.FC<NodesListProps> = ({
     };
 
     const activeNodes = useMemo(() => {
-        const actives = nodes.filter((n) =>
-            ACTIVE_STATUSES.has(String(n.status || "").toUpperCase()),
-        );
+        const actives = nodes.filter((n) => ACTIVE_STATUSES.has(String(n.status || "").toUpperCase()));
         actives.sort((a, b) => toMs(b.started_booting_at) - toMs(a.started_booting_at));
         return actives;
     }, [nodes]);
@@ -179,6 +124,7 @@ export const NodesList: React.FC<NodesListProps> = ({
             setDeletedSlice([]);
             setDeletedTotal(0);
             setDeletedError(null);
+            deletedCursorsRef.current = { 0: null };
         } else {
             setShowDeletedHydrating(false);
             setDeletedSlice([]);
@@ -207,35 +153,42 @@ export const NodesList: React.FC<NodesListProps> = ({
                 setDeletedLoading(true);
                 setDeletedError(null);
 
-                const res = await fetch(
-                    `/v1/cluster/deleted_recent_paginated?offset=${reqOffset}&limit=${reqLimit}`,
-                    { signal: controller.signal },
-                );
-                if (!res.ok) throw new Error(`status ${res.status}`);
-
-                const json = await res.json();
+                const query = new URLSearchParams({
+                    status: "all",
+                    ended_after: "1970-01-01T00:00:00Z",
+                    sort: "ended_at",
+                    order: "desc",
+                    limit: String(reqLimit),
+                });
+                const cursor = deletedCursorsRef.current[reqOffset];
+                if (cursor) query.set("cursor", cursor);
+                const json = await managementJson<any>(`/nodes?${query}`, {
+                    signal: controller.signal,
+                });
                 if (requestId !== deletedRequestIdRef.current) return;
 
-                const total: number = typeof json.total === "number" ? json.total : 0;
-                setDeletedTotal(total);
+                const rawNodes = json.items ?? [];
+                setDeletedTotal(json.total_count ?? rawNodes.length);
+                deletedCursorsRef.current[reqOffset + rawNodes.length] = json.next_cursor;
 
                 if (needsSlice) {
-                    const rawNodes: any[] = Array.isArray(json.nodes) ? json.nodes : [];
                     const mapped: BurlaNode[] = rawNodes.map((raw) => ({
-                        id: raw.id,
-                        name: raw.name ?? raw.id,
-                        status: (raw.status || "DELETED") as NodeStatus,
-                        type: raw.type || "unknown",
-                        cpus: raw.cpus ?? undefined,
-                        gpus: raw.gpus ?? undefined,
-                        memory: raw.memory ?? undefined,
+                        id: raw.node_id,
+                        name: raw.node_id,
+                        status: String(raw.status || "deleted").toUpperCase() as NodeStatus,
+                        type: raw.machine_type || "unknown",
+                        cpus: raw.vcpu_count ?? undefined,
+                        gpus: raw.gpu_count ?? undefined,
+                        gpuDisplay: raw.gpu_display ?? undefined,
+                        memory:
+                            typeof raw.memory_bytes === "number"
+                                ? `${Math.round(raw.memory_bytes / 1024 ** 3)}G`
+                                : undefined,
                         age: undefined,
                         logs: undefined,
                         started_booting_at:
-                            typeof raw.started_booting_at === "number"
-                                ? raw.started_booting_at
-                                : undefined,
-                        deletedAt: typeof raw.deletedAt === "number" ? raw.deletedAt : undefined,
+                            typeof raw.started_booting_at === "string" ? Date.parse(raw.started_booting_at) : undefined,
+                        deletedAt: typeof raw.ended_at === "string" ? Date.parse(raw.ended_at) : undefined,
                     }));
                     setDeletedSlice(mapped);
                 } else {
@@ -265,8 +218,7 @@ export const NodesList: React.FC<NodesListProps> = ({
     }, [showDeleted, activeSlice, deletedSlice]);
 
     const noActiveNodes = !showDeleted && activeNodes.length === 0;
-    const noCombinedNodes =
-        showDeleted && !showDeletedHydrating && !deletedLoading && displayNodes.length === 0;
+    const noCombinedNodes = showDeleted && !showDeletedHydrating && !deletedLoading && displayNodes.length === 0;
 
     const isBusy = showDeletedHydrating || (showDeleted && deletedLoading);
 
@@ -315,8 +267,7 @@ export const NodesList: React.FC<NodesListProps> = ({
                                 </p>
                                 {noActiveNodes && (
                                     <p className="mt-1 text-[13px] text-muted-foreground">
-                                        Hit <span className="font-medium">Start</span> to boot
-                                        machines.
+                                        Hit <span className="font-medium">Start</span> to boot machines.
                                     </p>
                                 )}
                             </div>
@@ -346,15 +297,12 @@ export const NodesList: React.FC<NodesListProps> = ({
                                                             <ChevronRight
                                                                 className={cn(
                                                                     "h-4 w-4 text-muted-foreground transition-transform duration-200",
-                                                                    expandedNodeId === node.id &&
-                                                                        "rotate-90",
+                                                                    expandedNodeId === node.id && "rotate-90",
                                                                 )}
                                                             />
                                                         </TableCell>
                                                         <TableCell>
-                                                            <StatusBadge
-                                                                {...nodeStatusBadge(node.status)}
-                                                            />
+                                                            <StatusBadge {...nodeStatusBadge(node.status)} />
                                                         </TableCell>
                                                         <TableCell className="whitespace-nowrap font-mono text-[13px] text-foreground">
                                                             {node.name}
@@ -365,33 +313,25 @@ export const NodesList: React.FC<NodesListProps> = ({
                                                                 title={node.current_function ?? ""}
                                                             >
                                                                 {node.current_function ?? (
-                                                                    <span className="text-muted-foreground">
-                                                                        —
-                                                                    </span>
+                                                                    <span className="text-muted-foreground">—</span>
                                                                 )}
                                                             </div>
                                                         </TableCell>
                                                         <TableCell className="text-right tabular-nums">
-                                                            {node.cpus ??
-                                                                extractCpuCount(node.type) ??
-                                                                "—"}
+                                                            {node.cpus ?? "—"}
                                                         </TableCell>
                                                         <TableCell className="text-right tabular-nums">
-                                                            {parseRamDisplay(node.type) === "-" ? (
-                                                                <span className="text-muted-foreground">
-                                                                    —
-                                                                </span>
+                                                            {node.memory ? (
+                                                                node.memory
                                                             ) : (
-                                                                parseRamDisplay(node.type)
+                                                                <span className="text-muted-foreground">—</span>
                                                             )}
                                                         </TableCell>
                                                         <TableCell className="whitespace-nowrap pr-5">
-                                                            {parseGpuDisplay(node.type) === "-" ? (
-                                                                <span className="text-muted-foreground">
-                                                                    —
-                                                                </span>
+                                                            {node.gpuDisplay ? (
+                                                                node.gpuDisplay
                                                             ) : (
-                                                                parseGpuDisplay(node.type)
+                                                                <span className="text-muted-foreground">—</span>
                                                             )}
                                                         </TableCell>
                                                     </TableRow>
@@ -409,9 +349,7 @@ export const NodesList: React.FC<NodesListProps> = ({
                                                                         </div>
                                                                     ) : (
                                                                         <pre className="whitespace-pre-wrap font-mono text-xs leading-5 text-muted-foreground">
-                                                                            {nodeLogs[
-                                                                                node.id
-                                                                            ]?.join("\n")}
+                                                                            {nodeLogs[node.id]?.join("\n")}
                                                                         </pre>
                                                                     )}
                                                                 </div>

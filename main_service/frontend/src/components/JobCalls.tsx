@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowDown, ArrowUp, ChevronDown, ChevronLeft, ChevronRight } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
@@ -21,6 +21,7 @@ import {
     formatRate,
 } from "@/components/JobMetricChart";
 import { cn } from "@/lib/utils";
+import { managementJson } from "@/lib/managementApi";
 
 type TaskPoint = {
     t: number;
@@ -44,7 +45,14 @@ type TaskSeries = {
     points: TaskPoint[];
 };
 
-type CallStatus = "failed" | "running" | "done";
+type CallStatus =
+    | "pending"
+    | "running"
+    | "succeeded"
+    | "failed"
+    | "canceled"
+    | "not_run"
+    | "unknown";
 
 type TaskSummary = {
     index: number;
@@ -89,9 +97,41 @@ const callStatusBadge = (status: CallStatus) =>
         <StatusBadge tone="danger" label="Failed" />
     ) : status === "running" ? (
         <StatusBadge tone="progress" label="Running" pulse />
-    ) : (
+    ) : status === "succeeded" ? (
         <StatusBadge tone="success" label="Succeeded" />
+    ) : (
+        <StatusBadge tone="neutral" label={status === "not_run" ? "Not run" : status} />
     );
+
+const mapCall = (call: any): TaskSummary => ({
+    index: call.input_index,
+    started_at: call.started_at ? Date.parse(call.started_at) / 1000 : null,
+    duration_sec: call.duration_seconds,
+    attempts: call.attempt_count,
+    peak_cpus: call.peak_cpu_cores,
+    peak_mem_bytes: call.peak_memory_bytes,
+    status: call.status,
+});
+
+const mapSeries = (payload: any): TaskSeries => ({
+    has_metrics: payload.has_metrics,
+    has_gpu: payload.points.some((point) => point.gpu_percent != null),
+    prev_index: payload.previous_input_index,
+    next_index: payload.next_input_index,
+    n_attempts: payload.attempt_count,
+    bucket_sec: payload.bucket_seconds,
+    points: payload.points.map((point) => ({
+        t: Date.parse(point.timestamp) / 1000,
+        cpus: point.cpu_cores,
+        mem: point.memory_bytes,
+        net_rx: point.network_rx_bytes_per_second,
+        net_tx: point.network_tx_bytes_per_second,
+        disk_read: point.disk_read_bytes_per_second,
+        disk_write: point.disk_write_bytes_per_second,
+        gpu: point.gpu_percent ?? null,
+        gpu_mem: point.gpu_memory_bytes ?? null,
+    })),
+});
 
 const iconBtnClass = (disabled: boolean) =>
     disabled
@@ -153,23 +193,21 @@ const CallDetail = ({
     const [isChartsOpen, setIsChartsOpen] = useState(false);
 
     const load = useCallback(async () => {
-        const [seriesRes, summaryRes, logsRes] = await Promise.all([
-            fetch(`/v1/jobs/${jobId}/metrics/tasks/${taskIndex}`),
-            fetch(`/v1/jobs/${jobId}/metrics/task-summaries?index=${taskIndex}&limit=1`),
-            fetch(`/v1/jobs/${jobId}/logs?index=${taskIndex}`),
+        const [seriesPayload, summaryPayload, logsPayload] = await Promise.all([
+            managementJson<any>(`/jobs/${jobId}/calls/${taskIndex}/metrics`),
+            managementJson<any>(`/jobs/${jobId}/calls/${taskIndex}`),
+            managementJson<any>(`/jobs/${jobId}/calls/${taskIndex}/logs`),
         ]);
-        if (seriesRes.ok) setSeries(await seriesRes.json());
-        if (summaryRes.ok) {
-            const page: TaskSummaryPage = await summaryRes.json();
-            setSummary(page.tasks[0] ?? null);
-        }
-        if (logsRes.ok) {
-            const payload = await logsRes.json();
-            setLogs({
-                entries: payload.logs ?? [],
-                truncated: Boolean(payload.has_more_older),
-            });
-        }
+        setSeries(mapSeries(seriesPayload));
+        setSummary(mapCall(summaryPayload));
+        setLogs({
+            entries: (logsPayload.items ?? []).map((entry) => ({
+                message: entry.message,
+                log_timestamp: Date.parse(entry.timestamp) / 1000,
+                is_error: entry.is_error,
+            })),
+            truncated: Boolean(logsPayload.has_more),
+        });
     }, [jobId, taskIndex]);
 
     useEffect(() => {
@@ -490,25 +528,38 @@ const JobCalls = ({
     const [logsOnly, setLogsOnly] = useState(false);
     const [page, setPage] = useState(0);
     const [searchValue, setSearchValue] = useState("");
+    const pageCursors = useRef<Record<number, string | null>>({ 0: null });
 
     const isLive = jobStatus === "RUNNING" || jobStatus === "PENDING";
 
     const searchIndex = /^\d+$/.test(searchValue) ? Number(searchValue) : null;
 
     const loadTaskPage = useCallback(async () => {
+        const sortMap: Record<SortKey, string> = {
+            index: "input_index",
+            started: "started_at",
+            duration: "duration",
+            attempts: "attempts",
+            peak_cpus: "peak_cpu",
+            peak_mem: "peak_memory",
+        };
         const params = new URLSearchParams({
-            sort,
-            dir: descending ? "desc" : "asc",
+            sort: sortMap[sort],
+            order: descending ? "desc" : "asc",
             failed_only: String(failedOnly),
             logs_only: String(logsOnly),
-            offset: String(page * CALLS_PER_PAGE),
             limit: String(CALLS_PER_PAGE),
         });
-        if (searchIndex != null) params.set("index", String(searchIndex));
+        if (searchIndex != null) params.set("input_index", String(searchIndex));
+        const cursor = pageCursors.current[page];
+        if (cursor) params.set("cursor", cursor);
         try {
-            const res = await fetch(`/v1/jobs/${jobId}/metrics/task-summaries?${params}`);
-            if (!res.ok) throw new Error();
-            setTaskPage(await res.json());
+            const payload = await managementJson<any>(`/jobs/${jobId}/calls?${params}`);
+            pageCursors.current[page + 1] = payload.next_cursor;
+            setTaskPage({
+                total: payload.total_count ?? 0,
+                tasks: (payload.items ?? []).map(mapCall),
+            });
         } catch {
             setTaskPage(null);
         }
@@ -518,7 +569,12 @@ const JobCalls = ({
         setTaskPage(null);
         setPage(0);
         setSearchValue("");
+        pageCursors.current = { 0: null };
     }, [jobId]);
+
+    useEffect(() => {
+        pageCursors.current = { 0: null };
+    }, [sort, descending, failedOnly, logsOnly, searchIndex]);
 
     useEffect(() => {
         void loadTaskPage();

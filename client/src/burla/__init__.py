@@ -3,7 +3,6 @@ import os
 from pathlib import Path
 from urllib.parse import urlparse
 
-from fire import Fire
 from platformdirs import user_config_dir
 
 # needed so main_service can associate a client version with a request
@@ -213,11 +212,6 @@ from burla._remote_parallel_map import remote_parallel_map
 worker_cache = {}
 
 
-def version():
-    """Print current Burla client version."""
-    print(__version__)
-
-
 def dashboard(port: int | None = None):
     """Open the dashboard. Local dashboards use port 5001 unless overridden."""
     import webbrowser
@@ -244,15 +238,6 @@ def dashboard(port: int | None = None):
 
 
 def init_cli():
-    commands = {
-        "login": login,
-        "dashboard": dashboard,
-        "deploy": deploy,
-        "config": {
-            "set": set_config,
-            "get": get_config,
-        },
-        "--version": version,
-        "-v": version,
-    }
-    Fire(commands)
+    from burla._cli import main
+
+    raise SystemExit(main())

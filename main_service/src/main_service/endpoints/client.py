@@ -180,29 +180,20 @@ def _select_ready_nodes_from_state(
     )
 
 
-def _grow_if_needed(
+def _plan_grow_if_needed(
     target_parallelism: int,
     n_inputs: int,
     max_parallelism: int,
     func_cpu: int | str,
     func_ram: int | str,
-    image: Optional[str],
     func_gpu: Optional[str],
     region: Optional[str],
     disk_gb: Optional[int],
-    job_id: str,
-    logger: Logger,
-    add_background_task,
-) -> tuple[list[dict], Optional[int]]:
-    """Schedules `_start_nodes` in the background and returns
-    `(booting_nodes, grow_cpus_remaining)`: one `{instance_name,
-    target_parallelism}` dict per reserved booting node (empty if no growth
-    was needed), and the job's remaining grow-CPU budget for mid-job
-    replacement boots (None = uncapped, i.e. GPU jobs).
+) -> tuple[list[dict], Optional[int], Optional[dict]]:
+    """Returns `(planned_nodes, grow_cpus_remaining, config)`.
 
     When `func_gpu` is set, each new node is one of the mapped GPU machine
-    types. When `image` is set, the new nodes run that image instead of the
-    cluster default.
+    types.
     """
     if gpu_machine_type(func_gpu, CLOUD_PROVIDER):
         max_additional_cpus = None
@@ -214,7 +205,7 @@ def _grow_if_needed(
     requested_parallelism = min(n_inputs, max_parallelism)
     missing_slots = max(0, requested_parallelism - target_parallelism)
     if missing_slots <= 0:
-        return [], max_additional_cpus
+        return [], max_additional_cpus, None
 
     config = config_with_job_overrides(_get_cluster_config(), region, disk_gb)
     planned = plan_grow_nodes(
@@ -226,31 +217,10 @@ def _grow_if_needed(
         max_additional_cpus=max_additional_cpus,
     )
     if not planned:
-        return [], max_additional_cpus
-
-    containers_override = [{"image": image}] if image else None
-    add_background_task(
-        _start_nodes,
-        logger,
-        config,
-        len(planned),
-        [p["instance_name"] for p in planned],
-        job_id,
-        [p["machine_type"] for p in planned],
-        containers_override,
-        GROW_INACTIVITY_SHUTDOWN_TIME_SEC,
-        [p["target_parallelism"] for p in planned],
-    )
-    booting_nodes = [
-        {
-            "instance_name": p["instance_name"],
-            "target_parallelism": p["target_parallelism"],
-        }
-        for p in planned
-    ]
+        return [], max_additional_cpus, config
     if max_additional_cpus is not None:
         max_additional_cpus = max(0, max_additional_cpus - planned_cpu_count(planned))
-    return booting_nodes, max_additional_cpus
+    return planned, max_additional_cpus, config
 
 
 @router.post("/v1/jobs/{job_id}/start")
@@ -342,6 +312,13 @@ async def start_job(
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error))
 
+    existing_response = cluster_state.get_job_start_response(job_id)
+    if existing_response is not None:
+        return {
+            **existing_response,
+            "cluster_ca": None if IN_LOCAL_DEV_MODE else cluster_ca_pem(),
+        }
+
     # --- select from live ready nodes ---
     (
         ready,
@@ -415,27 +392,31 @@ async def start_job(
         raise HTTPException(status_code=409, detail=detail)
 
     # --- grow, if requested and short on capacity ---
-    booting_nodes: list[dict] = []
+    planned_nodes: list[dict] = []
+    grow_config: Optional[dict] = None
     grow_cpus_remaining: Optional[int] = None
     if grow:
         if min(n_inputs, max_parallelism) > target_parallelism:
             # In a thread because the verification request arrives back
             # through this same event loop.
             await asyncio.to_thread(verify_nodes_can_reach_head)
-        booting_nodes, grow_cpus_remaining = _grow_if_needed(
+        planned_nodes, grow_cpus_remaining, grow_config = _plan_grow_if_needed(
             target_parallelism=target_parallelism,
             n_inputs=n_inputs,
             max_parallelism=max_parallelism,
             func_cpu=func_cpu,
             func_ram=func_ram,
-            image=image,
             func_gpu=func_gpu,
             region=region,
             disk_gb=disk_gb,
-            job_id=job_id,
-            logger=logger,
-            add_background_task=add_background_task,
         )
+    booting_nodes = [
+        {
+            "instance_name": node["instance_name"],
+            "target_parallelism": node["target_parallelism"],
+        }
+        for node in planned_nodes
+    ]
 
     # --- create the job and claim warm nodes atomically ---
     job = {
@@ -464,14 +445,37 @@ async def start_job(
         "all_inputs_uploaded": False,
         "client_has_all_results": False,
         "fail_reason": [],
+        # A replay with this client-generated ID must return the original
+        # admission instead of reserving or booting another set of nodes.
+        "_start_response": {
+            "ready_nodes": ready,
+            "booting_nodes": booting_nodes,
+        },
     }
     selected_instance_names = [node["instance_name"] for node in ready]
-    if not cluster_state.admit_job(job_id, job, selected_instance_names):
+    created, start_response = cluster_state.admit_job(
+        job_id, job, selected_instance_names
+    )
+    if start_response is None:
         raise HTTPException(status_code=503, detail={"error": "nodes_busy"})
 
+    if created and planned_nodes:
+        containers_override = [{"image": image}] if image else None
+        add_background_task(
+            _start_nodes,
+            logger,
+            grow_config,
+            len(planned_nodes),
+            [node["instance_name"] for node in planned_nodes],
+            job_id,
+            [node["machine_type"] for node in planned_nodes],
+            containers_override,
+            GROW_INACTIVITY_SHUTDOWN_TIME_SEC,
+            [node["target_parallelism"] for node in planned_nodes],
+        )
+
     return {
-        "ready_nodes": ready,
-        "booting_nodes": booting_nodes,
+        **start_response,
         "cluster_ca": None if IN_LOCAL_DEV_MODE else cluster_ca_pem(),
     }
 

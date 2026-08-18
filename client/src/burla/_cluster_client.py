@@ -6,7 +6,9 @@ the cluster.
 Each method maps one-to-one to a main_service endpoint.
 """
 
+import asyncio
 import os
+import random
 from typing import Optional
 
 import aiohttp
@@ -17,6 +19,14 @@ from burla._auth import bootstrap_from_adc, get_auth_headers
 
 
 _TIMEOUT = aiohttp.ClientTimeout(total=30)
+_START_JOB_MAX_ATTEMPTS = 5
+_START_JOB_BACKOFF_BASE_SEC = 0.25
+_START_JOB_BACKOFF_CAP_SEC = 2.0
+_START_JOB_TRANSPORT_ERRORS = (
+    asyncio.TimeoutError,
+    aiohttp.ClientConnectionError,
+    aiohttp.ClientPayloadError,
+)
 
 
 def _is_login_response(response) -> bool:
@@ -103,6 +113,37 @@ class ClusterClient:
 
     # ---------- jobs/{id} ----------
 
+    async def _request_job_start(self, job_id: str, config: dict):
+        for attempt in range(_START_JOB_MAX_ATTEMPTS):
+            url = f"{self._url}/v1/jobs/{job_id}/start"
+            try:
+                async with self.session.request(
+                    "POST",
+                    url,
+                    json=config,
+                    headers=get_auth_headers(),
+                    timeout=_TIMEOUT,
+                ) as response:
+                    status = response.status
+                    try:
+                        body = (await response.json()) or {}
+                    except aiohttp.ContentTypeError:
+                        body = {}
+                    except aiohttp.ClientPayloadError:
+                        if 200 <= status < 300:
+                            raise
+                        body = {}
+                    auth_failed = response.status == 401 or _is_login_response(response)
+                return status, body, auth_failed
+            except _START_JOB_TRANSPORT_ERRORS:
+                if attempt == _START_JOB_MAX_ATTEMPTS - 1:
+                    raise
+                backoff_cap = min(
+                    _START_JOB_BACKOFF_CAP_SEC,
+                    _START_JOB_BACKOFF_BASE_SEC * (2**attempt),
+                )
+                await asyncio.sleep(random.uniform(0, backoff_cap))
+
     async def start_job(self, job_id: str, config: dict) -> dict:
         """
         One-shot: picks ready nodes from main_service's in-memory cache,
@@ -129,20 +170,7 @@ class ClusterClient:
         )
 
         for attempt in range(2):
-            url = f"{self._url}/v1/jobs/{job_id}/start"
-            async with self.session.request(
-                "POST",
-                url,
-                json=config,
-                headers=get_auth_headers(),
-                timeout=_TIMEOUT,
-            ) as response:
-                status = response.status
-                try:
-                    body = (await response.json()) or {}
-                except aiohttp.ContentTypeError:
-                    body = {}
-                auth_failed = response.status == 401 or _is_login_response(response)
+            status, body, auth_failed = await self._request_job_start(job_id, config)
             if auth_failed and attempt == 0:
                 bootstrap_from_adc()
                 self._url = get_cluster_dashboard_url()

@@ -234,12 +234,18 @@ def job_admission_paused() -> bool:
     return _job_admission_paused
 
 
-def admit_job(job_id: str, job: dict, selected_instance_names: list[str]) -> bool:
+def admit_job(
+    job_id: str, job: dict, selected_instance_names: list[str]
+) -> tuple[bool, dict | None]:
     job = dict(job)
     job["assigned_nodes"] = {}
     with _lock:
+        existing = _get_or_load_job(job_id)
+        if existing is not None:
+            response = existing.get("_start_response")
+            return False, dict(response) if response is not None else None
         if _job_admission_paused:
-            return False
+            return False, None
         selected = [NODES.get(name) for name in selected_instance_names]
         if any(
             node is None
@@ -249,7 +255,7 @@ def admit_job(job_id: str, job: dict, selected_instance_names: list[str]) -> boo
             or not node_is_fresh(node)
             for node in selected
         ):
-            return False
+            return False, None
 
         node_snapshots = []
         for node in selected:
@@ -266,7 +272,7 @@ def admit_job(job_id: str, job: dict, selected_instance_names: list[str]) -> boo
     for node in node_snapshots:
         _publish(_node_event_queues, {"deleted": False, **node})
     _publish(_job_event_queues, {"job_id": job_id, **_job_summary(snapshot)})
-    return True
+    return True, dict(job["_start_response"])
 
 
 def _get_or_load_job(job_id: str) -> dict | None:
@@ -289,11 +295,22 @@ def get_job(job_id: str) -> dict | None:
         job = _get_or_load_job(job_id)
         if job is None:
             return None
-        view = {k: v for k, v in job.items() if k != "assigned_nodes"}
+        view = {
+            k: v
+            for k, v in job.items()
+            if k not in ("assigned_nodes", "_start_response")
+        }
         view["n_results"] = sum(
             n.get("current_num_results", 0) for n in job["assigned_nodes"].values()
         )
         return view
+
+
+def get_job_start_response(job_id: str) -> dict | None:
+    with _lock:
+        job = _get_or_load_job(job_id)
+        response = job.get("_start_response") if job is not None else None
+        return dict(response) if response is not None else None
 
 
 def update_job(

@@ -196,36 +196,34 @@ with socket.create_server(("0.0.0.0", port)) as listener:
                         # --no-deps: the client's list is its whole environment,
                         # so it is already closed under dependencies; resolving
                         # would only let uv "upgrade" pre-baked image packages.
-                        try:
-                            subprocess.run(
-                                [
-                                    "uv",
-                                    "pip",
-                                    "install",
-                                    "--python",
-                                    "python",
-                                    "--target",
-                                    "/worker_service_python_env",
-                                    "--no-deps",
-                                    *packages_to_install,
-                                ],
-                                check=True,
-                                capture_output=True,
-                                text=True,
-                            )
-                        except subprocess.CalledProcessError as error:
+                        result = subprocess.run(
+                            [
+                                "uv",
+                                "pip",
+                                "install",
+                                "--python",
+                                "python",
+                                "--target",
+                                "/worker_service_python_env",
+                                "--no-deps",
+                                *packages_to_install,
+                            ],
+                            capture_output=True,
+                            text=True,
+                        )
+                        if result.returncode:
                             output = "\n\n".join(
                                 f"{stream}:\n{content.strip()}"
                                 for stream, content in (
-                                    ("stdout", error.stdout),
-                                    ("stderr", error.stderr),
+                                    ("stdout", result.stdout),
+                                    ("stderr", result.stderr),
                                 )
                                 if content.strip()
                             )
                             raise RuntimeError(
                                 "uv failed to install the client environment "
-                                f"(exit status {error.returncode}).\n\n{output}"
-                            ) from None
+                                f"(exit status {result.returncode}).\n\n{output}"
+                            )
                     importlib.invalidate_caches()
                 if command == b"l":
                     loaded_function = cloudpickle.loads(request_payload)

@@ -12,6 +12,257 @@ across clouds.
 
 import re
 
+
+SETTINGS_MACHINE_TYPES = {
+    "gcp": (
+        "n4-standard-2",
+        "n4-standard-4",
+        "n4-standard-8",
+        "n4-standard-16",
+        "n4-standard-32",
+        "n4-standard-64",
+        "n4-standard-80",
+        "a2-highgpu-1g",
+        "a2-highgpu-2g",
+        "a2-highgpu-4g",
+        "a2-highgpu-8g",
+        "a2-ultragpu-1g",
+        "a2-ultragpu-2g",
+        "a2-ultragpu-4g",
+        "a2-ultragpu-8g",
+        "a3-highgpu-1g",
+        "a3-highgpu-2g",
+        "a3-highgpu-4g",
+        "a3-highgpu-8g",
+    ),
+    "aws": (
+        "m7i.large",
+        "m7i.xlarge",
+        "m7i.2xlarge",
+        "m7i.4xlarge",
+        "m7i.8xlarge",
+        "m7i.16xlarge",
+        "p4d.24xlarge",
+        "p4de.24xlarge",
+        "p5.4xlarge",
+        "p5.48xlarge",
+    ),
+    "azure": (
+        "Standard_D2as_v5",
+        "Standard_D4as_v5",
+        "Standard_D8as_v5",
+        "Standard_D16as_v5",
+        "Standard_D32as_v5",
+        "Standard_D64as_v5",
+    ),
+}
+
+CPU_ONLY_IMAGE_REPOSITORIES = ("python", "ubuntu", "debian", "alpine")
+
+SETTINGS_REGIONS = {
+    "gcp": (
+        "us-central1",
+        "us-east1",
+        "us-east4",
+        "us-east5",
+        "us-south1",
+        "us-west1",
+        "us-west3",
+        "us-west4",
+        "northamerica-northeast2",
+        "northamerica-south1",
+        "europe-west1",
+        "europe-west2",
+        "europe-west3",
+        "europe-west4",
+        "europe-west9",
+        "europe-southwest1",
+        "europe-north2",
+        "asia-northeast1",
+        "asia-northeast3",
+        "asia-south1",
+        "asia-southeast1",
+        "australia-southeast1",
+        "me-west1",
+    ),
+    "aws": (
+        "af-south-1",
+        "ap-east-1",
+        "ap-east-2",
+        "ap-northeast-1",
+        "ap-northeast-2",
+        "ap-northeast-3",
+        "ap-south-1",
+        "ap-south-2",
+        "ap-southeast-1",
+        "ap-southeast-2",
+        "ap-southeast-3",
+        "ap-southeast-4",
+        "ap-southeast-5",
+        "ap-southeast-6",
+        "ap-southeast-7",
+        "ca-central-1",
+        "eu-central-1",
+        "eu-central-2",
+        "eu-north-1",
+        "eu-south-1",
+        "eu-south-2",
+        "eu-west-1",
+        "eu-west-2",
+        "eu-west-3",
+        "il-central-1",
+        "me-central-1",
+        "mx-central-1",
+        "sa-east-1",
+        "us-east-1",
+        "us-east-2",
+        "us-west-1",
+        "us-west-2",
+    ),
+    "azure": (
+        "eastus",
+        "eastus2",
+        "centralus",
+        "southcentralus",
+        "westus2",
+        "westus3",
+        "canadacentral",
+        "brazilsouth",
+        "northeurope",
+        "westeurope",
+        "uksouth",
+        "francecentral",
+        "germanywestcentral",
+        "swedencentral",
+        "centralindia",
+        "southeastasia",
+        "eastasia",
+        "japaneast",
+        "koreacentral",
+        "australiaeast",
+    ),
+}
+
+_GPU_REGIONS = {
+    "gcp": {
+        "a2-highgpu": (
+            "us-central1",
+            "us-west3",
+            "us-east1",
+            "us-west4",
+            "us-west1",
+            "europe-west4",
+            "asia-northeast1",
+            "asia-northeast3",
+            "me-west1",
+            "asia-southeast1",
+        ),
+        "a2-ultragpu": (
+            "us-central1",
+            "us-east5",
+            "us-east4",
+            "europe-west4",
+            "asia-southeast1",
+        ),
+        "a3-highgpu": (
+            "us-central1",
+            "us-east5",
+            "us-east4",
+            "us-west4",
+            "us-west1",
+            "europe-west1",
+            "asia-northeast1",
+            "asia-southeast1",
+        ),
+    },
+    "aws": {
+        "p4de.": (
+            "us-east-1",
+            "us-west-2",
+            "eu-central-1",
+            "ap-northeast-1",
+            "ap-southeast-1",
+        ),
+        "p4d.": (
+            "us-east-1",
+            "us-east-2",
+            "us-west-2",
+            "ca-central-1",
+            "sa-east-1",
+            "eu-west-1",
+            "eu-west-2",
+            "eu-central-1",
+            "eu-north-1",
+            "ap-south-1",
+            "ap-northeast-1",
+            "ap-northeast-2",
+            "ap-southeast-2",
+        ),
+        "p5.4xlarge": (
+            "us-east-1",
+            "us-east-2",
+            "us-west-2",
+            "sa-east-1",
+            "eu-west-2",
+            "ap-south-1",
+            "ap-northeast-1",
+            "ap-southeast-2",
+        ),
+        "p5.48xlarge": (
+            "us-east-1",
+            "us-east-2",
+            "us-west-1",
+            "us-west-2",
+            "ca-central-1",
+            "sa-east-1",
+            "eu-west-2",
+            "eu-north-1",
+            "ap-south-1",
+            "ap-northeast-1",
+            "ap-northeast-2",
+            "ap-southeast-2",
+        ),
+    },
+}
+
+ON_DEMAND_HOURLY_USD = {
+    "a2-highgpu-1g": 3.673385,
+    "a2-highgpu-2g": 7.34677,
+    "a2-highgpu-4g": 14.69354,
+    "a2-highgpu-8g": 29.38708,
+    "a2-ultragpu-1g": 5.06879789,
+    "a2-ultragpu-2g": 10.137595781,
+    "a2-ultragpu-4g": 20.275191562,
+    "a2-ultragpu-8g": 40.550383123,
+    "a3-highgpu-1g": 11.0612,
+    "a3-highgpu-2g": 22.1225,
+    "a3-highgpu-4g": 44.245,
+    "a3-highgpu-8g": 88.490000119,
+    "n4-standard-2": 0.0907,
+    "n4-standard-4": 0.1814,
+    "n4-standard-8": 0.3628,
+    "n4-standard-16": 0.7256,
+    "n4-standard-32": 1.4512,
+    "n4-standard-64": 2.9024,
+    "n4-standard-80": 3.628,
+    "p4d.24xlarge": 32.7726,
+    "p4de.24xlarge": 40.9657,
+    "p5.4xlarge": 6.88,
+    "p5.48xlarge": 98.32,
+    "m7i.large": 0.1008,
+    "m7i.xlarge": 0.2016,
+    "m7i.2xlarge": 0.4032,
+    "m7i.4xlarge": 0.8064,
+    "m7i.8xlarge": 1.6128,
+    "m7i.16xlarge": 3.2256,
+    "Standard_D2as_v5": 0.086,
+    "Standard_D4as_v5": 0.172,
+    "Standard_D8as_v5": 0.344,
+    "Standard_D16as_v5": 0.688,
+    "Standard_D32as_v5": 1.376,
+    "Standard_D64as_v5": 2.752,
+}
+
 _M7I_SIZE_TO_CPUS = {
     "large": 2,
     "xlarge": 4,
@@ -73,6 +324,29 @@ GPU_MACHINE_TYPES = {
     # request then fails with a clear "must be one of []" error.
     "azure": {},
 }
+
+
+def gpu_display(machine_type: str) -> str | None:
+    families = {
+        "a2-highgpu": ("A100", "40G"),
+        "a2-ultragpu": ("A100", "80G"),
+        "a3-highgpu": ("H100", "80G"),
+        "g4dn.": ("T4", "16G"),
+        "p4d.": ("A100", "40G"),
+        "p4de.": ("A100", "80G"),
+        "p5.": ("H100", "80G"),
+    }
+    for prefix, (model, memory) in families.items():
+        if machine_type.startswith(prefix):
+            count = machine_spec(machine_type)["gpus"]
+            return f"{count}x {model} {memory}"
+    return None
+
+
+def image_is_gpu_compatible(image: str) -> bool:
+    repository = image.split(":", 1)[0].removeprefix("docker.io/")
+    repository = repository.removeprefix("library/")
+    return repository not in CPU_ONLY_IMAGE_REPOSITORIES
 
 
 def machine_spec(machine_type: str) -> dict:
@@ -191,3 +465,42 @@ def gpu_machine_prefix(func_gpu: str | None, cloud_provider: str) -> str | None:
     if cloud_provider == "aws":
         return machine_type.split(".")[0] + "."
     return machine_type.rsplit("-", 1)[0] + "-"
+
+
+def settings_options(cloud_provider: str) -> dict:
+    machines = []
+    for machine_type in SETTINGS_MACHINE_TYPES[cloud_provider]:
+        spec = machine_spec(machine_type)
+        machines.append(
+            {
+                "machine_type": machine_type,
+                "vcpu_count": spec["cpus"],
+                "memory_bytes": spec["ram_gb"] * 1024**3,
+                "gpu_count": spec["gpus"],
+                "gpu_display": gpu_display(machine_type),
+                "regions": next(
+                    (
+                        list(regions)
+                        for prefix, regions in _GPU_REGIONS.get(
+                            cloud_provider, {}
+                        ).items()
+                        if machine_type.startswith(prefix)
+                    ),
+                    list(SETTINGS_REGIONS[cloud_provider]),
+                ),
+            }
+        )
+    return {
+        "machine_types": machines,
+        "regions": list(SETTINGS_REGIONS[cloud_provider]),
+        "cpu_only_image_repositories": list(CPU_ONLY_IMAGE_REPOSITORIES),
+        "constraints": {
+            "quantity": {"minimum": 1, "maximum": 1000},
+            "disk_gb": {"minimum": 10, "maximum": 2000},
+            "inactivity_timeout_seconds": {"minimum": 0, "maximum": 86400},
+        },
+    }
+
+
+def on_demand_hourly_usd(machine_type: str) -> float | None:
+    return ON_DEMAND_HOURLY_USD.get(machine_type)

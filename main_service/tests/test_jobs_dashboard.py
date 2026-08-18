@@ -49,6 +49,35 @@ def _push_job_logs(main_http_client, job_id: str, documents: list[dict]) -> None
     assert resp.status_code == 200, resp.text
 
 
+def test_management_usage_accepts_cluster_token(node_push_client, local_dev_cluster):
+    response = node_push_client.get("/v1/management/usage")
+    assert response.status_code == 200, response.text
+    assert "days" in response.json()
+
+
+def test_management_settings_exposes_and_validates_machine_regions(
+    main_http_client,
+    local_dev_cluster,
+):
+    settings = main_http_client.get("/v1/management/settings").json()
+    all_regions = set(settings["options"]["regions"])
+    gpu_machines = [
+        machine
+        for machine in settings["options"]["machine_types"]
+        if machine["gpu_count"]
+    ]
+    assert gpu_machines
+    assert all(set(machine["regions"]) <= all_regions for machine in gpu_machines)
+    assert any(set(machine["regions"]) < all_regions for machine in gpu_machines)
+
+    invalid = main_http_client.patch(
+        "/v1/management/settings",
+        json={"machine_type": settings["machine_type"], "region": "not-a-region"},
+    )
+    assert invalid.status_code == 422, invalid.text
+    assert "region is not available" in invalid.json()["error"]["message"]
+
+
 def test_stop_job_writes_dashboard_canceled(
     main_http_client,
     local_dev_cluster,
@@ -67,7 +96,7 @@ def test_stop_job_writes_dashboard_canceled(
     assert doc["status"] == "CANCELED"
 
 
-def test_stop_job_writes_log_entry(
+def test_stop_job_writes_job_notice(
     main_http_client,
     local_dev_cluster,
     isolated_job_id,
@@ -79,48 +108,24 @@ def test_stop_job_writes_log_entry(
     resp = main_http_client.post(f"/v1/jobs/{job_id}/stop")
     assert resp.status_code in (200, 204)
 
-    # The "canceled by user" log doc has no input_index, so the only
-    # HTTP-visible trace of it is the error count in result-stats.
-    def _n_failed():
-        stats_resp = main_http_client.get(f"/v1/jobs/{job_id}/result-stats")
-        if stats_resp.status_code != 200:
+    def _notice():
+        response = main_http_client.get(f"/v1/management/jobs/{job_id}")
+        if response.status_code != 200:
             return None
-        return stats_resp.json()["n_failed"]
+        body = response.json()
+        notices = body["notices"]
+        if not notices:
+            return None
+        return body, notices[0]
 
-    n_failed = wait_for_fixture(_n_failed, timeout=5)
-    assert n_failed >= 1
+    body, notice = wait_for_fixture(_notice, timeout=5)
+    assert body["failed_count"] == 0
+    assert "canceled by user" in notice["message"].lower()
 
 
 def test_result_stats_404_when_missing(main_http_client, local_dev_cluster):
     resp = main_http_client.get(f"/v1/jobs/nonexistent-{int(time.time())}/result-stats")
     assert resp.status_code == 404
-
-
-def test_logged_input_indexes_returns_sorted_unique(
-    main_http_client,
-    node_push_client,
-    local_dev_cluster,
-    isolated_job_id,
-    cleanup_job,
-):
-    job_id = cleanup_job(isolated_job_id())
-    documents = [
-        {
-            "logs": [{"message": "m", "timestamp": time.time()}],
-            "input_index": idx,
-            "is_error": err,
-            "timestamp": time.time(),
-        }
-        for idx, err in [(0, False), (5, True), (3, False), (5, False)]
-    ]
-    _push_job_logs(node_push_client, job_id, documents)
-    time.sleep(0.5)
-
-    resp = main_http_client.get(f"/v1/jobs/{job_id}/logged-input-indexes")
-    assert resp.status_code == 200
-    body = resp.json()
-    assert sorted(body["indexes_with_logs"]) == body["indexes_with_logs"]
-    assert 5 in body["failed_indexes"]
 
 
 def test_job_logs_returns_logs_for_index(
@@ -150,3 +155,129 @@ def test_job_logs_returns_logs_for_index(
     body = resp.json()
     assert body["input_index"] == 7
     assert any("hello from input 7" in log["message"] for log in body["logs"])
+
+
+def test_management_call_pages_large_running_job_with_every_sort(
+    main_http_client,
+    node_push_client,
+    local_dev_cluster,
+    isolated_job_id,
+    cleanup_job,
+):
+    job_id = cleanup_job(isolated_job_id())
+    n_inputs = 5000
+    _seed_running_job(main_http_client, job_id, n_inputs=n_inputs)
+    now = time.time()
+    _push_job_logs(
+        node_push_client,
+        job_id,
+        [
+            {
+                "logs": [{"message": "running", "timestamp": now}],
+                "input_index": 7,
+                "is_error": False,
+                "timestamp": now,
+            },
+            {
+                "logs": [{"message": "failed", "timestamp": now}],
+                "input_index": 11,
+                "is_error": True,
+                "timestamp": now,
+            },
+        ],
+    )
+    metrics = node_push_client.post(
+        "/v1/nodes/pagination-test/metrics:batch",
+        json={
+            "samples": [
+                {
+                    "timestamp": now,
+                    "duration_sec": 1,
+                    "scope": "task",
+                    "job_id": job_id,
+                    "input_index": 13,
+                    "worker_id": "worker-0",
+                    "cpu_seconds": 0.5,
+                    "cpu_percent": 50,
+                    "memory_bytes": 1024,
+                    "memory_percent": 1,
+                    "network_rx_bytes": 0,
+                    "network_tx_bytes": 0,
+                    "disk_read_bytes": 0,
+                    "disk_write_bytes": 0,
+                    "gpu_percent": None,
+                    "gpu_memory_bytes": None,
+                    "gpu_memory_percent": None,
+                }
+            ]
+        },
+    )
+    assert metrics.status_code == 200, metrics.text
+    url = f"/v1/management/jobs/{job_id}/calls"
+    pending_count = n_inputs - 3
+
+    for sort in (
+        "input_index",
+        "started_at",
+        "ended_at",
+        "duration",
+        "attempts",
+        "status",
+        "peak_cpu",
+        "peak_memory",
+    ):
+        for order in ("asc", "desc"):
+            params = {
+                "status": "pending",
+                "sort": sort,
+                "order": order,
+                "limit": 37,
+            }
+            first = main_http_client.get(url, params=params)
+            assert first.status_code == 200, first.text
+            first_page = first.json()
+            assert first_page["total_count"] == pending_count
+            assert first_page["has_more"] is True
+            assert len(first_page["items"]) == 37
+
+            second = main_http_client.get(
+                url,
+                params={**params, "cursor": first_page["next_cursor"]},
+            )
+            assert second.status_code == 200, second.text
+            second_page = second.json()
+            assert second_page["total_count"] == pending_count
+            assert len(second_page["items"]) == 37
+            assert {call["input_index"] for call in first_page["items"]}.isdisjoint(
+                call["input_index"] for call in second_page["items"]
+            )
+
+    indexed = main_http_client.get(
+        url,
+        params={"input_index": n_inputs - 1, "status": "pending", "limit": 1},
+    )
+    assert indexed.status_code == 200, indexed.text
+    assert indexed.json()["items"][0]["input_index"] == n_inputs - 1
+
+    filtered_expectations = (
+        ({"failed_only": "true", "status": "failed"}, [11]),
+        ({"logs_only": "true"}, [7, 11]),
+        ({"has_metrics": "true", "status": "running"}, [13]),
+        ({"status": "running"}, [7, 13]),
+    )
+    for filters, expected_indices in filtered_expectations:
+        response = main_http_client.get(url, params={**filters, "limit": 10})
+        assert response.status_code == 200, response.text
+        assert [
+            item["input_index"] for item in response.json()["items"]
+        ] == expected_indices
+        assert response.json()["total_count"] == len(expected_indices)
+
+    stopped = main_http_client.post(f"/v1/jobs/{job_id}/stop")
+    assert stopped.status_code in (200, 204), stopped.text
+    canceled = main_http_client.get(url, params={"status": "canceled", "limit": 10})
+    assert canceled.status_code == 200, canceled.text
+    assert [item["input_index"] for item in canceled.json()["items"]] == [7, 13]
+    not_run = main_http_client.get(url, params={"status": "not_run", "limit": 10})
+    assert not_run.status_code == 200, not_run.text
+    assert not_run.json()["total_count"] == pending_count

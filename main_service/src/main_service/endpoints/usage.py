@@ -112,7 +112,10 @@ def nodes_daily_hours(
     month: Optional[str] = None,
 ):
     _require_auth(request)
+    return build_nodes_daily_hours(month)
 
+
+def build_nodes_daily_hours(month: Optional[str] = None) -> dict:
     now = datetime.now(timezone.utc)
     month_dt = _parse_yyyy_mm(month) if month else _month_start(now)
     month_start = month_dt

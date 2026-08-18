@@ -52,7 +52,7 @@ def test_jobs_page_lists_completed_job_and_shows_its_logs(
     page.goto("/jobs")
     newest_row = page.get_by_role("row").nth(1)  # row 0 is the header
     expect(newest_row).to_contain_text("test_function")
-    expect(newest_row).to_contain_text("completed")
+    expect(newest_row).to_contain_text(re.compile("completed", re.IGNORECASE))
     expect(newest_row).to_contain_text("1 / 1")
 
     newest_row.click()
@@ -60,6 +60,7 @@ def test_jobs_page_lists_completed_job_and_shows_its_logs(
     expect(page.get_by_role("heading", name="test_function")).to_be_visible()
     expect(page.get_by_text("Completed").first).to_be_visible()
     # The UDF's printed output must reach the person reading the dashboard.
+    page.get_by_role("row", name=re.compile(r"^0 ")).click()
     expect(page.get_by_text(marker)).to_be_visible()
 
 
@@ -72,11 +73,13 @@ def test_cluster_page_shows_ready_nodes_live(page, local_dev_cluster):
     page.goto("/")
     for name in ready_names:
         expect(page.get_by_role("cell", name=name)).to_be_visible()
-    expect(page.get_by_role("row", name=re.compile("READY")).first).to_be_visible()
+    expect(
+        page.get_by_role("row", name=re.compile("ready", re.IGNORECASE)).first
+    ).to_be_visible()
 
     # "Show deleted nodes" pulls node history on demand.
     with page.expect_response(
-        lambda response: "/v1/cluster/deleted_recent_paginated" in response.url
+        lambda response: "/v1/management/nodes" in response.url
         and response.status == 200
     ):
         page.get_by_role("switch").click()
@@ -87,7 +90,9 @@ def test_settings_cluster_roundtrip(page, local_dev_cluster):
         # The settings inputs carry no ids or labels; the field wrapper div
         # holding the label text is the innermost `div` match, so `.last`.
         field = page.locator("div").filter(
-            has=page.get_by_text("Inactivity Timeout (minutes)", exact=True)
+            has=page.get_by_text(
+                re.compile(r"^Inactivity timeout \(minutes\)$", re.IGNORECASE)
+            )
         )
         return field.last.get_by_role("textbox")
 
@@ -108,19 +113,3 @@ def test_settings_cluster_roundtrip(page, local_dev_cluster):
             timeout_input().fill(original)
             page.get_by_role("button", name="Save").click()
             expect(page.get_by_role("button", name="Save")).not_to_be_visible()
-
-
-def test_settings_usage_section_loads_live_usage_data(page, local_dev_cluster):
-    with page.expect_response(
-        lambda response: "/v1/nodes/daily_hours" in response.url
-        and response.status == 200
-    ):
-        with page.expect_response(
-            lambda response: "/v1/nodes/month_nodes" in response.url
-            and response.status == 200
-        ):
-            page.goto("/settings?section=usage")
-
-    expect(page.get_by_role("heading", name="Usage")).to_be_visible()
-    expect(page.get_by_text("Daily spend")).to_be_visible()
-    expect(page.get_by_text("Compute types")).to_be_visible()

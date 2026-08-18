@@ -97,20 +97,9 @@ async def get_jobs(request: Request, page: int = 0, stream: bool = False):
 
 @router.post("/v1/jobs/{job_id}/stop")
 async def stop_job(job_id: str, request: Request):
-    email = request.session.get("X-User-Email") or request.headers.get("X-User-Email")
-    msg = f"Job canceled by user: {email}"
-    timestamp = time()
-    logs = [{"is_error": True, "message": msg, "timestamp": timestamp}]
-    # The log still exists for the dashboard's log view.
-    await asyncio.to_thread(
-        history.add_job_logs,
-        job_id,
-        [{"logs": logs, "timestamp": timestamp, "is_error": True}],
-    )
-    # `dashboard_canceled` is the signal the client reads: each node picks it
-    # up from its next state-push response, caches it into SELF, the next
-    # /results response returns it, and the client raises JobCanceled.
-    cluster_state.update_job(job_id, {"status": "CANCELED", "dashboard_canceled": True})
+    from main_service.endpoints.management import cancel_job
+
+    return cancel_job(job_id, request)
 
 
 @router.get("/v1/jobs/{job_id}/result-stats")

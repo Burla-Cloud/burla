@@ -563,14 +563,33 @@ async def job_reaper_loop(logger=None):
             # reaper noticed; the last persisted sample is the closest record.
             ended_at = history.last_job_metrics_timestamp(job_id) or now
             if status == "COMPLETED":
-                update_job(job_id, {"status": status, "ended_at": ended_at})
+                update_job(
+                    job_id,
+                    {
+                        "status": status,
+                        "ended_at": ended_at,
+                        "terminal_reason": {
+                            "code": "reaped_completed",
+                            "source": "job_reaper",
+                            "message": "The job had produced all results when its nodes stopped reporting.",
+                        },
+                    },
+                )
                 if logger is not None:
                     logger.log(f"Reaped completed job {job_id}", severity="WARNING")
                 continue
             reason = 'main_svc: job is "running" but no nodes working on it ???'
             update_job(
                 job_id,
-                {"status": "FAILED", "ended_at": ended_at},
+                {
+                    "status": "FAILED",
+                    "ended_at": ended_at,
+                    "terminal_reason": {
+                        "code": "nodes_lost",
+                        "source": "job_reaper",
+                        "message": "No node remained available to finish the job.",
+                    },
+                },
                 append_fail_reason=reason,
             )
             history.add_job_logs(
@@ -662,11 +681,36 @@ async def node_reaper_loop(logger=None):
                         await asyncio.to_thread(
                             provider.delete_instance, name, node_obj.zone
                         )
-                    update_node(name, {"status": "DELETED", "ended_at": now})
+                    vm_existed = name in existing
+                    boot_timed_out = node.get("status") == "BOOTING"
+                    update_node(
+                        name,
+                        {
+                            "status": "DELETED",
+                            "ended_at": now,
+                            "terminal_reason": {
+                                "code": (
+                                    "boot_timeout"
+                                    if boot_timed_out
+                                    else "silent_vm_deleted"
+                                    if vm_existed
+                                    else "vm_missing"
+                                ),
+                                "source": "node_reaper",
+                                "message": (
+                                    "The node did not finish booting before its timeout."
+                                    if boot_timed_out
+                                    else "The node stopped reporting and its VM was deleted."
+                                    if vm_existed
+                                    else "The node stopped reporting and its VM no longer existed."
+                                ),
+                            },
+                        },
+                    )
                     if logger is not None:
                         cause = (
                             "deleted its silent VM"
-                            if name in existing
+                            if vm_existed
                             else "its VM no longer exists"
                         )
                         logger.log(f"Reaped node {name} ({cause}).", severity="WARNING")

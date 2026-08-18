@@ -99,6 +99,19 @@ matches your local interpreter, then press **Start** to boot the first node:
 burla dashboard
 ```
 
+Coding agents can manage the same cluster without interacting with the browser.
+With `burla dashboard` running, inspect the available settings, update them, and
+start the node fleet from another shell:
+
+```bash
+burla settings show
+burla settings update --image python:3.12
+burla cluster start
+```
+
+Management commands emit JSON; watches and raw metrics emit NDJSON. See
+[`docs/agent-cli.md`](docs/agent-cli.md) for the complete contract.
+
 AWS uses the default VPC. Set `AWS_SUBNET_ID` and `AWS_SECURITY_GROUP_ID` only
 when you need to choose existing network resources. Google Cloud uses the
 default network. Azure uses an existing outbound-capable subnet; set

@@ -19,7 +19,6 @@ import {
 } from "@/components/ui/select";
 import { AlertTriangle } from "lucide-react";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { getOnDemandHourlyUsdForMachine, getVmCategory, VM_TYPES, type VmType } from "@/types/constants";
 import { useUsage } from "@/contexts/UsageContext";
 
 function money(n: number) {
@@ -66,106 +65,44 @@ function lastNMonthsUtc(n: number) {
 const PRIMARY = "hsl(var(--primary))";
 
 const UsageSettings = () => {
-  const { loading, error, daily, nodes, selectedMonth, setSelectedMonth } = useUsage();
+  const { loading, error, daily, selectedMonth, setSelectedMonth } = useUsage();
 
   const monthOptions = useMemo(() => lastNMonthsUtc(6), []);
   const monthLabel = useMemo(() => fmtMonthLabel(selectedMonth), [selectedMonth]);
 
   const totals = useMemo(() => {
-    let totalComputeHours = 0;
-    let totalSpend = 0;
-    let unknownNodeHours = 0;
-
-    for (const day of daily?.days || []) {
-      totalComputeHours += Number(day.total_compute_hours || 0);
-
-      for (const g of day.groups || []) {
-        const rate = getOnDemandHourlyUsdForMachine(g.machine_type);
-        const nodeHours = Number(g.total_node_hours || 0);
-
-        if (rate == null) {
-          unknownNodeHours += nodeHours;
-          continue;
-        }
-
-        totalSpend += nodeHours * rate;
-      }
-    }
-
     return {
-      totalComputeHours,
-      totalSpend: Number(totalSpend.toFixed(2)),
-      unknownNodeHours,
+      totalComputeHours: Number(daily?.total_compute_hours || 0),
+      totalSpend: Number(daily?.estimated_spend_usd || 0),
+      unknownNodeHours: Number(daily?.unpriced_node_hours || 0),
     };
   }, [daily]);
 
   const chartData = useMemo(() => {
     return (daily?.days || []).map((d) => {
-      let daySpend = 0;
-      let unknownHours = 0;
-
-      for (const g of d.groups || []) {
-        const rate = getOnDemandHourlyUsdForMachine(g.machine_type);
-        const h = Number(g.total_node_hours || 0); // spend uses node-hours
-
-        if (rate == null) {
-          unknownHours += h;
-          continue;
-        }
-
-        daySpend += h * rate;
-      }
-
       return {
         date: d.date,
         day: fmtDayLabel(d.date),
-        spend: Number(daySpend.toFixed(2)),
-        unknownHours: Number(unknownHours.toFixed(2)),
+        spend: Number(d.estimated_spend_usd || 0),
+        unknownHours: Number(d.unpriced_node_hours || 0),
       };
     });
   }, [daily]);
 
   const vmRows = useMemo(() => {
-    const buckets = new Map<VmType, { vm: VmType; totalComputeHours: number; cost: number; rateMissing: boolean }>();
-
-    for (const vm of VM_TYPES) {
-      buckets.set(vm, { vm, totalComputeHours: 0, cost: 0, rateMissing: false });
-    }
-
-    for (const n of nodes?.nodes || []) {
-      const machineType = String(n.machine_type || "");
-      const vm = getVmCategory(machineType);
-      if (!vm) continue;
-
-      const computeHours = Number(n.duration_compute_hours || 0);
-      const nodeHours = Number(n.duration_hours || 0);
-      const rate = getOnDemandHourlyUsdForMachine(machineType);
-
-      const b = buckets.get(vm);
-      if (!b) continue;
-
-      b.totalComputeHours += computeHours;
-
-      if (rate == null) {
-        b.rateMissing = true;
-      } else {
-        b.cost += nodeHours * rate;
-      }
-    }
-
-    const rows = Array.from(buckets.values())
-      .map((r) => ({
-        vm: r.vm,
-        totalComputeHours: Number(r.totalComputeHours.toFixed(2)),
-        cost: Number(r.cost.toFixed(2)),
-        rateMissing: r.rateMissing,
+    const rows = (daily?.compute_types || [])
+      .map((row) => ({
+        vm: row.type,
+        totalComputeHours: Number(row.compute_hours.toFixed(2)),
+        cost: Number(row.estimated_spend_usd.toFixed(2)),
+        rateMissing: row.rate_missing,
       }))
       .filter((r) => r.totalComputeHours > 0);
 
     rows.sort((a, b) => b.cost - a.cost || b.totalComputeHours - a.totalComputeHours);
 
     return rows;
-  }, [nodes]);
+  }, [daily]);
 
   if (loading) {
     return (

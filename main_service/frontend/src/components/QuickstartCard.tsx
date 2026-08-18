@@ -4,7 +4,6 @@ import { Highlight, themes } from "prism-react-renderer";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useSettings } from "@/contexts/SettingsContext";
-import { extractCpuCount } from "@/lib/machineSpecs";
 import { cn } from "@/lib/utils";
 import { useTheme } from "@/lib/theme";
 
@@ -80,11 +79,12 @@ export const QuickstartCard = ({ onDismiss }: QuickstartCardProps) => {
             : settings.cloudProvider === "azure"
               ? "Azure subscription"
               : "GCP project";
-    const resourceName =
-        (settings.cloudProvider === "gcp"
-            ? settings.googleCloudProjectId
-            : settings.cloudAccountName)!;
-    const vcpusPerVm = extractCpuCount(settings.machineType)!;
+    const resourceName = (
+        settings.cloudProvider === "gcp" ? settings.googleCloudProjectId : settings.cloudAccountName
+    )!;
+    const vcpusPerVm = settings.options?.machine_types.find(
+        (machine) => machine.machine_type === settings.machineType,
+    )?.vcpu_count;
     const machineDescription =
         settings.machineQuantity === 1
             ? `one ${vcpusPerVm} vCPU VM`
@@ -109,12 +109,8 @@ export const QuickstartCard = ({ onDismiss }: QuickstartCardProps) => {
             </button>
 
             <CardContent className="p-5">
-                <h2 className="text-base font-semibold tracking-tight text-foreground">
-                    Get started
-                </h2>
-                <p className="mt-1 text-[13px] text-muted-foreground">
-                    Run your first job in about two minutes.
-                </p>
+                <h2 className="text-base font-semibold tracking-tight text-foreground">Get started</h2>
+                <p className="mt-1 text-[13px] text-muted-foreground">Run your first job in about two minutes.</p>
 
                 <ol className="mt-5 space-y-5">
                     <Step
@@ -123,9 +119,7 @@ export const QuickstartCard = ({ onDismiss }: QuickstartCardProps) => {
                             loading ? (
                                 <Skeleton className="h-5 w-96 max-w-full" />
                             ) : error ? (
-                                <span className="text-muted-foreground">
-                                    Could not load cluster settings.
-                                </span>
+                                <span className="text-muted-foreground">Could not load cluster settings.</span>
                             ) : (
                                 <>
                                     Hit{" "}
@@ -138,18 +132,14 @@ export const QuickstartCard = ({ onDismiss }: QuickstartCardProps) => {
                                         </span>
                                         Start
                                     </span>{" "}
-                                    to boot{" "}
-                                    {machineDescription} in the {cloudResource}: {resourceName}
+                                    to boot {machineDescription} in the {cloudResource}: {resourceName}
                                 </>
                             )
                         }
                     />
 
                     {!isClientHosted && (
-                        <Step
-                            number={nextStep()}
-                            title="Connect your computer to the cluster:"
-                        >
+                        <Step number={nextStep()} title="Connect your computer to the cluster:">
                             <div className="relative w-fit min-w-48 rounded-lg border bg-[#f6f8fa] py-2.5 pl-3.5 pr-12 font-mono text-[13px] text-[#393a34] dark:bg-[#011627] dark:text-[#d6deeb]">
                                 <code>burla login</code>
                                 <CopyButton text="burla login" label="burla login command" />
@@ -163,10 +153,7 @@ export const QuickstartCard = ({ onDismiss }: QuickstartCardProps) => {
                             <Highlight theme={codeTheme} code={QUICKSTART_CODE} language="python">
                                 {({ className, style, tokens, getLineProps, getTokenProps }) => (
                                     <pre
-                                        className={cn(
-                                            className,
-                                            "overflow-x-auto p-3.5 pr-14 text-[13px] leading-6",
-                                        )}
+                                        className={cn(className, "overflow-x-auto p-3.5 pr-14 text-[13px] leading-6")}
                                         style={{
                                             ...style,
                                             backgroundColor: "transparent",
@@ -176,10 +163,7 @@ export const QuickstartCard = ({ onDismiss }: QuickstartCardProps) => {
                                         {tokens.map((line, lineIndex) => (
                                             <div key={lineIndex} {...getLineProps({ line })}>
                                                 {line.map((token, tokenIndex) => (
-                                                    <span
-                                                        key={tokenIndex}
-                                                        {...getTokenProps({ token })}
-                                                    />
+                                                    <span key={tokenIndex} {...getTokenProps({ token })} />
                                                 ))}
                                             </div>
                                         ))}

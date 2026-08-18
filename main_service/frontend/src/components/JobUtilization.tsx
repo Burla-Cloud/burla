@@ -6,6 +6,7 @@ import {
     SECONDARY,
     formatRate,
 } from "@/components/JobMetricChart";
+import { managementJson } from "@/lib/managementApi";
 
 type JobPoint = {
     t: number;
@@ -35,9 +36,24 @@ const JobUtilization = ({ jobId, jobStatus }: { jobId: string; jobStatus: string
 
     const loadJobSeries = useCallback(async () => {
         try {
-            const res = await fetch(`/v1/jobs/${jobId}/metrics`);
-            if (!res.ok) throw new Error();
-            setJobSeries(await res.json());
+            const payload = await managementJson<any>(`/jobs/${jobId}/metrics`);
+            setJobSeries({
+                has_metrics: payload.has_metrics,
+                has_gpu: payload.points.some((point) => point.gpu_percent != null),
+                bucket_sec: payload.bucket_seconds,
+                points: payload.points.map((point) => ({
+                    t: Date.parse(point.timestamp) / 1000,
+                    nodes: point.node_count,
+                    cpu: point.cpu_percent,
+                    mem: point.memory_percent,
+                    net_rx: point.network_rx_bytes_per_second,
+                    net_tx: point.network_tx_bytes_per_second,
+                    disk_read: point.disk_read_bytes_per_second,
+                    disk_write: point.disk_write_bytes_per_second,
+                    gpu: point.gpu_percent ?? null,
+                    gpu_mem: point.gpu_memory_percent ?? null,
+                })),
+            });
             setLoadFailed(false);
         } catch {
             setLoadFailed(true);

@@ -111,7 +111,11 @@ def _active_node_docs() -> list[dict[str, Any]]:
         f"{DASHBOARD_URL}/v1/cluster/nodes", headers=_request_headers(), timeout=5
     )
     resp.raise_for_status()
-    return resp.json()["nodes"]
+    return [
+        node
+        for node in resp.json()["nodes"]
+        if node.get("status") in {"BOOTING", "READY", "RUNNING"}
+    ]
 
 
 def _test_runner_node_url(host: str) -> str:

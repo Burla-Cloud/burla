@@ -9,6 +9,7 @@ import { ChevronRight, PowerOff } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
 import { StatusBadge, jobStatusBadge } from "@/components/StatusBadge";
 import { cn } from "@/lib/utils";
+import { managementJson } from "@/lib/managementApi";
 
 type JobResultStats = {
     n_inputs: number;
@@ -37,9 +38,7 @@ const Unknown = () => <span className="text-muted-foreground">unknown</span>;
 const tabClass = (active: boolean) =>
     cn(
         "relative -mb-px border-b-2 px-1 pb-2.5 text-sm font-medium transition-colors duration-150 focus-visible:outline-none",
-        active
-            ? "border-primary text-foreground"
-            : "border-transparent text-muted-foreground hover:text-foreground"
+        active ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground",
     );
 
 const JobDetails = () => {
@@ -52,9 +51,7 @@ const JobDetails = () => {
     const [isStatsLoading, setIsStatsLoading] = useState(true);
     const [statsLoadError, setStatsLoadError] = useState(false);
     const [jobDoc, setJobDoc] = useState<JobDoc | null>(null);
-    // Deep links: jobs outside the SSE-streamed first page never appear in
-    // the jobs context, so the page falls back to the job summary that
-    // result-stats returns.
+    // Deep links can target jobs outside the first page held by the jobs context.
     const [fetchedJob, setFetchedJob] = useState<BurlaJob | null>(null);
     const hasCompletedInitialStatsLoadRef = useRef(false);
     const [userTimeZone, setUserTimeZone] = useState<string>(() => {
@@ -71,16 +68,13 @@ const JobDetails = () => {
     });
 
     const taskParam = searchParams.get("task");
-    const selectedTaskIndex =
-        taskParam !== null && /^\d+$/.test(taskParam) ? Number(taskParam) : null;
+    const selectedTaskIndex = taskParam !== null && /^\d+$/.test(taskParam) ? Number(taskParam) : null;
 
     // The call table and detail live on the first tab. A selected task wins
     // over the tab param, which also reinterprets old ?tab=utilization&task=N
     // and ?tab=calls&task=N links.
     const activeTab: "overview" | "utilization" =
-        selectedTaskIndex == null && searchParams.get("tab") === "utilization"
-            ? "utilization"
-            : "overview";
+        selectedTaskIndex == null && searchParams.get("tab") === "utilization" ? "utilization" : "overview";
 
     const openTab = (tab: "overview" | "utilization") => {
         const sp = new URLSearchParams(searchParams);
@@ -157,9 +151,11 @@ const JobDetails = () => {
     const stopJob = async () => {
         try {
             setIsStopping(true);
-            const res = await fetch(`/v1/jobs/${jobId}/stop`, { method: "POST" });
-            if (!res.ok) throw new Error("Failed to stop job");
-            toast({ title: "Stopping job", description: `Job ${jobId} is stopping.` });
+            await managementJson(`/jobs/${jobId}/cancel`, { method: "POST" });
+            toast({
+                title: "Stopping job",
+                description: `Job ${jobId} is stopping.`,
+            });
         } catch (err) {
             toast({
                 variant: "destructive",
@@ -176,6 +172,7 @@ const JobDetails = () => {
 
     // Live duration ticks once per second while the job runs.
     const [nowMs, setNowMs] = useState(() => Date.now());
+    const [jobEvents, setJobEvents] = useState<{ message: string; timestamp: string }[]>([]);
     useEffect(() => {
         if (!isLiveJob) return;
         const id = window.setInterval(() => setNowMs(Date.now()), 1000);
@@ -187,34 +184,12 @@ const JobDetails = () => {
         setStatsLoadError(false);
         setIsStatsLoading(true);
         setFetchedJob(null);
+        setJobEvents([]);
         hasCompletedInitialStatsLoadRef.current = false;
-    }, [jobId]);
-
-    useEffect(() => {
-        setJobDoc(null);
-        const controller = new AbortController();
-        (async () => {
-            const res = await fetch(`/v1/jobs/${jobId}`, { signal: controller.signal });
-            if (!res.ok) return;
-            setJobDoc(await res.json());
-        })().catch(() => {});
-        return () => controller.abort();
     }, [jobId]);
 
     // Job-level notices (e.g. "Job canceled by user"): not function calls, so
     // they render in a quiet events strip instead of the call table.
-    const [jobEvents, setJobEvents] = useState<{ message: string; timestamp: number }[]>([]);
-    useEffect(() => {
-        const controller = new AbortController();
-        (async () => {
-            const res = await fetch(`/v1/jobs/${jobId}/events`, { signal: controller.signal });
-            if (!res.ok) return;
-            const payload = await res.json();
-            setJobEvents(payload.events ?? []);
-        })().catch(() => {});
-        return () => controller.abort();
-    }, [jobId, job?.status]);
-
     useEffect(() => {
         const controller = new AbortController();
         let cancelled = false;
@@ -222,42 +197,37 @@ const JobDetails = () => {
         let failedSyncTimeoutIdShort: number | undefined;
         let failedSyncTimeoutIdLong: number | undefined;
 
-        const isTerminalStatus =
-            job?.status === "FAILED" || job?.status === "COMPLETED" || job?.status === "CANCELED";
+        const isTerminalStatus = job?.status === "FAILED" || job?.status === "COMPLETED" || job?.status === "CANCELED";
 
         const loadStats = async (forceLoadingSpinner: boolean) => {
             if (forceLoadingSpinner) setIsStatsLoading(true);
             try {
-                const response = await fetch(`/v1/jobs/${jobId}/result-stats`, {
+                const payload = await managementJson<any>(`/jobs/${jobId}`, {
                     signal: controller.signal,
                 });
-                if (!response.ok) throw new Error("Failed to load job result stats");
-                const payload = await response.json();
                 if (cancelled) return;
                 setStats({
-                    n_inputs: Number(payload?.n_inputs ?? 0),
-                    n_results: Number(payload?.n_results ?? 0),
-                    n_failed: Number(payload?.n_failed ?? 0),
+                    n_inputs: Number(payload?.input_count ?? 0),
+                    n_results: Number(payload?.result_count ?? 0),
+                    n_failed: Number(payload?.failed_count ?? 0),
                 });
+                setJobDoc({
+                    max_parallelism: payload?.max_parallelism,
+                    func_cpu: payload?.resources_per_call?.cpu,
+                    func_ram: payload?.resources_per_call?.memory_gb,
+                    func_gpu: payload?.resources_per_call?.gpu,
+                });
+                setJobEvents(payload?.notices ?? []);
                 setFetchedJob({
                     id: jobId,
-                    status: (payload?.status as JobsStatus) ?? null,
+                    status: String(payload?.status || "unknown").toUpperCase() as JobsStatus,
                     user: payload?.user || "Unknown",
-                    n_inputs: Number(payload?.n_inputs ?? 0),
-                    n_results: Number(payload?.n_results ?? 0),
-                    n_failed: Number(payload?.n_failed ?? 0),
-                    function_name:
-                        typeof payload?.function_name === "string"
-                            ? payload.function_name
-                            : "Unknown",
-                    started_at:
-                        typeof payload?.started_at === "number"
-                            ? new Date(payload.started_at * 1000)
-                            : undefined,
-                    ended_at:
-                        typeof payload?.ended_at === "number"
-                            ? new Date(payload.ended_at * 1000)
-                            : undefined,
+                    n_inputs: Number(payload?.input_count ?? 0),
+                    n_results: Number(payload?.result_count ?? 0),
+                    n_failed: Number(payload?.failed_count ?? 0),
+                    function_name: typeof payload?.function_name === "string" ? payload.function_name : "Unknown",
+                    started_at: payload?.started_at ? new Date(payload.started_at) : undefined,
+                    ended_at: payload?.ended_at ? new Date(payload.ended_at) : undefined,
                 });
                 setStatsLoadError(false);
                 hasCompletedInitialStatsLoadRef.current = true;
@@ -274,7 +244,7 @@ const JobDetails = () => {
 
         void loadStats(!hasCompletedInitialStatsLoadRef.current);
 
-        if (!isTerminalStatus) {
+        if (job && !isTerminalStatus) {
             refreshIntervalId = window.setInterval(() => {
                 void loadStats(false);
             }, 2500);
@@ -304,9 +274,7 @@ const JobDetails = () => {
     if (statsLoadError) {
         return (
             <div className="flex flex-1 flex-col items-center justify-center text-center">
-                <p className="text-sm font-medium text-foreground">
-                    Failed to load job result stats
-                </p>
+                <p className="text-sm font-medium text-foreground">Failed to load job result stats</p>
                 <button
                     onClick={() => window.location.reload()}
                     className="mt-2 text-[13px] font-medium text-primary hover:underline"
@@ -354,10 +322,7 @@ const JobDetails = () => {
     }
 
     const loadingValue = <span className="text-muted-foreground">…</span>;
-    const resourceValue = (
-        value: number | string | null | undefined,
-        unit: string
-    ): React.ReactNode => {
+    const resourceValue = (value: number | string | null | undefined, unit: string): React.ReactNode => {
         if (jobDoc == null) return loadingValue;
         if (value == null) return <Unknown />;
         if (value === "dynamic") return "Dynamic";
@@ -377,7 +342,10 @@ const JobDetails = () => {
                       value: <span className="tabular-nums">{formatDateTime(job.ended_at)}</span>,
                   },
               ]),
-        { label: "Duration", value: <span className="tabular-nums">{durationValue}</span> },
+        {
+            label: "Duration",
+            value: <span className="tabular-nums">{durationValue}</span>,
+        },
         {
             label: "Max parallelism",
             value: (
@@ -402,7 +370,7 @@ const JobDetails = () => {
         },
         {
             label: "GPU / call",
-            value: jobDoc == null ? loadingValue : jobDoc.func_gpu ?? "None",
+            value: jobDoc == null ? loadingValue : (jobDoc.func_gpu ?? "None"),
         },
     ];
 
@@ -470,9 +438,7 @@ const JobDetails = () => {
                         <div className="mb-4 rounded-xl border border-border bg-card px-5 py-4 shadow-sm">
                             <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-2">
                                 <span className="tabular-nums text-foreground">
-                                    <span className="text-xl font-semibold">
-                                        {finishedCount.toLocaleString()}
-                                    </span>
+                                    <span className="text-xl font-semibold">{finishedCount.toLocaleString()}</span>
                                     <span className="text-sm text-muted-foreground">
                                         {" "}
                                         / {stats.n_inputs.toLocaleString()} function calls complete
@@ -531,15 +497,10 @@ const JobDetails = () => {
                                 {facts.map((fact, i) => (
                                     <div
                                         key={fact.label}
-                                        className={cn(
-                                            "min-w-0 pr-7",
-                                            i > 0 && "border-l border-border/70 pl-7"
-                                        )}
+                                        className={cn("min-w-0 pr-7", i > 0 && "border-l border-border/70 pl-7")}
                                     >
                                         <div className="eyebrow">{fact.label}</div>
-                                        <div className="mt-1 text-sm leading-snug text-foreground">
-                                            {fact.value}
-                                        </div>
+                                        <div className="mt-1 text-sm leading-snug text-foreground">{fact.value}</div>
                                     </div>
                                 ))}
                             </div>
@@ -557,13 +518,9 @@ const JobDetails = () => {
                                                 className="flex items-baseline gap-3 text-[13px]"
                                             >
                                                 <span className="shrink-0 tabular-nums text-muted-foreground">
-                                                    {formatDateTime(
-                                                        new Date(event.timestamp * 1000)
-                                                    )}
+                                                    {formatDateTime(new Date(event.timestamp))}
                                                 </span>
-                                                <span className="text-foreground/90">
-                                                    {event.message}
-                                                </span>
+                                                <span className="text-foreground/90">{event.message}</span>
                                             </div>
                                         ))}
                                     </div>

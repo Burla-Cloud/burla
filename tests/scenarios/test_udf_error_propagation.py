@@ -41,25 +41,30 @@ def test_udf_error_propagation(
     # Python 3.11+ note attached for visibility.
     assert "[burla] failed on input index 7" in tb
 
-    # Head-visible: find the matching job and check input_index=7 is recorded
-    # as a failed index (i.e. an is_error log landed for it).
-    def _failed_indexes():
-        jobs = main_http_client.get("/v1/jobs?page=0").json()["jobs"]
+    # Head-visible: find the matching job and check the management call/error
+    # resources agree that input 7 failed.
+    def _failed_call():
+        jobs = main_http_client.get("/v1/management/jobs?limit=100").json()["items"]
         for job in jobs:
             if job.get("function_name") != "test_function":
                 continue
-            if job.get("status") == "COMPLETED":
+            if job.get("status") == "completed":
                 continue
-            resp = main_http_client.get(f"/v1/jobs/{job['jobId']}/logged-input-indexes")
-            indexes = resp.json()
-            if 7 in indexes["failed_indexes"]:
-                return indexes
+            job_id = job["job_id"]
+            calls = main_http_client.get(
+                f"/v1/management/jobs/{job_id}/calls?failed_only=true"
+            ).json()["items"]
+            errors = main_http_client.get(
+                f"/v1/management/jobs/{job_id}/errors"
+            ).json()["items"]
+            if any(call["input_index"] == 7 for call in calls):
+                return calls, errors
         return None
 
-    indexes = wait_for_fixture(
-        _failed_indexes,
+    calls, errors = wait_for_fixture(
+        _failed_call,
         timeout=30,
         message="no error log recorded for input_index=7",
     )
-    assert 7 in indexes["failed_indexes"]
-    assert 7 not in indexes["non_failed_indexes_with_logs"]
+    assert any(call["input_index"] == 7 for call in calls)
+    assert any(7 in group["sample_input_indexes"] for group in errors)

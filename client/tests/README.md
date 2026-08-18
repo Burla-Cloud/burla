@@ -71,7 +71,9 @@ Use `local-dev` for anything that can be exercised with light resources, and
 cannot take another local cluster. See the `burla-parallel-dev` skill for the
 full decision guide.
 
-Tear down with `make stop` (this checkout only) or `make stop-all`.
+Stop the foreground `make local-dev` or `make remote-dev` process in its
+terminal. `make stop-all` is emergency machine-wide cleanup for every local
+dev cluster.
 
 #### Running the tests
 
@@ -119,8 +121,8 @@ blocked. Notable exceptions:
 
 1. Work in your own worktree and run your own cluster. Never reuse another
    agent's cluster, and never `docker rm` containers by `node_*` name prefix;
-   that destroys other agents' clusters. Use `make stop`. (Workers live inside
-   their node's own docker daemon and die with it.)
+   that destroys other agents' clusters. Stop the dev-cluster process normally.
+   (Workers live inside their node's own docker daemon and die with it.)
 2. Prefer `local-dev` while iterating: node and worker code is bind-mounted, so
    your edits apply on save. In `remote-dev`, node VMs run your branch from
    GitHub, so `node_service` / `worker_server.py` changes need a push first.

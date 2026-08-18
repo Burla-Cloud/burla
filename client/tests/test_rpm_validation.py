@@ -42,8 +42,7 @@ def test_non_pickleable_function_surfaces_error(rpm_subprocess, local_dev_cluste
         "        return x\n"
     )
     result = rpm_subprocess(source, [1], timeout_seconds=30)
-    if result["ok"]:
-        pytest.skip("cloudpickle now handles this closure type")
+    assert not result["ok"], "the supposedly unpickleable function ran successfully"
     assert any(
         keyword in (result.get("traceback") or "").lower()
         for keyword in ("pickle", "cloudpickle", "lock", "cannot pickle", "unpicklable")

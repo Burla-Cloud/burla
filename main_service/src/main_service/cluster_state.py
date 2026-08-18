@@ -157,7 +157,6 @@ def update_node(instance_name: str, updates: dict) -> dict:
         merged = dict(node)
         durable_fields = {
             "host",
-            "peer_host",
             "public_ip",
             "private_ip",
             "zone",
@@ -471,7 +470,7 @@ def peers_for_job(job_id: str) -> dict:
     with _lock:
         now = time()
         peers = [
-            {"instance_name": name, "host": node.get("peer_host") or node.get("host")}
+            {"instance_name": name, "host": node.get("host")}
             for name, node in sorted(NODES.items())
             if node.get("status") == "RUNNING"
             and node.get("current_job") == job_id

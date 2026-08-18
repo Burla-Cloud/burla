@@ -34,8 +34,7 @@ def _seed_running_job(main_http_client, job_id: str, n_inputs: int = 1) -> None:
         "func_gpu": None,
     }
     resp = main_http_client.post(f"/v1/jobs/{job_id}/start", json=config)
-    if resp.status_code != 200:
-        pytest.skip(f"could not seed job via /start: {resp.status_code} {resp.text}")
+    assert resp.status_code == 200, resp.text
 
 
 def test_get_job_404_when_missing(main_http_client, local_dev_cluster):

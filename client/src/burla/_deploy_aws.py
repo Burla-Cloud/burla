@@ -68,7 +68,6 @@ def _head_setup_commands(
             f'-e CLOUD_ACCOUNT_NAME="{account_name}" '
             "-e BIND_HOST=127.0.0.1 "
             "-e PORT=5001 "
-            "-e INTERNAL_TLS_PORT=8443 "
             "-e HISTORY_DB_PATH=/var/lib/burla/history.db "
             f'-e SHARED_WORKSPACE_BUCKET="{project_id}-burla-shared-workspace" '
             f'-e BURLA_BACKEND_URL="{_BURLA_BACKEND_URL}" '
@@ -91,17 +90,11 @@ def _head_setup_commands(
             f"{dashboard_hostname} {{\n"
             "  reverse_proxy 127.0.0.1:5001\n"
             "}\n"
-            ":8443 {\n"
-            "  tls /etc/burla/tls/head.pem /etc/burla/tls/head.key\n"
-            "  reverse_proxy 127.0.0.1:5001\n"
-            "}\n"
             "EOF"
         ),
         (
             "docker run -d --restart=always --network=host --name=burla-head-caddy "
             "-v /etc/burla/Caddyfile:/etc/caddy/Caddyfile:ro "
-            "-v /var/lib/burla/tls/head.pem:/etc/burla/tls/head.pem:ro "
-            "-v /var/lib/burla/tls/head.key:/etc/burla/tls/head.key:ro "
             "-v /var/lib/burla/caddy:/data "
             "caddy:2.10.2-alpine caddy run --config /etc/caddy/Caddyfile --adapter caddyfile"
         ),
@@ -171,7 +164,7 @@ def deploy_aws(spinner):
     bucket_name = f"{project_id}-burla-shared-workspace"
     _create_s3_bucket(spinner, bucket_name, region)
     _create_iam(spinner, account_id, bucket_name)
-    _, head_sg_id = _create_security_groups(spinner, region)
+    head_sg_id = _create_head_security_group(spinner, region)
     cluster_id_token = _register_cluster_and_save_token(spinner, project_id, region)
 
     from burla._deploy import _snapshot_local_history, _upload_local_history
@@ -391,42 +384,16 @@ def _get_or_create_security_group(name, description, region):
     )
 
 
-def _authorize_ingress_from_group(region, group_id, port, source_group_id):
-    permission = [
-        {
-            "IpProtocol": "tcp",
-            "FromPort": port,
-            "ToPort": port,
-            "UserIdGroupPairs": [{"GroupId": source_group_id}],
-        }
-    ]
-    with tempfile.NamedTemporaryFile("w", suffix=".json") as permission_file:
-        json.dump(permission, permission_file)
-        permission_file.flush()
-        run_command(
-            f"aws ec2 authorize-security-group-ingress --region {region} "
-            f"--group-id {group_id} --ip-permissions file://{permission_file.name}",
-            raise_error=False,  # fails harmlessly when the rule already exists
-        )
-
-
-def _create_security_groups(spinner, region):
-    """All ingress is VPC-internal: clients reach nodes + dashboard through
-    the relay (VMs dial out to it), so nothing is open to the internet."""
-    spinner.text = "Creating security groups ... "
+def _create_head_security_group(spinner, region):
+    """The head and nodes dial out to the relay, so the head needs no ingress."""
+    spinner.text = "Creating head security group ... "
     spinner.start()
-    node_sg = _get_or_create_security_group(
-        "burla-cluster-node", "Burla node VMs (peer + head traffic)", region
-    )
     head_sg = _get_or_create_security_group(
-        "burla-head", "Burla main_service head VM (node traffic)", region
+        "burla-head", "Burla main_service head VM", region
     )
-    _authorize_ingress_from_group(region, node_sg, 8080, node_sg)  # peer transfers
-    _authorize_ingress_from_group(region, node_sg, 8080, head_sg)  # head status polls
-    _authorize_ingress_from_group(region, head_sg, 8443, node_sg)  # node -> head API
-    spinner.text = "Creating security groups ... Done."
+    spinner.text = "Creating head security group ... Done."
     spinner.ok("✓")
-    return node_sg, head_sg
+    return head_sg
 
 
 def _aws_ownership_payload(region: str) -> dict:

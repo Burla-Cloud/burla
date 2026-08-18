@@ -89,8 +89,7 @@ def test_start_job_writes_job_doc(
     job_id = cleanup_job(isolated_job_id())
     config = _base_config(n_inputs=3)
     resp = main_http_client.post(f"/v1/jobs/{job_id}/start", json=config)
-    if resp.status_code != 200:
-        pytest.skip(f"start_job returned {resp.status_code}, skipping doc-check")
+    assert resp.status_code == 200, resp.text
 
     doc = wait_for_fixture(
         lambda: get_job(job_id), timeout=10, message="job doc never appeared"
@@ -108,8 +107,7 @@ def test_start_job_dynamic_func_ram_writes_raw_setting(
 ):
     job_id = cleanup_job(isolated_job_id())
     resp = main_http_client.post(f"/v1/jobs/{job_id}/start", json=_base_config(func_ram="dynamic"))
-    if resp.status_code != 200:
-        pytest.skip(f"start_job returned {resp.status_code}")
+    assert resp.status_code == 200, resp.text
 
     doc = wait_for_fixture(lambda: get_job(job_id), timeout=10)
     assert doc["func_ram"] == "dynamic"
@@ -124,8 +122,7 @@ def test_start_job_job_doc_includes_burla_client_version(
 
     job_id = cleanup_job(isolated_job_id())
     resp = main_http_client.post(f"/v1/jobs/{job_id}/start", json=_base_config())
-    if resp.status_code != 200:
-        pytest.skip(f"start_job returned {resp.status_code}")
+    assert resp.status_code == 200, resp.text
 
     doc = wait_for_fixture(lambda: get_job(job_id), timeout=10)
     assert doc["burla_client_version"] == burla.__version__

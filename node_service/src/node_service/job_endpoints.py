@@ -447,7 +447,6 @@ async def execute(
         request_json["n_inputs"],
         is_background_job,
         request_json["start_time"],
-        request_json["node_ids_expected"],
     )
     SELF["job_watcher_task"] = asyncio.create_task(job_watcher_coroutine)
     return Response(status_code=200)

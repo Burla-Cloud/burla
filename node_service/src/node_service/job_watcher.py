@@ -68,28 +68,22 @@ def _lifecycle_canceled(job_view: dict) -> bool:
     )
 
 
-async def get_neighbor(node_ids_expected):
+async def get_neighbor():
     """Pick the next RUNNING node after this one in the (name-sorted) ring of
     nodes assigned to this job. Peer list comes from the head."""
     response = await head_client.get_peers(SELF["current_job"])
     peers = response["peers"]
     self_index = [i for i, p in enumerate(peers) if p["instance_name"] == INSTANCE_NAME]
 
-    running_node_ids = {p["instance_name"] for p in peers}
-    missing_node_ids = [nid for nid in node_ids_expected if nid not in running_node_ids]
-    still_booting = bool(missing_node_ids) and any(
-        nid in response["booting_node_ids"] for nid in missing_node_ids
-    )
-
     neighbor_id, neighbor_host = None, None
     if self_index and len(peers) > 1:
         neighbors = peers[self_index[0] + 1 :] + peers[: self_index[0]]
         neighbor_id = neighbors[0]["instance_name"]
         neighbor_host = neighbors[0]["host"]
-    return neighbor_id, neighbor_host, still_booting
+    return neighbor_id, neighbor_host
 
 
-async def _input_steal_loop(session, logger, job_started_at, node_ids_expected):
+async def _input_steal_loop(session, logger, job_started_at):
     global SEC_NEIGHBOR_HAD_NO_INPUTS
 
     # A node traded down to zero slots must stop pulling work in: it has no
@@ -103,7 +97,7 @@ async def _input_steal_loop(session, logger, job_started_at, node_ids_expected):
     # peer list is re-checked on an interval for the whole job instead of
     # only while initially-expected nodes are still booting. last_peer_check
     # starts at 0 so the first active tick fetches the initial neighbor.
-    neighbor_id, neighbor_host, nodes_might_join = None, None, True
+    neighbor_id, neighbor_host = None, None
     neighbor_had_no_inputs_at = None
     last_peer_check = 0.0
 
@@ -117,9 +111,7 @@ async def _input_steal_loop(session, logger, job_started_at, node_ids_expected):
         if time() - last_peer_check > PEER_RECHECK_INTERVAL_SEC:
             last_peer_check = time()
             try:
-                neighbor_id, neighbor_host, nodes_might_join = await get_neighbor(
-                    node_ids_expected
-                )
+                neighbor_id, neighbor_host = await get_neighbor()
             except Exception:
                 # Head briefly unreachable: keep the current neighbor and let
                 # the next interval retry, instead of silently killing
@@ -144,7 +136,6 @@ async def _input_steal_loop(session, logger, job_started_at, node_ids_expected):
                 get_url, params=get_params, headers=SELF["auth_headers"]
             ) as response:
                 if response.status == 404:
-                    nodes_might_join = True
                     continue
                 if response.status == 200:
                     items = pickle.loads(await response.read())
@@ -207,7 +198,7 @@ async def _input_steal_loop(session, logger, job_started_at, node_ids_expected):
             await asyncio.sleep(1)
 
 
-async def _slot_trade_loop(session, logger, node_ids_expected):
+async def _slot_trade_loop(session, logger):
     """Acquire slots from the ring neighbor when this node could productively
     run more workers than it owns: it is at its slot count, unsaturated, and
     has more queued inputs than workers (the blog's "add workers to a machine
@@ -280,7 +271,7 @@ async def _slot_trade_loop(session, logger, node_ids_expected):
                 continue
 
         try:
-            neighbor_id, neighbor_host, _ = await get_neighbor(node_ids_expected)
+            neighbor_id, neighbor_host = await get_neighbor()
         except Exception:
             continue
         if not neighbor_id:
@@ -348,7 +339,6 @@ async def _job_watcher(
     n_inputs: int,
     is_background_job: bool,
     job_started_at: float,
-    node_ids_expected: list,
     logger: Logger,
     session: aiohttp.ClientSession,
 ):
@@ -365,11 +355,9 @@ async def _job_watcher(
         raise RuntimeError(f"Job {SELF['current_job']} does not exist on the head.")
 
     steal_task = asyncio.create_task(
-        _input_steal_loop(session, logger, job_started_at, node_ids_expected)
+        _input_steal_loop(session, logger, job_started_at)
     )
-    trade_task = asyncio.create_task(
-        _slot_trade_loop(session, logger, node_ids_expected)
-    )
+    trade_task = asyncio.create_task(_slot_trade_loop(session, logger))
 
     JOB_FAILED = False
     JOB_CANCELED = False
@@ -655,7 +643,6 @@ async def job_watcher_logged(
     n_inputs: int,
     is_background_job: bool,
     job_started_at: float,
-    node_ids_expected: list,
 ):
     logger = (
         Logger()
@@ -670,7 +657,6 @@ async def job_watcher_logged(
                 n_inputs,
                 is_background_job,
                 job_started_at,
-                node_ids_expected,
                 logger,
                 session,
             )

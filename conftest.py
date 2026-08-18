@@ -517,14 +517,6 @@ def cleanup_job():
         pass  # head unreachable mid-teardown; the gate recovers
 
 
-@pytest.fixture
-def cleanup_node():
-    def _register(instance_name: str) -> str:
-        return instance_name
-
-    yield _register
-
-
 @pytest.fixture(scope="session")
 def main_http_client(burla_auth_headers):
     """
@@ -532,10 +524,7 @@ def main_http_client(burla_auth_headers):
     auth headers so main_service's outbound calls to nodes (which still
     validate auth) use a token the node's authorized_users recognizes.
     """
-    try:
-        import httpx
-    except Exception as e:
-        pytest.skip(f"httpx not installed: {e}")
+    import httpx
 
     with httpx.Client(
         base_url=DASHBOARD_URL,
@@ -564,40 +553,18 @@ def node_push_client(main_http_client, local_dev_cluster):
 
 
 @pytest.fixture(scope="session")
-def main_async_client():
-    import asyncio
-
-    try:
-        import httpx
-    except Exception as e:
-        pytest.skip(f"httpx not installed: {e}")
-
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    client = httpx.AsyncClient(base_url=DASHBOARD_URL, timeout=30)
-
-    yield client
-
-    loop.run_until_complete(client.aclose())
-    loop.close()
-
-
-@pytest.fixture(scope="session")
 def burla_auth_headers() -> dict[str, str]:
     """
     Auth headers the pypi client would send. Nodes validate against
     `authorized_users` populated from backend.burla.dev — we forward the
     user's `burla login` credentials.
     """
-    try:
-        from burla._auth import AuthException, get_auth_headers
-    except Exception as e:
-        pytest.skip(f"burla not importable: {e}")
+    from burla._auth import AuthException, get_auth_headers
 
     try:
         return get_auth_headers()
     except AuthException:
-        pytest.skip(
+        pytest.fail(
             "Burla credentials missing. Run `burla login --no_browser=True`, open the URL, "
             "and authorize before running node-level tests."
         )
@@ -619,14 +586,14 @@ def node_http_client(main_http_client, burla_auth_headers):
     def _factory(instance_name: str | None = None):
         nodes = state.get("ready_nodes") or []
         if not nodes:
-            pytest.skip("No READY nodes to talk to.")
+            pytest.fail("No READY nodes to talk to.")
         target = nodes[0]
         if instance_name:
             target = next(
                 (n for n in nodes if n["instance_name"] == instance_name), None
             )
             if target is None:
-                pytest.skip(f"Node {instance_name} not in ready_nodes.")
+                pytest.fail(f"Node {instance_name} not in ready_nodes.")
         host = target["host"]
         if host.startswith("http://node_"):
             port = host.rsplit(":", 1)[-1]
@@ -651,7 +618,7 @@ def any_ready_node(main_http_client):
     state = main_http_client.get("/v1/cluster/state").json()
     nodes = state.get("ready_nodes") or []
     if not nodes:
-        pytest.skip("No READY nodes.")
+        pytest.fail("No READY nodes.")
     return nodes[0]
 
 
@@ -828,21 +795,6 @@ def wait_for(
 @pytest.fixture
 def wait_for_fixture():
     return wait_for
-
-
-# ---------------------------------------------------------------------------
-# Test-data fixtures — small tokens / flags / strings reused across files.
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-def burla_version_current() -> str:
-    try:
-        from burla import __version__
-
-        return __version__
-    except Exception:
-        pytest.skip("burla not importable")
 
 
 # ---------------------------------------------------------------------------

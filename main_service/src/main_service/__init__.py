@@ -124,9 +124,9 @@ def _resolve_cluster_id_token() -> str:
 
 CLUSTER_ID_TOKEN = _resolve_cluster_id_token()
 
-# Base URL node VMs use to reach this service. Nodes run in the same VPC as
-# the head VM, so this is the head's internal IP (or the docker network
-# hostname in local-dev). The public dashboard URL is separate.
+# Base URL node VMs use to reach this service. Every non-local head connects
+# outward to the relay, so nodes can reach it from any cloud region without
+# public ingress or private-network peering.
 MAIN_SERVICE_PORT = int(os.environ.get("PORT", 5001))
 INTERNAL_TLS_PORT = int(os.environ.get("INTERNAL_TLS_PORT", 8443))
 
@@ -137,36 +137,7 @@ def _resolve_self_url_for_nodes() -> str:
     override = os.environ.get("MAIN_SERVICE_URL_FOR_NODES")
     if override:
         return override.rstrip("/")
-    import requests as _requests
-
-    if CLOUD_PROVIDER == "aws":
-        token_response = _requests.put(
-            "http://169.254.169.254/latest/api/token",
-            headers={"X-aws-ec2-metadata-token-ttl-seconds": "60"},
-            timeout=5,
-        )
-        ip_response = _requests.get(
-            "http://169.254.169.254/latest/meta-data/local-ipv4",
-            headers={"X-aws-ec2-metadata-token": token_response.text},
-            timeout=5,
-        )
-        internal_ip = ip_response.text.strip()
-    elif CLOUD_PROVIDER == "azure":
-        ip_response = _requests.get(
-            "http://169.254.169.254/metadata/instance/network/interface/0/ipv4"
-            "/ipAddress/0/privateIpAddress?api-version=2021-02-01&format=text",
-            headers={"Metadata": "true"},
-            timeout=5,
-        )
-        internal_ip = ip_response.text.strip()
-    else:
-        ip_response = _requests.get(
-            "http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/ip",
-            headers={"Metadata-Flavor": "Google"},
-            timeout=5,
-        )
-        internal_ip = ip_response.text.strip()
-    return f"https://{internal_ip}:{INTERNAL_TLS_PORT}"
+    return f"https://head--{PROJECT_ID}.{BURLA_RELAY_HOST}"
 
 
 MAIN_SERVICE_URL_FOR_NODES = _resolve_self_url_for_nodes()

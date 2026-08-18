@@ -32,11 +32,13 @@ real-VM behavior, or when this machine cannot take another local cluster).
 Development happens in AWS; GCP is production-only. Read the
 `burla-parallel-dev` skill before starting or stopping a cluster.
 
-Tear down with `make stop` (label-scoped to that worktree) or `make stop-all`.
-Never `docker rm` containers by `node_*` name prefix: that destroys other
-agents' clusters. Workers are containers *inside* their node's own docker
-daemon (each local node is a privileged fake VM running dockerd), so they die
-with the node; inspect them with `docker exec node_<id> docker ps`.
+Stop a dev cluster in the terminal running `make local-dev` or `make
+remote-dev`; the cluster cleans up its own nodes. `make stop-all` is emergency
+machine-wide cleanup and destroys every local dev cluster. Never `docker rm`
+containers by `node_*` name prefix: that destroys other agents' clusters.
+Workers are containers *inside* their node's own docker daemon (each local node
+is a privileged fake VM running dockerd), so they die with the node; inspect
+them with `docker exec node_<id> docker ps`.
 
 In remote-dev, node VMs run the worktree's current branch from GitHub, so
 `node_service` / `worker_server.py` changes must be committed and pushed before
@@ -44,6 +46,6 @@ they reach a node. `main_service` changes are always live in both modes.
 
 When the work looks done, ask Jake whether to merge; never merge unprompted.
 Once he says yes: push the branch, merge it into `dev`, push `dev`, then
-`make stop` and remove the worktree and branch. Until he says yes the worktree
-stays; if it is dirty, commit the work on its branch with a clear WIP message
-rather than discarding it.
+stop the dev-cluster process and remove the worktree and branch. Until he says
+yes the worktree stays; if it is dirty, commit the work on its branch with a
+clear WIP message rather than discarding it.

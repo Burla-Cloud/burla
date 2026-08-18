@@ -42,7 +42,7 @@ define TEST_SHELL
 endef
 
 .PHONY: 3.11-dev 3.12-dev 3.13-dev 3.14-dev local-dev remote-dev local-images \
-	image-seed stop stop-all cluster-info node-logs test test-service test-e2e \
+	image-seed stop-all cluster-info node-logs test test-service test-e2e \
 	test-dashboard kill-kernels
 
 3.11-dev:
@@ -104,25 +104,8 @@ node-logs:
 		--namespace "$(BURLA_CLUSTER_NAME)" \
 		--local-dev-db "$(PWD)/_local_dev_state/history.db"
 
-# Remove this checkout's cluster containers. Filtered by label so other
-# checkouts' clusters on the same docker daemon are left alone. Cluster state
-# lives inside the main_service process, so there is nothing else to clean up.
-# The volumes are the nodes' inner docker image stores and worker python envs
-# (GBs each); they deliberately survive node replacement, so stopping the
-# cluster is what reclaims them. The machine-wide uv cache (`burla-uv-cache`)
-# survives even this: emptying it makes the next run's env installs re-download
-# everything at once, which is heavy enough to wedge nodes. `stop-all` gets it.
-stop:
-	set -e; \
-	pids=$$(lsof -ti tcp:$(BURLA_HEAD_PORT) -sTCP:LISTEN 2>/dev/null || true); \
-	if [ -n "$$pids" ]; then kill $$pids 2>/dev/null || true; fi; \
-	ids=$$(docker ps -aq --filter label=burla-cluster=$(BURLA_CLUSTER_NAME)); \
-	if [ -n "$$ids" ]; then docker rm -f -v $$ids >/dev/null; fi; \
-	vols=$$(docker volume ls -q --filter label=burla-cluster=$(BURLA_CLUSTER_NAME)); \
-	if [ -n "$$vols" ]; then docker volume rm $$vols >/dev/null; fi; \
-	docker network rm $(BURLA_CLUSTER_NETWORK) >/dev/null 2>&1 || true; \
-	echo "Removed cluster [$(BURLA_CLUSTER_NAME)]."
-
+# Emergency machine-wide cleanup only. Normal dev clusters clean up their own
+# nodes; this removes every local cluster's containers and caches.
 stop-all:
 	set -e; \
 	ids=$$(docker ps -aq --filter label=burla-cluster); \
@@ -179,7 +162,7 @@ local-dev:
 		echo "       checkout's cluster. Starting another would wipe its live state"; \
 		echo "       (_local_dev_state) out from under it."; \
 		echo ""; \
-		echo "  Fix: make stop   (then re-run make local-dev)"; \
+		echo "  Fix: stop the existing cluster in its terminal, then re-run make local-dev"; \
 		echo ""; \
 		exit 1; \
 	fi; \

@@ -37,8 +37,7 @@ def _seed_running_job(main_http_client, job_id: str, n_inputs: int = 1) -> None:
         "func_gpu": None,
     }
     resp = main_http_client.post(f"/v1/jobs/{job_id}/start", json=config)
-    if resp.status_code != 200:
-        pytest.skip(f"could not seed job via /start: {resp.status_code} {resp.text}")
+    assert resp.status_code == 200, resp.text
 
 
 def _push_job_logs(main_http_client, job_id: str, documents: list[dict]) -> None:

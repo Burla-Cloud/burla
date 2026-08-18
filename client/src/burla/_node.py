@@ -457,7 +457,6 @@ class Node:
         start_time: float,
         function_pkl: bytes,
         udf_error_event: Event,
-        assigned_node_ids: list,
     ):
         request_json = {
             "parallelism": self.target_parallelism,
@@ -468,7 +467,6 @@ class Node:
             "func_cpu": func_cpu,
             "func_ram": func_ram,
             "start_time": start_time,
-            "node_ids_expected": assigned_node_ids,
             "cluster_dashboard_url": self.client._url,
         }
         url = f"{self.host}/jobs/{job_id}"
@@ -650,7 +648,6 @@ class Node:
         inputs_with_indicies: list,
         return_queue: Queue,
         nodes: list["Node"],
-        assigned_node_ids: list,
         first_chunk_barrier: asyncio.Barrier | None,
     ):
         was_initially_ready = self.state == "READY"
@@ -684,7 +681,6 @@ class Node:
             start_time,
             function_pkl,
             udf_error_event,
-            assigned_node_ids,
         )
         self.installing_packages = False
         if self.state in ("FAILED", "REMOVED"):

@@ -5,8 +5,8 @@ Reverse-tunnel relay every Burla cluster connects through: user projects need
 with [frp](https://github.com/fatedier/frp); clients and browsers connect to
 `https://<subdomain>.relay.burla.dev`, and frps routes each connection down
 the matching tunnel by SNI. TLS is never terminated here: node traffic is
-encrypted with cluster-CA certs, dashboard traffic with the head's ACME cert
-(issued through the tunnel via TLS-ALPN-01).
+encrypted with cluster-CA certs, while dashboard and node-to-head traffic use
+the head's ACME cert (issued through the tunnel via TLS-ALPN-01).
 
 Hostname convention (enforced by `auth_plugin.py`):
 
@@ -17,11 +17,9 @@ Hostname convention (enforced by `auth_plugin.py`):
   the default mode). The relay accepts only these exact shapes, preventing
   project IDs containing `--` from colliding with another project's tunnels.
 
-Node-to-node input transfers stay inside the VPC except on client-hosted AWS and
-Azure, where they use the relay so existing networks need no inbound rule. A
-deployed head also uses the VPC for node traffic, while a client-hosted head uses
-the relay because it runs outside the cloud network. Deployed AWS clusters use
-Burla's group-to-group security group rules. Dev clusters point at a test relay
+Nodes use the relay for head traffic and node-to-node input transfers in every
+cloud mode. This keeps regional networking uniform and requires no inbound
+firewall rules or private-network peering. Dev clusters point at a test relay
 via `BURLA_RELAY_HOST` (see the makefile).
 
 ## Deployments

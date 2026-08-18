@@ -31,7 +31,7 @@ def remove_container(docker_client, container_id: str):
 
 
 def _cluster_volume(docker_client, name: str) -> str:
-    """A docker volume tagged for this cluster, so `make stop` reclaims it."""
+    """A docker volume tagged for machine-wide development cleanup."""
     full_name = f"burla-{CLUSTER_NAME}-{name}"
     docker_client.create_volume(name=full_name, labels={"burla-cluster": CLUSTER_NAME})
     return full_name
@@ -39,10 +39,9 @@ def _cluster_volume(docker_client, name: str) -> str:
 
 def _shared_uv_cache_volume(docker_client) -> str:
     """One uv cache for every burla cluster on this machine (uv is built for
-    concurrent use). Labeled with its own key so `make stop` leaves it alone:
-    emptying the cache is what made the first post-stop test run re-download
+    concurrent use). Emptying the cache makes the next test run re-download
     every wheel at once, which is exactly the load spike that wedged nodes.
-    `make stop-all` reclaims it."""
+    Only emergency machine-wide cleanup reclaims it."""
     docker_client.create_volume(name="burla-uv-cache", labels={"burla-uv-cache": "1"})
     return "burla-uv-cache"
 
@@ -133,8 +132,8 @@ class LocalDockerProvider:
             ports=[port],
             host_config=host_config,
             # `burla-cluster` marks everything belonging to this cluster (what
-            # `make stop` removes). `burla-cluster-member` marks only the
-            # nodes, so the head tearing the cluster down cannot delete itself.
+            # machine-wide cleanup removes). `burla-cluster-member` marks only
+            # nodes so the head can sweep this cluster without touching others.
             labels={
                 "burla-cluster": CLUSTER_NAME,
                 "burla-cluster-member": CLUSTER_NAME,

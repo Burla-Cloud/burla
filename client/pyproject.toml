@@ -3,8 +3,8 @@ name = "burla"
 version = "1.6.6"
 description = "Easy to use cluster-compute software."
 requires-python = ">=3.11"
-# Everything below `yaspin` exists so the cluster head (main_service, vendored
-# into this wheel) can run inside the client: the default "client-hosted" mode.
+# This wheel vendors main_service, so every main_service runtime dependency
+# must also appear here; pip only reads this project's dependency metadata.
 dependencies = [
     "aiohttp>=3.13.2",
     "azure-identity>=1.19.0",
@@ -20,13 +20,20 @@ dependencies = [
     "tblib>=3.2.0",
     "yaspin>=3.3.0",
     "cryptography>=42.0.0",
+    "docker>=7.1.0,<8.0.0",
     "fastapi>=0.109.0",
     "google-cloud-compute>=1.14.1",
+    "google-cloud-resource-manager>=1.14.1,<2.0.0",
+    "google-cloud-storage>=3.5.0,<4.0.0",
+    "grpcio>=1.54.2,<2.0.0",
     "itsdangerous>=2.2.0",
     "jinja2>=3.1.6",
+    "packaging>=25.0,<26.0",
     "python-multipart>=0.0.9",
     "pytz>=2024.1",
+    "starlette>=0.35.1",
     "uvicorn>=0.25.0",
+    "watchfiles>=1.0.4,<2.0.0",
 ]
 
 [project.scripts]
@@ -57,15 +64,10 @@ dev = [
     "daft>=0.6.13",
     "delta-spark>=4.0.0",
     "diceware>=1.0.1",
-    # `make local-dev` runs main_service in this venv and it boots node
-    # containers via the docker SDK; watchfiles gives uvicorn --reload proper
-    # include/exclude handling instead of falling back to stat-polling.
-    "docker>=7.1.0",
     "duckdb>=1.4.1",
     "fastparquet>=2024.11.0",
     "freezegun>=1.5.1",
     "geopandas[all]>=1.1.3",
-    "google-cloud-storage>=3.5.0",
     "httpx>=0.27.0",
     "ipykernel>=7.1.0",
     "jupyterlab>=4.4.10",
@@ -87,7 +89,6 @@ dev = [
     # 3.14 shell still works for testing the client itself.
     "ray>=2.53.0; python_version < '3.14'",
     "scikit-learn>=1.7.2",
-    "watchfiles>=1.0.4",
     "xgboost>=3.1.1",
 ]
 

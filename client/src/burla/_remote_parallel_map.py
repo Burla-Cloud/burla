@@ -342,7 +342,6 @@ async def _execute_job(
                     inputs_with_indicies=inputs_with_indicies,
                     return_queue=return_queue,
                     nodes=nodes,
-                    assigned_node_ids=[n.instance_name for n in nodes],
                     first_chunk_barrier=first_chunk_barrier,
                 )
             )
@@ -395,7 +394,6 @@ async def _execute_job(
                             inputs_with_indicies=inputs_with_indicies,
                             return_queue=return_queue,
                             nodes=nodes,
-                            assigned_node_ids=[n.instance_name for n in nodes],
                             first_chunk_barrier=None,
                         )
                     )

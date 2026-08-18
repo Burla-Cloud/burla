@@ -21,14 +21,10 @@ def test_cluster_sse_initial_event(main_http_client, local_dev_cluster):
         headers={"Accept": "text/event-stream"},
         timeout=5,
     ) as r:
-        assert r.status_code in (
-            200,
-            401,
-        )  # 401 only if auth is required and we don't have it
-        if r.status_code != 200:
-            pytest.skip("auth required on SSE endpoint")
-        lines_read = 0
+        assert r.status_code == 200, r.text
+        lines = []
         for line in r.iter_lines():
-            lines_read += 1
-            if lines_read > 2:
+            lines.append(line)
+            if line == ": init":
                 break
+        assert ": init" in lines

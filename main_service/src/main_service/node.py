@@ -77,7 +77,6 @@ class Node:
             "inactivity_shutdown_time_sec"
         )
         self.host = node_dict.get("host")
-        self.peer_host = node_dict.get("peer_host")
         self.public_ip = node_dict.get("public_ip")
         self.private_ip = node_dict.get("private_ip")
         self.zone = node_dict.get("zone")
@@ -124,7 +123,6 @@ class Node:
         self.started_booting_at = time()
         self.is_booting = True
         self.host = None
-        self.peer_host = None
         self.public_ip = None
         self.private_ip = None
         self.zone = None
@@ -149,7 +147,6 @@ class Node:
                 "port": service_port,
                 "sync_gcs_bucket_name": sync_bucket_name,
                 "host": None,
-                "peer_host": None,
                 "public_ip": None,
                 "private_ip": None,
                 "zone": None,
@@ -170,7 +167,6 @@ class Node:
                     inactivity_shutdown_time_sec=inactivity_shutdown_time_sec,
                     reserved_for_job=reserved_for_job,
                 )
-                self.peer_host = self.host
             else:
                 self.public_ip, self.private_ip, self.zone = (
                     self.provider.create_instance(
@@ -191,13 +187,7 @@ class Node:
                         needs_cloud_credentials=self._filesystem_enabled(),
                     )
                 )
-                # Client-hosted AWS and Azure peers use the relay so an
-                # existing security group needs no inbound rule.
                 self.host = f"https://{relay_fqdn(self.instance_name)}"
-                if IN_CLIENT_HOSTED_MODE and CLOUD_PROVIDER in ("aws", "azure"):
-                    self.peer_host = self.host
-                else:
-                    self.peer_host = f"https://{self.private_ip}:{self.port}"
 
             # The node polls its state-push responses for `host` and won't mark
             # itself READY until it appears.
@@ -205,7 +195,6 @@ class Node:
                 self.instance_name,
                 {
                     "host": self.host,
-                    "peer_host": self.peer_host,
                     "public_ip": self.public_ip,
                     "private_ip": self.private_ip,
                     "zone": self.zone,
@@ -252,13 +241,9 @@ class Node:
     def status(self):
         """Returns one of: `BOOTING`, `RUNNING`, `READY`, `FAILED`"""
 
-        # `host` points at the relay. A head VM shares a VPC with the node so
-        # it polls the private IP directly; a client-hosted head is outside
-        # the VPC and must go through the relay like any other client.
-        if IN_CLIENT_HOSTED_MODE:
-            poll_host = self.host or self.peer_host
-        else:
-            poll_host = self.peer_host or self.host
+        # The relay path works across regions and requires no inbound firewall
+        # access to the node.
+        poll_host = self.host
 
         # In local-dev the head runs on the docker host, not on the cluster
         # network, so it can't resolve a node's container name. Node ports are
@@ -303,6 +288,11 @@ class Node:
             mount_script = self.provider.mount_shared_workspace_script(
                 self.sync_bucket_name
             )
+        main_service_ca_path = (
+            "$TLS_DIR/ca.pem"
+            if IN_CLIENT_HOSTED_MODE
+            else "/etc/ssl/certs/ca-certificates.crt"
+        )
 
         azure_delete_lease_script = ""
         if IN_CLIENT_HOSTED_MODE and CLOUD_PROVIDER == "azure":
@@ -468,19 +458,19 @@ class Node:
         set -Eeuo pipefail
 
         HEAD_URL="{MAIN_SERVICE_URL_FOR_NODES}"
+        HEAD_CA_PATH="{main_service_ca_path}"
         AUTH_HEADER="Authorization: Bearer {CLUSTER_ID_TOKEN}"
         NODE_NAME="{self.instance_name}"
         NODE_AUTH_TOKEN="{node_auth_token(self.instance_name)}"
         TLS_DIR="/etc/burla/tls"
         mkdir -p "$TLS_DIR" /etc/burla/caddy
         echo "{ca_pem_b64}" | base64 -d > "$TLS_DIR/ca.pem"
-        cat /etc/ssl/certs/ca-certificates.crt "$TLS_DIR/ca.pem" > "$TLS_DIR/ca-bundle.pem"
         {azure_delete_lease_script}
 
         report_log() {{
             payload=$(jq -n --arg msg "$1" --arg ts "$(date +%s)" \\
                 '{{"logs":[{{"msg":$msg,"ts":($ts|tonumber)}}]}}')
-            curl -sS --cacert "$TLS_DIR/ca.pem" -o /dev/null \\
+            curl -sS --cacert "$HEAD_CA_PATH" -o /dev/null \\
                 -X POST "$HEAD_URL/v1/nodes/$NODE_NAME/logs:batch" \\
                 -H "$AUTH_HEADER" -H "Content-Type: application/json" -d "$payload" || true
         }}
@@ -491,10 +481,10 @@ class Node:
             report_log "$MSG"
             status_payload=$(jq -n --arg ts "$(date +%s)" \\
                 '{{"status":"FAILED","ended_at":($ts|tonumber)}}')
-            curl -sS --cacert "$TLS_DIR/ca.pem" -o /dev/null \\
+            curl -sS --cacert "$HEAD_CA_PATH" -o /dev/null \\
                 -X PUT "$HEAD_URL/v1/nodes/$NODE_NAME/state" \\
                 -H "$AUTH_HEADER" -H "Content-Type: application/json" -d "$status_payload" || true
-            curl -sS --cacert "$TLS_DIR/ca.pem" -o /dev/null \\
+            curl -sS --cacert "$HEAD_CA_PATH" -o /dev/null \\
                 -X POST "$HEAD_URL/v1/nodes/$NODE_NAME/self_delete" \\
                 -H "$AUTH_HEADER" || true
             exit 1
@@ -511,7 +501,7 @@ class Node:
         # boot timeout reaps this VM with no visible cause anywhere.
         cert_attempts=0
         until cert_response=$(curl --fail --silent --show-error \\
-            --cacert "$TLS_DIR/ca.pem" \\
+            --cacert "$HEAD_CA_PATH" \\
             -X POST "$HEAD_URL/v1/nodes/$NODE_NAME/certificate" \\
             -H "$AUTH_HEADER" -H "Content-Type: application/json" \\
             -d "$csr_payload"); do
@@ -632,6 +622,7 @@ class Node:
             --setenv=INACTIVITY_SHUTDOWN_TIME_SEC="$INACTIVITY_SHUTDOWN_TIME_SEC" \\
             --setenv=RESERVED_FOR_JOB="$RESERVED_FOR_JOB" \\
             --setenv=MAIN_SERVICE_URL="$MAIN_SERVICE_URL" \\
+            --setenv=MAIN_SERVICE_CA_PATH="$HEAD_CA_PATH" \\
             --setenv=CLUSTER_ID_TOKEN="$CLUSTER_ID_TOKEN" \\
             --setenv=BURLA_NODE_AUTH_TOKEN="$NODE_AUTH_TOKEN" \\
             --setenv=BURLA_BACKEND_URL="$BURLA_BACKEND_URL" \\

@@ -28,11 +28,10 @@ def _push_node_logs(main_http_client, instance_name: str, logs: list[dict]) -> N
 
 
 def test_cluster_state_ready_nodes_excludes_reserved(
-    main_http_client, node_push_client, local_dev_cluster, cleanup_node
+    main_http_client, node_push_client, local_dev_cluster
 ):
     """Push a READY+reserved node state and confirm it's NOT in ready_nodes."""
     instance_name = f"burla-node-test{int(time.time())%100000}"
-    cleanup_node(instance_name)
     _push_node_state(
         node_push_client,
         instance_name,
@@ -63,9 +62,7 @@ def test_cluster_state_ready_nodes_excludes_reserved(
 
 def test_get_node_returns_dict_for_live_node(main_http_client, local_dev_cluster):
     state = main_http_client.get("/v1/cluster/state").json()
-    if not state["ready_nodes"]:
-        pytest.skip("no ready nodes to test get_node against")
-
+    assert state["ready_nodes"], "readiness gate returned no READY nodes"
     name = state["ready_nodes"][0]["instance_name"]
     resp = main_http_client.get(f"/v1/cluster/nodes/{name}")
     assert resp.status_code == 200
@@ -82,10 +79,9 @@ def test_get_node_404_when_not_in_cache(main_http_client, local_dev_cluster):
 
 
 def test_get_node_fail_reason_returns_first_matching_error(
-    main_http_client, node_push_client, local_dev_cluster, cleanup_node
+    main_http_client, node_push_client, local_dev_cluster
 ):
     instance_name = f"burla-node-err{int(time.time())%100000}"
-    cleanup_node(instance_name)
     now = time.time()
     _push_node_logs(
         node_push_client,

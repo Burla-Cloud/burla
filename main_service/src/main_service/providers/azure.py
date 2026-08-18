@@ -137,6 +137,41 @@ class AzureProvider:
             return {"communityGalleryImageId": image_id}
         return {"id": image_id}
 
+    def _create_node_subnet(self, region: str) -> tuple[str, str]:
+        resource_group = self.resource_group
+        vnet_name = f"burla-{region}"
+        try:
+            self.network.virtual_networks.get(resource_group, vnet_name)
+        except ResourceNotFoundError:
+            self.network.virtual_networks.begin_create_or_update(
+                resource_group,
+                vnet_name,
+                {
+                    "location": region,
+                    "properties": {
+                        "addressSpace": {"addressPrefixes": ["10.0.0.0/16"]}
+                    },
+                },
+            ).result()
+
+        nsg = self.network.network_security_groups.begin_create_or_update(
+            resource_group,
+            f"burla-cluster-node-{region}",
+            {"location": region},
+        ).result()
+        subnet = self.network.subnets.begin_create_or_update(
+            resource_group,
+            vnet_name,
+            "nodes",
+            {
+                "properties": {
+                    "addressPrefix": "10.0.0.0/20",
+                    "networkSecurityGroup": {"id": nsg.id},
+                },
+            },
+        ).result()
+        return resource_group, subnet.id
+
     def _placement(self, region: str) -> tuple[str, str]:
         if self.subnet_id:
             network_resource_group = _resource_group_from_id(self.subnet_id)
@@ -164,6 +199,8 @@ class AzureProvider:
                     candidates.append(subnet.id)
 
         if not candidates:
+            if self.resource_group:
+                return self._create_node_subnet(region)
             raise Exception(
                 f"No accessible Azure subnet was found in {region}. "
                 "Set AZURE_SUBNET_ID to an existing outbound-capable subnet."

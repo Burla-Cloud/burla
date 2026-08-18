@@ -27,7 +27,7 @@ from main_service import cluster_state, history
 from main_service.node import Container, Node
 from main_service.providers import get_provider
 from main_service.helpers import Logger, log_telemetry
-from main_service.transport_tls import CA_CERT_PATH, TLS_DIR
+from main_service.transport_tls import CA_CERT_PATH
 
 router = APIRouter()
 MAX_GROW_CPUS = 2560
@@ -46,10 +46,8 @@ def _remove_local_dev_cluster_containers():
     from main_service.providers.local_docker import remove_container
 
     # Filter on this cluster's member label: matching by `node_` name prefix
-    # would delete every other local-dev cluster's containers, and matching
-    # `burla-cluster` would delete this head too (it carries that label so
-    # `make stop` gets it). Workers live on each node's own docker daemon and
-    # die with it.
+    # would delete every other local-dev cluster's containers. Workers live on
+    # each node's own docker daemon and die with it.
     docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
     containers = docker_client.containers(
         all=True, filters={"label": f"burla-cluster-member={CLUSTER_NAME}"}
@@ -131,28 +129,28 @@ def config_with_job_overrides(config: dict, region: str | None, disk_gb: int | N
 
 
 def verify_nodes_can_reach_head():
-    """A client-hosted head is reachable by nodes only through the relay
-    tunnel, and a dead tunnel is invisible from in here: VMs boot, retry an
-    unreachable hostname until the boot timeout reaps them, and never manage
-    to report an error anywhere. One round trip through the relay before
-    booting anything turns that into an immediate, actionable error.
+    """Every non-local head is reachable by nodes through the relay. A dead
+    tunnel is invisible from in here: VMs boot, retry an unreachable hostname
+    until the boot timeout reaps them, and never manage to report an error
+    anywhere. One round trip before booting turns that into an immediate error.
 
     Callers on the event loop must run this in a thread: the verification
     request arrives back through this same server."""
-    if not IN_CLIENT_HOSTED_MODE:
+    if IN_LOCAL_DEV_MODE:
         return
     url = f"{MAIN_SERVICE_URL_FOR_NODES}/version"
     headers = {"Authorization": f"Bearer {CLUSTER_ID_TOKEN}"}
+    verify = str(CA_CERT_PATH) if IN_CLIENT_HOSTED_MODE else True
     try:
-        response = requests.get(url, headers=headers, verify=str(CA_CERT_PATH), timeout=5)
+        response = requests.get(url, headers=headers, verify=verify, timeout=5)
         response.raise_for_status()
     except requests.exceptions.RequestException as error:
         raise HTTPException(
             status_code=503,
             detail=(
-                f"Nodes cannot reach this machine through the Burla relay "
-                f"(GET {url} failed: {error}). Refusing to boot VMs that could "
-                f"never connect. Tunnel log: {TLS_DIR.parent / 'frpc.log'}"
+                f"Nodes cannot reach the head through the Burla relay "
+                f"(GET {url} failed: {error}). Refusing to boot VMs that "
+                "could never connect."
             ),
         )
 
@@ -419,7 +417,7 @@ def _import_history_snapshot(snapshot_path: str, digest: str) -> bool:
         deployed_config = history.get_cluster_config()
         # The snapshot's config has no shared-workspace bucket (client-hosted
         # heads run without one), and on AWS its node region may be one this
-        # deployment never prepared (no node AMI / security groups there).
+        # deployment never prepared (the node AMI may not be published there).
         config["gcs_bucket_name"] = deployed_config.get("gcs_bucket_name")
         if CLOUD_PROVIDER == "aws":
             deployed_region = deployed_config["Nodes"][0]["gcp_region"]

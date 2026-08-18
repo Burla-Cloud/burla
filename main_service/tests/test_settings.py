@@ -43,9 +43,7 @@ def test_post_settings_local_dev_forces_small_machine_and_one_node(
         "users": current.json()["users"],
     }
     resp = main_http_client.post("/v1/settings", json=payload)
-    if resp.status_code == 401:
-        pytest.skip("auth required")
-    assert resp.status_code in (200, 204), f"unexpected {resp.status_code}: {resp.text}"
+    assert resp.status_code == 200, resp.text
 
     verify = main_http_client.get("/v1/settings")
     assert verify.status_code == 200

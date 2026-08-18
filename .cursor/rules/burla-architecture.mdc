@@ -26,7 +26,7 @@ There is no separate `worker_service/` top-level directory: the worker script li
 - `main_service` → VMs: boot/delete instances via a compute-provider interface (`main_service/src/main_service/providers/`, GCE + EC2 implementations).
 - `node_service` → `worker_server.py` (TCP bytes): run UDF.
 
-Inputs also move node-to-node mid-job via `/jobs/{job_id}/get_inputs` + `/jobs/{job_id}/ack_transfer` (pull-based work stealing): the peer list comes from the head's `/v1/jobs/{id}/peers`. Client-hosted AWS and Azure route this through the relay so existing networks need no inbound rule.
+Inputs also move node-to-node mid-job via `/jobs/{job_id}/get_inputs` + `/jobs/{job_id}/ack_transfer` (pull-based work stealing): the peer list comes from the head's `/v1/jobs/{id}/peers`. Cloud nodes route head and peer traffic through the relay, so jobs can span regions without inbound firewall rules or private-network peering.
 
 ## State / coordination
 

@@ -168,9 +168,8 @@ def ensure_resource_group(region: str):
 
 
 def ensure_network(region: str):
-    """VNet with a nodes subnet + a head subnet, each behind an NSG that only
-    admits VNet-internal traffic. Clients reach nodes + dashboard through the
-    relay (VMs dial out to it), so nothing is open to the internet."""
+    """VNet with node and head subnets behind NSGs with no custom ingress.
+    Every service dials out to the relay."""
     vnet = f"burla-{region}"
     node_nsg = f"burla-cluster-node-{region}"
     head_nsg = f"burla-head-{region}"
@@ -187,20 +186,8 @@ def ensure_network(region: str):
         f"--name {node_nsg} --location {region}"
     )
     run_command(
-        f"az network nsg rule create --resource-group {RESOURCE_GROUP} "
-        f"--nsg-name {node_nsg} --name allow-node-port --priority 100 "
-        "--access Allow --direction Inbound --protocol Tcp "
-        "--source-address-prefixes VirtualNetwork --destination-port-ranges 8080"
-    )
-    run_command(
         f"az network nsg create --resource-group {RESOURCE_GROUP} "
         f"--name {head_nsg} --location {region}"
-    )
-    run_command(
-        f"az network nsg rule create --resource-group {RESOURCE_GROUP} "
-        f"--nsg-name {head_nsg} --name allow-node-to-head --priority 100 "
-        "--access Allow --direction Inbound --protocol Tcp "
-        "--source-address-prefixes VirtualNetwork --destination-port-ranges 8443"
     )
     run_command(
         f"az network vnet create --resource-group {RESOURCE_GROUP} --name {vnet} "
@@ -436,7 +423,6 @@ def _head_setup_commands(
             f'-e CLOUD_ACCOUNT_NAME="{account_name}" '
             "-e BIND_HOST=127.0.0.1 "
             "-e PORT=5001 "
-            "-e INTERNAL_TLS_PORT=8443 "
             "-e HISTORY_DB_PATH=/var/lib/burla/history.db "
             f'-e SHARED_WORKSPACE_BUCKET="{storage_account}" '
             f'-e BURLA_BACKEND_URL="{_BURLA_BACKEND_URL}" '
@@ -459,17 +445,11 @@ def _head_setup_commands(
             f"{dashboard_hostname} {{\n"
             "  reverse_proxy 127.0.0.1:5001\n"
             "}\n"
-            ":8443 {\n"
-            "  tls /etc/burla/tls/head.pem /etc/burla/tls/head.key\n"
-            "  reverse_proxy 127.0.0.1:5001\n"
-            "}\n"
             "EOF"
         ),
         (
             "docker run -d --restart=always --network=host --name=burla-head-caddy "
             "-v /etc/burla/Caddyfile:/etc/caddy/Caddyfile:ro "
-            "-v /var/lib/burla/tls/head.pem:/etc/burla/tls/head.pem:ro "
-            "-v /var/lib/burla/tls/head.key:/etc/burla/tls/head.key:ro "
             "-v /var/lib/burla/caddy:/data "
             "caddy:2.10.2-alpine caddy run --config /etc/caddy/Caddyfile --adapter caddyfile"
         ),

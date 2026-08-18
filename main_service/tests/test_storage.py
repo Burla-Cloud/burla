@@ -10,10 +10,9 @@ pytestmark = pytest.mark.service
 
 
 @pytest.fixture(autouse=True)
-def _requires_shared_filesystem(main_http_client, burla_auth_headers):
-    settings = main_http_client.get("/v1/settings", headers=burla_auth_headers).json()
-    if not settings.get("filesystemEnabled", True):
-        pytest.skip("shared filesystem is disabled on this cluster")
+def _requires_shared_filesystem(main_http_client):
+    settings = main_http_client.get("/v1/settings").json()
+    assert settings.get("filesystemEnabled") is True
 
 
 def test_filemanager_read_returns_shape(main_http_client, local_dev_cluster):
@@ -21,11 +20,9 @@ def test_filemanager_read_returns_shape(main_http_client, local_dev_cluster):
         "/api/sf/filemanager",
         json={"action": "read", "path": "/", "pageSize": 50, "pageIndex": 0},
     )
-    assert resp.status_code in (200, 400)
-    if resp.status_code == 200:
-        body = resp.json()
-        # Syncfusion contract: either {cwd, files, count, hasMore} or an error dict.
-        assert "files" in body or "error" in body
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert {"cwd", "files", "count", "hasMore"} <= body.keys()
 
 
 def test_filemanager_unsupported_action_returns_400_body(main_http_client, local_dev_cluster):
@@ -60,10 +57,10 @@ def test_signed_download_sanitizes_dot_dot(main_http_client, local_dev_cluster):
     assert resp.status_code in (400, 404)
 
 
-def test_batch_download_ticket_returns_downloadUrl(main_http_client, local_dev_cluster):
+def test_batch_download_ticket_rejects_empty_items(main_http_client, local_dev_cluster):
     resp = main_http_client.post(
         "/batch-download-ticket",
         json={"items": [], "archiveName": "test.zip"},
     )
-    # Empty items list may 400; non-empty returns a url.
-    assert resp.status_code in (200, 400)
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "No files provided for download"

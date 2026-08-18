@@ -109,23 +109,35 @@ def test_input_steal_between_nodes(
             verify=verify,
         )
 
-        # Give both nodes a moment to upload inputs so A's queue is non-empty.
+        # Give both nodes a moment to upload inputs before selecting whichever
+        # still has a queued batch to donate.
         time.sleep(5)
 
-        transfer_id = "test-steal-t1"
-
-        # 1. Steal a batch from A.
-        resp_a1 = node_client.get(
-            f"{url_a}/jobs/{job_id}/get_inputs",
-            params={"transfer_id": transfer_id, "requester_queue_size": 0},
-        )
-        assert resp_a1.status_code == 200, resp_a1.text
-        items = pickle.loads(resp_a1.content)
-        assert isinstance(items, list)
-
-        # If A's queue was empty at the moment we asked (other node ran fast), skip.
-        if not items:
-            pytest.skip("node A's inputs_queue was empty at steal-time; race, retry")
+        # 1. Steal a batch from whichever node still has queued work.
+        items = []
+        transfer_id = ""
+        for attempt in range(20):
+            transfer_id = f"test-steal-t{attempt}"
+            for donor_url, receiver_url in ((url_a, url_b), (url_b, url_a)):
+                response = node_client.get(
+                    f"{donor_url}/jobs/{job_id}/get_inputs",
+                    params={"transfer_id": transfer_id, "requester_queue_size": 0},
+                )
+                assert response.status_code == 200, response.text
+                items = pickle.loads(response.content)
+                assert isinstance(items, list)
+                if items:
+                    url_a, url_b = donor_url, receiver_url
+                    break
+                ack = node_client.post(
+                    f"{donor_url}/jobs/{job_id}/ack_transfer",
+                    params={"transfer_id": transfer_id, "received": "false"},
+                )
+                assert ack.status_code == 200
+            if items:
+                break
+            time.sleep(0.5)
+        assert items, "neither node retained queued inputs long enough to test stealing"
 
         # 2. Idempotency: same transfer_id returns same batch.
         resp_a2 = node_client.get(

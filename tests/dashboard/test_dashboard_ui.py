@@ -14,20 +14,17 @@ import re
 import uuid
 
 import pytest
+from playwright import sync_api as playwright_api
 
 pytestmark = pytest.mark.dashboard
 
-playwright_api = pytest.importorskip("playwright.sync_api")
 expect = playwright_api.expect
 
 
 @pytest.fixture(scope="session")
 def browser():
     with playwright_api.sync_playwright() as playwright:
-        try:
-            browser = playwright.chromium.launch()
-        except playwright_api.Error as error:
-            pytest.skip(f"chromium not installed ({error}); run `make test-dashboard`")
+        browser = playwright.chromium.launch()
         yield browser
         browser.close()
 

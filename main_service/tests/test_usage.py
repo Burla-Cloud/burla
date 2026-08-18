@@ -14,6 +14,4 @@ pytestmark = pytest.mark.service
 
 def test_daily_hours_malformed_month_returns_400(main_http_client, local_dev_cluster):
     resp = main_http_client.get("/v1/nodes/daily_hours?month=bad-month")
-    if resp.status_code == 401:
-        pytest.skip("auth required")
     assert resp.status_code == 400

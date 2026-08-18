@@ -69,9 +69,9 @@ Do not rely on a previous shell export or automatic cluster resolution. Either
 can silently send the job to the deployed test cluster instead of this
 worktree's cluster.
 
-Tear down with `make stop` (this worktree only) or `make stop-all` (every dev
-cluster on the machine). `make stop` is label-scoped, so it cannot disturb
-another agent's cluster.
+Stop the foreground `make local-dev` or `make remote-dev` process in its
+terminal; the cluster cleans up its own nodes. `make stop-all` is emergency
+machine-wide cleanup and destroys every local dev cluster.
 
 ## The one thing remote-dev cannot see
 
@@ -101,9 +101,9 @@ your own initiative. Once he says yes:
 1. Commit the work on the worktree's branch and push it.
 2. Merge the branch into `dev` and push `dev`. `dev` is the integration branch:
    everything in flight lives there, and it is what a release is cut from.
-3. Stop the cluster with `make stop`, then remove the worktree and delete the
-   branch (locally and on origin). His yes covers all of this, so don't ask
-   again per step.
+3. Stop the dev-cluster process, then remove the worktree and delete the branch
+   (locally and on origin). His yes covers all of this, so don't ask again per
+   step.
 
 Until he says yes, the worktree and its cluster stay put.
 
@@ -117,9 +117,8 @@ account ("push this to test", see the `burla-release` skill).
 
 - Never edit the primary checkout for a task; always work in a linked worktree.
 - Never run `docker rm` by container-name prefix (`node_*`); that deletes other
-  agents' clusters. Use `make stop`: it is what removes the nodes' inner-docker
-  volumes, which are kept across node replacement on purpose so a replacement
-  node doesn't unpack its whole image store again.
+  agents' clusters. Stop the dev-cluster process normally; reserve `make
+  stop-all` for intentional machine-wide cleanup.
 - To inspect a worker in local-dev, go through its node:
   `docker exec node_<id> docker ps` / `docker exec node_<id> docker logs <worker>`.
 - Never assume the head is on port 5001; ask `make cluster-info`.

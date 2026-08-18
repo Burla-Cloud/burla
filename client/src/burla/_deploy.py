@@ -128,10 +128,6 @@ def _head_startup_script(
     caddy_config = f"""{dashboard_hostname} {{
   reverse_proxy burla-main-service:5001
 }}
-:8443 {{
-  tls /etc/burla/tls/head.pem /etc/burla/tls/head.key
-  reverse_proxy burla-main-service:5001
-}}
 """
     caddy_config_b64 = base64.b64encode(caddy_config.encode()).decode()
 
@@ -167,7 +163,6 @@ subdomain = "{relay_subdomain}"
       -e CLOUD_PROVIDER=gcp \\
       -e BIND_HOST=0.0.0.0 \\
       -e PORT=5001 \\
-      -e INTERNAL_TLS_PORT=8443 \\
       -e HISTORY_DB_PATH=/var/lib/burla/history.db \\
       -e SHARED_WORKSPACE_BUCKET="{project_id}-burla-shared-workspace" \\
       -e BURLA_BACKEND_URL="{_BURLA_BACKEND_URL}" \\
@@ -185,10 +180,7 @@ subdomain = "{relay_subdomain}"
     rm -rf /etc/burla/Caddyfile
     echo "{caddy_config_b64}" | base64 -d > /etc/burla/Caddyfile
     docker run -d --restart=always --network=burla-head --name=burla-head-caddy \\
-      -p 8443:8443 \\
       -v /etc/burla/Caddyfile:/etc/caddy/Caddyfile:ro \\
-      -v /var/lib/burla/tls/head.pem:/etc/burla/tls/head.pem:ro \\
-      -v /var/lib/burla/tls/head.key:/etc/burla/tls/head.key:ro \\
       -v /var/lib/burla/caddy:/data \\
       caddy:2.10.2-alpine caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
     sleep 3

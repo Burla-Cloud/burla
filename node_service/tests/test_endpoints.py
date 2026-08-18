@@ -9,26 +9,11 @@ attaches real burla auth headers.
 
 from __future__ import annotations
 
-import json
-import pickle
-import time
-
 import pytest
 
 # Node calls go over plain http to localhost in local-dev, so the real host,
 # TLS, and cluster-CA path these endpoints serve only exists on real VMs.
 pytestmark = [pytest.mark.service, pytest.mark.remote_dev]
-
-
-def test_root_returns_status(node_http_client, any_ready_node):
-    client = node_http_client(any_ready_node["instance_name"])
-    try:
-        resp = client.get("/")
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["status"] in ("READY", "BOOTING", "RUNNING", "FAILED")
-    finally:
-        client.close()
 
 
 def test_root_returns_ready_when_no_job_active(node_http_client, any_ready_node):
@@ -56,12 +41,9 @@ def test_root_requires_auth(any_ready_node, main_http_client):
     cluster_ca = main_http_client.get("/v1/cluster/state").json().get("cluster_ca")
     verify = ssl.create_default_context(cadata=cluster_ca) if cluster_ca else True
     resp = httpx.get(f"{host}/", timeout=5, verify=verify)
-    assert resp.status_code in (200, 401)  # If no authorized_users, 401; otherwise 200
-    if resp.status_code == 200:
-        pytest.skip("node has local-dev auth bypass; cannot test 401")
+    assert resp.status_code == 401
 
 
-@pytest.mark.skip(reason="temporarily disabled: hangs after pytest timeout, see #200")
 def test_results_404_when_wrong_job_id(node_http_client, any_ready_node):
     client = node_http_client(any_ready_node["instance_name"])
     try:
@@ -82,7 +64,6 @@ def test_inputs_404_when_wrong_job_id(node_http_client, any_ready_node):
         client.close()
 
 
-@pytest.mark.skip(reason="temporarily disabled: hangs after pytest timeout, see #200")
 def test_get_inputs_404_when_wrong_job_id(node_http_client, any_ready_node):
     client = node_http_client(any_ready_node["instance_name"])
     try:
@@ -95,7 +76,6 @@ def test_get_inputs_404_when_wrong_job_id(node_http_client, any_ready_node):
         client.close()
 
 
-@pytest.mark.skip(reason="temporarily disabled: hangs after pytest timeout, see #200")
 def test_ack_transfer_404_when_wrong_job_id(node_http_client, any_ready_node):
     client = node_http_client(any_ready_node["instance_name"])
     try:
@@ -124,7 +104,7 @@ def test_shutdown_requires_cluster_token(
     cluster_ca = main_http_client.get("/v1/cluster/state").json().get("cluster_ca")
     verify = ssl.create_default_context(cadata=cluster_ca) if cluster_ca else True
     resp = httpx.post(f"{host}/shutdown", timeout=10, verify=verify)
-    assert resp.status_code in (401, 403)
+    assert resp.status_code == 401
 
     # The node must still be alive and serving.
     client = node_http_client(any_ready_node["instance_name"])
@@ -142,7 +122,6 @@ def test_reboot_starts_booting_then_returns(node_http_client, any_ready_node):
     client = node_http_client(any_ready_node["instance_name"])
     try:
         resp = client.post("/reboot", timeout=120)
-        # reboot either 409 (already booting) or 200 after completion
-        assert resp.status_code in (200, 409)
+        assert resp.status_code == 200
     finally:
         client.close()

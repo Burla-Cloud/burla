@@ -31,7 +31,7 @@ _STATE_HEADERS = dict(_HEADERS)
 if _NODE_AUTH_TOKEN:
     _STATE_HEADERS["X-Burla-Node-Token"] = _NODE_AUTH_TOKEN
 _TIMEOUT = aiohttp.ClientTimeout(total=10)
-_CA_PATH = os.environ.get("CLUSTER_CA_PATH")
+_CA_PATH = os.environ.get("MAIN_SERVICE_CA_PATH")
 _SSL_CONTEXT = ssl.create_default_context(cafile=_CA_PATH) if _CA_PATH else None
 
 _session: Optional[aiohttp.ClientSession] = None

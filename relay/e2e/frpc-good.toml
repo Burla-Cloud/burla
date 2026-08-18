@@ -12,3 +12,10 @@ type = "https"
 localIP = "node"
 localPort = 8080
 subdomain = "burla-node-1234abcd--test-project"
+
+[[proxies]]
+name = "head--test-project"
+type = "https"
+localIP = "node"
+localPort = 5001
+subdomain = "head--test-project"

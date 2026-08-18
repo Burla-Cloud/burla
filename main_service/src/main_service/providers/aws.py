@@ -6,7 +6,7 @@ import boto3
 from botocore.exceptions import ClientError
 from burla._aws_amis import public_node_ami_id
 
-from main_service import CLUSTER_NAME, IN_CLIENT_HOSTED_MODE
+from main_service import CLUSTER_NAME
 from main_service.providers import NoCapacity
 
 # Capacity errors worth trying the next AZ for; anything else is a real error.
@@ -283,7 +283,9 @@ _cached_sg_ids: dict[tuple[str, str, str], str] = {}
 
 
 def _security_group_id(ec2, vpc_id: str) -> str:
-    group_name = "default" if IN_CLIENT_HOSTED_MODE else "burla-cluster-node"
+    # All node traffic uses outbound relay tunnels, so the VPC's existing
+    # default group is sufficient and the head needs no network-write access.
+    group_name = "default"
     cache_key = (ec2.meta.region_name, vpc_id, group_name)
     if cache_key not in _cached_sg_ids:
         response = ec2.describe_security_groups(

@@ -2,3 +2,8 @@
 	tls /certs/node.pem /certs/node.key
 	respond "hello-from-node"
 }
+
+:5001 {
+	tls /certs/head.pem /certs/head.key
+	respond "hello-from-head"
+}

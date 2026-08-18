@@ -465,6 +465,7 @@ class Node:
         NODE_AUTH_TOKEN="{node_auth_token(self.instance_name)}"
         mkdir -p "$TLS_DIR" /etc/burla/caddy
         echo "{ca_pem_b64}" | base64 -d > "$TLS_DIR/ca.pem"
+        cat /etc/ssl/certs/ca-certificates.crt "$TLS_DIR/ca.pem" > "$TLS_DIR/ca-bundle.pem"
         {azure_delete_lease_script}
 
         report_log() {{

@@ -67,6 +67,7 @@ def _busy_node(main_http_client):
     return None
 
 
+@pytest.mark.local_dev
 @pytest.mark.timeout(600)
 def test_frozen_node_service_does_not_fail_the_job(
     rpm_subprocess, local_dev_cluster, main_http_client, wait_for_fixture

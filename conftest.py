@@ -102,6 +102,10 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers",
         "remote_dev: only meaningful against real VMs, requires make remote-dev",
     )
+    config.addinivalue_line(
+        "markers",
+        "local_dev: only meaningful against local fake-VM containers",
+    )
 
 
 def _active_node_docs() -> list[dict[str, Any]]:
@@ -384,6 +388,11 @@ def clean_local_dev_cluster_before_cluster_tests(request):
             "this test only means anything against real VMs; start this "
             "checkout's cluster with `make remote-dev`."
         )
+    if request.node.get_closest_marker("local_dev") and not _head_in_local_dev_mode():
+        pytest.skip(
+            "this test controls local fake-VM containers and cannot run "
+            "against remote-dev."
+        )
     request.getfixturevalue("local_dev_cluster")
 
 
@@ -646,6 +655,8 @@ def run_rpm_in_subprocess(
     timeout_seconds: float = 60,
     env_overrides: dict | None = None,
     signal_after_seconds: float | None = None,
+    signal_when: Callable[[], bool] | None = None,
+    signal_wait_timeout_seconds: float = 120,
     signal_name: str = "SIGINT",
     resume_after_seconds: float | None = None,
     **rpm_kwargs: Any,
@@ -657,7 +668,6 @@ def run_rpm_in_subprocess(
     """
     env_overrides = env_overrides or {}
     rpm_kwargs.setdefault("spinner", False)
-    rpm_kwargs.setdefault("grow", True)
 
     from _rpm_subprocess_helper import run_rpm_in_subprocess as _target
 
@@ -676,18 +686,31 @@ def run_rpm_in_subprocess(
     )
     process.start()
 
-    if signal_after_seconds is not None:
-        sig = getattr(signal, signal_name)
+    should_signal = signal_after_seconds is not None or signal_when is not None
+    if signal_when is not None:
+        deadline = time.time() + signal_wait_timeout_seconds
+        while process.is_alive() and not signal_when():
+            if time.time() >= deadline:
+                process.terminate()
+                process.join(5)
+                pytest.fail(
+                    "test subprocess never reached the signal point within "
+                    f"{signal_wait_timeout_seconds}s"
+                )
+            time.sleep(0.1)
+    elif signal_after_seconds is not None:
         start = time.time()
         while time.time() - start < signal_after_seconds:
             if not process.is_alive():
                 break
             time.sleep(0.1)
-        if process.is_alive():
-            try:
-                os.kill(process.pid, sig)
-            except ProcessLookupError:
-                pass
+
+    if should_signal and process.is_alive():
+        sig = getattr(signal, signal_name)
+        try:
+            os.kill(process.pid, sig)
+        except ProcessLookupError:
+            pass
         if resume_after_seconds is not None and process.is_alive():
             time.sleep(resume_after_seconds)
             try:
@@ -743,24 +766,38 @@ def ctrl_c_after():
 
 
 @pytest.fixture
-def suspend_client_for():
+def suspend_client_for(main_http_client):
     """
-    Helper for e2e tests that suspend the client process mid-job: SIGSTOP
-    after delay_s, SIGCONT suspend_s later. Usage:
-        result = suspend_client_for(source, inputs, delay_s=6, suspend_s=20, **kwargs)
+    Helper for e2e tests that suspend the client after its job is running
+    with every input uploaded, then resume it after suspend_s.
     """
 
     def _suspend(
         function_source: str,
         inputs: list,
-        delay_s: float,
         suspend_s: float,
         **kwargs: Any,
     ) -> dict:
+        started_after = time.time()
+
+        def _job_is_running():
+            nodes = main_http_client.get("/v1/cluster/nodes").json()["nodes"]
+            for node in nodes:
+                job_id = node.get("current_job")
+                if not job_id:
+                    continue
+                job = main_http_client.get(f"/v1/jobs/{job_id}").json()
+                if (
+                    job.get("started_at", 0) >= started_after
+                    and job.get("all_inputs_uploaded")
+                ):
+                    return True
+            return False
+
         return run_rpm_in_subprocess(
             function_source,
             inputs,
-            signal_after_seconds=delay_s,
+            signal_when=_job_is_running,
             signal_name="SIGSTOP",
             resume_after_seconds=suspend_s,
             **kwargs,

@@ -12,13 +12,12 @@ for results is only failed after `RESULT_POLL_SILENCE_TIMEOUT_SECONDS`
 
 from __future__ import annotations
 
-import shutil
 import subprocess
 import threading
 
 import pytest
 
-pytestmark = [pytest.mark.e2e, pytest.mark.slow]
+pytestmark = [pytest.mark.e2e, pytest.mark.slow, pytest.mark.local_dev]
 
 # 3-minute silence budget in the client, plus room for job start and teardown.
 CLIENT_EXIT_BUDGET_SEC = 300
@@ -32,9 +31,6 @@ def _container_name(instance_name: str) -> str:
 def test_node_lost_mid_job_surfaces_NodeDisconnected(
     rpm_subprocess, local_dev_cluster, main_http_client, wait_for_fixture
 ):
-    if shutil.which("docker") is None:
-        pytest.skip("no docker; nodes are real VMs and cannot be killed this way")
-
     source = "import time\ndef test_function(x):\n    time.sleep(20)\n    return x\n"
     result_box: dict = {}
 

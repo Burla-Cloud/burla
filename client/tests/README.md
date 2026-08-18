@@ -28,7 +28,8 @@ Which tier a behavior belongs in:
 Tests marked `@pytest.mark.remote_dev` are skipped against a local-dev cluster
 and need `make remote-dev`: real OOM kills, real grow, real scale, real restart,
 and the node endpoints' TLS path all need nodes that are VMs rather than
-containers. Everything else runs in either mode.
+containers. Tests marked `@pytest.mark.local_dev` control fake-VM containers
+directly and are skipped against remote-dev. Everything else runs in either mode.
 
 Tests that need more than one node ask for them with the `cluster_with_n_nodes`
 fixture, which resizes and restarts the cluster instead of skipping.
@@ -96,8 +97,9 @@ local dev cluster. They restart and mutate whatever they are aimed at, so they
 will never touch a deployed cluster. A failure caused by the cluster not being
 ready is not a test failure; start or reset the cluster and retry.
 
-For now, tests that call `remote_parallel_map` should pass `grow=True` so the job
-boots nodes itself instead of relying on an already-started cluster.
+Tests inherit `remote_parallel_map`'s `grow=False` default and use the READY
+nodes guaranteed by the readiness gate. Only tests exercising growth or
+requesting a different image pass `grow=True`.
 
 Tests have a 120s default timeout, with longer limits on scenarios whose real
 silence budgets, VM recovery, or multi-node provisioning exceed it. If output

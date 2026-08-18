@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-pytestmark = pytest.mark.service
+pytestmark = [pytest.mark.service, pytest.mark.local_dev]
 
 
 # Must match the mapping local-dev pins in main_service/__init__.py and

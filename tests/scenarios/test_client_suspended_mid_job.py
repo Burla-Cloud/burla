@@ -31,7 +31,6 @@ def test_suspended_client_recovers_and_finishes(
     result = suspend_client_for(
         source,
         inputs,
-        delay_s=6,  # inside the result-polling loop, see the sleep(4) above
         suspend_s=SUSPEND_SECONDS,
         timeout_seconds=240,
         grow=False,

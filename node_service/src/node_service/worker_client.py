@@ -1182,7 +1182,7 @@ class WorkerClient:
             self.writer.write(len(payload).to_bytes(8, "big"))
             self.writer.write(payload)
             await self.writer.drain()
-            await self._read_response()
+            return pickle.loads(await self._read_response())
         except (BrokenPipeError, ConnectionResetError):
             await self._raise_if_worker_failed()
 

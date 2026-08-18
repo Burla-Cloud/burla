@@ -270,8 +270,6 @@ def install_client_environment(packages):
                     "uv",
                     "pip",
                     "uninstall",
-                    "--python",
-                    "python",
                     "--target",
                     "/worker_service_python_env",
                     *packages_to_uninstall,

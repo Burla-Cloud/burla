@@ -55,7 +55,8 @@ for tarball in /opt/burla/image-seed/*.tar; do
 done
 
 # Paths a real VM's disk image / startup script would provide.
-mkdir -p /worker_service_python_env /etc/burla/tls
+mkdir -p /worker_service_storage/python_env /worker_service_storage/uv_cache \
+    /etc/burla/tls
 cp /etc/ssl/certs/ca-certificates.crt /etc/burla/tls/ca-bundle.pem
 
 # Workers (inner containers) can NAT to an IP but cannot resolve the outer
@@ -68,7 +69,7 @@ export MAIN_SERVICE_URL="${MAIN_SERVICE_URL//host.docker.internal/$HOST_IP}"
 # always re-syncs it against this checkout's lockfile. Point that at the shared
 # host cache (the same one workers use) so it doesn't re-download wheels on
 # every node boot.
-export UV_CACHE_DIR=/uv_cache
+export UV_CACHE_DIR=/worker_service_storage/uv_cache
 export UV_LINK_MODE=copy
 
 cd /opt/burla/node_service

@@ -37,15 +37,6 @@ def _cluster_volume(docker_client, name: str) -> str:
     return full_name
 
 
-def _shared_uv_cache_volume(docker_client) -> str:
-    """One uv cache for every burla cluster on this machine (uv is built for
-    concurrent use). Emptying the cache makes the next test run re-download
-    every wheel at once, which is exactly the load spike that wedged nodes.
-    Only emergency machine-wide cleanup reclaims it."""
-    docker_client.create_volume(name="burla-uv-cache", labels={"burla-uv-cache": "1"})
-    return "burla-uv-cache"
-
-
 def _ensure_node_image(docker_client, image: str):
     """`make local-dev` builds this image locally, so it is normally already here.
     Only reach for a registry when it isn't, which is how a custom
@@ -86,8 +77,9 @@ class LocalDockerProvider:
         # virtiofs, and two nodes installing multi-GB envs across it at once
         # stall each other long enough to look dead to the head.
         inner_docker_store = _cluster_volume(docker_client, f"docker-{port}")
-        worker_python_env = _cluster_volume(docker_client, f"worker-env-{port}")
-        uv_cache = _shared_uv_cache_volume(docker_client)
+        # uv can hardlink prepared packages into the worker environment only
+        # when both directories share a filesystem.
+        worker_storage = _cluster_volume(docker_client, f"worker-storage-{port}")
         host_config = docker_client.create_host_config(
             # Privileged so the node can run its own dockerd for its workers.
             privileged=True,
@@ -112,8 +104,7 @@ class LocalDockerProvider:
                     "bind": "/opt/burla/image-seed",
                     "mode": "ro",
                 },
-                uv_cache: "/uv_cache",
-                worker_python_env: "/worker_service_python_env",
+                worker_storage: "/worker_service_storage",
                 # /var/lib/docker also cannot be a directory in the node's own
                 # overlayfs root, which cannot stack another overlayfs: the
                 # inner dockerd would fall back to the crawling `vfs` driver.

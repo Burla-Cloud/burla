@@ -1,6 +1,6 @@
 [project]
 name = "burla"
-version = "1.7.0"
+version = "1.7.1"
 description = "Easy to use cluster-compute software."
 requires-python = ">=3.11"
 # This wheel vendors main_service, so every main_service runtime dependency

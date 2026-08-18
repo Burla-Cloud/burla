@@ -11,8 +11,8 @@ endpoints. A single WAL-mode connection guarded by a lock is plenty because
 high-frequency logs and resource metrics arrive in batches.
 """
 
-import json
 import hashlib
+import json
 import math
 import os
 import re
@@ -1166,6 +1166,36 @@ def first_failure_log(instance_name: str, tokens: tuple[str, ...]) -> str | None
 # reaper "fail" jobs and show phantom nodes that never belonged to this head.
 _ENDED_JOB_STATUSES = ("COMPLETED", "FAILED", "CANCELED")
 _ENDED_NODE_STATUSES = ("DELETED", "FAILED")
+_IMPORT_TABLES = (
+    "jobs",
+    "job_logs",
+    "nodes",
+    "node_logs",
+    "resource_metrics",
+    "call_events",
+    "debug_logs",
+    "cluster_config",
+    "history_imports",
+)
+_EMPTY_IMPORT_TABLES = tuple(
+    table for table in _IMPORT_TABLES if table != "cluster_config"
+)
+
+
+def _validate_attached_snapshot(conn: sqlite3.Connection):
+    integrity = conn.execute("PRAGMA snapshot.integrity_check").fetchall()
+    if integrity != [("ok",)]:
+        raise ValueError(f"history snapshot integrity check failed: {integrity}")
+    for table in _IMPORT_TABLES:
+        expected = [
+            tuple(row[1:]) for row in conn.execute(f"PRAGMA main.table_info({table})")
+        ]
+        actual = [
+            tuple(row[1:])
+            for row in conn.execute(f"PRAGMA snapshot.table_info({table})")
+        ]
+        if actual != expected:
+            raise ValueError(f"history snapshot has an incompatible {table} schema")
 
 
 def snapshot_cluster_config(snapshot_path: str) -> dict | None:
@@ -1177,12 +1207,14 @@ def snapshot_cluster_config(snapshot_path: str) -> dict | None:
     return json.loads(row[0]) if row else None
 
 
-def import_snapshot(snapshot_path: str, digest: str, cluster_config: dict | None) -> bool:
-    """Merge a client-hosted head's history snapshot into this database
-    (first `burla deploy`). Existing rows always win; log rows are copied only
-    for jobs/nodes this import inserted, so two unrelated histories can't mix.
+def import_snapshot(
+    snapshot_path: str, digest: str, cluster_config: dict | None
+) -> bool:
+    """Import a first-deploy history snapshot into an otherwise-empty head.
+
     The digest row makes retrying the same upload a no-op. Returns False if
-    this snapshot was already imported."""
+    this exact snapshot was already imported.
+    """
     job_marks = ", ".join("?" for _ in _ENDED_JOB_STATUSES)
     node_marks = ", ".join("?" for _ in _ENDED_NODE_STATUSES)
     with _lock:
@@ -1192,36 +1224,41 @@ def import_snapshot(snapshot_path: str, digest: str, cluster_config: dict | None
         ).fetchone()
         if already:
             return False
+        nonempty_tables = [
+            table
+            for table in _EMPTY_IMPORT_TABLES
+            if conn.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone()
+        ]
+        if nonempty_tables:
+            raise ValueError(
+                "history can only be imported into an empty head; "
+                f"found rows in {', '.join(nonempty_tables)}"
+            )
         conn.execute("ATTACH DATABASE ? AS snapshot", (snapshot_path,))
         try:
-            conn.execute("CREATE TEMP TABLE old_jobs AS SELECT job_id FROM jobs")
+            _validate_attached_snapshot(conn)
             conn.execute(
-                "CREATE TEMP TABLE old_nodes AS SELECT instance_name FROM nodes"
-            )
-            conn.execute(
-                f"INSERT OR IGNORE INTO jobs SELECT * FROM snapshot.jobs "
+                f"INSERT INTO jobs SELECT * FROM snapshot.jobs "
                 f"WHERE status IN ({job_marks})",
                 _ENDED_JOB_STATUSES,
             )
             conn.execute(
                 "INSERT INTO job_logs (job_id, input_index, is_error, timestamp, logs) "
                 "SELECT job_id, input_index, is_error, timestamp, logs "
-                "FROM snapshot.job_logs WHERE job_id IN (SELECT job_id FROM jobs) "
-                "AND job_id NOT IN (SELECT job_id FROM old_jobs)"
+                "FROM snapshot.job_logs WHERE job_id IN (SELECT job_id FROM jobs)"
             )
             conn.execute(
-                f"INSERT OR IGNORE INTO nodes SELECT * FROM snapshot.nodes "
+                f"INSERT INTO nodes SELECT * FROM snapshot.nodes "
                 f"WHERE status IN ({node_marks})",
                 _ENDED_NODE_STATUSES,
             )
             conn.execute(
                 "INSERT INTO node_logs (instance_name, ts, msg) "
                 "SELECT instance_name, ts, msg FROM snapshot.node_logs "
-                "WHERE instance_name IN (SELECT instance_name FROM nodes) "
-                "AND instance_name NOT IN (SELECT instance_name FROM old_nodes)"
+                "WHERE instance_name IN (SELECT instance_name FROM nodes)"
             )
             conn.execute(
-                "INSERT OR IGNORE INTO resource_metrics "
+                "INSERT INTO resource_metrics "
                 "(timestamp, duration_sec, instance_name, scope, job_id, input_index, "
                 "worker_id, cpu_seconds, cpu_percent, memory_bytes, memory_percent, "
                 "network_rx_bytes, network_tx_bytes, disk_read_bytes, disk_write_bytes, "
@@ -1231,12 +1268,8 @@ def import_snapshot(snapshot_path: str, digest: str, cluster_config: dict | None
                 "memory_percent, network_rx_bytes, network_tx_bytes, disk_read_bytes, "
                 "disk_write_bytes, gpu_percent, gpu_memory_bytes, gpu_memory_percent "
                 "FROM snapshot.resource_metrics "
-                "WHERE job_id IN ("
-                "SELECT job_id FROM jobs WHERE job_id NOT IN (SELECT job_id FROM old_jobs)"
-                ") OR (scope = 'node' AND instance_name IN ("
-                "SELECT instance_name FROM nodes "
-                "WHERE instance_name NOT IN (SELECT instance_name FROM old_nodes)"
-                "))"
+                "WHERE job_id IN (SELECT job_id FROM jobs) "
+                "OR (scope = 'node' AND instance_name IN (SELECT instance_name FROM nodes))"
             )
             if cluster_config is not None:
                 conn.execute(
@@ -1253,8 +1286,6 @@ def import_snapshot(snapshot_path: str, digest: str, cluster_config: dict | None
             conn.rollback()
             raise
         finally:
-            conn.execute("DROP TABLE IF EXISTS old_jobs")
-            conn.execute("DROP TABLE IF EXISTS old_nodes")
             conn.execute("DETACH DATABASE snapshot")
     return True
 

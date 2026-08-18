@@ -2,32 +2,33 @@ import asyncio
 import copy
 import hashlib
 import os
+import shutil
 import tempfile
-
+from concurrent.futures import ThreadPoolExecutor
 from time import time
 
 import requests
 from fastapi import APIRouter, Depends, HTTPException, Request
-from concurrent.futures import ThreadPoolExecutor
+from main_service.helpers import Logger, log_telemetry
+from main_service.node import Container, Node
+from main_service.providers import get_provider
+from main_service.transport_tls import CA_CERT_PATH
 
 from main_service import (
-    IN_CLIENT_HOSTED_MODE,
-    IN_LOCAL_DEV_MODE,
     CLOUD_PROVIDER,
     CLUSTER_ID_TOKEN,
     CLUSTER_NAME,
+    IN_CLIENT_HOSTED_MODE,
+    IN_LOCAL_DEV_MODE,
     LOCAL_DEV_CONFIG,
     LOCAL_DEV_NODE_PORT_BASE,
     MAIN_SERVICE_URL_FOR_NODES,
+    cluster_state,
     default_region,
-    get_logger,
     get_add_background_task_function,
+    get_logger,
+    history,
 )
-from main_service import cluster_state, history
-from main_service.node import Container, Node
-from main_service.providers import get_provider
-from main_service.helpers import Logger, log_telemetry
-from main_service.transport_tls import CA_CERT_PATH
 
 router = APIRouter()
 MAX_GROW_CPUS = 2560
@@ -428,19 +429,63 @@ async def import_history(request: Request):
     if request.headers.get("Authorization") != f"Bearer {CLUSTER_ID_TOKEN}":
         raise HTTPException(status_code=403, detail="cluster token required")
 
+    content_length = request.headers.get("Content-Length")
+    if content_length is None:
+        raise HTTPException(status_code=411, detail="Content-Length required")
+    upload_size = int(content_length)
+    _verify_history_import_disk_space(upload_size)
+
     digest = hashlib.sha256()
     descriptor, snapshot_path = tempfile.mkstemp(suffix=".db")
     try:
+        bytes_written = 0
         with os.fdopen(descriptor, "wb") as snapshot_file:
             async for chunk in request.stream():
                 digest.update(chunk)
                 snapshot_file.write(chunk)
+                bytes_written += len(chunk)
+        if bytes_written != upload_size:
+            raise HTTPException(status_code=400, detail="Content-Length mismatch")
         imported = await asyncio.to_thread(
             _import_history_snapshot, snapshot_path, digest.hexdigest()
         )
     finally:
         os.remove(snapshot_path)
     return {"imported": imported}
+
+
+def _verify_history_import_disk_space(upload_size: int):
+    db_path = history.DB_PATH
+    db_directory = os.path.dirname(db_path) or "."
+    temp_directory = tempfile.gettempdir()
+    db_size = sum(
+        os.path.getsize(path)
+        for path in (db_path, f"{db_path}-wal", f"{db_path}-shm")
+        if os.path.exists(path)
+    )
+    reserve = max(1024**3, (db_size + upload_size + 4) // 5)
+    if os.stat(db_directory).st_dev == os.stat(temp_directory).st_dev:
+        required = 3 * upload_size + db_size + reserve
+        if shutil.disk_usage(db_directory).free < required:
+            raise HTTPException(
+                status_code=507,
+                detail=f"History import requires {required} free bytes.",
+            )
+        return
+
+    temp_required = upload_size + reserve
+    db_required = 2 * upload_size + db_size + reserve
+    if (
+        shutil.disk_usage(temp_directory).free < temp_required
+        or shutil.disk_usage(db_directory).free < db_required
+    ):
+        raise HTTPException(
+            status_code=507,
+            detail=(
+                f"History import requires {temp_required} temporary and "
+                f"{db_required} database free bytes."
+            ),
+        )
 
 
 def _import_history_snapshot(snapshot_path: str, digest: str) -> bool:

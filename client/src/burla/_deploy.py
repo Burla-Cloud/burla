@@ -612,9 +612,7 @@ def _register_cluster_and_save_cluster_id_token(spinner, PROJECT_ID):
     spinner.start()
 
     try:
-        cluster_id_token = get_or_register_cluster_token(
-            "gcp", PROJECT_ID, aws_region=None
-        )
+        cluster_id_token = get_or_register_cluster_token("gcp", PROJECT_ID, region=None)
     except LocalHeadError:
         spinner.fail("✗")
         raise AuthError()

@@ -290,7 +290,7 @@ async def dynamic_ram_monitor_loop():
             for rss_bytes, worker in worker_memory
             if not worker.is_idle and worker.current_input is not None
         ]
-        if not running_worker_memory:
+        if len(running_worker_memory) <= 1:
             continue
         # Smallest first: retiring small workers gives large tasks more room
         # while losing the least in-flight progress to the requeue.
@@ -299,7 +299,7 @@ async def dynamic_ram_monitor_loop():
         selected_worker_memory = []
         selected_rss_bytes = 0
         for rss_bytes, worker in running_worker_memory:
-            if len(worker_memory) - len(selected_worker_memory) <= 1:
+            if len(running_worker_memory) - len(selected_worker_memory) <= 1:
                 break
             selected_worker_memory.append((rss_bytes, worker))
             selected_rss_bytes += rss_bytes
@@ -368,7 +368,7 @@ async def cpu_pressure_monitor_loop():
             for cpu, worker in worker_cpu
             if not worker.is_idle and worker.current_input is not None
         ]
-        if not running_worker_cpu:
+        if len(running_worker_cpu) <= 1:
             continue
         # Least CPU first: cheapest to evict and requeue, and the biggest
         # tasks keep the cores they are clearly using.

@@ -23,12 +23,14 @@ by-value), which is decided by `modules_to_pickle_by_value`.
 import ast
 import importlib.util
 import inspect
+import io
 import json
 import os
 import re
 import sys
 import sysconfig
 import textwrap
+import zipfile
 from dataclasses import dataclass
 from urllib.parse import unquote, urlparse
 
@@ -407,6 +409,20 @@ def modules_to_pickle_by_value(scan: ScannedEnvironment) -> set:
         if not resolved.startswith(known_prefixes):
             module_names.add(module_name)
     return module_names
+
+
+def local_module_source_zip(module_names: set) -> bytes:
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for module_name in sorted(module_names):
+            module = sys.modules[module_name]
+            source_path = module.__file__
+            if os.path.basename(source_path) == "__init__.py":
+                archive_path = module_name.replace(".", "/") + "/__init__.py"
+            else:
+                archive_path = module_name.replace(".", "/") + ".py"
+            archive.write(source_path, archive_path)
+    return output.getvalue()
 
 
 class UnsupportedLocalImport(Exception):

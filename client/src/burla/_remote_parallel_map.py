@@ -1,14 +1,17 @@
 import asyncio
+import base64
+import io
+import pickle
 import random
 import ssl
 import sys
 import traceback
-import base64
 from asyncio import create_task
 from contextlib import AsyncExitStack
 from queue import Empty, Queue
-from threading import Event, Thread
+from threading import Event, Lock, Thread
 from time import time
+from types import ModuleType
 from typing import Callable, Literal, Optional, Union
 
 FuncGpu = Literal["T4", "A100", "A100_40G", "A100_80G", "H100", "H100_80G"]
@@ -35,6 +38,7 @@ from yaspin import Spinner, yaspin
 from burla import __version__
 from burla._cluster_client import ClusterClient, NodesBusy, _local_host_from
 from burla._env_scan import (
+    local_module_source_zip,
     modules_to_pickle_by_value,
     raise_on_call_time_local_imports,
     scan_environment,
@@ -64,6 +68,48 @@ from burla._reporting import (
     log_job_failure_telemetry,
     stdio_supports_spinner,
 )
+
+_FUNCTION_PAYLOAD_MAGIC = b"BURLA_FUNCTION_V2\0"
+_FUNCTION_PICKLE_LOCK = Lock()
+
+
+def _pickle_function(function_: Callable, local_module_names: set) -> bytes:
+    if not local_module_names:
+        return cloudpickle.dumps(function_)
+
+    # By-value module objects include their whole live namespace. Bundle source
+    # so module references stay imports while local functions still travel by value.
+    module_sources = local_module_source_zip(local_module_names)
+    default_module_reduce = cloudpickle.CloudPickler.dispatch[ModuleType]
+
+    def module_reduce(module):
+        if module.__name__ in local_module_names:
+            return cloudpickle.cloudpickle.subimport, (module.__name__,)
+        return default_module_reduce(module)
+
+    class FunctionPickler(cloudpickle.CloudPickler):
+        dispatch = cloudpickle.CloudPickler.dispatch.copy()
+        dispatch_table = dispatch
+
+    FunctionPickler.dispatch[ModuleType] = module_reduce
+    output = io.BytesIO()
+    with _FUNCTION_PICKLE_LOCK:
+        previously_registered = (
+            local_module_names
+            & cloudpickle.cloudpickle._PICKLE_BY_VALUE_MODULES.copy()
+        )
+        for module_name in local_module_names:
+            cloudpickle.register_pickle_by_value(sys.modules[module_name])
+        try:
+            FunctionPickler(output, protocol=pickle.HIGHEST_PROTOCOL).dump(function_)
+        finally:
+            for module_name in local_module_names - previously_registered:
+                cloudpickle.unregister_pickle_by_value(sys.modules[module_name])
+
+    envelope = (sorted(local_module_names), module_sources, output.getvalue())
+    return _FUNCTION_PAYLOAD_MAGIC + pickle.dumps(
+        envelope, protocol=pickle.HIGHEST_PROTOCOL
+    )
 
 
 def _machine_ram_gb(machine_type: str) -> int:
@@ -187,6 +233,7 @@ async def _execute_job(
     function_: Callable,
     inputs: list,
     packages: dict,
+    by_value_module_names: set,
     func_cpu: FuncCpu,
     func_ram: FuncRam,
     max_parallelism: int,
@@ -232,7 +279,7 @@ async def _execute_job(
     if background:
         reporter.print_detach_mode_enabled_message()
 
-    function_pkl = cloudpickle.dumps(function_)
+    function_pkl = _pickle_function(function_, by_value_module_names)
     function_size_gb = len(function_pkl) / (1024**3)
     reporter.function_size_gb = function_size_gb
     if function_size_gb > 0.1:
@@ -676,8 +723,6 @@ def remote_parallel_map(
     scan = scan_environment()
     packages = dict(scan.requirements)
     by_value_module_names = modules_to_pickle_by_value(scan)
-    for module_name in by_value_module_names:
-        cloudpickle.register_pickle_by_value(sys.modules[module_name])
     raise_on_call_time_local_imports(function_, scan, by_value_module_names)
     # ------------------------------------------------
 
@@ -713,6 +758,7 @@ def remote_parallel_map(
                     function_=wrapped_function_,
                     inputs=inputs,
                     packages=packages,
+                    by_value_module_names=by_value_module_names,
                     func_cpu=func_cpu,
                     func_ram=func_ram,
                     max_parallelism=max_parallelism,

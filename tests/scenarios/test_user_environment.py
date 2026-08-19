@@ -75,7 +75,10 @@ def test_udf_can_call_a_local_module(rpm_subprocess, local_dev_cluster, tmp_path
     module_dir = tmp_path / "burla_helpers"
     module_dir.mkdir()
     (module_dir / "udf_helpers.py").write_text(
+        "import threading\n"
+        "\n"
         "GREETING = 'hello-from-a-local-module'\n"
+        "UNRELATED_STATE = threading.Lock()\n"
         "\n"
         "def label(value):\n"
         "    return f'{GREETING}-{value}'\n"
@@ -84,9 +87,9 @@ def test_udf_can_call_a_local_module(rpm_subprocess, local_dev_cluster, tmp_path
     source = (
         "import sys\n"
         f"sys.path.insert(0, {str(module_dir)!r})\n"
-        "from udf_helpers import label\n"
+        "import udf_helpers\n"
         "def test_function(x):\n"
-        "    return label(x)\n"
+        "    return udf_helpers.label(x)\n"
     )
     result = rpm_subprocess(source, [1, 2], timeout_seconds=300, grow=True)
     assert result["ok"], result.get("traceback")

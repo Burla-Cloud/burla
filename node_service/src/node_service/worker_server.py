@@ -1,21 +1,24 @@
+import hashlib
 import importlib
 import importlib.metadata
 import io
 import json
 import os
-import re
-import signal
-import sys
 import pickle
+import re
 import shutil
+import signal
 import socket
 import subprocess
+import sys
 import tarfile
 import threading
 import time
 import traceback
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
+
+FUNCTION_PAYLOAD_MAGIC = b"BURLA_FUNCTION_V2\0"
 
 # Do not move. Node assumes first line printed is the Python version.
 print(f"{sys.version_info.major}.{sys.version_info.minor}", flush=True)
@@ -396,6 +399,24 @@ def install_client_environment(packages):
     return metrics
 
 
+def load_function_payload(payload):
+    if not payload.startswith(FUNCTION_PAYLOAD_MAGIC):
+        return cloudpickle.loads(payload), [], None
+
+    module_names, module_sources, function_pkl = pickle.loads(
+        payload[len(FUNCTION_PAYLOAD_MAGIC) :]
+    )
+    digest = hashlib.sha256(module_sources).hexdigest()
+    module_path = f"/worker_service_storage/local-modules-{digest}.zip"
+    temporary_path = f"{module_path}.{os.getpid()}"
+    with open(temporary_path, "wb") as output:
+        output.write(module_sources)
+    os.replace(temporary_path, module_path)
+    sys.path.insert(0, module_path)
+    importlib.invalidate_caches()
+    return cloudpickle.loads(function_pkl), module_names, module_path
+
+
 # Become a session + process group leader so the node_service can kill this worker together with
 # any subprocess the user's UDF spawned via a single os.killpg from the host. Runs after uv/pip
 # setup so subprocess.run above still inherits the container's original session cleanly.
@@ -407,6 +428,8 @@ with socket.create_server(("0.0.0.0", port)) as listener:
     with connection:
         connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         loaded_function = None
+        local_module_names = []
+        local_module_path = None
         ping = receive_exactly(connection, 1)
         connection.sendall(ping)
         while True:
@@ -421,6 +444,13 @@ with socket.create_server(("0.0.0.0", port)) as listener:
                 if command == b"r":
                     kill_all_other_processes()
                     loaded_function = None
+                    for module_name in local_module_names:
+                        sys.modules.pop(module_name, None)
+                    if local_module_path is not None:
+                        sys.path.remove(local_module_path)
+                    local_module_names = []
+                    local_module_path = None
+                    importlib.invalidate_caches()
                     # Worker process persists across jobs; otherwise cached
                     # creds from a prior nested RPM leak to the next user.
                     auth_module = sys.modules.get("burla._auth")
@@ -434,7 +464,9 @@ with socket.create_server(("0.0.0.0", port)) as listener:
                         install_client_environment(packages)
                     )
                 if command == b"l":
-                    loaded_function = cloudpickle.loads(request_payload)
+                    loaded_function, local_module_names, local_module_path = (
+                        load_function_payload(request_payload)
+                    )
                 if command == b"c":
                     request = pickle.loads(request_payload)
                     input_index = request["input_index"]

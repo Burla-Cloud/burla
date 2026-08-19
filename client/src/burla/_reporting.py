@@ -192,10 +192,13 @@ class RemoteParallelMapReporter:
             message += f"to {number_of_nodes} nodes ({total_data_gb:.2f}GB) ..."
         self.spinner.text = message
 
-    def set_installing_packages_message(self):
+    def set_installing_packages_message(self, package_name: str | None = None):
         if not self.spinner:
             return
-        self.spinner.text = "Installing packages ..."
+        if package_name:
+            self.spinner.text = f"Installing package: {package_name} ..."
+        else:
+            self.spinner.text = "Installing packages ..."
 
     def print_inputs_done_message(self):
         message = "\n------------------------------\n"

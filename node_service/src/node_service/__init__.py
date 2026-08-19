@@ -789,7 +789,7 @@ async def validate_requests(request: Request, call_next):
 async def log_and_time_requests(request: Request, call_next):
     start = time()
     chatty_endpoint = request.url.path.endswith(
-        ("/results", "/ack_transfer", "/get_inputs")
+        ("/results", "/ack_transfer", "/get_inputs", "/installing_package")
     )
 
     try:

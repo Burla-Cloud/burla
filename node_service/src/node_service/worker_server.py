@@ -11,6 +11,7 @@ import shutil
 import socket
 import subprocess
 import tarfile
+import threading
 import time
 import traceback
 import urllib.request
@@ -140,6 +141,35 @@ def _subprocess_output(result):
     )
 
 
+# Read by node_service to answer the client's install-progress poll (path
+# duplicated in job_endpoints.py): this worker's TCP socket is blocked inside
+# the `i` command for the whole install, so progress leaves the container
+# through this bind-mounted file instead.
+INSTALLING_PACKAGE_PATH = "/worker_service_storage/installing_package.txt"
+
+_installing_lock = threading.Lock()
+_in_flight_package_names = []
+
+
+def _write_installing_package(package_name):
+    temp_path = f"{INSTALLING_PACKAGE_PATH}.tmp"
+    with open(temp_path, "w") as file:
+        file.write(package_name or "")
+    os.replace(temp_path, INSTALLING_PACKAGE_PATH)
+
+
+def _watch_single_install(ordered_package_names, stop_event):
+    # One uv command installs the whole batch, so per-package progress is
+    # approximated the way the pre-1.6 worker did it: report the first
+    # requested package whose dist-info hasn't appeared in the env dir yet.
+    while not stop_event.wait(0.2):
+        installed_names = set(env_dir_distributions())
+        remaining = [
+            name for name in ordered_package_names if name not in installed_names
+        ]
+        _write_installing_package(remaining[0] if remaining else None)
+
+
 def _stage_package(item):
     index, package_name, requirement, staging_root = item
     stage_dir = os.path.join(staging_root, str(index))
@@ -149,6 +179,11 @@ def _stage_package(item):
         UV_CONCURRENT_DOWNLOADS="1",
         UV_CONCURRENT_INSTALLS="1",
     )
+    with _installing_lock:
+        # Newest start owns the display: names cycle while the queue drains,
+        # then the long build (pyspark) is the only one left showing.
+        _in_flight_package_names.append(package_name)
+        _write_installing_package(package_name)
     started_at = time.perf_counter()
     result = subprocess.run(
         [
@@ -166,6 +201,11 @@ def _stage_package(item):
         text=True,
         env=environment,
     )
+    with _installing_lock:
+        _in_flight_package_names.remove(package_name)
+        _write_installing_package(
+            _in_flight_package_names[-1] if _in_flight_package_names else None
+        )
     return package_name, time.perf_counter() - started_at, result
 
 
@@ -199,6 +239,7 @@ def _merge_stage(source_dir, destination_dir):
 
 
 def install_client_environment(packages):
+    _write_installing_package(None)  # residue from a prior install
     env_dir_dists = env_dir_distributions()
     packages_to_install = []
     packages_to_uninstall = []
@@ -241,21 +282,34 @@ def install_client_environment(packages):
 
     if "pyspark" not in {name for name, _ in packages_to_install}:
         single_install_started_at = time.perf_counter()
-        result = subprocess.run(
-            [
-                "uv",
-                "pip",
-                "install",
-                "--python",
-                "python",
-                "--target",
-                "/worker_service_python_env",
-                "--no-deps",
-                *(requirement for _, requirement in packages_to_install),
-            ],
-            capture_output=True,
-            text=True,
+        stop_event = threading.Event()
+        watcher_thread = threading.Thread(
+            target=_watch_single_install,
+            args=([name for name, _ in packages_to_install], stop_event),
+            daemon=True,
         )
+        _write_installing_package(packages_to_install[0][0])
+        watcher_thread.start()
+        try:
+            result = subprocess.run(
+                [
+                    "uv",
+                    "pip",
+                    "install",
+                    "--python",
+                    "python",
+                    "--target",
+                    "/worker_service_python_env",
+                    "--no-deps",
+                    *(requirement for _, requirement in packages_to_install),
+                ],
+                capture_output=True,
+                text=True,
+            )
+        finally:
+            stop_event.set()
+            watcher_thread.join()
+            _write_installing_package(None)
         if result.returncode:
             raise RuntimeError(
                 "uv failed to install the client environment "
@@ -335,6 +389,7 @@ def install_client_environment(packages):
         metrics["merge_seconds"] = time.perf_counter() - merge_started_at
     finally:
         shutil.rmtree(staging_root, ignore_errors=True)
+        _write_installing_package(None)
 
     importlib.invalidate_caches()
     metrics["total_seconds"] = time.perf_counter() - total_started_at

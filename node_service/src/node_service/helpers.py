@@ -24,6 +24,7 @@ class ResultsEndpointFilter(python_logging.Filter):
             or "/client-heartbeat" in path
             or "/get_inputs" in path
             or "/ack_transfer" in path
+            or "/installing_package" in path
         )
 
 

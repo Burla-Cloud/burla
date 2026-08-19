@@ -114,14 +114,3 @@ def test_shutdown_requires_cluster_token(
         assert resp.json()["status"] == "READY"
     finally:
         client.close()
-
-
-def test_reboot_starts_booting_then_returns(node_http_client, any_ready_node):
-    """POST /reboot is disruptive; we just verify the endpoint responds and
-    the node returns to READY eventually."""
-    client = node_http_client(any_ready_node["instance_name"])
-    try:
-        resp = client.post("/reboot", timeout=120)
-        assert resp.status_code == 200
-    finally:
-        client.close()

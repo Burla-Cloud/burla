@@ -155,9 +155,9 @@ def deploy_aws(spinner):
     )
     # Cluster id: what backend.burla.dev and the dashboard know this cluster as.
     project_id = f"aws-{account_id}"
-    from burla._local_head import _aws_account_name
+    from burla._auth import aws_account_name
 
-    account_name = _aws_account_name(account_id)
+    account_name = aws_account_name(account_id)
     spinner.text = f"Checking for aws CLI ... Using account {account_id} in {region}."
     spinner.ok("✓")
     log_telemetry("Installer has aws CLI and is logged in.", project_id=project_id)
@@ -426,7 +426,7 @@ def _register_cluster_and_save_token(spinner, project_id, region):
     """The cluster token lives in Burla's local state dir (and, for clusters
     installed before 1.7, in SSM, which is read as a fallback)."""
     from burla._deploy import AuthError
-    from burla._local_head import LocalHeadError, get_or_register_cluster_token
+    from burla._auth import LocalHeadError, get_or_register_cluster_token
 
     spinner.text = "Registering cluster ... "
     spinner.start()

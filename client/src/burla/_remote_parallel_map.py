@@ -209,17 +209,21 @@ async def _execute_job(
     # for this job. A head we start here is stopped when the job's context
     # unwinds; an env-pointed / already-running / deployed cluster is left
     # alone. Done before ClusterClient so its own URL lookup finds this head.
-    from burla import _pin_cluster_url, _unpin_cluster_url
-    from burla._local_head import acquire_head_for_job, release_head
+    from burla import (
+        _acquire_head_for_job,
+        _pin_cluster_url,
+        _release_head_for_job,
+        _unpin_cluster_url,
+    )
 
-    head = acquire_head_for_job(for_background_job=background)
+    head = _acquire_head_for_job(for_background_job=background)
     # Pin it so nothing re-resolves mid-job: a lookup whose health probe times
     # out would otherwise start a replacement head and kill this one.
     _pin_cluster_url(head.url, head.supports_detach)
 
     def _release_cluster():
         _unpin_cluster_url()
-        release_head(head)
+        _release_head_for_job(head)
 
     session_stack.callback(_release_cluster)
 

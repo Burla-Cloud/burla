@@ -33,6 +33,8 @@ dependencies = [
     "starlette>=0.35.1",
     "uvicorn>=0.25.0",
     "watchfiles>=1.0.4,<2.0.0",
+    "filelock>=3.20.3",
+    "psutil>=7.1.2",
 ]
 
 [project.scripts]
@@ -78,7 +80,6 @@ dev = [
     # Dashboard-UI tier (tests/dashboard/); browsers install via
     # `playwright install chromium`, which `make test-dashboard` runs.
     "playwright>=1.49.0",
-    "psutil>=6.0.0",
     "pyarrow>=22.0.0",
     "pyspark>=4.0.1",
     "pytest>=8.4.2",

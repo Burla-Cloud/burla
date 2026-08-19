@@ -11,7 +11,7 @@ import sqlite3
 import time
 from pathlib import Path
 
-from burla._local_head import STATE_ROOT
+from burla._auth import STATE_ROOT
 
 
 def _history_db(local_dev_db: Path, namespace: str) -> Path:

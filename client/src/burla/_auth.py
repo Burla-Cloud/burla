@@ -1,15 +1,20 @@
-import os
-import json
 import base64
+import configparser
+import json
+import os
+import shutil
+import subprocess
 import webbrowser
-import requests
 from functools import cache
+from pathlib import Path
 from time import sleep
 from uuid import uuid4
 
+import requests
+from platformdirs import user_data_dir
 from yaspin import yaspin
 
-from burla import _BURLA_BACKEND_URL, CONFIG_PATH
+from burla import _BURLA_APP_NAME, _BURLA_BACKEND_URL, CONFIG_PATH
 from burla._helpers import run_command
 
 AUTH_TIMEOUT_SECONDS = 180
@@ -17,6 +22,13 @@ IN_COLAB = os.getenv("COLAB_RELEASE_TAG") is not None
 CLUSTER_TOKEN_SECRET = os.environ.get(
     "BURLA_CLUSTER_TOKEN_SECRET", "burla-cluster-id-token"
 )
+STATE_ROOT = (
+    Path(user_data_dir(appname=_BURLA_APP_NAME, appauthor="burla")) / "clusters"
+)
+
+
+class LocalHeadError(Exception):
+    pass
 
 
 class AuthTimeoutException(Exception):
@@ -67,6 +79,368 @@ class ADCSecretPermissionException(Exception):
         )
 
 
+def _state_dir(project_id: str) -> Path:
+    directory = STATE_ROOT / project_id
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory
+
+
+def detect_cloud() -> tuple[str, str, str | None]:
+    """Returns (cloud, project_id, region) for the configured cloud.
+    region is None on GCP (nodes' region comes from cluster config there)."""
+    from burla import get_cloud
+
+    cloud = get_cloud()
+    if cloud == "azure":
+        executable = shutil.which("az")
+        if not executable:
+            raise LocalHeadError(
+                "Azure is selected, but the az CLI is not installed. "
+                "Install it or run `burla config set cloud aws`."
+            )
+        result = subprocess.run(
+            [executable, "account", "show", "--query", "id", "--output", "tsv"],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0 or not result.stdout.strip():
+            raise LocalHeadError(
+                "Azure is selected, but its credentials are not active. "
+                "Run `az login`, then retry."
+            )
+        subscription_id = result.stdout.strip()
+        from burla._deploy_azure import _azure_region
+
+        # Keeps the GUID's dashes: the longest relay label this produces is
+        # exactly the 63-char DNS limit (see _deploy_azure.deploy_azure).
+        return "azure", f"azure-{subscription_id}", _azure_region()
+
+    if cloud == "gcp":
+        executable = shutil.which("gcloud")
+        if not executable:
+            raise LocalHeadError(
+                "GCP is selected, but gcloud is not installed. "
+                "Install it or run `burla config set cloud aws`."
+            )
+        result = subprocess.run(
+            [executable, "config", "get-value", "project"],
+            capture_output=True,
+            text=True,
+        )
+        gcp_project = result.stdout.strip()
+        if gcp_project and gcp_project != "(unset)":
+            return "gcp", gcp_project, None
+        raise LocalHeadError(
+            "GCP is selected, but no gcloud project is set. "
+            "Run `gcloud config set project <id>`."
+        )
+
+    executable = shutil.which("aws")
+    if not executable:
+        raise LocalHeadError(
+            "AWS is selected, but the AWS CLI is not installed. "
+            "Install it or run `burla config set cloud gcp`."
+        )
+    result = subprocess.run(
+        [
+            executable,
+            "sts",
+            "get-caller-identity",
+            "--query",
+            "Account",
+            "--output",
+            "text",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise LocalHeadError(
+            "AWS is selected, but its credentials are not active. "
+            "Run `aws configure` or `aws sso login`, then retry."
+        )
+    region_result = subprocess.run(
+        [executable, "configure", "get", "region"], capture_output=True, text=True
+    )
+    region = (
+        os.environ.get("AWS_REGION")
+        or os.environ.get("AWS_DEFAULT_REGION")
+        or region_result.stdout.strip()
+        or "us-east-1"
+    )
+    return "aws", f"aws-{result.stdout.strip()}", region
+
+
+def cloud_account_name(cloud: str, project_id: str) -> str:
+    """Human-readable account label for the dashboard's settings page."""
+    if cloud == "aws":
+        return aws_account_name(project_id.removeprefix("aws-"))
+    if cloud == "azure":
+        result = subprocess.run(
+            [
+                shutil.which("az"),
+                "account",
+                "show",
+                "--query",
+                "name",
+                "--output",
+                "tsv",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+    return project_id
+
+
+def aws_account_name(account_id: str) -> str:
+    result = subprocess.run(
+        [
+            shutil.which("aws"),
+            "account",
+            "get-account-information",
+            "--query",
+            "AccountName",
+            "--output",
+            "text",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode == 0 and result.stdout.strip() not in ("", "None"):
+        return result.stdout.strip()
+
+    config = configparser.ConfigParser()
+    config.read(Path.home() / ".aws" / "config")
+    for section in config.sections():
+        if config[section].get("sso_account_id") == account_id:
+            return section.removeprefix("profile ")
+    return account_id
+
+
+def _gcp_ownership_payload() -> dict:
+    try:
+        import google.auth
+        from google.auth.transport.requests import Request
+
+        credentials, _ = google.auth.default(
+            scopes=["https://www.googleapis.com/auth/cloud-platform"]
+        )
+        credentials.refresh(Request())
+        access_token = credentials.token
+    except Exception:
+        result = subprocess.run(
+            [shutil.which("gcloud"), "auth", "print-access-token"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        access_token = result.stdout.strip()
+    return {"cloud": "gcp", "access_token": access_token}
+
+
+def _ownership_payload(cloud: str, region: str | None) -> dict:
+    if cloud == "aws":
+        from burla._deploy_aws import _aws_ownership_payload
+
+        return _aws_ownership_payload(region)
+    if cloud == "azure":
+        from burla._deploy_azure import _azure_ownership_payload
+
+        return _azure_ownership_payload()
+    return _gcp_ownership_payload()
+
+
+def read_saved_cluster_token(project_id: str) -> str | None:
+    token_path = _state_dir(project_id) / "cluster_token"
+    if token_path.exists():
+        return token_path.read_text().strip()
+    return None
+
+
+def save_cluster_token(project_id: str, token: str):
+    token_path = _state_dir(project_id) / "cluster_token"
+    token_path.write_text(token)
+    token_path.chmod(0o600)
+
+
+def get_or_register_cluster_token(
+    cloud: str, project_id: str, region: str | None
+) -> str:
+    token = read_saved_cluster_token(project_id)
+    if token:
+        return token
+
+    response = requests.post(
+        f"{_BURLA_BACKEND_URL}/v1/clusters/{project_id}",
+        json=_ownership_payload(cloud, region),
+        timeout=30,
+    )
+    if response.status_code == 200:
+        token = response.json()["token"]
+        save_cluster_token(project_id, token)
+        return token
+
+    # Cluster already registered by an old `burla install`, which stored its
+    # token in Secret Manager (GCP) / SSM (AWS) - read it from there so
+    # upgrades stay seamless. No Azure equivalent: Azure support postdates
+    # the move to backend-held tokens.
+    if response.status_code in (403, 409):
+        command = None
+        if cloud == "gcp":
+            secret = os.environ.get(
+                "BURLA_CLUSTER_TOKEN_SECRET", "burla-cluster-id-token"
+            )
+            command = [
+                shutil.which("gcloud"),
+                "secrets",
+                "versions",
+                "access",
+                "latest",
+                f"--secret={secret}",
+            ]
+        elif cloud == "aws":
+            parameter = os.environ.get(
+                "BURLA_CLUSTER_TOKEN_PARAMETER", "/burla/cluster-id-token"
+            )
+            command = [
+                *(shutil.which("aws"), "ssm", "get-parameter", "--region", region),
+                *("--name", parameter, "--with-decryption"),
+                *("--query", "Parameter.Value", "--output", "text"),
+            ]
+        if command:
+            result = subprocess.run(command, capture_output=True, text=True)
+            if result.returncode == 0 and result.stdout.strip():
+                token = result.stdout.strip()
+                save_cluster_token(project_id, token)
+                return token
+
+        # Authorized users (e.g. this user's other laptop) may fetch the
+        # token from the backend after a browser `burla login`.
+        if CONFIG_PATH.exists():
+            response = requests.get(
+                f"{_BURLA_BACKEND_URL}/v1/clusters/{project_id}/token",
+                headers=get_auth_headers(),
+                timeout=30,
+            )
+            if response.status_code == 200:
+                token = response.json()["token"]
+                save_cluster_token(project_id, token)
+                return token
+
+    raise LocalHeadError(
+        f"The cluster [{project_id}] is already registered with Burla, but this machine "
+        "doesn't have its token. Run `burla login` (as an authorized user of that cluster) "
+        "and retry, or email jake@burla.dev to recover access."
+    )
+
+
+def ensure_user_authorized(
+    cloud: str,
+    project_id: str,
+    cluster_token: str,
+):
+    """Registers this user against the cluster and mints client credentials,
+    without needing Secret Manager (the token came from local state)."""
+    if CONFIG_PATH.exists():
+        auth_info = json.loads(CONFIG_PATH.read_text())
+        if auth_info["project_id"] == project_id:
+            return
+
+    if cloud == "aws":
+        result = subprocess.run(
+            [
+                shutil.which("aws"),
+                "sts",
+                "get-caller-identity",
+                "--query",
+                "Arn",
+                "--output",
+                "text",
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        identity = result.stdout.strip().rsplit("/", 1)[-1]
+    elif cloud == "azure":
+        result = subprocess.run(
+            [
+                shutil.which("az"),
+                "account",
+                "show",
+                "--query",
+                "user.name",
+                "--output",
+                "tsv",
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        identity = result.stdout.strip()
+    else:
+        import google.auth
+        from google.auth.transport.requests import Request
+
+        credentials, _ = google.auth.default(
+            scopes=["https://www.googleapis.com/auth/cloud-platform"]
+        )
+        credentials.refresh(Request())
+        response = requests.get(
+            "https://oauth2.googleapis.com/tokeninfo",
+            params={"access_token": credentials.token},
+            timeout=10,
+        )
+        response.raise_for_status()
+        identity = response.json()["email"]
+
+    headers = {"Authorization": f"Bearer {cluster_token}"}
+    users_url = f"{_BURLA_BACKEND_URL}/v1/clusters/{project_id}/users"
+    requests.post(users_url, json={"new_user": identity}, headers=headers, timeout=30)
+
+    response = requests.post(
+        f"{_BURLA_BACKEND_URL}/v1/clusters/{project_id}/adc:exchange",
+        headers=headers,
+        json={"email": identity},
+        timeout=30,
+    )
+    response.raise_for_status()
+    _write_auth_config(response.json())
+
+
+def deployed_dashboard_url() -> str | None:
+    config = json.loads(CONFIG_PATH.read_text()) if CONFIG_PATH.exists() else {}
+    configured_url = (config.get("cluster_dashboard_url") or "").rstrip("/")
+
+    try:
+        cloud, project_id, region = detect_cloud()
+    except LocalHeadError:
+        return configured_url or None
+
+    cluster_token = get_or_register_cluster_token(cloud, project_id, region)
+    response = requests.get(
+        f"{_BURLA_BACKEND_URL}/v1/clusters/{project_id}/dashboard_url",
+        headers={"Authorization": f"Bearer {cluster_token}"},
+        timeout=20,
+    )
+    if response.status_code == 409:
+        return None
+    response.raise_for_status()
+
+    dashboard_url = response.json()["dashboard_url"].rstrip("/")
+    if not dashboard_url.startswith("https://"):
+        raise ValueError("Backend returned a non-HTTPS dashboard URL")
+
+    ensure_user_authorized(cloud, project_id, cluster_token)
+    config = json.loads(CONFIG_PATH.read_text())
+    config["cluster_dashboard_url"] = dashboard_url
+    config.pop("mode", None)
+    _write_auth_config(config)
+    return dashboard_url
+
+
 def _write_auth_config(auth_info: dict):
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     CONFIG_PATH.write_text(json.dumps(auth_info))
@@ -109,8 +483,6 @@ def _get_adc_identity() -> tuple[str, str, str]:
 def _get_cluster_token(access_token: str, project_id: str) -> str:
     # `burla deploy` and client-hosted mode save the token locally; only
     # clusters installed before 1.7 still keep it in Secret Manager.
-    from burla._local_head import read_saved_cluster_token
-
     saved_token = read_saved_cluster_token(project_id)
     if saved_token:
         return saved_token
@@ -181,8 +553,6 @@ def get_auth_headers() -> dict[str, str]:
 
 def _saved_cluster_token() -> str | None:
     try:
-        from burla._local_head import detect_cloud, read_saved_cluster_token
-
         _, project_id, _ = detect_cloud()
         return read_saved_cluster_token(project_id)
     except Exception:
@@ -196,8 +566,6 @@ def save_deployed_cluster_config(
     `remote_parallel_map` uses it without a separate `burla login`. Best-effort:
     deploy has already succeeded, and the deploy message still tells the user
     they can `burla login`."""
-    from burla._local_head import ensure_user_authorized
-
     try:
         ensure_user_authorized(cloud, project_id, cluster_token)
         config = json.loads(CONFIG_PATH.read_text())

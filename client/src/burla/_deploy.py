@@ -606,7 +606,7 @@ def _create_gcs_bucket(spinner, PROJECT_ID):
 def _register_cluster_and_save_cluster_id_token(spinner, PROJECT_ID):
     """The cluster token lives in Burla's local state dir (and, for clusters
     installed before 1.7, in Secret Manager, which is read as a fallback)."""
-    from burla._local_head import LocalHeadError, get_or_register_cluster_token
+    from burla._auth import LocalHeadError, get_or_register_cluster_token
 
     spinner.text = "Registering cluster ... "
     spinner.start()

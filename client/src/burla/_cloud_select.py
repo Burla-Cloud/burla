@@ -21,7 +21,7 @@ def installed_clouds() -> list[tuple[str, str]]:
 
 def choose_cloud() -> str:
     from burla import set_config
-    from burla._local_head import LocalHeadError
+    from burla._auth import LocalHeadError
 
     options = installed_clouds()
     if not options:

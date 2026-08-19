@@ -11,14 +11,12 @@ compute billing. The only cloud permission needed is "can boot VMs". `burla
 deploy` remains the upgrade path to an always-on, shared head VM.
 """
 
-import configparser
-import fcntl
+import io
 import json
 import os
 import platform
 import re
 import shutil
-import signal
 import socket
 import sqlite3
 import subprocess
@@ -27,22 +25,29 @@ import tarfile
 import tempfile
 import zipfile
 from collections.abc import Callable
-from contextlib import contextmanager
-from dataclasses import dataclass
 from pathlib import Path
 from time import sleep, time
 from urllib.parse import urlparse
 from uuid import uuid4
 
+import psutil
 import requests
-from platformdirs import user_data_dir
+from filelock import FileLock
 
 from burla import (
-    _BURLA_APP_NAME,
     _BURLA_BACKEND_URL,
     _BURLA_NODE_SOURCE_REF,
     _BURLA_RELAY_HOST,
     __version__,
+)
+from burla._auth import (
+    STATE_ROOT,
+    LocalHeadError,
+    cloud_account_name,
+    detect_cloud,
+    ensure_user_authorized,
+    get_or_register_cluster_token,
+    read_saved_cluster_token,
 )
 
 RELAY_HOST = _BURLA_RELAY_HOST.strip().lower()
@@ -51,20 +56,6 @@ RELAY_SERVER_PORT = os.environ.get("BURLA_RELAY_SERVER_PORT", "7000")
 FRP_VERSION = "0.70.1"
 
 PREFERRED_HEAD_PORT = 5001  # the browser login flow redirects to localhost:5001
-
-STATE_ROOT = (
-    Path(user_data_dir(appname=_BURLA_APP_NAME, appauthor="burla")) / "clusters"
-)
-
-
-class LocalHeadError(Exception):
-    pass
-
-
-def _state_dir(project_id: str) -> Path:
-    directory = STATE_ROOT / project_id
-    directory.mkdir(parents=True, exist_ok=True)
-    return directory
 
 
 def cluster_namespace() -> str:
@@ -83,179 +74,23 @@ def _head_state_dir(project_id: str, namespace: str = "") -> Path:
     """Per-cluster head state: ports, relay subdomain, history db, TLS. The
     cluster token lives in the project dir above this instead, because it is
     account-wide and every head for the account shares it."""
-    directory = _state_dir(project_id)
+    directory = STATE_ROOT / project_id
+    directory.mkdir(parents=True, exist_ok=True)
     if namespace:
         directory = directory / f"cluster-{namespace}"
         directory.mkdir(parents=True, exist_ok=True)
     return directory
 
 
-@contextmanager
 def _head_lifecycle_lock(state_dir: Path):
     # Dashboard attachment and job teardown run in separate processes; one must
     # finish claiming or stopping a head before the other inspects ownership.
-    with open(state_dir / "lifecycle.lock", "w") as lock_file:
-        fcntl.flock(lock_file, fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(lock_file, fcntl.LOCK_UN)
+    return FileLock(state_dir / "lifecycle.lock")
 
 
 def _dashboard_owns_head(state_dir: Path, head_pid: int) -> bool:
     owner_path = state_dir / "dashboard.owner"
     return owner_path.exists() and owner_path.read_text() == str(head_pid)
-
-
-# ------------------------------------------------------------------ cloud
-
-
-def detect_cloud() -> tuple[str, str, str | None]:
-    """Returns (cloud, project_id, region) for the configured cloud.
-    region is None on GCP (nodes' region comes from cluster config there)."""
-    from burla import get_cloud
-
-    cloud = get_cloud()
-    if cloud == "azure":
-        if not shutil.which("az"):
-            raise LocalHeadError(
-                "Azure is selected, but the az CLI is not installed. "
-                "Install it or run `burla config set cloud aws`."
-            )
-        result = subprocess.run(
-            ["az", "account", "show", "--query", "id", "--output", "tsv"],
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode != 0 or not result.stdout.strip():
-            raise LocalHeadError(
-                "Azure is selected, but its credentials are not active. "
-                "Run `az login`, then retry."
-            )
-        subscription_id = result.stdout.strip()
-        from burla._deploy_azure import _azure_region
-
-        # Keeps the GUID's dashes: the longest relay label this produces is
-        # exactly the 63-char DNS limit (see _deploy_azure.deploy_azure).
-        return "azure", f"azure-{subscription_id}", _azure_region()
-
-    if cloud == "gcp":
-        if not shutil.which("gcloud"):
-            raise LocalHeadError(
-                "GCP is selected, but gcloud is not installed. "
-                "Install it or run `burla config set cloud aws`."
-            )
-        result = subprocess.run(
-            ["gcloud", "config", "get-value", "project"],
-            capture_output=True,
-            text=True,
-        )
-        gcp_project = result.stdout.strip()
-        if gcp_project and gcp_project != "(unset)":
-            return "gcp", gcp_project, None
-        raise LocalHeadError(
-            "GCP is selected, but no gcloud project is set. "
-            "Run `gcloud config set project <id>`."
-        )
-
-    if not shutil.which("aws"):
-        raise LocalHeadError(
-            "AWS is selected, but the AWS CLI is not installed. "
-            "Install it or run `burla config set cloud gcp`."
-        )
-    result = subprocess.run(
-        ["aws", "sts", "get-caller-identity", "--query", "Account", "--output", "text"],
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        raise LocalHeadError(
-            "AWS is selected, but its credentials are not active. "
-            "Run `aws configure` or `aws sso login`, then retry."
-        )
-    region_result = subprocess.run(
-        ["aws", "configure", "get", "region"], capture_output=True, text=True
-    )
-    region = (
-        os.environ.get("AWS_REGION")
-        or os.environ.get("AWS_DEFAULT_REGION")
-        or region_result.stdout.strip()
-        or "us-east-1"
-    )
-    return "aws", f"aws-{result.stdout.strip()}", region
-
-
-def _cloud_account_name(cloud: str, project_id: str) -> str:
-    """Human-readable account label for the dashboard's settings page."""
-    if cloud == "aws":
-        return _aws_account_name(project_id.removeprefix("aws-"))
-    if cloud == "azure":
-        result = subprocess.run(
-            ["az", "account", "show", "--query", "name", "--output", "tsv"],
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            return result.stdout.strip()
-    return project_id
-
-
-def _aws_account_name(account_id: str) -> str:
-    result = subprocess.run(
-        [
-            "aws",
-            "account",
-            "get-account-information",
-            "--query",
-            "AccountName",
-            "--output",
-            "text",
-        ],
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode == 0 and result.stdout.strip() not in ("", "None"):
-        return result.stdout.strip()
-
-    config = configparser.ConfigParser()
-    config.read(Path.home() / ".aws" / "config")
-    for section in config.sections():
-        if config[section].get("sso_account_id") == account_id:
-            return section.removeprefix("profile ")
-    return account_id
-
-
-def _gcp_ownership_payload() -> dict:
-    try:
-        import google.auth
-        from google.auth.transport.requests import Request
-
-        credentials, _ = google.auth.default(
-            scopes=["https://www.googleapis.com/auth/cloud-platform"]
-        )
-        credentials.refresh(Request())
-        access_token = credentials.token
-    except Exception:
-        result = subprocess.run(
-            ["gcloud", "auth", "print-access-token"],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        access_token = result.stdout.strip()
-    return {"cloud": "gcp", "access_token": access_token}
-
-
-def _ownership_payload(cloud: str, region: str | None) -> dict:
-    if cloud == "aws":
-        from burla._deploy_aws import _aws_ownership_payload
-
-        return _aws_ownership_payload(region)
-    if cloud == "azure":
-        from burla._deploy_azure import _azure_ownership_payload
-
-        return _azure_ownership_payload()
-    return _gcp_ownership_payload()
 
 
 def _azure_resource_group() -> str | None:
@@ -269,7 +104,7 @@ def _azure_resource_group() -> str | None:
 
     default_group = subprocess.run(
         [
-            "az",
+            shutil.which("az"),
             "config",
             "get",
             "defaults.group",
@@ -284,158 +119,6 @@ def _azure_resource_group() -> str | None:
     if default_group.returncode == 0 and default_group.stdout.strip():
         return default_group.stdout.strip()
     return None
-
-
-# ------------------------------------------------------------------ token
-
-
-def read_saved_cluster_token(project_id: str) -> str | None:
-    token_path = _state_dir(project_id) / "cluster_token"
-    if token_path.exists():
-        return token_path.read_text().strip()
-    return None
-
-
-def save_cluster_token(project_id: str, token: str):
-    token_path = _state_dir(project_id) / "cluster_token"
-    token_path.write_text(token)
-    token_path.chmod(0o600)
-
-
-def get_or_register_cluster_token(
-    cloud: str, project_id: str, aws_region: str | None
-) -> str:
-    token = read_saved_cluster_token(project_id)
-    if token:
-        return token
-
-    response = requests.post(
-        f"{_BURLA_BACKEND_URL}/v1/clusters/{project_id}",
-        json=_ownership_payload(cloud, aws_region),
-        timeout=30,
-    )
-    if response.status_code == 200:
-        token = response.json()["token"]
-        save_cluster_token(project_id, token)
-        return token
-
-    # Cluster already registered by an old `burla install`, which stored its
-    # token in Secret Manager (GCP) / SSM (AWS) - read it from there so
-    # upgrades stay seamless. No Azure equivalent: Azure support postdates
-    # the move to backend-held tokens.
-    if response.status_code in (403, 409):
-        command = None
-        if cloud == "gcp":
-            secret = os.environ.get(
-                "BURLA_CLUSTER_TOKEN_SECRET", "burla-cluster-id-token"
-            )
-            command = [
-                "gcloud",
-                "secrets",
-                "versions",
-                "access",
-                "latest",
-                f"--secret={secret}",
-            ]
-        elif cloud == "aws":
-            parameter = os.environ.get(
-                "BURLA_CLUSTER_TOKEN_PARAMETER", "/burla/cluster-id-token"
-            )
-            command = [
-                *("aws", "ssm", "get-parameter", "--region", aws_region),
-                *("--name", parameter, "--with-decryption"),
-                *("--query", "Parameter.Value", "--output", "text"),
-            ]
-        if command:
-            result = subprocess.run(command, capture_output=True, text=True)
-            if result.returncode == 0 and result.stdout.strip():
-                token = result.stdout.strip()
-                save_cluster_token(project_id, token)
-                return token
-
-        # Authorized users (e.g. this user's other laptop) may fetch the
-        # token from the backend after a browser `burla login`.
-        from burla import CONFIG_PATH
-        from burla._auth import get_auth_headers
-
-        if CONFIG_PATH.exists():
-            response = requests.get(
-                f"{_BURLA_BACKEND_URL}/v1/clusters/{project_id}/token",
-                headers=get_auth_headers(),
-                timeout=30,
-            )
-            if response.status_code == 200:
-                token = response.json()["token"]
-                save_cluster_token(project_id, token)
-                return token
-
-    raise LocalHeadError(
-        f"The cluster [{project_id}] is already registered with Burla, but this machine "
-        "doesn't have its token. Run `burla login` (as an authorized user of that cluster) "
-        "and retry, or email jake@burla.dev to recover access."
-    )
-
-
-def ensure_user_authorized(
-    cloud: str,
-    project_id: str,
-    cluster_token: str,
-):
-    """Registers this user against the cluster and mints client credentials,
-    without needing Secret Manager (the token came from local state)."""
-    from burla import CONFIG_PATH
-    from burla._auth import _write_auth_config
-
-    if CONFIG_PATH.exists():
-        auth_info = json.loads(CONFIG_PATH.read_text())
-        if auth_info["project_id"] == project_id:
-            return
-
-    if cloud == "aws":
-        result = subprocess.run(
-            ["aws", "sts", "get-caller-identity", "--query", "Arn", "--output", "text"],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        identity = result.stdout.strip().rsplit("/", 1)[-1]
-    elif cloud == "azure":
-        result = subprocess.run(
-            ["az", "account", "show", "--query", "user.name", "--output", "tsv"],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        identity = result.stdout.strip()
-    else:
-        import google.auth
-        from google.auth.transport.requests import Request
-
-        credentials, _ = google.auth.default(
-            scopes=["https://www.googleapis.com/auth/cloud-platform"]
-        )
-        credentials.refresh(Request())
-        response = requests.get(
-            "https://oauth2.googleapis.com/tokeninfo",
-            params={"access_token": credentials.token},
-            timeout=10,
-        )
-        response.raise_for_status()
-        identity = response.json()["email"]
-
-    headers = {"Authorization": f"Bearer {cluster_token}"}
-    users_url = f"{_BURLA_BACKEND_URL}/v1/clusters/{project_id}/users"
-    requests.post(users_url, json={"new_user": identity}, headers=headers, timeout=30)
-
-    response = requests.post(
-        f"{_BURLA_BACKEND_URL}/v1/clusters/{project_id}/adc:exchange",
-        headers=headers,
-        json={"email": identity},
-        timeout=30,
-    )
-    response.raise_for_status()
-    auth_info = response.json()
-    _write_auth_config(auth_info)
 
 
 # ------------------------------------------------------------------ frpc
@@ -460,8 +143,11 @@ def _frpc_download_url() -> tuple[str, str]:
 
 
 def ensure_frpc_binary() -> Path:
-    binary_name = "frpc.exe" if platform.system() == "Windows" else "frpc"
-    binary_path = STATE_ROOT.parent / "bin" / f"{binary_name}-{FRP_VERSION}"
+    if platform.system() == "Windows":
+        binary_name = f"frpc-{FRP_VERSION}.exe"
+    else:
+        binary_name = f"frpc-{FRP_VERSION}"
+    binary_path = STATE_ROOT.parent / "bin" / binary_name
     if binary_path.exists():
         return binary_path
 
@@ -469,15 +155,18 @@ def ensure_frpc_binary() -> Path:
     url, member = _frpc_download_url()
     with tempfile.TemporaryDirectory() as tmp:
         archive_path = Path(tmp) / url.split("/")[-1]
-        with requests.get(url, stream=True, timeout=120) as response:
-            response.raise_for_status()
-            with open(archive_path, "wb") as f:
-                for chunk in response.iter_content(chunk_size=1024 * 1024):
-                    f.write(chunk)
         if archive_path.suffix == ".zip":
-            with zipfile.ZipFile(archive_path) as archive:
-                archive.extract(member, tmp)
+            # Defender quarantines FRP's ZIP on disk but accepts frpc.exe.
+            with requests.get(url, timeout=120) as response:
+                response.raise_for_status()
+                with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+                    archive.extract(member, tmp)
         else:
+            with requests.get(url, stream=True, timeout=120) as response:
+                response.raise_for_status()
+                with open(archive_path, "wb") as f:
+                    for chunk in response.iter_content(chunk_size=1024 * 1024):
+                        f.write(chunk)
             with tarfile.open(archive_path) as archive:
                 archive.extract(member, tmp)
         extracted = Path(tmp) / member
@@ -529,11 +218,12 @@ def _free_port(preferred: int | None = None, required: bool = False) -> int:
         return probe.getsockname()[1]
 
 
-def _pid_alive(pid: int) -> bool:
+def _pid_alive(pid: int | None) -> bool:
+    if pid is None:
+        return False
     try:
-        os.kill(pid, 0)
-        return True
-    except (OSError, TypeError):
+        return psutil.Process(pid).is_running()
+    except psutil.NoSuchProcess:
         return False
 
 
@@ -578,6 +268,14 @@ def ensure_local_head() -> str:
     return _run_local_head(detached=True)
 
 
+def start_local_head_for_job() -> tuple[str, int]:
+    url = ensure_local_head()
+    _, project_id, _ = detect_cloud()
+    head_state_path = _head_state_dir(project_id) / "head.json"
+    pid = json.loads(head_state_path.read_text())["head_pid"]
+    return url, pid
+
+
 def running_head_url() -> str | None:
     """URL of the account-wide ad hoc client head, or None.
 
@@ -606,64 +304,6 @@ def running_head_url() -> str | None:
     return None
 
 
-@dataclass
-class HeadHandle:
-    url: str
-    owned: bool  # True only for a head this process started (and must stop).
-    pid: int | None = None
-    # True when the head outlives this machine: a deployed cluster, or one the
-    # caller explicitly pointed at via BURLA_CLUSTER_DASHBOARD_URL (dev
-    # clusters). Local ad hoc heads die with this machine, so background jobs
-    # are refused for them.
-    supports_detach: bool = False
-
-
-def acquire_head_for_job(for_background_job: bool = False) -> HeadHandle:
-    """Resolve the cluster for one job, matching `get_cluster_dashboard_url`'s
-    precedence. Reuses an env-pointed, already-running, or deployed cluster
-    (owned=False); only when nothing is available does it start a head here,
-    which the caller must stop with `release_head`.
-
-    Background jobs are refused unless the head survives this machine going
-    away (deployed, or explicitly env-pointed), and are refused *before* an ad
-    hoc head gets started for them."""
-    import burla
-    from burla import _deployed_dashboard_url, _env_dashboard_url
-
-    handle = None
-    if burla._pinned_cluster_url:
-        handle = HeadHandle(
-            url=burla._pinned_cluster_url,
-            owned=False,
-            supports_detach=burla._pinned_head_supports_detach,
-        )
-    if handle is None:
-        url = _env_dashboard_url()
-        if url:
-            handle = HeadHandle(url=url, owned=False, supports_detach=True)
-    if handle is None:
-        url = _deployed_dashboard_url()
-        if url:
-            handle = HeadHandle(url=url, owned=False, supports_detach=True)
-    if handle is None:
-        url = running_head_url()
-        if url:
-            handle = HeadHandle(url=url, owned=False, supports_detach=False)
-
-    if for_background_job and (handle is None or not handle.supports_detach):
-        from burla._node import DetachRequiresDeployedCluster
-
-        raise DetachRequiresDeployedCluster()
-
-    if handle is None:
-        url = ensure_local_head()
-        _, project_id, _ = detect_cloud()
-        head_state_path = _head_state_dir(project_id) / "head.json"
-        pid = json.loads(head_state_path.read_text())["head_pid"]
-        handle = HeadHandle(url=url, owned=True, pid=pid)
-    return handle
-
-
 # How long to wait for the head to delete this cluster's nodes before killing
 # it anyway. Deleting is just one terminate/delete API call per node, so this
 # only needs to cover a slow control plane, and it bounds how long a finished
@@ -671,8 +311,8 @@ def acquire_head_for_job(for_background_job: bool = False) -> HeadHandle:
 CLUSTER_SHUTDOWN_TIMEOUT_SEC = 30
 
 
-def release_head(handle: HeadHandle):
-    """Stop a head started by `acquire_head_for_job` (no-op if not owned).
+def release_head(handle):
+    """Stop a head started for one job (no-op if not owned).
 
     Deletes this cluster's nodes first, while the head still holds the cloud
     credentials to do it: otherwise the nodes outlive the job and only clean
@@ -801,30 +441,18 @@ def finish_history_migration(project_id: str):
         _clear_process_state(head_state_path, head_pid, frpc_pid)
 
 
-def _reap(pid: int):
-    """Clear the zombie left behind when we kill a head we spawned ourselves.
-    Until it is reaped the pid still exists, so `_pid_alive` keeps saying yes."""
-    try:
-        os.waitpid(pid, os.WNOHANG)
-    except (ChildProcessError, OSError):
-        pass  # not our child (a head some earlier process started)
-
-
 def _terminate_pid(pid: int | None):
-    if not _pid_alive(pid):
+    if pid is None:
         return
-    os.kill(pid, signal.SIGTERM)
-    for _ in range(50):  # up to ~5s for a graceful uvicorn shutdown
-        _reap(pid)
-        if not _pid_alive(pid):
-            return
-        sleep(0.1)
-    os.kill(pid, signal.SIGKILL)
-    for _ in range(20):
-        _reap(pid)
-        if not _pid_alive(pid):
-            return
-        sleep(0.1)
+    try:
+        process = psutil.Process(pid)
+    except psutil.NoSuchProcess:
+        return
+    process.terminate()
+    _, alive = psutil.wait_procs([process], timeout=5)
+    if alive:
+        alive[0].kill()
+        psutil.wait_procs(alive, timeout=2)
 
 
 def _pause_job_admission(url: str, project_id: str) -> bool:
@@ -855,12 +483,12 @@ def _resume_job_admission(url: str, project_id: str):
 
 def _head_exit_status(head_pid: int) -> tuple[bool, int | None]:
     try:
-        exited_pid, status = os.waitpid(head_pid, os.WNOHANG)
-    except ChildProcessError:
-        return not _pid_alive(head_pid), None
-    if exited_pid:
-        return True, os.waitstatus_to_exitcode(status)
-    return False, None
+        exit_code = psutil.Process(head_pid).wait(timeout=0)
+        return True, exit_code
+    except psutil.TimeoutExpired:
+        return False, None
+    except psutil.NoSuchProcess:
+        return True, None
 
 
 def _stream_head_log(log_path: Path, offset: int, head_pid: int) -> int | None:
@@ -1079,7 +707,7 @@ def _run_local_head(
         "BURLA_CLUSTER_NAME": head_namespace,
         "PROJECT_ID": project_id,
         "CLOUD_PROVIDER": cloud,
-        "CLOUD_ACCOUNT_NAME": _cloud_account_name(cloud, project_id),
+        "CLOUD_ACCOUNT_NAME": cloud_account_name(cloud, project_id),
         "CLUSTER_ID_TOKEN": cluster_token,
         "BURLA_BACKEND_URL": _BURLA_BACKEND_URL,
         "BURLA_RELAY_HOST": RELAY_HOST,
@@ -1097,6 +725,8 @@ def _run_local_head(
         "BURLA_LOCAL_USER_EMAIL": auth_info["email"],
         "BURLA_LOCAL_USER_TOKEN": auth_info["auth_token"],
     }
+    if os.name == "nt":
+        environment.setdefault("SSL_CERT_FILE", requests.certs.where())
     if cloud == "aws" and aws_region:
         environment["AWS_REGION"] = aws_region
     if cloud == "azure":
@@ -1350,6 +980,15 @@ def _wait_for_head_ready(
     raise LocalHeadError(message)
 
 
+def _detached_process_kwargs() -> dict:
+    if os.name == "nt":
+        return {
+            "creationflags": subprocess.CREATE_NEW_PROCESS_GROUP
+            | subprocess.DETACHED_PROCESS
+        }
+    return {"start_new_session": True}
+
+
 def _spawn_head(
     state_dir: Path,
     head_port: int,
@@ -1380,7 +1019,7 @@ def _spawn_head(
             env=environment,
             stdout=head_log,
             stderr=head_log,
-            start_new_session=True,
+            **_detached_process_kwargs(),
         )
 
 
@@ -1423,7 +1062,7 @@ def _respawn_frpc(
         [str(frpc_binary), "-c", str(config_path)],
         stdout=frpc_log,
         stderr=frpc_log,
-        start_new_session=True,
+        **_detached_process_kwargs(),
     )
     head_state["frpc_pid"] = frpc_process.pid
     (state_dir / "head.json").write_text(json.dumps(head_state))

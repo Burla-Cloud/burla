@@ -1,5 +1,6 @@
 import json
 import os
+from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -116,45 +117,9 @@ def _env_dashboard_url() -> str | None:
 
 
 def _deployed_dashboard_url() -> str | None:
-    """The deployed cluster registered for the active cloud account, or None."""
-    import requests
+    from burla._auth import deployed_dashboard_url
 
-    from burla._local_head import (
-        LocalHeadError,
-        detect_cloud,
-        ensure_user_authorized,
-        get_or_register_cluster_token,
-    )
-
-    config = json.loads(CONFIG_PATH.read_text()) if CONFIG_PATH.exists() else {}
-    configured_url = (config.get("cluster_dashboard_url") or "").rstrip("/")
-    try:
-        cloud, project_id, aws_region = detect_cloud()
-    except LocalHeadError:
-        # Nested Burla calls run inside workers without cloud credentials. Their
-        # node writes the exact head URL into this config before invoking them.
-        return configured_url or None
-
-    cluster_token = get_or_register_cluster_token(cloud, project_id, aws_region)
-    response = requests.get(
-        f"{_BURLA_BACKEND_URL}/v1/clusters/{project_id}/dashboard_url",
-        headers={"Authorization": f"Bearer {cluster_token}"},
-        timeout=20,
-    )
-    if response.status_code == 409:
-        return None
-    response.raise_for_status()
-
-    dashboard_url = response.json()["dashboard_url"].rstrip("/")
-    if not dashboard_url.startswith("https://"):
-        raise ValueError("Backend returned a non-HTTPS dashboard URL")
-
-    ensure_user_authorized(cloud, project_id, cluster_token)
-    config = json.loads(CONFIG_PATH.read_text())
-    config["cluster_dashboard_url"] = dashboard_url
-    config.pop("mode", None)
-    CONFIG_PATH.write_text(json.dumps(config))
-    return dashboard_url
+    return deployed_dashboard_url()
 
 
 # The cluster a job has already committed to. Set for the duration of a
@@ -169,6 +134,14 @@ _pinned_cluster_url: str | None = None
 _pinned_head_supports_detach: bool = False
 
 
+@dataclass
+class _HeadHandle:
+    url: str
+    owned: bool
+    pid: int | None = None
+    supports_detach: bool = False
+
+
 def _pin_cluster_url(url: str, supports_detach: bool = False):
     global _pinned_cluster_url, _pinned_head_supports_detach
     _pinned_cluster_url = url
@@ -181,15 +154,30 @@ def _unpin_cluster_url():
     _pinned_head_supports_detach = False
 
 
+def _remote_head_handle() -> _HeadHandle | None:
+    if _pinned_cluster_url:
+        return _HeadHandle(
+            url=_pinned_cluster_url,
+            owned=False,
+            supports_detach=_pinned_head_supports_detach,
+        )
+    url = _env_dashboard_url()
+    if url:
+        return _HeadHandle(url=url, owned=False, supports_detach=True)
+    url = _deployed_dashboard_url()
+    if url:
+        return _HeadHandle(url=url, owned=False, supports_detach=True)
+    return None
+
+
 def _existing_cluster_dashboard_url() -> str | None:
+    handle = _remote_head_handle()
+    if handle:
+        return handle.url
+
     from burla._local_head import running_head_url
 
-    return (
-        _pinned_cluster_url
-        or _env_dashboard_url()
-        or _deployed_dashboard_url()
-        or running_head_url()
-    )
+    return running_head_url()
 
 
 def get_cluster_dashboard_url() -> str:
@@ -200,9 +188,43 @@ def get_cluster_dashboard_url() -> str:
     active cloud account, then an account-wide ad hoc head already running, then
     a head started on this machine. See `burla._local_head`.
     """
+    url = _existing_cluster_dashboard_url()
+    if url:
+        return url
+
     from burla._local_head import ensure_local_head
 
-    return _existing_cluster_dashboard_url() or ensure_local_head()
+    return ensure_local_head()
+
+
+def _acquire_head_for_job(for_background_job: bool = False) -> _HeadHandle:
+    handle = _remote_head_handle()
+    if handle is None:
+        from burla._local_head import running_head_url
+
+        url = running_head_url()
+        if url:
+            handle = _HeadHandle(url=url, owned=False)
+
+    if for_background_job and (handle is None or not handle.supports_detach):
+        from burla._node import DetachRequiresDeployedCluster
+
+        raise DetachRequiresDeployedCluster()
+
+    if handle is None:
+        from burla._local_head import start_local_head_for_job
+
+        url, pid = start_local_head_for_job()
+        handle = _HeadHandle(url=url, owned=True, pid=pid)
+    return handle
+
+
+def _release_head_for_job(handle: _HeadHandle):
+    if not handle.owned:
+        return
+    from burla._local_head import release_head
+
+    release_head(handle)
 
 
 from burla._auth import login
@@ -216,7 +238,6 @@ def dashboard(port: int | None = None):
     """Open the dashboard. Local dashboards use port 5001 unless overridden."""
     import webbrowser
 
-    from burla._local_head import LocalHeadError, run_local_head_for_dashboard
     from burla._reporting import log_dashboard_start_telemetry
 
     def open_dashboard(url: str, is_foreground: bool):
@@ -226,14 +247,17 @@ def dashboard(port: int | None = None):
         webbrowser.open(url)
         log_dashboard_start_telemetry(__version__, is_local=is_foreground)
 
-    remote_url = (
-        _pinned_cluster_url or _env_dashboard_url() or _deployed_dashboard_url()
-    )
-    if remote_url:
+    remote_head = _remote_head_handle()
+    if remote_head:
+        from burla._auth import LocalHeadError
+
         if port is not None:
             raise LocalHeadError("--port can only be used with a local dashboard.")
-        open_dashboard(remote_url, False)
+        open_dashboard(remote_head.url, False)
         return
+
+    from burla._local_head import run_local_head_for_dashboard
+
     run_local_head_for_dashboard(on_ready=open_dashboard, port=port)
 
 

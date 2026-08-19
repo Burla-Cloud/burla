@@ -43,7 +43,8 @@ _RESOURCE_PROVIDERS = (
 
 
 def _az(cmd: str, parse_json: bool = True, raise_error: bool = True):
-    result = run_command(f"az {cmd}", raise_error=raise_error)
+    executable = subprocess.list2cmdline([shutil.which("az")])
+    result = run_command(f"{executable} {cmd}", raise_error=raise_error)
     if result.returncode != 0:
         return None
     stdout = result.stdout.decode().strip()
@@ -76,7 +77,7 @@ def _azure_region() -> str:
         vnet_id = "/" + "/".join(parts[: vnet_index + 2])
         result = subprocess.run(
             [
-                "az",
+                shutil.which("az"),
                 "network",
                 "vnet",
                 "show",
@@ -627,7 +628,7 @@ def _create_identities(spinner, subscription_id: str, storage_account: str):
 
 def _register_cluster_and_save_token(spinner, project_id, region):
     from burla._deploy import AuthError
-    from burla._local_head import LocalHeadError, get_or_register_cluster_token
+    from burla._auth import LocalHeadError, get_or_register_cluster_token
 
     spinner.text = "Registering cluster ... "
     spinner.start()

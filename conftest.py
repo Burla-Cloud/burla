@@ -550,7 +550,7 @@ def main_http_client(burla_auth_headers):
 @pytest.fixture
 def node_push_client(main_http_client, local_dev_cluster):
     import httpx
-    from burla._local_head import read_saved_cluster_token
+    from burla._auth import read_saved_cluster_token
 
     project_id = main_http_client.get("/version").json()["project"]
     cluster_token = read_saved_cluster_token(project_id)

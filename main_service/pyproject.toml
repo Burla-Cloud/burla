@@ -1,6 +1,6 @@
 [project]
 name = "main-service"
-version = "1.7.2"
+version = "1.7.3"
 description = ""
 authors = [
     { name = "Jacob Zuliani", email = "jake@burla.dev" },

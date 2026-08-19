@@ -1,4 +1,4 @@
-import { NavLink } from "react-router-dom";
+import { Link, NavLink } from "react-router-dom";
 import { BookOpen, FolderClosed, LifeBuoy, ListChecks, Server, Settings } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { BrandLockup } from "@/components/BrandLockup";
@@ -33,9 +33,9 @@ const Sidebar = ({ disabled = false }: SidebarProps) => {
                 disabled && "pointer-events-none select-none opacity-60",
             )}
         >
-            <div className="px-3">
+            <Link to="/" className="px-3">
                 <BrandLockup />
-            </div>
+            </Link>
 
             <nav className="mt-7 space-y-0.5">
                 {items.map(({ to, label, icon: Icon, end }) => (

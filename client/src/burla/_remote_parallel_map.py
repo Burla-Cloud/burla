@@ -460,7 +460,15 @@ async def _execute_job(
                 if all([n.state == "BOOTING" for n in nodes]):
                     reporter.set_booting_nodes_message(len(nodes))
                 elif any([n.installing_packages for n in nodes]):
-                    reporter.set_installing_packages_message()
+                    installing_package = next(
+                        (
+                            n.currently_installing_package
+                            for n in nodes
+                            if n.currently_installing_package
+                        ),
+                        None,
+                    )
+                    reporter.set_installing_packages_message(installing_package)
                 else:
                     total_parallelism = sum((n.current_parallelism for n in nodes))
                     booting_node_count = sum(n.state == "BOOTING" for n in nodes)

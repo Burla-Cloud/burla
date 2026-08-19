@@ -278,6 +278,24 @@ async def upload_inputs(
         await SELF["inputs_queue"].put(input_pkl_with_idx, len(input_pkl_with_idx[1]))
 
 
+# Written by worker_server.py during environment installs (path duplicated
+# there). Assignment blocks the whole install, so this file is the only live
+# progress the client can poll for its spinner.
+INSTALLING_PACKAGE_PATH = "/worker_service_storage/installing_package.txt"
+
+
+@router.get("/jobs/{job_id}/installing_package")
+async def get_installing_package(job_id: str = Path(...)):
+    if job_id != SELF["current_job"]:
+        return Response("job not found", status_code=404)
+    try:
+        with open(INSTALLING_PACKAGE_PATH) as file:
+            package_name = file.read().strip() or None
+    except FileNotFoundError:
+        package_name = None
+    return {"package": package_name}
+
+
 @router.get("/jobs/{job_id}/results")
 async def get_results(
     job_id: str = Path(...),

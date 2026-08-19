@@ -286,6 +286,7 @@ class Node:
         self.udf_error_event = None
         self.current_parallelism = 0
         self.installing_packages = False
+        self.currently_installing_package = None
         self.result_count = 0
         self.result_batch_id_to_ack = None
         self.dynamic_worker_reduction = None
@@ -634,6 +635,23 @@ class Node:
             elif status >= 400:
                 raise Exception(response_text)
 
+    async def _poll_installing_package(self, job_id: str):
+        """Assignment blocks for the whole environment install; this side
+        channel is the only live progress during that window."""
+        url = f"{self.host}/jobs/{job_id}/installing_package"
+        while True:
+            await asyncio.sleep(0.25)
+            try:
+                async with self.session.get(
+                    url, headers=self.auth_headers, timeout=ClientTimeout(total=5)
+                ) as response:
+                    if response.status == 200:
+                        response_json = await response.json()
+                        self.currently_installing_package = response_json["package"]
+            except NETWORK_ERROR_TYPES:
+                # Cosmetic channel: assignment itself decides the node's fate.
+                pass
+
     async def execute_job(
         self,
         job_id: str,
@@ -669,20 +687,29 @@ class Node:
                     self.removed_reason = "replacement node failed to boot"
                 return
 
+        install_poll_task = None
         if packages:
             self.installing_packages = True
-        await self._assign_job(
-            job_id,
-            background,
-            n_inputs,
-            packages,
-            func_cpu,
-            func_ram,
-            start_time,
-            function_pkl,
-            udf_error_event,
-        )
-        self.installing_packages = False
+            install_poll_task = asyncio.create_task(
+                self._poll_installing_package(job_id)
+            )
+        try:
+            await self._assign_job(
+                job_id,
+                background,
+                n_inputs,
+                packages,
+                func_cpu,
+                func_ram,
+                start_time,
+                function_pkl,
+                udf_error_event,
+            )
+        finally:
+            self.installing_packages = False
+            self.currently_installing_package = None
+            if install_poll_task is not None:
+                install_poll_task.cancel()
         if self.state in ("FAILED", "REMOVED"):
             if was_initially_ready and first_chunk_barrier:
                 await first_chunk_barrier.abort()

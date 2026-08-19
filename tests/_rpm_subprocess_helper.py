@@ -38,6 +38,54 @@ def _drop_first_result_batch_if_requested() -> None:
     _node.Node._gather_results = gather_results_with_one_dropped_batch
 
 
+def _inject_transient_result_502s_if_requested() -> None:
+    requested = int(os.environ.get("BURLA_TEST_RESULT_502S", "0"))
+    if requested <= 0:
+        return
+
+    from burla import _node
+
+    original_gather_results = _node.Node._gather_results
+    remaining = requested
+
+    class InjectedResponse:
+        status = 502
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def text(self):
+            return "injected transient bad gateway"
+
+    class SessionProxy:
+        def __init__(self, session):
+            self.session = session
+
+        async def get(self, url, **kwargs):
+            nonlocal remaining
+            if remaining > 0 and url.endswith("/results"):
+                remaining -= 1
+                print("BURLA_TEST_INJECTED_RESULT_502")
+                return InjectedResponse()
+            return await self.session.get(url, **kwargs)
+
+        def __getattr__(self, name):
+            return getattr(self.session, name)
+
+    async def gather_results_through_fault_proxy(self):
+        original_session = self.session
+        self.session = SessionProxy(original_session)
+        try:
+            return await original_gather_results(self)
+        finally:
+            self.session = original_session
+
+    _node.Node._gather_results = gather_results_through_fault_proxy
+
+
 def run_rpm_in_subprocess(
     result_queue: Any,
     function_source: str,
@@ -53,6 +101,7 @@ def run_rpm_in_subprocess(
     from burla import remote_parallel_map
 
     _drop_first_result_batch_if_requested()
+    _inject_transient_result_502s_if_requested()
 
     function_namespace: dict = {}
     exec(function_source, function_namespace, function_namespace)

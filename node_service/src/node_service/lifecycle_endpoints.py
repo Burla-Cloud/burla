@@ -8,18 +8,16 @@ import aiodocker
 from fastapi import APIRouter, Depends, Response
 
 from node_service import (
-    PROJECT_ID,
     SELF,
     REINIT_SELF,
     INSTANCE_N_CPUS,
     INSTANCE_NAME,
     IN_LOCAL_DEV_MODE,
-    BURLA_BACKEND_URL,
-    CLUSTER_ID_TOKEN,
     NUM_GPUS,
     get_logger,
     get_add_background_task_function,
     head_client,
+    refresh_authorized_users,
 )
 from node_service.helpers import Logger
 from node_service.worker_client import WorkerClient, verify_worker_cgroup_isolation
@@ -282,20 +280,24 @@ async def reboot_containers(
         # reset state of the node service, except current_container_config, and the job_watcher.
         current_container_config = SELF["current_container_config"]
         reserved_for_job = SELF["reserved_for_job"]
+        authorized_users = SELF["authorized_users"]
         REINIT_SELF(SELF)
         SELF["BOOTING"] = True
         SELF["reported_status"] = "BOOTING"
         SELF["current_container_config"] = current_container_config
         SELF["reserved_for_job"] = reserved_for_job
+        SELF["authorized_users"] = authorized_users
         if new_container_config:
             SELF["current_container_config"] = new_container_config
 
-        # get list of authorized users/tokens from backend service
-        headers = {"Authorization": f"Bearer {CLUSTER_ID_TOKEN}"}
-        url = f"{BURLA_BACKEND_URL}/v1/clusters/{PROJECT_ID}/users"
-        response = requests.get(url, headers=headers)
-        response.raise_for_status()
-        SELF["authorized_users"] = response.json()["authorized_users"]
+        refreshed_users = await refresh_authorized_users(
+            allow_cached_on_error=bool(authorized_users)
+        )
+        if not refreshed_users:
+            await logger.log(
+                "Backend auth refresh unavailable; using cached authorized users.",
+                severity="WARNING",
+            )
 
         docker = aiodocker.Docker()
         try:

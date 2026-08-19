@@ -6,7 +6,7 @@ import sys
 from queue import Queue
 from threading import Event
 from pickle import UnpicklingError
-from time import time
+from time import monotonic, time
 import aiohttp
 import cloudpickle
 from aiohttp import ClientConnectorError, ClientError, ClientOSError, ClientTimeout
@@ -26,6 +26,8 @@ MAX_INPUT_SIZE_BYTES = 1_000_000 * 200  # 200MB
 MAX_CHUNK_SIZE_BYTES = 1_000_000 * 2  # 2MB
 NETWORK_RETRY_ATTEMPTS = 5
 NETWORK_RETRY_DELAY_SECONDS = 1
+RESULT_HTTP_RETRY_TIMEOUT_SECONDS = 10
+TRANSIENT_RESULT_STATUS_CODES = {500, 502, 503, 504}
 NETWORK_ERROR_TYPES = (
     asyncio.TimeoutError,
     ClientConnectorError,
@@ -415,6 +417,15 @@ class Node:
             raise ClusterRestarted()
         if job_doc.get("dashboard_canceled"):
             raise JobCanceled("\n\nJob canceled from dashboard.\n")
+        if job_doc.get("status") == "CANCELED":
+            raise JobCanceled("\n\nJob canceled from dashboard.\n")
+        if job_doc.get("status") == "FAILED":
+            reasons = job_doc.get("fail_reason") or []
+            reason = f"\n\nReason: {reasons[-1]}" if reasons else ""
+            raise NodeDisconnected(
+                self,
+                f"Job failed while polling node {self.instance_name}.{reason}",
+            )
 
     async def _update_status(self, job_id: str):
         node_data = await self.client.get_node(self.instance_name)
@@ -563,35 +574,61 @@ class Node:
             )
 
         try:
-            response = await _run_network_request_with_retries(request_function)
-            async with response:
-                self.last_reply_timestamp = time()
-                if response.status == 404:
-                    self.state = "DONE"
-                    return {
-                        "result_batch_id": None,
-                        "results": [],
-                        "current_parallelism": 0,
-                        "dynamic_worker_reduction": None,
-                        "logs": [],
-                    }
-                if response.status != 200:
-                    raise Exception(
-                        f"Result-check failed for node: {self.instance_name}"
-                    )
-                try:
-                    node_results = pickle.loads(await response.content.read())
+            transient_started_at = None
+            transient_attempt = 0
+            while True:
+                response = await _run_network_request_with_retries(request_function)
+                async with response:
                     self.last_reply_timestamp = time()
-                    if result_batch_id_to_ack:
-                        self.result_batch_id_to_ack = None
-                except UnpicklingError as error:
-                    if "Memo value not found at index" not in str(error):
-                        raise error
-                    job_doc = await self.client.get_job(self.job_id)
-                    if job_doc and job_doc.get("status") == "CANCELED":
-                        raise JobCanceled("Job canceled from dashboard.")
-                    msg = f"Node {self.instance_name} disconnected while transmitting results.\n"
-                    raise NodeDisconnected(self, await self._failure_message(msg))
+                    if response.status in TRANSIENT_RESULT_STATUS_CODES:
+                        response_text = (await response.text()).strip()
+                        transient_started_at = transient_started_at or monotonic()
+                        elapsed = monotonic() - transient_started_at
+                        await self._raise_if_job_ended_by_lifecycle(self.job_id)
+                        if elapsed >= RESULT_HTTP_RETRY_TIMEOUT_SECONDS:
+                            detail = f": {response_text[:500]}" if response_text else ""
+                            raise Exception(
+                                f"Result-check failed for node {self.instance_name} "
+                                f"after {RESULT_HTTP_RETRY_TIMEOUT_SECONDS}s of HTTP "
+                                f"{response.status} responses{detail}"
+                            )
+                        delay = min(0.25 * (2**transient_attempt), 2.0)
+                        delay = min(
+                            delay, RESULT_HTTP_RETRY_TIMEOUT_SECONDS - elapsed
+                        )
+                        transient_attempt += 1
+                        await asyncio.sleep(delay)
+                        continue
+                    if response.status == 404:
+                        self.state = "DONE"
+                        return {
+                            "result_batch_id": None,
+                            "results": [],
+                            "current_parallelism": 0,
+                            "dynamic_worker_reduction": None,
+                            "logs": [],
+                        }
+                    if response.status != 200:
+                        response_text = (await response.text()).strip()
+                        detail = f": {response_text[:500]}" if response_text else ""
+                        raise Exception(
+                            f"Result-check failed for node {self.instance_name}: "
+                            f"HTTP {response.status}{detail}"
+                        )
+                    try:
+                        node_results = pickle.loads(await response.content.read())
+                        self.last_reply_timestamp = time()
+                        if result_batch_id_to_ack:
+                            self.result_batch_id_to_ack = None
+                    except UnpicklingError as error:
+                        if "Memo value not found at index" not in str(error):
+                            raise error
+                        job_doc = await self.client.get_job(self.job_id)
+                        if job_doc and job_doc.get("status") == "CANCELED":
+                            raise JobCanceled("Job canceled from dashboard.")
+                        msg = f"Node {self.instance_name} disconnected while transmitting results.\n"
+                        raise NodeDisconnected(self, await self._failure_message(msg))
+                    break
         except NETWORK_ERROR_TYPES:
             # The node normally attaches restart/shutdown/cancel signals to
             # its /results responses, but a restart terminates the VM before

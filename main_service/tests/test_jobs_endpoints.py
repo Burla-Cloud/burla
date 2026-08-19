@@ -118,3 +118,24 @@ def test_patch_job_updates_fields_directly(
         return doc.get("client_has_all_results") if doc else None
 
     assert wait_for_fixture(_flag, timeout=5) is True
+
+
+def test_patch_job_preserves_first_terminal_status(
+    main_http_client, local_dev_cluster, isolated_job_id, cleanup_job, get_job
+):
+    job_id = cleanup_job(isolated_job_id())
+    _seed_running_job(main_http_client, job_id)
+
+    canceled = main_http_client.patch(
+        f"/v1/jobs/{job_id}", json={"status": "CANCELED"}
+    )
+    assert canceled.status_code in (200, 204)
+    late_failure = main_http_client.patch(
+        f"/v1/jobs/{job_id}",
+        json={"status": "FAILED", "fail_reason_append": "late client cleanup"},
+    )
+    assert late_failure.status_code in (200, 204)
+
+    job = get_job(job_id)
+    assert job["status"] == "CANCELED"
+    assert "late client cleanup" in job["fail_reason"]

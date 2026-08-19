@@ -522,6 +522,11 @@ async def _execute_job(
                 all([task.done() for task in node_tasks])
                 and total_result_count < n_inputs
             ):
+                lifecycle_exception, _, _ = await _job_lifecycle_exception(
+                    client, job_id
+                )
+                if lifecycle_exception is not None:
+                    raise lifecycle_exception
                 summary = "\n".join([await n._stall_summary_line() for n in nodes])
                 msg = (
                     f"Job ended before all results were received "
@@ -538,7 +543,10 @@ async def _execute_job(
         # (e.g. mid-restart) must not turn this last handshake into a failure.
         for attempt in range(12):
             try:
-                await client.patch_job(job_id, {"client_has_all_results": True})
+                await client.patch_job(
+                    job_id,
+                    {"client_has_all_results": True, "status": "COMPLETED"},
+                )
                 break
             except (TimeoutError, aiohttp.ClientError):
                 if attempt == 11:

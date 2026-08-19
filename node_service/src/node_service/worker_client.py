@@ -123,7 +123,7 @@ async def _relocate_worker_process_or_retire(worker: "WorkerClient"):
             return  # worker_server.py is mid-relaunch, check next poll
         worker.retired = True
         worker.is_idle = True
-        SELF["reboot_containers_after_job"] = True
+        SELF["worker_pool_changed_during_job"] = True
         SELF["last_pressure_retirement_at"] = time.time()
         await Logger().log(
             f"Retired {worker.container_name}: process {stale_pid} is "
@@ -731,7 +731,7 @@ async def retire_workers_for_pressure(
             worker.is_idle = True
             await SELF["inputs_queue"].put((input_index, input_pkl), len(input_pkl))
 
-        SELF["reboot_containers_after_job"] = True
+        SELF["worker_pool_changed_during_job"] = True
         SELF["last_pressure_retirement_at"] = time.time()
         msg = (
             f"Node parallelism decreased from {old_parallelism} to {new_parallelism} "
@@ -1042,14 +1042,14 @@ class WorkerClient:
                 if isinstance(error, WorkerOutOfMemoryError):
                     error = _dynamic_terminal_oom_error()
                 self.retired = True
-                SELF["reboot_containers_after_job"] = True
+                SELF["worker_pool_changed_during_job"] = True
                 return (input_index, True, self._serialize_error(error))
 
             old_parallelism = len(other_active_workers) + 1
             new_parallelism = old_parallelism - 1
             self.retired = True
             self.is_idle = True
-            SELF["reboot_containers_after_job"] = True
+            SELF["worker_pool_changed_during_job"] = True
             SELF["last_pressure_retirement_at"] = time.time()
             await SELF["inputs_queue"].put((input_index, input_pkl), len(input_pkl))
 
@@ -1371,3 +1371,68 @@ class WorkerClient:
     async def _log_container_failure(self):
         if await self._container_exists():
             print(await self._get_logs(), end="")
+
+
+async def restore_worker_pool_after_job() -> list[WorkerClient]:
+    """Restore the pre-job worker shape without replacing healthy containers."""
+    desired_specs = list(SELF["job_worker_specs"])
+    existing_workers = list(SELF["workers"])
+    available_workers = [
+        worker
+        for worker in existing_workers
+        if not worker.retired and worker.container_id is not None
+    ]
+    selected_workers: list[WorkerClient | None] = []
+
+    for image, gpu_index in desired_specs:
+        selected = next(
+            (
+                worker
+                for worker in available_workers
+                if worker.image == image and worker.gpu_index == gpu_index
+            ),
+            None,
+        )
+        if selected is not None:
+            available_workers.remove(selected)
+        selected_workers.append(selected)
+
+    async def discard(worker: WorkerClient) -> None:
+        if worker.container_id is None or worker.container is None:
+            return
+        try:
+            await worker._delete_container()
+        except Exception:
+            pass
+
+    async def restore(
+        spec: tuple[str, int | None], worker: WorkerClient | None
+    ) -> WorkerClient:
+        if worker is not None:
+            try:
+                await worker.reset()
+                worker.retired = False
+                worker.current_input = None
+                return worker
+            except Exception:
+                await discard(worker)
+
+        replacement = WorkerClient(spec[0], gpu_index=spec[1])
+        await replacement.boot()
+        return replacement
+
+    restored_workers = await asyncio.gather(
+        *(
+            restore(spec, worker)
+            for spec, worker in zip(desired_specs, selected_workers)
+        )
+    )
+    restored_ids = {id(worker) for worker in restored_workers}
+    await asyncio.gather(
+        *(
+            discard(worker)
+            for worker in existing_workers
+            if id(worker) not in restored_ids
+        )
+    )
+    return list(restored_workers)

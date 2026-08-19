@@ -3,6 +3,7 @@ import inspect
 import json
 import logging as python_logging
 import os
+import random
 import sys
 import traceback
 from collections import deque
@@ -62,6 +63,8 @@ from node_service.helpers import Logger, ResultsEndpointFilter, SizedQueue
 MAX_PENDING_LOGS = 20_000
 
 STATE_PUSH_INTERVAL_SEC = 1
+AUTHORIZED_USERS_REFRESH_ATTEMPTS = 4
+AUTHORIZED_USERS_REFRESH_TIMEOUT_SEC = 2
 
 
 # SELF = state of this current instance of the node service
@@ -108,7 +111,8 @@ def REINIT_SELF(SELF):
     # The job's pickled function, kept so workers booted mid-job (re-adds,
     # slot trades) can be assigned without the client.
     SELF["function_pkl"] = None
-    SELF["reboot_containers_after_job"] = False
+    SELF["worker_pool_changed_during_job"] = False
+    SELF["job_worker_specs"] = []
     SELF["num_results_received"] = 0
     SELF["pending_transfers"] = {}
     SELF["pending_result_batch"] = None
@@ -129,6 +133,7 @@ def REINIT_SELF(SELF):
     # request arriving before that fetch gets the middleware's re-fetch path
     # (or a clean 401) instead of a KeyError 500.
     SELF["authorized_users"] = []
+    SELF["authorized_users_refresh_lock"] = asyncio.Lock()
     # State reported to / received from the head over the push exchange.
     SELF["reported_status"] = "BOOTING"
     SELF["client_contact_last_1s"] = True
@@ -146,6 +151,45 @@ SELF["reserved_for_job"] = RESERVED_FOR_JOB
 
 # Silence fastapi logs coming from the `/results` endpoint, there are so many it slows stuff down.
 python_logging.getLogger("uvicorn.access").addFilter(ResultsEndpointFilter())
+
+
+async def refresh_authorized_users(*, allow_cached_on_error: bool) -> bool:
+    """Refresh node auth without discarding a last-known-good user list."""
+    async with SELF["authorized_users_refresh_lock"]:
+        headers = {"Authorization": f"Bearer {CLUSTER_ID_TOKEN}"}
+        url = f"{BURLA_BACKEND_URL}/v1/clusters/{PROJECT_ID}/users"
+        last_error = None
+        for attempt in range(AUTHORIZED_USERS_REFRESH_ATTEMPTS):
+            try:
+                timeout = aiohttp.ClientTimeout(
+                    total=AUTHORIZED_USERS_REFRESH_TIMEOUT_SEC
+                )
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    async with session.get(url, headers=headers) as response:
+                        response.raise_for_status()
+                        response_json = await response.json()
+                SELF["authorized_users"] = response_json["authorized_users"]
+                return True
+            except aiohttp.ClientResponseError as error:
+                if error.status < 500:
+                    raise RuntimeError(
+                        f"Backend rejected authorized-user refresh with HTTP {error.status}."
+                    ) from error
+                last_error = error
+                if attempt < AUTHORIZED_USERS_REFRESH_ATTEMPTS - 1:
+                    delay = 0.2 * (2**attempt)
+                    await asyncio.sleep(delay * random.uniform(0.8, 1.2))
+            except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as error:
+                last_error = error
+                if attempt < AUTHORIZED_USERS_REFRESH_ATTEMPTS - 1:
+                    delay = 0.2 * (2**attempt)
+                    await asyncio.sleep(delay * random.uniform(0.8, 1.2))
+
+        if allow_cached_on_error and SELF["authorized_users"]:
+            return False
+        raise RuntimeError(
+            "Unable to refresh authorized users from the Burla backend."
+        ) from last_error
 
 
 async def get_request_json(request: Request):
@@ -767,13 +811,15 @@ async def validate_requests(request: Request, call_next):
 
     if invalid_headers:
         # refresh and try again:
-        headers = {"Authorization": f"Bearer {CLUSTER_ID_TOKEN}"}
-        url = f"{BURLA_BACKEND_URL}/v1/clusters/{PROJECT_ID}/users"
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, headers=headers) as response:
-                response.raise_for_status()
-                response_json = await response.json()
-                SELF["authorized_users"] = response_json["authorized_users"]
+        try:
+            refreshed = await refresh_authorized_users(allow_cached_on_error=True)
+        except RuntimeError:
+            refreshed = False
+        if not refreshed:
+            return Response(
+                status_code=503,
+                content="Authorization refresh is temporarily unavailable.",
+            )
 
         for user_dict in SELF["authorized_users"]:
             if email == user_dict["email"] and token == user_dict["token"]:

@@ -318,9 +318,9 @@ def update_job(
 ) -> bool:
     """Merge updates into a job. Returns False if the job doesn't exist.
 
-    Status rule: FAILED/CANCELED always apply; COMPLETED only applies while
-    the job is RUNNING (a node reporting completion must not overwrite a
-    cancellation another writer already recorded).
+    Status rule: the first terminal state wins. Late node/client cleanup must
+    not turn a completed or canceled job into a failure, or overwrite a failure
+    with completion.
     """
     with _lock:
         job = _get_or_load_job(job_id)
@@ -328,7 +328,16 @@ def update_job(
             return False
         updates = dict(updates)
         new_status = updates.get("status")
-        if new_status == "COMPLETED" and job.get("status") != "RUNNING":
+        current_status = job.get("status")
+        terminal_transition_already_recorded = (
+            current_status in TERMINAL_JOB_STATUSES
+            and new_status in TERMINAL_JOB_STATUSES
+            and new_status != current_status
+        )
+        invalid_completion = (
+            new_status == "COMPLETED" and current_status != "RUNNING"
+        )
+        if terminal_transition_already_recorded or invalid_completion:
             updates.pop("status")
             new_status = None
         became_failed = new_status == "FAILED" and job.get("status") != "FAILED"

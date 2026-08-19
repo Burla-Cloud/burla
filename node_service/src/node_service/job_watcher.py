@@ -21,7 +21,6 @@ from node_service import (
     head_client,
 )
 from node_service.helpers import Logger, debug_log, format_traceback
-from node_service.lifecycle_endpoints import reboot_containers
 from node_service.worker_client import (
     CPU_PRESSURE_FILE,
     READD_MAX_CPU_STALL_FRACTION,
@@ -29,9 +28,9 @@ from node_service.worker_client import (
     READD_PRESSURE_COOLDOWN_SECONDS,
     _read_cpu_stall_usec,
     _workers_memory_limit_bytes,
+    restore_worker_pool_after_job,
 )
 
-EMPTY_NEIGHBOR_TIMEOUT_SEC = 120
 CLIENT_CONTACT_TIMEOUT_SEC = 5
 ACK_RETRY_TIMEOUT_SEC = 600
 ACK_RETRY_DELAY_SEC = 15
@@ -55,9 +54,6 @@ STALL_REPORT_INTERVAL_SEC = 10
 # slot ledger, so post-mortems can read a timeseries instead of replaying
 # every change event.
 SLOT_STATE_LOG_INTERVAL_SEC = 60
-
-SEC_NEIGHBOR_HAD_NO_INPUTS = 0
-
 
 def _lifecycle_canceled(job_view: dict) -> bool:
     return (
@@ -84,8 +80,6 @@ async def get_neighbor():
 
 
 async def _input_steal_loop(session, logger, job_started_at):
-    global SEC_NEIGHBOR_HAD_NO_INPUTS
-
     # A node traded down to zero slots must stop pulling work in: it has no
     # workers left to run it, and holding inputs would keep it on the job.
     should_steal = lambda: (
@@ -98,7 +92,6 @@ async def _input_steal_loop(session, logger, job_started_at):
     # only while initially-expected nodes are still booting. last_peer_check
     # starts at 0 so the first active tick fetches the initial neighbor.
     neighbor_id, neighbor_host = None, None
-    neighbor_had_no_inputs_at = None
     last_peer_check = 0.0
 
     while not SELF["job_watcher_stop_event"].is_set():
@@ -188,13 +181,7 @@ async def _input_steal_loop(session, logger, job_started_at):
                 pass
             return
 
-        if received:
-            neighbor_had_no_inputs_at = None
-            SEC_NEIGHBOR_HAD_NO_INPUTS = 0
-            # await logger.log(f"Got {len(items)} more inputs from {neighbor_id}")
-        else:
-            neighbor_had_no_inputs_at = neighbor_had_no_inputs_at or time()
-            SEC_NEIGHBOR_HAD_NO_INPUTS = time() - neighbor_had_no_inputs_at
+        if not received:
             await asyncio.sleep(1)
 
 
@@ -342,10 +329,6 @@ async def _job_watcher(
     logger: Logger,
     session: aiohttp.ClientSession,
 ):
-    # Module-global: reset per-job so prior-job state doesn't leak in.
-    global SEC_NEIGHBOR_HAD_NO_INPUTS
-    SEC_NEIGHBOR_HAD_NO_INPUTS = 0
-
     # First push registers this node's progress with the head (the
     # `assigned_nodes` entry) and returns the job's current signal set.
     # The job was created synchronously inside `POST /v1/jobs/{id}/start`,
@@ -588,23 +571,6 @@ async def _job_watcher(
             await reset_workers(logger)
             break
 
-        # Neighbor had no inputs for too long?
-        if (
-            SEC_NEIGHBOR_HAD_NO_INPUTS
-            and SEC_NEIGHBOR_HAD_NO_INPUTS > EMPTY_NEIGHBOR_TIMEOUT_SEC
-        ):
-            if (
-                SELF["results_queue"].empty()
-                and pending_results_empty
-                and all_workers_idle
-            ):
-                steal_task.cancel()
-                trade_task.cancel()
-                msg = f"Neighbor had no extra inputs for {EMPTY_NEIGHBOR_TIMEOUT_SEC}s"
-                await logger.log(msg + ", done working on job!")
-                await reset_workers(logger)
-                break
-
         # Job over?
         job_completed = False
         all_uploaded = SELF["all_inputs_uploaded"]
@@ -692,7 +658,9 @@ async def reinit_node(assigned_workers: list):
 
 
 async def reset_workers(logger: Logger):
-    # Stops idle or reassigned workers from holding creds for a finished job.
+    # Detach from the completed/failed job before maintaining this node.
+    # A maintenance failure can make the node unavailable for future work, but
+    # must never retroactively fail work whose results were already drained.
     NODE_AUTH_CREDENTIALS_PATH.unlink(missing_ok=True)
     for task_key in (
         "dynamic_ram_monitor_task",
@@ -707,45 +675,51 @@ async def reset_workers(logger: Logger):
             except asyncio.CancelledError:
                 pass
             SELF[task_key] = None
-    if SELF["reboot_containers_after_job"]:
-        await logger.log(
-            "Rebooting worker containers to restore dynamic worker capacity ..."
-        )
+
+    SELF["reported_status"] = "BOOTING"
+    detach_error_logged = False
+    while not SELF["SHUTTING_DOWN"]:
         try:
-            await asyncio.wait_for(
-                reboot_containers(logger=logger),
-                timeout=WORKER_CLEANUP_TIMEOUT_SEC,
+            await head_client.push_state(
+                status="BOOTING", current_job=None, reserved_for_job=None
             )
-        except Exception as e:
-            SELF["reported_status"] = "FAILED"
-            await head_client.push_state(status="FAILED")
-            await logger.log(
-                f"Timed out rebooting worker containers: {e}", severity="ERROR"
-            )
+            break
+        except Exception as error:
+            if not detach_error_logged:
+                detach_error_logged = True
+                await logger.log(
+                    "Could not detach node before maintenance; retrying: "
+                    f"{type(error).__name__}: {error}",
+                    severity="WARNING",
+                )
+            await asyncio.sleep(1)
+    if SELF["SHUTTING_DOWN"]:
         return
+    SELF["RUNNING"] = False
+    SELF["current_job"] = None
+
     try:
-        await asyncio.wait_for(
-            asyncio.gather(*(worker.reset() for worker in SELF["workers"])),
+        if SELF["worker_pool_changed_during_job"]:
+            await logger.log(
+                "Restoring retired worker capacity without replacing healthy containers ..."
+            )
+        restored_workers = await asyncio.wait_for(
+            restore_worker_pool_after_job(),
             timeout=WORKER_CLEANUP_TIMEOUT_SEC,
         )
-    except Exception as e:
-        # dont throw errors if node deleting
-        if SELF["SHUTTING_DOWN"] or SELF["FAILED"]:
+        await reinit_node(restored_workers)
+    except Exception as error:
+        if SELF["SHUTTING_DOWN"]:
             return
-
-        await logger.log(f"Error resetting workers: {e}", severity="ERROR")
-        await logger.log("Some workers failed to reset, rebooting containers ...")
+        SELF["FAILED"] = True
+        SELF["reported_status"] = "FAILED"
+        await logger.log(
+            f"Worker capacity restoration failed: {type(error).__name__}: {error}",
+            severity="ERROR",
+        )
         try:
-            await asyncio.wait_for(
-                reboot_containers(logger=logger),
-                timeout=WORKER_CLEANUP_TIMEOUT_SEC,
-            )
-        except Exception as reboot_error:
-            SELF["reported_status"] = "FAILED"
             await head_client.push_state(status="FAILED")
-            await logger.log(
-                f"Timed out rebooting worker containers after reset failure: {reboot_error}",
-                severity="ERROR",
-            )
-        return
-    await reinit_node(SELF["workers"])
+            if not IN_LOCAL_DEV_MODE:
+                await head_client.request_self_delete()
+        except Exception:
+            pass

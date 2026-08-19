@@ -228,7 +228,7 @@ async def trade_slots(
             idle_to_give = idle_workers[: max(0, slots_requested - granted)]
             for worker in idle_to_give:
                 worker.retired = True
-                SELF["reboot_containers_after_job"] = True
+                SELF["worker_pool_changed_during_job"] = True
                 # The task is parked on inputs_queue.get(); left alive it
                 # would swallow (and lose) the next input to arrive.
                 if worker.process_inputs_task is not None:
@@ -432,6 +432,9 @@ async def execute(
     # client's involvement.
     SELF["function_pkl"] = function_pkl
 
+    SELF["job_worker_specs"] = [
+        (worker.image, worker.gpu_index) for worker in workers_to_assign
+    ]
     SELF["workers"] = workers_to_assign
     SELF["idle_workers"] = workers_to_leave_idle
     SELF["current_parallelism"] = 0
@@ -441,7 +444,7 @@ async def execute(
     SELF["job_assigned_at"] = time()
     SELF["dynamic_func_ram"] = request_json["func_ram"] == "dynamic"
     SELF["dynamic_func_cpu"] = request_json["func_cpu"] == "dynamic"
-    SELF["reboot_containers_after_job"] = False
+    SELF["worker_pool_changed_during_job"] = False
     # In local-dev psutil.virtual_memory() inside the node container reports the
     # whole docker VM, not this node, so the monitor's "90% of total" trigger
     # measures the wrong machine and would shed workers over other nodes' usage.

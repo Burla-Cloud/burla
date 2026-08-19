@@ -1034,7 +1034,7 @@ wheels = [
 
 [[package]]
 name = "main-service"
-version = "1.7.4"
+version = "1.7.5"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },

@@ -798,11 +798,9 @@ class WorkerClient:
             host_config["Runtime"] = "nvidia"
         binds.extend(
             [
-                "/worker_service_python_env:/worker_service_python_env",
-                # A worker env can be the client's whole environment (GBs); the
-                # cache bind makes every install after the first on a host
-                # near-network-free.
-                "/uv_cache:/uv_cache",
+                # One mount lets uv hardlink prepared package files into the
+                # environment instead of copying gigabytes between mounts.
+                "/worker_service_storage:/worker_service_storage",
                 "/workspace/shared:/workspace/shared",
                 # node_auth bind: see NODE_AUTH_DIR in node_service/__init__.py.
                 "/opt/burla/node_auth:/root/.config/burla",
@@ -825,6 +823,9 @@ class WorkerClient:
             "sh",
             "-lc",
             (
+                "rm -rf /worker_service_python_env /uv_cache; "
+                "ln -s /worker_service_storage/python_env /worker_service_python_env; "
+                "ln -s /worker_service_storage/uv_cache /uv_cache; "
                 "export PYTHONUNBUFFERED=1; "
                 "export PYTHONPATH=/worker_service_python_env; "
                 'export PATH="/worker_service_python_env/bin:$PATH"; '
@@ -863,9 +864,8 @@ class WorkerClient:
                 # Nested rpm calls import the client in here, and that client
                 # sends telemetry too; forward the node's kill switch.
                 f"DISABLE_BURLA_TELEMETRY={os.environ.get('DISABLE_BURLA_TELEMETRY', '')}",
-                # Copy mode: hardlinks can't cross the cache/env bind mounts.
                 "UV_CACHE_DIR=/uv_cache",
-                "UV_LINK_MODE=copy",
+                "UV_LINK_MODE=hardlink",
             ],
         }
 
@@ -1182,7 +1182,7 @@ class WorkerClient:
             self.writer.write(len(payload).to_bytes(8, "big"))
             self.writer.write(payload)
             await self.writer.drain()
-            await self._read_response()
+            return pickle.loads(await self._read_response())
         except (BrokenPipeError, ConnectionResetError):
             await self._raise_if_worker_failed()
 

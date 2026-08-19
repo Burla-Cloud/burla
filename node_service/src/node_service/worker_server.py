@@ -1,7 +1,3 @@
-###
-# Important: This file MUST be located adjecent to the node.py file.
-# It's mounted into the container at runtim at
-###
 import importlib
 import importlib.metadata
 import io
@@ -15,14 +11,13 @@ import shutil
 import socket
 import subprocess
 import tarfile
+import time
 import traceback
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 
 # Do not move. Node assumes first line printed is the Python version.
 print(f"{sys.version_info.major}.{sys.version_info.minor}", flush=True)
-
-if sys.platform != "linux":
-    raise RuntimeError("Worker container must be Linux.")
 
 MACHINE_TO_UV_ARCH = {
     "x86_64": "x86_64",
@@ -134,6 +129,218 @@ def env_dir_distributions():
     return dists
 
 
+def _subprocess_output(result):
+    return "\n\n".join(
+        f"{stream}:\n{content.strip()}"
+        for stream, content in (
+            ("stdout", result.stdout),
+            ("stderr", result.stderr),
+        )
+        if content.strip()
+    )
+
+
+def _stage_package(item):
+    index, package_name, requirement, staging_root = item
+    stage_dir = os.path.join(staging_root, str(index))
+    environment = os.environ.copy()
+    environment.update(
+        UV_CONCURRENT_BUILDS="1",
+        UV_CONCURRENT_DOWNLOADS="1",
+        UV_CONCURRENT_INSTALLS="1",
+    )
+    started_at = time.perf_counter()
+    result = subprocess.run(
+        [
+            "uv",
+            "pip",
+            "install",
+            "--python",
+            "python",
+            "--target",
+            stage_dir,
+            "--no-deps",
+            requirement,
+        ],
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+    return package_name, time.perf_counter() - started_at, result
+
+
+def _remove_path(path):
+    if os.path.islink(path) or not os.path.isdir(path):
+        os.unlink(path)
+    else:
+        shutil.rmtree(path)
+
+
+def _merge_stage(source_dir, destination_dir):
+    os.makedirs(destination_dir, exist_ok=True)
+    for entry in os.scandir(source_dir):
+        source_path = entry.path
+        destination_path = os.path.join(destination_dir, entry.name)
+        if entry.is_symlink():
+            if os.path.lexists(destination_path):
+                _remove_path(destination_path)
+            os.symlink(os.readlink(source_path), destination_path)
+        elif entry.is_dir(follow_symlinks=False):
+            destination_is_not_directory = os.path.islink(
+                destination_path
+            ) or not os.path.isdir(destination_path)
+            if os.path.lexists(destination_path) and destination_is_not_directory:
+                _remove_path(destination_path)
+            _merge_stage(source_path, destination_path)
+        else:
+            if os.path.lexists(destination_path):
+                _remove_path(destination_path)
+            os.link(source_path, destination_path)
+
+
+def install_client_environment(packages):
+    env_dir_dists = env_dir_distributions()
+    packages_to_install = []
+    packages_to_uninstall = []
+    for package_name, requirement in packages.items():
+        env_dir_dist = env_dir_dists.get(package_name)
+        needs_install = False
+        if env_dir_dist is None:
+            # Not installed by burla, so if it's importable it is baked into
+            # the image. Reinstalling would replace CUDA or ABI-pinned wheels.
+            try:
+                importlib.metadata.version(package_name)
+            except importlib.metadata.PackageNotFoundError:
+                needs_install = True
+        elif " @ " in requirement:
+            requested_spec = requirement.split(" @ ", 1)[1]
+            needs_install = env_dir_dist[1] != requested_spec
+        else:
+            requested_version = requirement.split("==", 1)[1]
+            needs_install = env_dir_dist[1] or env_dir_dist[0] != requested_version
+        if needs_install:
+            packages_to_install.append((package_name, requirement))
+            if env_dir_dist is not None:
+                packages_to_uninstall.append(package_name)
+
+    # PySpark's source build is this environment's critical path. Starting it
+    # first with two neighboring installs minimized wall time without starving
+    # the build of CPU, disk, or network bandwidth.
+    packages_to_install.sort(key=lambda item: item[0] != "pyspark")
+    total_started_at = time.perf_counter()
+    metrics = {
+        "requested_packages": len(packages),
+        "staged_packages": len(packages_to_install),
+        "install_workers": min(3, len(packages_to_install)),
+    }
+    if not packages_to_install:
+        metrics["install_mode"] = "cached"
+        metrics.update(stage_seconds=0, uninstall_seconds=0, merge_seconds=0)
+        metrics["total_seconds"] = time.perf_counter() - total_started_at
+        return metrics
+
+    if "pyspark" not in {name for name, _ in packages_to_install}:
+        single_install_started_at = time.perf_counter()
+        result = subprocess.run(
+            [
+                "uv",
+                "pip",
+                "install",
+                "--python",
+                "python",
+                "--target",
+                "/worker_service_python_env",
+                "--no-deps",
+                *(requirement for _, requirement in packages_to_install),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode:
+            raise RuntimeError(
+                "uv failed to install the client environment "
+                f"(exit status {result.returncode}).\n\n"
+                f"{_subprocess_output(result)}"
+            )
+        importlib.invalidate_caches()
+        metrics["install_mode"] = "single"
+        metrics["install_workers"] = 1
+        metrics.update(
+            stage_seconds=time.perf_counter() - single_install_started_at,
+            uninstall_seconds=0,
+            merge_seconds=0,
+        )
+        metrics["total_seconds"] = time.perf_counter() - total_started_at
+        return metrics
+
+    metrics["install_mode"] = "staged"
+    staging_root = "/worker_service_storage/package_staging"
+    shutil.rmtree(staging_root, ignore_errors=True)
+    os.makedirs(staging_root)
+    try:
+        stage_started_at = time.perf_counter()
+        items = [
+            (index, package_name, requirement, staging_root)
+            for index, (package_name, requirement) in enumerate(packages_to_install)
+        ]
+        with ThreadPoolExecutor(max_workers=metrics["install_workers"]) as executor:
+            staged = list(executor.map(_stage_package, items))
+        metrics["stage_seconds"] = time.perf_counter() - stage_started_at
+
+        failed = [item for item in staged if item[2].returncode]
+        if failed:
+            failures = "\n\n".join(
+                f"{package_name} (exit status {result.returncode}):\n"
+                f"{_subprocess_output(result)}"
+                for package_name, _, result in failed
+            )
+            raise RuntimeError(f"uv failed to stage the client environment.\n\n{failures}")
+
+        metrics["slowest_packages"] = [
+            {"name": package_name, "seconds": round(seconds, 3)}
+            for package_name, seconds, _ in sorted(
+                staged, key=lambda item: item[1], reverse=True
+            )[:5]
+        ]
+
+        uninstall_started_at = time.perf_counter()
+        if packages_to_uninstall:
+            result = subprocess.run(
+                [
+                    "uv",
+                    "pip",
+                    "uninstall",
+                    "--system",
+                    "--target",
+                    "/worker_service_python_env",
+                    *packages_to_uninstall,
+                ],
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode:
+                raise RuntimeError(
+                    "uv failed to remove replaced packages "
+                    f"(exit status {result.returncode}).\n\n"
+                    f"{_subprocess_output(result)}"
+                )
+        metrics["uninstall_seconds"] = time.perf_counter() - uninstall_started_at
+
+        merge_started_at = time.perf_counter()
+        for index in range(len(packages_to_install)):
+            _merge_stage(
+                os.path.join(staging_root, str(index)),
+                "/worker_service_python_env",
+            )
+        metrics["merge_seconds"] = time.perf_counter() - merge_started_at
+    finally:
+        shutil.rmtree(staging_root, ignore_errors=True)
+
+    importlib.invalidate_caches()
+    metrics["total_seconds"] = time.perf_counter() - total_started_at
+    return metrics
+
+
 # Become a session + process group leader so the node_service can kill this worker together with
 # any subprocess the user's UDF spawned via a single os.killpg from the host. Runs after uv/pip
 # setup so subprocess.run above still inherits the container's original session cleanly.
@@ -168,63 +375,9 @@ with socket.create_server(("0.0.0.0", port)) as listener:
                     # {canonical dist name: uv requirement string}, the
                     # client's entire environment, pinned exactly.
                     packages = pickle.loads(request_payload)
-                    env_dir_dists = env_dir_distributions()
-                    packages_to_install = []
-                    for package_name, requirement in packages.items():
-                        env_dir_dist = env_dir_dists.get(package_name)
-                        if env_dir_dist is None:
-                            # Not installed by burla, so if it's importable it
-                            # is baked into the image. Reinstalling to match
-                            # the client's version would silently replace
-                            # pre-baked GPU wheels (CUDA-built torch,
-                            # ABI-pinned numpy) with incompatible ones from
-                            # PyPI's default index.
-                            try:
-                                importlib.metadata.version(package_name)
-                            except importlib.metadata.PackageNotFoundError:
-                                packages_to_install.append(requirement)
-                        elif " @ " in requirement:
-                            requested_spec = requirement.split(" @ ", 1)[1]
-                            if env_dir_dist[1] != requested_spec:
-                                packages_to_install.append(requirement)
-                        else:
-                            requested_version = requirement.split("==", 1)[1]
-                            version_matches = env_dir_dist[0] == requested_version
-                            if env_dir_dist[1] or not version_matches:
-                                packages_to_install.append(requirement)
-                    if packages_to_install:
-                        # --no-deps: the client's list is its whole environment,
-                        # so it is already closed under dependencies; resolving
-                        # would only let uv "upgrade" pre-baked image packages.
-                        result = subprocess.run(
-                            [
-                                "uv",
-                                "pip",
-                                "install",
-                                "--python",
-                                "python",
-                                "--target",
-                                "/worker_service_python_env",
-                                "--no-deps",
-                                *packages_to_install,
-                            ],
-                            capture_output=True,
-                            text=True,
-                        )
-                        if result.returncode:
-                            output = "\n\n".join(
-                                f"{stream}:\n{content.strip()}"
-                                for stream, content in (
-                                    ("stdout", result.stdout),
-                                    ("stderr", result.stderr),
-                                )
-                                if content.strip()
-                            )
-                            raise RuntimeError(
-                                "uv failed to install the client environment "
-                                f"(exit status {result.returncode}).\n\n{output}"
-                            )
-                    importlib.invalidate_caches()
+                    response_payload = pickle.dumps(
+                        install_client_environment(packages)
+                    )
                 if command == b"l":
                     loaded_function = cloudpickle.loads(request_payload)
                 if command == b"c":

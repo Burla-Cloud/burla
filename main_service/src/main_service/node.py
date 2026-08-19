@@ -553,14 +553,13 @@ class Node:
         uv venv --python 3.13 --seed
         uv pip install ./node_service
 
-        # Pre-populate the shared /worker_service_python_env so worker[0]'s boot doesn't
+        # Pre-populate the shared worker environment so worker[0]'s boot doesn't
         # have to download uv from GitHub and install Burla inside the
-        # container. We detect the python version from the first user container image
-        # because cp311/cp312/cp313 C-extension wheels (cryptography, aiohttp, …) are
-        # ABI-incompatible across cpython tags. Subshell makes the whole block best-effort:
-        # if the image is missing python or anything else trips, fall through and let
-        # worker_server.py run its own download path rather than killing the VM via the
-        # outer trap.
+        # container. The environment and uv cache share a filesystem because
+        # copying a full client environment between mounts adds seconds of disk
+        # writes after uv has already prepared every package. The container's
+        # Python version selects ABI-compatible wheels; the subshell leaves
+        # worker_server.py as the fallback when pre-population cannot finish.
         (
             FIRST_IMAGE=$(echo "$CONTAINERS" | python3 -c \\
                 'import json,sys; d=json.load(sys.stdin); print(d[0]["image"] if d else "")')
@@ -568,12 +567,15 @@ class Node:
             docker pull "$FIRST_IMAGE" >/dev/null
             PY_VERSION=$(docker run --rm --entrypoint python "$FIRST_IMAGE" -c \\
                 'import sys; print(f"{{sys.version_info.major}}.{{sys.version_info.minor}}")')
-            mkdir -p /worker_service_python_env/bin
-            cp "$(command -v uv)" /worker_service_python_env/bin/uv
-            uv pip install \\
+            WORKER_STORAGE=/worker_service_storage
+            WORKER_PYTHON_ENV="$WORKER_STORAGE/python_env"
+            WORKER_UV_CACHE="$WORKER_STORAGE/uv_cache"
+            mkdir -p "$WORKER_PYTHON_ENV/bin" "$WORKER_UV_CACHE"
+            cp "$(command -v uv)" "$WORKER_PYTHON_ENV/bin/uv"
+            UV_CACHE_DIR="$WORKER_UV_CACHE" UV_LINK_MODE=hardlink uv pip install \\
                 --python-version "$PY_VERSION" \\
                 --python-platform x86_64-manylinux2014 \\
-                --target /worker_service_python_env \\
+                --target "$WORKER_PYTHON_ENV" \\
                 ./client
         ) || true
 

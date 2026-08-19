@@ -404,7 +404,8 @@ async def execute(
     packages = request_json["packages"]
     if packages:
         # installing in one installs in all, they share volume-mounted python env
-        await workers_to_assign[0].install_packages(packages)
+        install_metrics = await workers_to_assign[0].install_packages(packages)
+        await debug_log("environment_install", **install_metrics)
 
     function_pkl = request_files["function_pkl"]
     await asyncio.gather(*(w.load_function(function_pkl) for w in workers_to_assign))

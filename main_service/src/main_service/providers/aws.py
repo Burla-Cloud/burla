@@ -90,6 +90,11 @@ class AWSProvider:
                         # EC2 cannot shrink the public AMI's 20 GB snapshot.
                         "VolumeSize": max(disk_size, 20),
                         "VolumeType": "gp3",
+                        # Cold environment replication writes several GB before
+                        # the first function call; gp3's 125 MiB/s baseline was
+                        # directly adding more than ten seconds to that path.
+                        "Iops": 4000,
+                        "Throughput": 1000,
                         "DeleteOnTermination": True,
                     },
                 }

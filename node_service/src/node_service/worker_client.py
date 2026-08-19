@@ -292,9 +292,12 @@ async def dynamic_ram_monitor_loop():
         ]
         if len(running_worker_memory) <= 1:
             continue
-        # Smallest first: retiring small workers gives large tasks more room
-        # while losing the least in-flight progress to the requeue.
-        running_worker_memory.sort(key=lambda item: item[0])
+        # Newest attempts first: preserve an older call as a progress anchor
+        # instead of letting two long calls repeatedly evict each other.
+        # Memory is the tie-breaker for effectively simultaneous starts.
+        running_worker_memory.sort(
+            key=lambda item: (-(item[1].current_input_started_at or 0), item[0])
+        )
 
         selected_worker_memory = []
         selected_rss_bytes = 0
@@ -370,9 +373,11 @@ async def cpu_pressure_monitor_loop():
         ]
         if len(running_worker_cpu) <= 1:
             continue
-        # Least CPU first: cheapest to evict and requeue, and the biggest
-        # tasks keep the cores they are clearly using.
-        running_worker_cpu.sort(key=lambda item: item[0])
+        # Newest attempts first: preserve an older call as a progress anchor.
+        # CPU use breaks ties for effectively simultaneous starts.
+        running_worker_cpu.sort(
+            key=lambda item: (-(item[1].current_input_started_at or 0), item[0])
+        )
 
         # Batch scales with how far past the threshold pressure is, capped at
         # half the running workers per tick, so a slammed node converges in a
@@ -748,6 +753,7 @@ async def retire_workers_for_pressure(
 
         for worker, _ in current_inputs:
             worker.current_input = None
+            worker.current_input_started_at = None
 
         await asyncio.gather(
             *(worker.retire_for_pressure() for worker, _ in current_inputs)
@@ -775,6 +781,7 @@ class WorkerClient:
         self.oom_kill_marker_count = 0
         self.retired = False
         self.current_input = None
+        self.current_input_started_at = None
 
     def _worker_server_host_path(self):
         return str(Path(__file__).resolve().parent / "worker_server.py")
@@ -1116,6 +1123,7 @@ class WorkerClient:
 
             self.is_idle = False
             self.current_input = (input_index, input_pkl)
+            self.current_input_started_at = time.monotonic()
             await self._ensure_log_writer()
             # Exact call tracking: this is the moment the input is handed to
             # the worker, and the finally below is the moment this attempt
@@ -1166,9 +1174,11 @@ class WorkerClient:
                 if self.log_writer is not None:
                     await self.log_writer.finish_input(input_index)
                 self.current_input = None
+                self.current_input_started_at = None
 
             if self.retired:
                 self.current_input = None
+                self.current_input_started_at = None
                 return
             await SELF["results_queue"].put(result, len(result[2]))
             SELF["num_results_received"] += 1
@@ -1413,6 +1423,7 @@ async def restore_worker_pool_after_job() -> list[WorkerClient]:
                 await worker.reset()
                 worker.retired = False
                 worker.current_input = None
+                worker.current_input_started_at = None
                 return worker
             except Exception:
                 await discard(worker)

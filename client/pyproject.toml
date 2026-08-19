@@ -38,7 +38,7 @@ dependencies = [
 ]
 
 [project.scripts]
-burla = "burla._cli:main"
+burla = "burla.__main__:main"
 
 [tool.uv]
 package = true

@@ -413,11 +413,13 @@ def ensure_user_authorized(
 def deployed_dashboard_url() -> str | None:
     config = json.loads(CONFIG_PATH.read_text()) if CONFIG_PATH.exists() else {}
     configured_url = (config.get("cluster_dashboard_url") or "").rstrip("/")
+    if configured_url:
+        return configured_url
 
     try:
         cloud, project_id, region = detect_cloud()
     except LocalHeadError:
-        return configured_url or None
+        return None
 
     cluster_token = get_or_register_cluster_token(cloud, project_id, region)
     response = requests.get(

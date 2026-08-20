@@ -2,6 +2,7 @@ import asyncio
 import base64
 import io
 import pickle
+import random
 import ssl
 import sys
 import traceback
@@ -369,9 +370,11 @@ async def _execute_job(
     reporter.set_uploading_function_message(nodes)
 
     node_tasks = []
-    n_inputs = len(inputs)
+    n_inputs = len(
+        inputs
+    )  # <- inputs will be popped from so len(inputs) will start changing
     inputs_with_indicies = list(enumerate(inputs))
-    inputs_with_indicies.reverse()
+    random.shuffle(inputs_with_indicies)
     n_ready_nodes = len(nodes) - len(booting_nodes)
     first_chunk_barrier = asyncio.Barrier(n_ready_nodes) if n_ready_nodes else None
     for node in nodes:

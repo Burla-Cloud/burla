@@ -124,7 +124,7 @@ async def get_inputs(
         total_bytes = 0
         while len(items) < target_num:
             try:
-                input_index, input_pkl = SELF["inputs_queue"].get_last_nowait()
+                input_index, input_pkl = SELF["inputs_queue"].get_nowait()
             except asyncio.QueueEmpty:
                 break
             if total_bytes + len(input_pkl) > 3_000_000 and items:
@@ -134,7 +134,6 @@ async def get_inputs(
                 break
             items.append((input_index, input_pkl))
             total_bytes += len(input_pkl)
-        items.reverse()
         SELF["pending_transfers"][transfer_id] = items
 
     return Response(

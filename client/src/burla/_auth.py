@@ -15,7 +15,7 @@ from platformdirs import user_data_dir
 from yaspin import yaspin
 
 from burla import _BURLA_APP_NAME, _BURLA_BACKEND_URL, CONFIG_PATH
-from burla._helpers import run_command
+from burla._helpers import CREATE_NO_WINDOW, run_command
 
 AUTH_TIMEOUT_SECONDS = 180
 IN_COLAB = os.getenv("COLAB_RELEASE_TAG") is not None
@@ -102,6 +102,7 @@ def detect_cloud() -> tuple[str, str, str | None]:
             [executable, "account", "show", "--query", "id", "--output", "tsv"],
             capture_output=True,
             text=True,
+            creationflags=CREATE_NO_WINDOW,
         )
         if result.returncode != 0 or not result.stdout.strip():
             raise LocalHeadError(
@@ -126,6 +127,7 @@ def detect_cloud() -> tuple[str, str, str | None]:
             [executable, "config", "get-value", "project"],
             capture_output=True,
             text=True,
+            creationflags=CREATE_NO_WINDOW,
         )
         gcp_project = result.stdout.strip()
         if gcp_project and gcp_project != "(unset)":
@@ -153,6 +155,7 @@ def detect_cloud() -> tuple[str, str, str | None]:
         ],
         capture_output=True,
         text=True,
+        creationflags=CREATE_NO_WINDOW,
     )
     if result.returncode != 0:
         raise LocalHeadError(
@@ -160,7 +163,10 @@ def detect_cloud() -> tuple[str, str, str | None]:
             "Run `aws configure` or `aws sso login`, then retry."
         )
     region_result = subprocess.run(
-        [executable, "configure", "get", "region"], capture_output=True, text=True
+        [executable, "configure", "get", "region"],
+        capture_output=True,
+        text=True,
+        creationflags=CREATE_NO_WINDOW,
     )
     region = (
         os.environ.get("AWS_REGION")
@@ -188,6 +194,7 @@ def cloud_account_name(cloud: str, project_id: str) -> str:
             ],
             capture_output=True,
             text=True,
+            creationflags=CREATE_NO_WINDOW,
         )
         if result.returncode == 0 and result.stdout.strip():
             return result.stdout.strip()
@@ -207,6 +214,7 @@ def aws_account_name(account_id: str) -> str:
         ],
         capture_output=True,
         text=True,
+        creationflags=CREATE_NO_WINDOW,
     )
     if result.returncode == 0 and result.stdout.strip() not in ("", "None"):
         return result.stdout.strip()
@@ -235,6 +243,7 @@ def _gcp_ownership_payload() -> dict:
             capture_output=True,
             text=True,
             check=True,
+            creationflags=CREATE_NO_WINDOW,
         )
         access_token = result.stdout.strip()
     return {"cloud": "gcp", "access_token": access_token}
@@ -310,7 +319,9 @@ def get_or_register_cluster_token(
                 *("--query", "Parameter.Value", "--output", "text"),
             ]
         if command:
-            result = subprocess.run(command, capture_output=True, text=True)
+            result = subprocess.run(
+                command, capture_output=True, text=True, creationflags=CREATE_NO_WINDOW
+            )
             if result.returncode == 0 and result.stdout.strip():
                 token = result.stdout.strip()
                 save_cluster_token(project_id, token)
@@ -362,6 +373,7 @@ def ensure_user_authorized(
             capture_output=True,
             text=True,
             check=True,
+            creationflags=CREATE_NO_WINDOW,
         )
         identity = result.stdout.strip().rsplit("/", 1)[-1]
     elif cloud == "azure":
@@ -378,6 +390,7 @@ def ensure_user_authorized(
             capture_output=True,
             text=True,
             check=True,
+            creationflags=CREATE_NO_WINDOW,
         )
         identity = result.stdout.strip()
     else:

@@ -10,6 +10,7 @@ import aiohttp
 import cloudpickle
 
 from burla._auth import get_auth_headers
+from burla._helpers import CREATE_NO_WINDOW
 
 
 async def run_in_subprocess(func, *args):
@@ -21,7 +22,12 @@ async def run_in_subprocess(func, *args):
         """)
     cmd = [sys.executable, "-u", "-c", code]
     stderr_buffer = tempfile.TemporaryFile()
-    process = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=stderr_buffer)
+    process = subprocess.Popen(
+        cmd,
+        stdin=subprocess.PIPE,
+        stderr=stderr_buffer,
+        creationflags=CREATE_NO_WINDOW,
+    )
     process.stderr_buffer = stderr_buffer
     process.stdin.write(cloudpickle.dumps((func, args)))
     process.stdin.close()

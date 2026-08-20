@@ -49,6 +49,7 @@ from burla._auth import (
     get_or_register_cluster_token,
     read_saved_cluster_token,
 )
+from burla._helpers import CREATE_NO_WINDOW
 
 RELAY_HOST = _BURLA_RELAY_HOST.strip().lower()
 RELAY_SERVER_ADDR = os.environ.get("BURLA_RELAY_SERVER_ADDR", RELAY_HOST)
@@ -115,6 +116,7 @@ def _azure_resource_group() -> str | None:
         ],
         capture_output=True,
         text=True,
+        creationflags=CREATE_NO_WINDOW,
     )
     if default_group.returncode == 0 and default_group.stdout.strip():
         return default_group.stdout.strip()

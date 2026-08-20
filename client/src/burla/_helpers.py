@@ -13,6 +13,10 @@ NT_SIGNALS_TO_HANDLE = ["SIGINT", "SIGBREAK"]
 _signal_names_to_handle = POSIX_SIGNALS_TO_HANDLE if os.name == "posix" else NT_SIGNALS_TO_HANDLE
 SIGNALS_TO_HANDLE = [getattr(signal, s) for s in _signal_names_to_handle]
 
+# On Windows, a console subprocess pops a visible empty console window whenever
+# the parent has no console of its own (notebooks, GUI shells).
+CREATE_NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+
 
 class GoogleLoginError(Exception):
     pass
@@ -42,7 +46,9 @@ class VerboseCalledProcessError(Exception):
 
 
 def run_command(command, raise_error=True):
-    result = subprocess.run(command, shell=True, capture_output=True)
+    result = subprocess.run(
+        command, shell=True, capture_output=True, creationflags=CREATE_NO_WINDOW
+    )
 
     if result.returncode != 0 and raise_error:
         print("")

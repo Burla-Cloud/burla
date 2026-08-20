@@ -41,6 +41,13 @@ class SizedQueue(asyncio.Queue):
     def put_nowait(self, item, size_bytes):
         super().put_nowait((item, size_bytes))
 
+    def get_last_nowait(self):
+        if self.empty():
+            raise asyncio.QueueEmpty
+        item = self._get_last()
+        self._wakeup_next(self._putters)
+        return item
+
     def _put(self, item_and_size):
         item, size_bytes = item_and_size
         super()._put((item, size_bytes))
@@ -48,6 +55,11 @@ class SizedQueue(asyncio.Queue):
 
     def _get(self):
         item, size_bytes = super()._get()
+        self.size_bytes -= size_bytes
+        return item
+
+    def _get_last(self):
+        item, size_bytes = self._queue.pop()
         self.size_bytes -= size_bytes
         return item
 

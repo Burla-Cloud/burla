@@ -54,11 +54,11 @@ export const NodesList: React.FC<NodesListProps> = ({ nodes, loading, showDelete
                 });
                 setLogsLoading((prev) => ({ ...prev, [expandedNodeId]: false }));
             },
+            error: (error) => {
+                console.error("Node logs stream error", error);
+                setLogsLoading((prev) => ({ ...prev, [expandedNodeId]: false }));
+            },
         });
-        source.onerror = (error) => {
-            console.error("Node logs stream error", error);
-            setLogsLoading((prev) => ({ ...prev, [expandedNodeId]: false }));
-        };
 
         return () => {
             source.close();

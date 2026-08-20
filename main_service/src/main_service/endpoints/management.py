@@ -5,7 +5,7 @@ import json
 from datetime import datetime, timezone
 from time import time
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
@@ -40,7 +40,30 @@ from main_service.providers.catalog import (
 )
 
 
-router = APIRouter(prefix="/v1/management")
+def _declared_query_params(dependant) -> set[str]:
+    names = {param.alias for param in dependant.query_params}
+    for sub_dependant in dependant.dependencies:
+        names |= _declared_query_params(sub_dependant)
+    return names
+
+
+# Humans and scripts drive this API, so a typo'd query parameter (e.g.
+# include_deleted instead of status=deleted) must fail loudly instead of being
+# silently ignored and returning a misleading result.
+async def _reject_unknown_query_params(request: Request):
+    allowed = _declared_query_params(request.scope["route"].dependant)
+    unknown = sorted(set(request.query_params) - allowed)
+    if unknown:
+        raise ManagementAPIError(
+            422,
+            "INVALID_ARGUMENT",
+            f"Unknown query parameter(s): {', '.join(unknown)}.",
+        )
+
+
+router = APIRouter(
+    prefix="/v1/management", dependencies=[Depends(_reject_unknown_query_params)]
+)
 SSE_MAX_DURATION_SECONDS = 50
 
 
@@ -276,7 +299,10 @@ def watch_cluster():
                     await asyncio.wait_for(queue.get(), timeout=15)
                     yield _sse("update", _cluster_watch_dto())
                 except asyncio.TimeoutError:
-                    yield ": keepalive\n\n"
+                    # A named event, not an SSE comment: comments never reach
+                    # page javascript, so the client's staleness watchdog
+                    # could not tell a quiet stream from a dead connection.
+                    yield _sse("keepalive", {})
         finally:
             cluster_state.unsubscribe(queue)
 
@@ -522,6 +548,7 @@ def stream_node_logs(
     async def stream():
         nonlocal last_id
         started_at = time()
+        last_sent_at = time()
         while time() - started_at < SSE_MAX_DURATION_SECONDS:
             rows = history.node_logs_after(node_id, last_id)
             for row_id, timestamp, message in rows:
@@ -538,6 +565,10 @@ def stream_node_logs(
                     },
                     cursor,
                 )
+                last_sent_at = time()
+            if time() - last_sent_at > 15:
+                yield _sse("keepalive", {})
+                last_sent_at = time()
             await asyncio.sleep(0.5)
 
     return StreamingResponse(
@@ -689,14 +720,20 @@ def watch_jobs():
         try:
             snapshot = list_jobs(limit=100)["items"]
             yield _sse("snapshot", {"items": snapshot})
+            last_sent_at = time()
             while time() - started_at < SSE_MAX_DURATION_SECONDS:
                 try:
                     event = await asyncio.wait_for(queue.get(), timeout=1)
                     job_id = event["job_id"]
                     yield _sse("update", _job_or_404(job_id))
+                    last_sent_at = time()
                 except asyncio.TimeoutError:
                     for job_id in cluster_state.running_job_ids():
                         yield _sse("update", _job_or_404(job_id))
+                        last_sent_at = time()
+                    if time() - last_sent_at > 15:
+                        yield _sse("keepalive", {})
+                        last_sent_at = time()
         finally:
             cluster_state.unsubscribe(queue)
 

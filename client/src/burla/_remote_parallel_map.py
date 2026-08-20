@@ -368,11 +368,29 @@ async def _execute_job(
     session_stack.callback(job_start_telemetry_task.cancel)
     reporter.set_uploading_function_message(nodes)
 
-    node_tasks = []
     n_inputs = len(inputs)
-    inputs_with_indicies = list(enumerate(inputs))
-    inputs_with_indicies.reverse()
     n_ready_nodes = len(nodes) - len(booting_nodes)
+    node_inputs = {node.instance_name: [] for node in nodes}
+    if ready_nodes:
+        input_destinations = []
+        max_node_parallelism = max(node.target_parallelism for node in ready_nodes)
+        for slot_index in range(max_node_parallelism):
+            for node in ready_nodes:
+                if slot_index < node.target_parallelism:
+                    input_destinations.append(node_inputs[node.instance_name])
+        for input_index, input_ in enumerate(inputs):
+            destination = input_destinations[input_index % len(input_destinations)]
+            destination.append((input_index, input_))
+        for inputs_for_node in node_inputs.values():
+            inputs_for_node.reverse()
+        input_lists = list(node_inputs.values())
+    else:
+        shared_inputs = list(enumerate(inputs))
+        shared_inputs.reverse()
+        node_inputs = {node.instance_name: shared_inputs for node in nodes}
+        input_lists = [shared_inputs]
+
+    node_tasks = []
     first_chunk_barrier = asyncio.Barrier(n_ready_nodes) if n_ready_nodes else None
     for node in nodes:
         node_tasks.append(
@@ -387,7 +405,7 @@ async def _execute_job(
                     start_time=start_time,
                     function_pkl=function_pkl,
                     udf_error_event=udf_error_event,
-                    inputs_with_indicies=inputs_with_indicies,
+                    inputs_with_indicies=node_inputs[node.instance_name],
                     return_queue=return_queue,
                     nodes=nodes,
                     first_chunk_barrier=first_chunk_barrier,
@@ -425,6 +443,8 @@ async def _execute_job(
                 )
                 new_node.late_join = True
                 nodes.append(new_node)
+                new_node_inputs = []
+                input_lists.append(new_node_inputs)
                 # Appended in lockstep so the main loop's zip(node_tasks,
                 # nodes) failure scan stays aligned.
                 node_tasks.append(
@@ -439,7 +459,7 @@ async def _execute_job(
                             start_time=start_time,
                             function_pkl=function_pkl,
                             udf_error_event=udf_error_event,
-                            inputs_with_indicies=inputs_with_indicies,
+                            inputs_with_indicies=new_node_inputs,
                             return_queue=return_queue,
                             nodes=nodes,
                             first_chunk_barrier=None,
@@ -534,7 +554,9 @@ async def _execute_job(
                     )
                 last_status_message_update_time = current_time
 
-            if len(inputs_with_indicies) == 0 and not inputs_done_event.is_set():
+            if all(not input_list for input_list in input_lists) and (
+                not inputs_done_event.is_set()
+            ):
                 inputs_done_event.set()
                 await client.patch_job(job_id, {"all_inputs_uploaded": True})
                 if background:

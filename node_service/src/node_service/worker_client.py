@@ -423,17 +423,16 @@ async def cpu_pressure_monitor_loop():
 
         if stall_fraction < CPU_PRESSURE_MAX_STALL_FRACTION:
             continue
-        # <=1 unthrottled workers left: throttling the last one would park the
-        # whole node, so at least one always keeps running at full speed.
-        if len(worker_cpu) <= 1:
-            continue
 
         running_worker_cpu = [
             (cpu, worker)
             for cpu, worker in worker_cpu
             if not worker.is_idle and worker.current_input is not None
         ]
-        if not running_worker_cpu:
+        # Never park the node's only running worker: idle workers hold off
+        # the queue while anything is parked, so parking the sole runner
+        # would leave the node running nothing at all until recovery.
+        if len(running_worker_cpu) <= 1:
             continue
         # Least CPU first: cheapest to park (least momentum lost), and the
         # biggest tasks keep the cores they are clearly using.
@@ -494,16 +493,23 @@ async def _boot_readded_worker():
     )
 
 
-async def _unthrottle_oldest_parked_worker():
+def _parked_workers_exist() -> bool:
+    return any(worker.throttled and not worker.retired for worker in SELF["workers"])
+
+
+async def _unthrottle_one_parked_worker(reason: str, via: str):
     async with SELF["dynamic_retire_lock"]:
         # Re-filter under the lock: a revocation or RAM kill may have
-        # consumed the parked worker since this tick started.
+        # consumed the parked worker since the caller checked.
         throttled_workers = [
             worker for worker in _active_dynamic_workers() if worker.throttled
         ]
         if not throttled_workers:
             return
-        worker = min(throttled_workers, key=lambda w: w.throttled_at)
+        # Most progress first: the attempt closest to done frees its slot
+        # (and its RAM) soonest, while the least-progressed attempts stay
+        # parked, which are exactly the ones a peer can steal most cheaply.
+        worker = max(throttled_workers, key=lambda w: w.attempt_cpu_seconds())
         throttled_for = time.time() - worker.throttled_at
         await worker.unthrottle()
         unthrottled_count = (
@@ -511,14 +517,15 @@ async def _unthrottle_oldest_parked_worker():
         )
         await Logger().log(
             f"Node parallelism increased from {unthrottled_count - 1} to "
-            f"{unthrottled_count}: pressure subsided, restored full CPU to a "
-            "parked worker.",
+            f"{unthrottled_count}: {reason}, restored full CPU to a parked "
+            "worker.",
             job_id=SELF["current_job"],
             old_parallelism=unthrottled_count - 1,
             new_parallelism=unthrottled_count,
         )
         await debug_log(
             "worker_unthrottled",
+            via=via,
             input_index=worker.current_input[0] if worker.current_input else None,
             throttled_for_sec=round(throttled_for, 1),
             n_still_throttled=len(throttled_workers) - 1,
@@ -556,9 +563,13 @@ async def dynamic_worker_readd_loop():
         # RSS is already resident. Unthrottling one worker per tick, without
         # touching the pressure timestamp, means a re-spike simply re-throttles
         # and re-arms the cooldown: bounded oscillation converging on
-        # sustainable parallelism.
+        # sustainable parallelism. (Idle workers also resume parked attempts
+        # directly, see _process_inputs; this path covers pressure clearing
+        # while every other worker is still busy.)
         if any(worker.throttled for worker in _active_dynamic_workers()):
-            await _unthrottle_oldest_parked_worker()
+            await _unthrottle_one_parked_worker(
+                reason="pressure subsided", via="recovery_loop"
+            )
             continue
 
         active_workers = _active_dynamic_workers()
@@ -887,9 +898,15 @@ async def throttle_workers_for_pressure(
             for worker in SELF["workers"]
             if not worker.retired and not worker.throttled
         ]
-        # At least one unthrottled worker always keeps running, so the node is
-        # guaranteed to make progress no matter how pressured it is.
-        max_throttle_count = max(0, len(unthrottled_active) - 1)
+        running_unthrottled = [
+            worker
+            for worker in unthrottled_active
+            if not worker.is_idle and worker.current_input is not None
+        ]
+        # At least one RUNNING unthrottled worker must remain: idle workers
+        # refuse the queue while anything is parked, so they cannot cover for
+        # a parked sole runner and the node would run nothing at all.
+        max_throttle_count = max(0, len(running_unthrottled) - 1)
         selected_workers = [
             (metric, worker)
             for metric, worker in selected_workers
@@ -1378,6 +1395,19 @@ class WorkerClient:
     async def _process_inputs(self):
         while True:
             self.is_idle = True
+            # Parked attempts have absolute priority over fresh inputs: a
+            # worker going idle frees exactly one worker's worth of capacity,
+            # which belongs to the most-progressed parked attempt if one
+            # exists, and the queue may only be popped while nothing is
+            # parked. (One handoff per idle transition; if the CPU monitor
+            # re-parks someone during the wait, the next idle transition or
+            # the recovery loop resumes them.)
+            if _parked_workers_exist():
+                await _unthrottle_one_parked_worker(
+                    reason="a worker went idle", via="idle_handoff"
+                )
+                while _parked_workers_exist():
+                    await asyncio.sleep(0.25)
             while SELF["results_queue"].size_bytes > RESULTS_QUEUE_RAM_LIMIT_BYTES:
                 await asyncio.sleep(0.1)
             input_index, input_pkl = await SELF["inputs_queue"].get()

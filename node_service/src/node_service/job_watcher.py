@@ -126,12 +126,16 @@ async def _input_steal_loop(session, logger, job_started_at):
         remaining_inputs = SELF["inputs_queue"].qsize()
         # Idle unthrottled workers = genuinely free capacity right now. The
         # neighbor uses this to decide whether revoking its parked (throttled)
-        # workers' inputs for us is worth the kill: a pressured node reports
-        # 0, so two pressured nodes can never swap parked work back and forth.
-        idle_worker_count = sum(
-            worker.is_idle and not worker.retired and not worker.throttled
-            for worker in SELF["workers"]
-        )
+        # workers' inputs for us is worth the kill. Idle workers refuse the
+        # queue while anything is parked locally, so a node with parked
+        # workers reports 0: its "idle" workers could not actually run a
+        # revoked input, and two pressured nodes must never swap parked work
+        # back and forth via kills.
+        idle_worker_count = 0
+        if not any(w.throttled and not w.retired for w in SELF["workers"]):
+            idle_worker_count = sum(
+                worker.is_idle and not worker.retired for worker in SELF["workers"]
+            )
         get_url = f"{neighbor_host}/jobs/{SELF['current_job']}/get_inputs"
         get_params = {
             "transfer_id": transfer_id,

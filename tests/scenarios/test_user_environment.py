@@ -68,7 +68,9 @@ def test_package_install_custom_image_and_shared_filesystem(
     assert read["outputs"] == [sum(range(5))]
 
 
-def test_udf_can_call_a_local_module(rpm_subprocess, local_dev_cluster, tmp_path):
+def test_multiple_workers_can_call_a_local_module(
+    rpm_subprocess, local_dev_cluster, tmp_path
+):
     """Local modules are pickled by value, so a UDF can call code the worker
     cannot import. The directory name is deliberate: modules were once
     classified as Burla's own, and skipped, on any path containing "burla"."""
@@ -86,14 +88,24 @@ def test_udf_can_call_a_local_module(rpm_subprocess, local_dev_cluster, tmp_path
 
     source = (
         "import sys\n"
+        "import socket\n"
+        "import time\n"
         f"sys.path.insert(0, {str(module_dir)!r})\n"
         "import udf_helpers\n"
         "def test_function(x):\n"
-        "    return udf_helpers.label(x)\n"
+        "    time.sleep(0.5)\n"
+        "    return socket.gethostname(), udf_helpers.label(x)\n"
     )
-    result = rpm_subprocess(source, [1, 2], timeout_seconds=300, grow=True)
+    inputs = list(range(8))
+    result = rpm_subprocess(
+        source,
+        inputs,
+        timeout_seconds=300,
+        grow=True,
+        max_parallelism=len(inputs),
+    )
     assert result["ok"], result.get("traceback")
-    assert sorted(result["outputs"]) == [
-        "hello-from-a-local-module-1",
-        "hello-from-a-local-module-2",
+    assert len({hostname for hostname, _ in result["outputs"]}) > 1
+    assert sorted(label for _, label in result["outputs"]) == [
+        f"hello-from-a-local-module-{value}" for value in inputs
     ]

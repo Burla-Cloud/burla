@@ -585,13 +585,54 @@ class Node:
             worker_memory_kb=$((1024 * 1024))
         fi
 
+        # Swap for memory-pressure parking: prefer zram (compressed RAM) so
+        # parked Python heaps leave resident memory without cloud-disk latency.
+        # Fall back to a disk swapfile when the zram module is missing (needs
+        # linux-modules-extra on cloud kernels). Half of MemTotal keeps
+        # headroom for the compressed store / file itself. Best effort: every
+        # step stays inside an `if` so a swap failure degrades to
+        # swap_mode=none (node_service then kills under pressure instead of
+        # parking) rather than tripping the ERR trap and deleting the VM.
+        swap_size_kb=$((total_memory_kb / 2))
+        if [ "$swap_size_kb" -lt $((256 * 1024)) ]; then
+            swap_size_kb=$((256 * 1024))
+        fi
+        swap_mode=none
+        if modprobe zram 2>/dev/null && [ -e /dev/zram0 ]; then
+            echo lz4 >/sys/block/zram0/comp_algorithm 2>/dev/null || true
+            if echo $((swap_size_kb * 1024)) >/sys/block/zram0/disksize \\
+                && mkswap /dev/zram0 >/dev/null \\
+                && swapon -p 100 /dev/zram0; then
+                swap_mode=zram
+            fi
+        fi
+        if [ "$swap_mode" = "none" ]; then
+            if ! fallocate -l ${{swap_size_kb}}K /swapfile 2>/dev/null; then
+                dd if=/dev/zero of=/swapfile bs=1M \\
+                    count=$((swap_size_kb / 1024)) status=none || rm -f /swapfile
+            fi
+            if [ -f /swapfile ] \\
+                && chmod 600 /swapfile \\
+                && mkswap /swapfile >/dev/null \\
+                && swapon -p 100 /swapfile; then
+                swap_mode=swapfile
+            fi
+        fi
+        if [ "$swap_mode" != "none" ]; then
+            # Swap readahead off: parked workers fault back scattered pages,
+            # and clustered readahead just multiplies zram/disk traffic.
+            sysctl -w vm.page-cluster=0 >/dev/null
+        fi
+        report_log "Node swap provisioned: mode=$swap_mode size_kb=$swap_size_kb"
+
         # The AMI-baked shutdown hook (AWS/Azure) predates /shutdown requiring auth;
         # this drop-in makes it send the cluster token. No-op on GCP (no such unit).
         mkdir -p /etc/systemd/system/burla-shutdown-hook.service.d
         printf '[Service]\\nExecStart=\\nExecStart=/usr/bin/curl -s -X POST -H "%s" http://localhost:8081/shutdown\\n' \\
             "$AUTH_HEADER" >/etc/systemd/system/burla-shutdown-hook.service.d/auth.conf
 
-        printf '[Slice]\\nMemoryMin={NODE_SERVICE_RESERVED_MEMORY_GB}G\\nCPUWeight=1000\\n' \\
+        # MemorySwapMax=0: a swapped node_service push loop looks like a dead node.
+        printf '[Slice]\\nMemoryMin={NODE_SERVICE_RESERVED_MEMORY_GB}G\\nMemorySwapMax=0\\nCPUWeight=1000\\n' \\
             >/etc/systemd/system/burla-node-service.slice
         printf '[Slice]\\nMemoryMax=%sK\\nCPUWeight=80\\n' "$worker_memory_kb" \\
             >/etc/systemd/system/burla-workers.slice

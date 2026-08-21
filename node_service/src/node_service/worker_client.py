@@ -1,4 +1,5 @@
 import asyncio
+import errno
 import os
 import pickle
 import signal
@@ -75,6 +76,30 @@ READD_MONITOR_INTERVAL_SECONDS = 5
 READD_PRESSURE_COOLDOWN_SECONDS = 30
 READD_MAX_CPU_STALL_FRACTION = 0.05
 READD_MAX_WORKER_MEMORY_USED_FRACTION = 0.75
+
+# Memory parking: under memory pressure workers are parked (CPU throttle +
+# resident memory reclaimed into swap via their cgroup's memory.reclaim)
+# instead of killed; the kill path stays as the backstop below.
+MEMORY_RECLAIM_CHUNK_BYTES = 256 * 1024**2
+# Soft ceiling on the workers slice, set below memory.max for dynamic-RAM
+# jobs: an allocator crossing it is stalled by the kernel (direct reclaim +
+# forced sleeps inside the allocation path), so a fast-growing worker cannot
+# outrun the monitor's ticks to OOM while parked workers are being reclaimed.
+MEMORY_HIGH_GAP_MIN_BYTES = 512 * 1024**2
+MEMORY_HIGH_GAP_FRACTION = 0.03
+# Backstop kill triggers: swap nearly full, or memory PSI showing the slice
+# stalled on memory (thrash) despite no reclaim being in flight.
+SWAP_NEARLY_FULL_FRACTION = 0.90
+MEMORY_PSI_FULL_KILL_FRACTION = 0.15
+MEMORY_PSI_FULL_KILL_SECONDS = 10
+# A swapped worker may resume only when its swapped pages fit back into RAM
+# without recreating the pressure that parked it; below the re-add threshold
+# would never resume anything the moment two parked workers exist.
+RESUME_MEMORY_HEADROOM_FRACTION = 0.85
+# Swap-parked workers that cannot fit back into RAM while idle workers wait
+# on them would deadlock a single-node job; after this grace period one is
+# killed so its input requeues to the waiting idle capacity.
+PARKED_UNRESUMABLE_KILL_SECONDS = 30
 
 
 class WorkerOutOfMemoryError(RuntimeError):
@@ -243,92 +268,245 @@ async def verify_worker_cgroup_isolation(workers: list, logger: Logger):
         )
         await logger.log(message, severity="ERROR")
     else:
+        # Swap total tells whether memory parking can work on this node (the
+        # RAM monitor falls back to killing when there is none).
+        swap_total_bytes = psutil.swap_memory().total
         await logger.log(
             f"Worker cgroup isolation verified: {len(workers)} workers in "
             f"{WORKERS_CGROUP_SLICE} (memory.max={memory_max}, "
-            f"cpu.weight={cpu_weight}), node_service in {NODE_SERVICE_CGROUP_SLICE}."
+            f"cpu.weight={cpu_weight}), node_service in {NODE_SERVICE_CGROUP_SLICE}. "
+            f"Node swap: {swap_total_bytes // 1024**2}MiB."
         )
 
 
 async def dynamic_ram_monitor_loop():
     started_at = time.perf_counter()
     worker_memory_limit_bytes = None
-    while SELF["dynamic_func_ram"]:
-        startup_window = (
-            time.perf_counter() - started_at < DYNAMIC_RAM_STARTUP_MONITOR_SECONDS
-        )
-        interval = (
-            DYNAMIC_RAM_STARTUP_MONITOR_INTERVAL_SECONDS
-            if startup_window
-            else DYNAMIC_RAM_MONITOR_INTERVAL_SECONDS
-        )
-        await asyncio.sleep(interval)
-        active_workers = _active_dynamic_workers()
-        if not active_workers:
-            return
-        if worker_memory_limit_bytes is None:
-            worker_memory_limit_bytes = _workers_memory_limit_bytes(active_workers[0])
+    memory_high_bytes = None
+    memory_high_active = False
+    slice_dir = None
+    psi_thrashing_since = None
+    unresumable_since = None
+    try:
+        while SELF["dynamic_func_ram"]:
+            startup_window = (
+                time.perf_counter() - started_at < DYNAMIC_RAM_STARTUP_MONITOR_SECONDS
+            )
+            interval = (
+                DYNAMIC_RAM_STARTUP_MONITOR_INTERVAL_SECONDS
+                if startup_window
+                else DYNAMIC_RAM_MONITOR_INTERVAL_SECONDS
+            )
+            await asyncio.sleep(interval)
+            active_workers = _active_dynamic_workers()
+            if not active_workers:
+                return
+            if worker_memory_limit_bytes is None:
+                worker_memory_limit_bytes = _workers_memory_limit_bytes(
+                    active_workers[0]
+                )
+                slice_dir = _workers_cgroup_slice_dir(active_workers[0])
+                gap_bytes = max(
+                    MEMORY_HIGH_GAP_MIN_BYTES,
+                    int(worker_memory_limit_bytes * MEMORY_HIGH_GAP_FRACTION),
+                )
+                memory_high_bytes = worker_memory_limit_bytes - gap_bytes
 
-        worker_memory = []
-        for worker in active_workers:
+            worker_memory = []
+            for worker in active_workers:
+                try:
+                    worker_memory.append((worker.memory_rss_bytes(), worker))
+                except psutil.NoSuchProcess:
+                    await _relocate_worker_process_or_retire(worker)
+            if not worker_memory:
+                continue
+
+            # Kernel-level stall net (see MEMORY_HIGH_GAP_*), active only
+            # while parking can still help: with one worker left the job is
+            # in its terminal straight-to-OOM regime and the stall would just
+            # delay the OOM error the user needs to see. Cleared in the
+            # finally so fixed-RAM jobs are never affected.
+            if slice_dir is not None:
+                want_memory_high = len(worker_memory) > 1
+                if want_memory_high and not memory_high_active:
+                    (slice_dir / "memory.high").write_text(str(memory_high_bytes))
+                    memory_high_active = True
+                elif not want_memory_high and memory_high_active:
+                    (slice_dir / "memory.high").write_text("max")
+                    memory_high_active = False
+
+            active_worker_memory_bytes = sum(
+                rss_bytes for rss_bytes, _ in worker_memory
+            )
+            reclaim_in_flight = any(
+                worker.reclaim_in_progress for worker in active_workers
+            )
+
+            # Deadlock backstop, checked every tick (a stuck node can sit well
+            # below the pressure trigger): swap-parked workers nobody can
+            # resume, while idle workers wait on them, would hang a
+            # single-node job forever. After a grace period kill one (largest
+            # RSS, mirroring the kill path's parked-first order) so its input
+            # requeues to the waiting idle capacity.
+            swap_parked_memory = [
+                (rss_bytes, worker)
+                for rss_bytes, worker in worker_memory
+                if worker.swap_parked and worker.current_input is not None
+            ]
+            idle_workers_waiting = any(
+                worker.is_idle and not worker.throttled for worker in active_workers
+            )
+            deadlocked = (
+                bool(swap_parked_memory)
+                and idle_workers_waiting
+                and not reclaim_in_flight
+                and not _any_parked_worker_resumable(
+                    active_workers,
+                    active_worker_memory_bytes,
+                    worker_memory_limit_bytes,
+                )
+            )
+            if not deadlocked:
+                unresumable_since = None
+            elif unresumable_since is None:
+                unresumable_since = time.time()
+            elif time.time() - unresumable_since > PARKED_UNRESUMABLE_KILL_SECONDS:
+                unresumable_since = None
+                swap_parked_memory.sort(key=lambda item: item[0], reverse=True)
+                await retire_workers_for_pressure(
+                    swap_parked_memory[:1],
+                    reason="memory pressure (parked worker cannot resume)",
+                )
+                continue
+
+            active_worker_memory_fraction = (
+                active_worker_memory_bytes / worker_memory_limit_bytes
+            )
+            over_trigger = (
+                active_worker_memory_fraction
+                >= DYNAMIC_RAM_MAX_WORKER_MEMORY_USED_FRACTION
+            )
+            if not over_trigger:
+                psi_thrashing_since = None
+                continue
+
+            if len(worker_memory) <= 1:
+                continue
+
+            target_used_bytes = int(
+                worker_memory_limit_bytes
+                * DYNAMIC_RAM_TARGET_WORKER_MEMORY_USED_FRACTION
+            )
+            bytes_to_free = max(0, active_worker_memory_bytes - target_used_bytes)
+
+            # Backstops: parking only helps if swap can absorb the parked
+            # memory and reclaim actually recovers RAM. When either fails,
+            # fall back to killing (swap thrash must not replace OOM as the
+            # failure mode).
+            swap = psutil.swap_memory()
+            kill_reason = None
+            if swap.total == 0:
+                kill_reason = "memory pressure (no swap on this node)"
+            elif swap.percent >= SWAP_NEARLY_FULL_FRACTION * 100:
+                kill_reason = "memory pressure (swap nearly full)"
+            elif slice_dir is not None:
+                psi_full_avg10 = _read_memory_psi_full_avg10(slice_dir)
+                # An in-flight reclaim legitimately stalls the slice, so the
+                # thrash timer only runs between reclaims.
+                psi_thrashing = (
+                    psi_full_avg10 > MEMORY_PSI_FULL_KILL_FRACTION
+                    and not reclaim_in_flight
+                )
+                if not psi_thrashing:
+                    psi_thrashing_since = None
+                elif psi_thrashing_since is None:
+                    psi_thrashing_since = time.time()
+                elif time.time() - psi_thrashing_since > MEMORY_PSI_FULL_KILL_SECONDS:
+                    psi_thrashing_since = None
+                    kill_reason = "memory pressure (reclaim not recovering)"
+
+            if kill_reason is not None:
+                # Parked (throttled) workers die first, largest RSS first:
+                # their attempts were parked precisely because they are cheap
+                # to abandon, so they are the obvious source of bytes, and
+                # largest-first clears the target with the fewest kills.
+                # Running workers die only if the parked ones weren't enough,
+                # smallest first (small kills give large tasks room while
+                # losing the least in-flight progress).
+                throttled_worker_memory = [
+                    (rss_bytes, worker)
+                    for rss_bytes, worker in worker_memory
+                    if worker.throttled and worker.current_input is not None
+                ]
+                throttled_worker_memory.sort(key=lambda item: item[0], reverse=True)
+                running_worker_memory = [
+                    (rss_bytes, worker)
+                    for rss_bytes, worker in worker_memory
+                    if not worker.throttled
+                    and not worker.is_idle
+                    and worker.current_input is not None
+                ]
+                running_worker_memory.sort(key=lambda item: item[0])
+                candidate_worker_memory = (
+                    throttled_worker_memory + running_worker_memory
+                )
+                if not candidate_worker_memory:
+                    continue
+
+                selected_worker_memory = []
+                selected_rss_bytes = 0
+                for rss_bytes, worker in candidate_worker_memory:
+                    if len(worker_memory) - len(selected_worker_memory) <= 1:
+                        break
+                    selected_worker_memory.append((rss_bytes, worker))
+                    selected_rss_bytes += rss_bytes
+                    if selected_rss_bytes >= bytes_to_free:
+                        break
+
+                await retire_workers_for_pressure(
+                    selected_worker_memory, reason=kill_reason
+                )
+                continue
+
+            # Park path. One reclaim batch at a time: parked RSS only leaves
+            # RAM once reclaim lands, so parking more meanwhile would just
+            # over-shed (memory.high stalls any grower during the gap).
+            if reclaim_in_flight:
+                continue
+            running_worker_memory = [
+                (rss_bytes, worker)
+                for rss_bytes, worker in worker_memory
+                if not worker.throttled
+                and not worker.is_idle
+                and worker.current_input is not None
+            ]
+            # Never park the node's only running worker: idle workers refuse
+            # the queue while anything is parked, so parking the sole runner
+            # would leave the node running nothing at all until recovery.
+            if len(running_worker_memory) <= 1:
+                continue
+            # Lowest RSS first: cheapest to move to swap and back, and the
+            # biggest allocators (the likely pressure source) keep their
+            # momentum while memory.high meters them.
+            running_worker_memory.sort(key=lambda item: item[0])
+
+            selected_worker_memory = []
+            selected_rss_bytes = 0
+            for rss_bytes, worker in running_worker_memory[:-1]:
+                selected_worker_memory.append((rss_bytes, worker))
+                selected_rss_bytes += rss_bytes
+                if selected_rss_bytes >= bytes_to_free:
+                    break
+
+            await park_workers_for_memory(
+                selected_worker_memory, reason="memory pressure"
+            )
+    finally:
+        if slice_dir is not None:
             try:
-                worker_memory.append((worker.memory_rss_bytes(), worker))
-            except psutil.NoSuchProcess:
-                await _relocate_worker_process_or_retire(worker)
-        if not worker_memory:
-            continue
-
-        active_worker_memory_bytes = sum(rss_bytes for rss_bytes, _ in worker_memory)
-        active_worker_memory_fraction = (
-            active_worker_memory_bytes / worker_memory_limit_bytes
-        )
-        if active_worker_memory_fraction < DYNAMIC_RAM_MAX_WORKER_MEMORY_USED_FRACTION:
-            continue
-
-        if len(worker_memory) <= 1:
-            continue
-
-        target_used_bytes = int(
-            worker_memory_limit_bytes * DYNAMIC_RAM_TARGET_WORKER_MEMORY_USED_FRACTION
-        )
-        bytes_to_free = max(0, active_worker_memory_bytes - target_used_bytes)
-        # Parked (throttled) workers die first, largest RSS first: their
-        # attempts were parked precisely because they are cheap to abandon,
-        # so they are the obvious source of bytes, and largest-first clears
-        # the target with the fewest kills. Running workers die only if the
-        # parked ones weren't enough, smallest first as before (small kills
-        # give large tasks room while losing the least in-flight progress).
-        throttled_worker_memory = [
-            (rss_bytes, worker)
-            for rss_bytes, worker in worker_memory
-            if worker.throttled and worker.current_input is not None
-        ]
-        throttled_worker_memory.sort(key=lambda item: item[0], reverse=True)
-        running_worker_memory = [
-            (rss_bytes, worker)
-            for rss_bytes, worker in worker_memory
-            if not worker.throttled
-            and not worker.is_idle
-            and worker.current_input is not None
-        ]
-        running_worker_memory.sort(key=lambda item: item[0])
-        candidate_worker_memory = throttled_worker_memory + running_worker_memory
-        if not candidate_worker_memory:
-            continue
-
-        selected_worker_memory = []
-        selected_rss_bytes = 0
-        for rss_bytes, worker in candidate_worker_memory:
-            if len(worker_memory) - len(selected_worker_memory) <= 1:
-                break
-            selected_worker_memory.append((rss_bytes, worker))
-            selected_rss_bytes += rss_bytes
-            if selected_rss_bytes >= bytes_to_free:
-                break
-
-        await retire_workers_for_pressure(
-            selected_worker_memory, reason="memory pressure"
-        )
+                (slice_dir / "memory.high").write_text("max")
+            except OSError:
+                pass  # slice teardown at node shutdown
 
 
 def _worker_cgroup_dir(worker) -> Path:
@@ -342,6 +520,58 @@ def _worker_cgroup_dir(worker) -> Path:
         .split(":", 2)[2]
     )
     return Path("/sys/fs/cgroup", cgroup_path.strip("/"))
+
+
+def _read_memory_stat_anon(cgroup_dir: Path) -> int:
+    # `anon` counts anonymous pages still resident in RAM; pages moved to
+    # swap leave it (and appear in memory.swap.current), which makes it the
+    # honest measure of how much memory a reclaim actually got out of RAM.
+    for line in (cgroup_dir / "memory.stat").read_text().splitlines():
+        if line.startswith("anon "):
+            return int(line.split()[1])
+    return 0
+
+
+def _read_memory_psi_full_avg10(cgroup_dir: Path) -> float:
+    # `full` line: fraction of time ALL non-idle tasks in the cgroup were
+    # stalled on memory at once, i.e. thrash rather than mere contention.
+    for line in (cgroup_dir / "memory.pressure").read_text().splitlines():
+        if line.startswith("full"):
+            return float(line.split("avg10=")[1].split()[0])
+    return 0.0
+
+
+def _workers_rss_sum_bytes(workers) -> int:
+    rss_sum_bytes = 0
+    for worker in workers:
+        try:
+            rss_sum_bytes += worker.memory_rss_bytes()
+        except psutil.NoSuchProcess:
+            continue  # worker_server.py mid-relaunch; its RSS is ~0 anyway
+    return rss_sum_bytes
+
+
+def _swap_parked_worker_resumable(worker, rss_sum_bytes, limit_bytes) -> bool:
+    """A swapped worker may resume only when faulting its swapped pages back
+    into RAM would leave total worker memory under the headroom threshold."""
+    try:
+        swap_file = _worker_cgroup_dir(worker) / "memory.swap.current"
+        swap_current_bytes = int(swap_file.read_text())
+    except OSError:
+        return True  # process/container mid-teardown; resuming is harmless
+    projected = (rss_sum_bytes + swap_current_bytes) / limit_bytes
+    return projected < RESUME_MEMORY_HEADROOM_FRACTION
+
+
+def _any_parked_worker_resumable(active_workers, rss_sum_bytes, limit_bytes) -> bool:
+    for worker in active_workers:
+        if not worker.throttled:
+            continue
+        if not worker.swap_parked:
+            return True  # CPU-parked: resuming needs no RAM headroom
+        if _swap_parked_worker_resumable(worker, rss_sum_bytes, limit_bytes):
+            return True
+    return False
 
 
 class WorkerStallTracker:
@@ -501,19 +731,46 @@ async def _unthrottle_one_parked_worker(reason: str, via: str):
     async with SELF["dynamic_retire_lock"]:
         # Re-filter under the lock: a revocation or RAM kill may have
         # consumed the parked worker since the caller checked.
+        active_workers = _active_dynamic_workers()
         throttled_workers = [
-            worker for worker in _active_dynamic_workers() if worker.throttled
+            worker for worker in active_workers if worker.throttled
         ]
         if not throttled_workers:
             return
         # Most progress first: the attempt closest to done frees its slot
         # (and its RAM) soonest, while the least-progressed attempts stay
         # parked, which are exactly the ones a peer can steal most cheaply.
-        worker = max(throttled_workers, key=lambda w: w.attempt_cpu_seconds())
+        # Swap-parked candidates additionally need RAM headroom to fault
+        # their pages back without recreating the pressure that parked them.
+        throttled_workers.sort(key=lambda w: w.attempt_cpu_seconds(), reverse=True)
+        worker = None
+        limit_bytes = None
+        rss_sum_bytes = None
+        for candidate in throttled_workers:
+            if candidate.swap_parked:
+                if limit_bytes is None:
+                    limit_bytes = _workers_memory_limit_bytes(candidate)
+                    rss_sum_bytes = _workers_rss_sum_bytes(active_workers)
+                if not _swap_parked_worker_resumable(
+                    candidate, rss_sum_bytes, limit_bytes
+                ):
+                    continue
+            worker = candidate
+            break
+        if worker is None:
+            return
         throttled_for = time.time() - worker.throttled_at
+        was_swap_parked = worker.swap_parked
+        swap_used_bytes = None
+        if was_swap_parked:
+            try:
+                swap_file = _worker_cgroup_dir(worker) / "memory.swap.current"
+                swap_used_bytes = int(swap_file.read_text())
+            except OSError:
+                pass  # worker process mid-relaunch; metric only
         await worker.unthrottle()
         unthrottled_count = (
-            len(_active_dynamic_workers()) - len(throttled_workers) + 1
+            len(active_workers) - len(throttled_workers) + 1
         )
         await Logger().log(
             f"Node parallelism increased from {unthrottled_count - 1} to "
@@ -529,6 +786,8 @@ async def _unthrottle_one_parked_worker(reason: str, via: str):
             input_index=worker.current_input[0] if worker.current_input else None,
             throttled_for_sec=round(throttled_for, 1),
             n_still_throttled=len(throttled_workers) - 1,
+            was_swap_parked=was_swap_parked,
+            swap_used_bytes=swap_used_bytes,
         )
 
 
@@ -558,14 +817,16 @@ async def dynamic_worker_readd_loop():
         if stall_fraction > READD_MAX_CPU_STALL_FRACTION:
             continue
 
-        # No queue or RAM gate for unthrottling: a parked worker owns its own
-        # input (an empty queue must not strand it at 1% CPU forever) and its
-        # RSS is already resident. Unthrottling one worker per tick, without
-        # touching the pressure timestamp, means a re-spike simply re-throttles
-        # and re-arms the cooldown: bounded oscillation converging on
-        # sustainable parallelism. (Idle workers also resume parked attempts
-        # directly, see _process_inputs; this path covers pressure clearing
-        # while every other worker is still busy.)
+        # No queue gate for unthrottling: a parked worker owns its own input
+        # (an empty queue must not strand it at 1% CPU forever). CPU-parked
+        # workers have no RAM gate either (their RSS is already resident);
+        # swap-parked workers are gated on RAM headroom inside
+        # _unthrottle_one_parked_worker. Unthrottling one worker per tick,
+        # without touching the pressure timestamp, means a re-spike simply
+        # re-throttles and re-arms the cooldown: bounded oscillation
+        # converging on sustainable parallelism. (Idle workers also resume
+        # parked attempts directly, see _process_inputs; this path covers
+        # pressure clearing while every other worker is still busy.)
         if any(worker.throttled for worker in _active_dynamic_workers()):
             await _unthrottle_one_parked_worker(
                 reason="pressure subsided", via="recovery_loop"
@@ -949,6 +1210,100 @@ async def throttle_workers_for_pressure(
         )
 
 
+async def park_workers_for_memory(
+    selected_workers: list[tuple[float, "WorkerClient"]],
+    reason: str,
+):
+    """Memory twin of throttle_workers_for_pressure: park the selected workers
+    (CPU throttle + swap access) and start a background reclaim per worker
+    that pushes its resident memory into swap. Parked attempts stay stealable
+    via revoke_throttled_inputs and killable by the RAM monitor's backstops."""
+    if not selected_workers:
+        return
+    reclaim_workers = []
+    async with SELF["dynamic_retire_lock"]:
+        unthrottled_active = [
+            worker
+            for worker in SELF["workers"]
+            if not worker.retired and not worker.throttled
+        ]
+        running_unthrottled = [
+            worker
+            for worker in unthrottled_active
+            if not worker.is_idle and worker.current_input is not None
+        ]
+        # Same invariant as the CPU path: at least one RUNNING unthrottled
+        # worker must remain.
+        max_park_count = max(0, len(running_unthrottled) - 1)
+        selected_workers = [
+            (rss_bytes, worker)
+            for rss_bytes, worker in selected_workers
+            if not worker.retired
+            and not worker.throttled
+            and worker.current_input is not None
+        ][:max_park_count]
+        if not selected_workers:
+            return
+
+        old_parallelism = len(unthrottled_active)
+        new_parallelism = old_parallelism - len(selected_workers)
+        input_indexes = [worker.current_input[0] for _, worker in selected_workers]
+        rss_bytes_list = [int(rss_bytes) for rss_bytes, _ in selected_workers]
+        # Reuses the retirement cooldown so the recovery loop, slot trading,
+        # and trade grants all hold off while pressure is being shed.
+        SELF["last_pressure_retirement_at"] = time.time()
+        for _, worker in selected_workers:
+            await worker.park_for_memory()
+            worker.reclaim_in_progress = True
+            reclaim_workers.append(worker)
+
+        msg = (
+            f"Node parallelism decreased from {old_parallelism} to {new_parallelism} "
+            f"due to {reason}: parked {len(selected_workers)} worker(s) at ~1% CPU and "
+            "began moving their memory to swap. Their in-flight inputs are paused, "
+            "not killed, and resume (here or on another node) when memory frees up."
+        )
+        await Logger().log(
+            msg,
+            severity="WARNING",
+            job_id=SELF["current_job"],
+            input_indexes=input_indexes,
+            old_parallelism=old_parallelism,
+            new_parallelism=new_parallelism,
+        )
+        await debug_log(
+            "workers_memory_parked",
+            reason=reason,
+            input_indexes=input_indexes,
+            rss_bytes=rss_bytes_list,
+            old_parallelism=old_parallelism,
+            new_parallelism=new_parallelism,
+        )
+    for worker in reclaim_workers:
+        asyncio.create_task(_reclaim_parked_worker_memory(worker))
+
+
+async def _reclaim_parked_worker_memory(worker: "WorkerClient"):
+    input_index = worker.current_input[0] if worker.current_input else None
+    try:
+        cgroup_dir = _worker_cgroup_dir(worker)
+        slice_dir = _workers_cgroup_slice_dir(worker)
+        metrics = await asyncio.to_thread(worker.reclaim_memory_sync, cgroup_dir)
+        memory_psi_full_avg10 = None
+        if slice_dir is not None:
+            memory_psi_full_avg10 = _read_memory_psi_full_avg10(slice_dir)
+    except OSError:
+        return  # worker killed/revoked mid-reclaim and its cgroup vanished
+    finally:
+        worker.reclaim_in_progress = False
+    await debug_log(
+        "worker_swap_reclaim",
+        input_index=input_index,
+        memory_psi_full_avg10=memory_psi_full_avg10,
+        **metrics,
+    )
+
+
 async def revoke_throttled_inputs(max_inputs: int) -> list[tuple[int, bytes]]:
     """Kill up to max_inputs parked workers and hand their in-flight inputs to
     a stealing peer that reported idle capacity, least attempt-CPU first (the
@@ -1020,6 +1375,8 @@ class WorkerClient:
         self.current_input = None
         self.throttled = False
         self.throttled_at = None
+        self.swap_parked = False
+        self.reclaim_in_progress = False
         self.attempt_cpu_baseline = None
 
     def _worker_server_host_path(self):
@@ -1254,6 +1611,16 @@ class WorkerClient:
         self.is_idle = True
         self.logstream_task = asyncio.create_task(self._handle_container_logs())
         self.worker_host_pid = await self._get_worker_host_pid()
+        self._deny_swap()
+
+    def _deny_swap(self):
+        # Workers must not swap organically: with node swap present, the
+        # workers slice's memory.max would push overruns into swap (thrash)
+        # instead of the prompt OOM kill users expect. park_for_memory()
+        # flips this to "max" for workers being parked. Re-applied after
+        # every container (re)start because restarts recreate the cgroup.
+        if not IN_LOCAL_DEV_MODE:
+            (_worker_cgroup_dir(self) / "memory.swap.max").write_text("0")
 
     async def _raise_if_worker_failed(self):
         for _ in range(10):
@@ -1360,8 +1727,71 @@ class WorkerClient:
             method="POST",
             data={"CpuQuota": -1, "CpuPeriod": CPU_QUOTA_PERIOD_USEC},
         )
+        if self.swap_parked:
+            try:
+                # Re-deny swap; already-swapped pages just fault back on use.
+                (_worker_cgroup_dir(self) / "memory.swap.max").write_text("0")
+            except OSError:
+                pass  # worker process/container mid-teardown or relaunch
+            self.swap_parked = False
         self.throttled = False
         self.throttled_at = None
+
+    async def park_for_memory(self):
+        """Park like throttle(), then grant this container swap access (all
+        workers boot with memory.swap.max=0) so the reclaim task and the
+        kernel's memory.high reclaim can move its pages out of RAM."""
+        await self.throttle()
+        try:
+            (_worker_cgroup_dir(self) / "memory.swap.max").write_text("max")
+            self.swap_parked = True
+        except OSError:
+            pass  # worker process mid-relaunch; stays CPU-parked only
+
+    def reclaim_memory_sync(self, cgroup_dir: Path) -> dict:
+        """Blocking (run in a thread): push this parked container's resident
+        memory to swap with chunked memory.reclaim writes. The kernel may
+        reclaim less than asked (EAGAIN on shortfall), so progress is
+        measured from memory.current instead of trusting requested counts."""
+        started_at = time.perf_counter()
+        anon_before = _read_memory_stat_anon(cgroup_dir)
+        current_before = int((cgroup_dir / "memory.current").read_text())
+        requested_bytes = current_before
+        remaining_bytes = requested_bytes
+        no_progress_chunks = 0
+        outcome = "reclaimed"
+        while remaining_bytes > 0:
+            if self.retired or not self.swap_parked:
+                outcome = "aborted"  # killed, revoked, or resumed mid-reclaim
+                break
+            chunk_start_bytes = int((cgroup_dir / "memory.current").read_text())
+            chunk_bytes = min(MEMORY_RECLAIM_CHUNK_BYTES, remaining_bytes)
+            try:
+                (cgroup_dir / "memory.reclaim").write_text(str(chunk_bytes))
+            except OSError as error:
+                # EAGAIN just means this pass reclaimed less than requested.
+                if error.errno != errno.EAGAIN:
+                    raise
+            chunk_end_bytes = int((cgroup_dir / "memory.current").read_text())
+            if chunk_start_bytes - chunk_end_bytes < 1024**2:
+                no_progress_chunks += 1
+                if no_progress_chunks >= 2:
+                    outcome = "stalled"  # only unreclaimable pages remain
+                    break
+            else:
+                no_progress_chunks = 0
+            remaining_bytes -= chunk_bytes
+        return {
+            "outcome": outcome,
+            "requested_bytes": requested_bytes,
+            "reclaimed_anon_bytes": anon_before - _read_memory_stat_anon(cgroup_dir),
+            "reclaimed_total_bytes": (
+                current_before - int((cgroup_dir / "memory.current").read_text())
+            ),
+            "swap_used_bytes": int((cgroup_dir / "memory.swap.current").read_text()),
+            "node_swap_free_bytes": psutil.swap_memory().free,
+            "duration_sec": round(time.perf_counter() - started_at, 3),
+        }
 
     async def _read_response(self):
         try:
@@ -1574,6 +2004,7 @@ class WorkerClient:
         self.is_idle = True
         self.logstream_task = asyncio.create_task(self._handle_container_logs())
         self.worker_host_pid = await self._get_worker_host_pid()
+        self._deny_swap()
 
     async def _restart_container(self):
         if self.writer is not None:

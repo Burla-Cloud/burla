@@ -27,7 +27,7 @@ from node_service.worker_client import (
     READD_MAX_CPU_STALL_FRACTION,
     READD_MAX_WORKER_MEMORY_USED_FRACTION,
     READD_PRESSURE_COOLDOWN_SECONDS,
-    _read_cpu_stall_usec,
+    WorkerStallTracker,
     _workers_memory_limit_bytes,
 )
 
@@ -124,10 +124,23 @@ async def _input_steal_loop(session, logger, job_started_at):
 
         transfer_id = uuid4().hex
         remaining_inputs = SELF["inputs_queue"].qsize()
+        # Idle unthrottled workers = genuinely free capacity right now. The
+        # neighbor uses this to decide whether revoking its parked (throttled)
+        # workers' inputs for us is worth the kill. Idle workers refuse the
+        # queue while anything is parked locally, so a node with parked
+        # workers reports 0: its "idle" workers could not actually run a
+        # revoked input, and two pressured nodes must never swap parked work
+        # back and forth via kills.
+        idle_worker_count = 0
+        if not any(w.throttled and not w.retired for w in SELF["workers"]):
+            idle_worker_count = sum(
+                worker.is_idle and not worker.retired for worker in SELF["workers"]
+            )
         get_url = f"{neighbor_host}/jobs/{SELF['current_job']}/get_inputs"
         get_params = {
             "transfer_id": transfer_id,
             "requester_queue_size": remaining_inputs,
+            "requester_idle_workers": idle_worker_count,
         }
 
         items = None
@@ -215,8 +228,7 @@ async def _slot_trade_loop(session, logger):
         return
     max_workers = OVERSUBSCRIBE_MAX_WORKERS_PER_CPU * INSTANCE_N_CPUS
     can_check_cpu = CPU_PRESSURE_FILE.exists()
-    last_stall_usec = _read_cpu_stall_usec() if can_check_cpu else 0
-    last_read_at = time()
+    stall_tracker = WorkerStallTracker()
 
     while not SELF["job_watcher_stop_event"].is_set():
         await asyncio.sleep(1)
@@ -225,11 +237,10 @@ async def _slot_trade_loop(session, logger):
 
         stall_fraction = 0.0
         if can_check_cpu:
-            stall_usec = _read_cpu_stall_usec()
-            read_at = time()
-            elapsed_usec = (read_at - last_read_at) * 1_000_000
-            stall_fraction = (stall_usec - last_stall_usec) / elapsed_usec
-            last_stall_usec, last_read_at = stall_usec, read_at
+            unthrottled_workers = [
+                w for w in SELF["workers"] if not w.retired and not w.throttled
+            ]
+            stall_fraction = stall_tracker.max_stall_fraction(unthrottled_workers)
 
         if SELF["target_parallelism"] <= 0:
             return  # traded out; this node is on its way off the job
@@ -524,6 +535,9 @@ async def _job_watcher(
                 target=SELF["target_parallelism"],
                 alive_workers=sum(not w.retired for w in SELF["workers"]),
                 busy_workers=SELF["current_parallelism"],
+                throttled_workers=sum(
+                    w.throttled and not w.retired for w in SELF["workers"]
+                ),
                 queued_inputs=remaining_inputs,
                 results=SELF["num_results_received"],
             )
@@ -545,7 +559,7 @@ async def _job_watcher(
                 queued_results=SELF["results_queue"].qsize(),
                 queued_result_bytes=SELF["results_queue"].size_bytes,
                 unacked_result_batch=not pending_results_empty,
-                workers=[(w.is_idle, w.retired) for w in SELF["workers"]],
+                workers=[(w.is_idle, w.retired, w.throttled) for w in SELF["workers"]],
                 all_inputs_uploaded=SELF["all_inputs_uploaded"],
             )
 

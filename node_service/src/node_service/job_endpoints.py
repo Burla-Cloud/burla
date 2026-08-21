@@ -27,6 +27,7 @@ from node_service.worker_client import (
     cpu_pressure_monitor_loop,
     dynamic_ram_monitor_loop,
     dynamic_worker_readd_loop,
+    revoke_throttled_inputs,
 )
 
 _LOGS_OVERFLOW_MESSAGE = (
@@ -111,6 +112,7 @@ async def get_inputs(
     job_id: str = Path(...),
     transfer_id: str = Query(...),
     requester_queue_size: int = Query(0),
+    requester_idle_workers: int = Query(0),
 ):
     if job_id != SELF["current_job"]:
         return Response("job not found", status_code=404)
@@ -135,6 +137,13 @@ async def get_inputs(
             items.append((input_index, input_pkl))
             total_bytes += len(input_pkl)
         items.reverse()
+        # Queued inputs always take priority, but once the queue is dry a
+        # peer with genuinely idle workers may take the in-flight inputs of
+        # parked (throttled) workers: they were throttled precisely so their
+        # attempts would stay cheap to move to free capacity elsewhere.
+        queue_is_empty = SELF["inputs_queue"].qsize() == 0
+        if not items and queue_is_empty and requester_idle_workers > 0:
+            items = await revoke_throttled_inputs(requester_idle_workers)
         SELF["pending_transfers"][transfer_id] = items
 
     return Response(

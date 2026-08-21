@@ -28,8 +28,8 @@ from jinja2 import Environment, FileSystemLoader
 from starlette.datastructures import UploadFile
 from starlette.middleware.sessions import SessionMiddleware
 
-CURRENT_BURLA_VERSION = "1.7.7"
-MIN_COMPATIBLE_CLIENT_VERSION = "1.7.7"
+CURRENT_BURLA_VERSION = "1.7.8"
+MIN_COMPATIBLE_CLIENT_VERSION = "1.7.8"
 NODE_SOURCE_REF = os.environ.get("BURLA_NODE_SOURCE_REF", CURRENT_BURLA_VERSION)
 
 # In this mode EVERYTHING runs locally in docker containers.

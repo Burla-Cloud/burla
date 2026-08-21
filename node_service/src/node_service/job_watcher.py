@@ -720,6 +720,14 @@ async def reset_workers(logger: Logger):
                 await monitor_task
             except asyncio.CancelledError:
                 pass
+            except Exception as e:
+                # A monitor that crashed mid-job (observed: FileNotFoundError
+                # reading /proc/<pid>/cgroup of a worker the kernel OOM-killed)
+                # re-raises here; it must never block teardown or the node
+                # stays "running" forever and leaks its VM.
+                await logger.log(
+                    f"{task_key} crashed during the job: {e}", severity="ERROR"
+                )
             SELF[task_key] = None
     if SELF["reboot_containers_after_job"]:
         await logger.log(

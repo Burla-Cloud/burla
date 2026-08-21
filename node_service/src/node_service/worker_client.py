@@ -304,10 +304,16 @@ async def dynamic_ram_monitor_loop():
             if not active_workers:
                 return
             if worker_memory_limit_bytes is None:
-                worker_memory_limit_bytes = _workers_memory_limit_bytes(
-                    active_workers[0]
-                )
-                slice_dir = _workers_cgroup_slice_dir(active_workers[0])
+                try:
+                    worker_memory_limit_bytes = _workers_memory_limit_bytes(
+                        active_workers[0]
+                    )
+                    slice_dir = _workers_cgroup_slice_dir(active_workers[0])
+                except OSError:
+                    # That worker's process just died (e.g. kernel OOM);
+                    # /proc/<pid>/cgroup vanished mid-read. Retry next tick.
+                    worker_memory_limit_bytes = None
+                    continue
                 memory_high_bytes = int(
                     worker_memory_limit_bytes * MEMORY_HIGH_WORKER_MEMORY_FRACTION
                 )
@@ -748,9 +754,12 @@ async def _unthrottle_one_parked_worker(reason: str, via: str):
         rss_sum_bytes = None
         for candidate in throttled_workers:
             if candidate.swap_parked:
-                if limit_bytes is None:
-                    limit_bytes = _workers_memory_limit_bytes(candidate)
-                    rss_sum_bytes = _workers_rss_sum_bytes(active_workers)
+                try:
+                    if limit_bytes is None:
+                        limit_bytes = _workers_memory_limit_bytes(candidate)
+                        rss_sum_bytes = _workers_rss_sum_bytes(active_workers)
+                except OSError:
+                    continue  # candidate's process just died; skip it
                 if not _swap_parked_worker_resumable(
                     candidate, rss_sum_bytes, limit_bytes
                 ):
@@ -842,7 +851,10 @@ async def dynamic_worker_readd_loop():
         # RAM headroom check mirrors the RAM monitor's gating (its psutil
         # numbers are meaningless inside a local-dev fake VM).
         if SELF["dynamic_func_ram"] and not IN_LOCAL_DEV_MODE and active_workers:
-            memory_limit_bytes = _workers_memory_limit_bytes(active_workers[0])
+            try:
+                memory_limit_bytes = _workers_memory_limit_bytes(active_workers[0])
+            except OSError:
+                continue  # that worker's process just died; skip this tick
             used_bytes = 0
             for worker in active_workers:
                 try:

@@ -1115,9 +1115,25 @@ class WorkerClient:
             ],
         }
 
-        self.container = await self.docker.containers.run(
-            config=config, name=self.container_name
-        )
+        # systemd sometimes cancels a scope-start job when every worker on a
+        # big node boots at once while the previous set is still tearing down
+        # in the same slice (observed in prod as a "got `canceled`" 500 that
+        # failed the reboot and made the node delete itself). The cancel is
+        # transient, so retry. run() raises DockerContainerError only after
+        # create succeeded, leaving a container that holds our name; remove
+        # it or the retried create fails with a name conflict.
+        for attempt_number in range(1, 4):
+            try:
+                self.container = await self.docker.containers.run(
+                    config=config, name=self.container_name
+                )
+                break
+            except aiodocker.DockerContainerError as e:
+                leftover = self.docker.containers.container(e.container_id)
+                await leftover.delete(force=True)
+                if attempt_number == 3:
+                    raise
+                await asyncio.sleep(1)
         self.container_id = self.container.id
 
     async def _get_host_port(self):

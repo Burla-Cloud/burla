@@ -81,12 +81,14 @@ READD_MAX_WORKER_MEMORY_USED_FRACTION = 0.75
 # resident memory reclaimed into swap via their cgroup's memory.reclaim)
 # instead of killed; the kill path stays as the backstop below.
 MEMORY_RECLAIM_CHUNK_BYTES = 256 * 1024**2
-# Soft ceiling on the workers slice, set below memory.max for dynamic-RAM
-# jobs: an allocator crossing it is stalled by the kernel (direct reclaim +
-# forced sleeps inside the allocation path), so a fast-growing worker cannot
-# outrun the monitor's ticks to OOM while parked workers are being reclaimed.
-MEMORY_HIGH_GAP_MIN_BYTES = 512 * 1024**2
-MEMORY_HIGH_GAP_FRACTION = 0.03
+# Soft ceiling on the workers slice, set for dynamic-RAM jobs: an allocator
+# crossing it is stalled by the kernel (direct reclaim + forced sleeps inside
+# the allocation path), so a fast-growing worker cannot outrun the monitor's
+# ticks to OOM while parked workers are being reclaimed. It MUST sit between
+# the park trigger (DYNAMIC_RAM_MAX_WORKER_MEMORY_USED_FRACTION) and
+# memory.max: placed below the trigger, the kernel clamps usage under the
+# trigger and the monitor never parks anyone, stalling the job forever.
+MEMORY_HIGH_WORKER_MEMORY_FRACTION = 0.985
 # Backstop kill triggers: swap nearly full, or memory PSI showing the slice
 # stalled on memory (thrash) despite no reclaim being in flight.
 SWAP_NEARLY_FULL_FRACTION = 0.90
@@ -306,11 +308,9 @@ async def dynamic_ram_monitor_loop():
                     active_workers[0]
                 )
                 slice_dir = _workers_cgroup_slice_dir(active_workers[0])
-                gap_bytes = max(
-                    MEMORY_HIGH_GAP_MIN_BYTES,
-                    int(worker_memory_limit_bytes * MEMORY_HIGH_GAP_FRACTION),
+                memory_high_bytes = int(
+                    worker_memory_limit_bytes * MEMORY_HIGH_WORKER_MEMORY_FRACTION
                 )
-                memory_high_bytes = worker_memory_limit_bytes - gap_bytes
 
             worker_memory = []
             for worker in active_workers:

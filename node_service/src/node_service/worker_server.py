@@ -16,6 +16,7 @@ import threading
 import time
 import traceback
 import urllib.request
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 
 FUNCTION_PAYLOAD_MAGIC = b"BURLA_FUNCTION_V2\0"
@@ -408,10 +409,16 @@ def load_function_payload(payload):
     )
     digest = hashlib.sha256(module_sources).hexdigest()
     module_path = f"/worker_service_storage/local-modules-{digest}.zip"
-    temporary_path = f"{module_path}.{os.getpid()}"
-    with open(temporary_path, "wb") as output:
-        output.write(module_sources)
-    os.replace(temporary_path, module_path)
+    # Every worker on the node loads the same bundle concurrently into this
+    # shared storage, and PIDs collide across their separate PID namespaces,
+    # so the staging name must be globally unique or workers rename each
+    # other's files away mid-write. The zip only appears under its final name
+    # via a completed atomic rename, so if it exists it's whole and identical.
+    if not os.path.exists(module_path):
+        temporary_path = f"{module_path}.{uuid.uuid4().hex}"
+        with open(temporary_path, "wb") as output:
+            output.write(module_sources)
+        os.replace(temporary_path, module_path)
     sys.path.insert(0, module_path)
     importlib.invalidate_caches()
     return cloudpickle.loads(function_pkl), module_names, module_path

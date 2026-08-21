@@ -11,6 +11,7 @@ which no e2e test passed before.
 
 from __future__ import annotations
 
+import random
 import uuid
 
 import pytest
@@ -74,11 +75,16 @@ def test_udf_can_call_a_local_module(rpm_subprocess, local_dev_cluster, tmp_path
     classified as Burla's own, and skipped, on any path containing "burla"."""
     module_dir = tmp_path / "burla_helpers"
     module_dir.mkdir()
+    # Incompressible so the shipped zip stays ~0.5MB after deflate: staging
+    # the bundle into the node's shared storage only races when concurrent
+    # worker writes take real time (a prod node hit this with 5 workers).
+    blob = "".join(random.Random(0).choices("0123456789abcdef", k=1_000_000))
     (module_dir / "udf_helpers.py").write_text(
         "import threading\n"
         "\n"
         "GREETING = 'hello-from-a-local-module'\n"
         "UNRELATED_STATE = threading.Lock()\n"
+        f"PADDING = '{blob}'\n"
         "\n"
         "def label(value):\n"
         "    return f'{GREETING}-{value}'\n"
@@ -91,9 +97,10 @@ def test_udf_can_call_a_local_module(rpm_subprocess, local_dev_cluster, tmp_path
         "def test_function(x):\n"
         "    return udf_helpers.label(x)\n"
     )
-    result = rpm_subprocess(source, [1, 2], timeout_seconds=300, grow=True)
+    # Enough inputs that every worker on every node loads the bundle at once.
+    values = list(range(1, 17))
+    result = rpm_subprocess(source, values, timeout_seconds=300, grow=True)
     assert result["ok"], result.get("traceback")
-    assert sorted(result["outputs"]) == [
-        "hello-from-a-local-module-1",
-        "hello-from-a-local-module-2",
-    ]
+    assert sorted(result["outputs"]) == sorted(
+        f"hello-from-a-local-module-{value}" for value in values
+    )

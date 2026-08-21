@@ -26,16 +26,20 @@ LONG_CALL_SEC = 60
 N_SHORT_INPUTS = 40
 
 
-@pytest.mark.timeout(300)
+@pytest.mark.timeout(600)
 def test_growth_node_drains_and_self_deletes_mid_job(
     rpm_subprocess,
     local_dev_cluster,
+    cluster_with_n_nodes,
     main_http_client,
     wait_for_fixture,
 ):
-    before = main_http_client.get("/v1/cluster/state").json()
-    initial_names = {n["instance_name"] for n in before["ready_nodes"]}
-    assert len(initial_names) >= 1
+    # Exactly one baseline node: local-dev's grow budget is
+    # LOCAL_DEV_MAX_GROW_CPUS=4 minus existing capacity, so a second idle
+    # baseline node would leave no budget to boot growth capacity from.
+    initial_names = {
+        n["instance_name"] for n in cluster_with_n_nodes(1)
+    }
 
     # Inputs 0 and 1 sleep for a minute and are queued first, so the baseline
     # node's two workers grab them immediately; everything else is short work

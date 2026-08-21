@@ -17,6 +17,7 @@ import time
 import traceback
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
+from uuid import uuid4
 
 FUNCTION_PAYLOAD_MAGIC = b"BURLA_FUNCTION_V2\0"
 
@@ -408,7 +409,10 @@ def load_function_payload(payload):
     )
     digest = hashlib.sha256(module_sources).hexdigest()
     module_path = f"/worker_service_storage/local-modules-{digest}.zip"
-    temporary_path = f"{module_path}.{os.getpid()}"
+    # Workers share this volume but not a PID namespace, so os.getpid() here
+    # collides across concurrently-assigned workers (two PID-15s racing the
+    # same temp file, observed as FileNotFoundError from os.replace).
+    temporary_path = f"{module_path}.{uuid4().hex}"
     with open(temporary_path, "wb") as output:
         output.write(module_sources)
     os.replace(temporary_path, module_path)

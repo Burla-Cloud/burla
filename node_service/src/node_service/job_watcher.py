@@ -19,7 +19,6 @@ from node_service import (
     NUM_GPUS,
     REINIT_SELF,
     RESERVED_FOR_JOB,
-    _shutdown_self,
     head_client,
 )
 from node_service.helpers import Logger, debug_log, format_traceback
@@ -496,6 +495,10 @@ async def _leave_job_early(logger: Logger, reason: str):
     await logger.log(
         f"Growth node finished its part of the job ({reason}), deleting self."
     )
+    # Lazy import: this module is imported while node_service/__init__.py is
+    # still initializing, before _shutdown_self is defined.
+    from node_service import _shutdown_self
+
     if IN_LOCAL_DEV_MODE:
         # Local-dev nodes are containers with no cloud shutdown path of
         # their own; the head removes the container.

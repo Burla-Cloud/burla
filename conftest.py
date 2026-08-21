@@ -398,19 +398,23 @@ def clean_local_dev_cluster_before_cluster_tests(request):
 
 @pytest.fixture
 def cluster_with_n_nodes(local_dev_cluster):
-    """Grow this checkout's cluster to `n` READY nodes for tests that need
-    more than one, then put it back. local-dev fixes the node count at head
-    startup and resets it on every settings write, so the head exposes a
-    test-only knob for this."""
+    """Ensure this checkout's cluster has exactly `n` READY nodes, then put
+    it back. Exactness matters both ways: multi-node tests need more than
+    one, and grow tests need the baseline small enough that the local-dev
+    grow CPU budget isn't already spent on idle capacity. local-dev fixes
+    the node count at head startup and resets it on every settings write,
+    so the head exposes a test-only knob for this."""
     original_quantity = None
 
     def _ensure(n: int) -> list[dict[str, Any]]:
         nonlocal original_quantity
         state = _cluster_state_via_http()
-        if len(state["ready_nodes"]) >= n:
+        if len(state["ready_nodes"]) == n:
             return state["ready_nodes"]
 
         if not _head_in_local_dev_mode():
+            if len(state["ready_nodes"]) > n:
+                return state["ready_nodes"]
             pytest.fail(
                 f"this test needs {n} READY nodes but the cluster has "
                 f"{len(state['ready_nodes'])}; raise machineQuantity in settings "

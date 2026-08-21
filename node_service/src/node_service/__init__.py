@@ -111,6 +111,13 @@ def REINIT_SELF(SELF):
     SELF["reboot_containers_after_job"] = False
     SELF["num_results_received"] = 0
     SELF["pending_transfers"] = {}
+    # transfer_ids already concluded by an ack. A replayed get_inputs for one
+    # of these must return nothing instead of selecting a fresh batch.
+    SELF["completed_transfers"] = set()
+    # Set when this node decides its capacity is no longer useful to the job:
+    # it stops acquiring work and capacity, finishes in-flight calls, waits
+    # for the client to ack every result, then leaves the job.
+    SELF["draining"] = False
     SELF["pending_result_batch"] = None
     SELF["pending_logs"] = deque(maxlen=MAX_PENDING_LOGS)
     SELF["pending_cluster_shutdown"] = False

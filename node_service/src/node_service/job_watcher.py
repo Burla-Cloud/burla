@@ -18,6 +18,8 @@ from node_service import (
     NODE_AUTH_CREDENTIALS_PATH,
     NUM_GPUS,
     REINIT_SELF,
+    RESERVED_FOR_JOB,
+    _shutdown_self,
     head_client,
 )
 from node_service.helpers import Logger, debug_log, format_traceback
@@ -46,9 +48,16 @@ REPLACEMENT_RETRY_SEC = 60
 # neighbor for slots, and how far beyond one-worker-per-CPU it may grow.
 TRADE_INTERVAL_SEC = 15
 OVERSUBSCRIBE_MAX_WORKERS_PER_CPU = 2
-# The set of nodes on a job changes rarely, so re-asking the head is cheap to do
-# seldom. Matches the client's wait before it hands a booting node the job.
-PEER_RECHECK_INTERVAL_SEC = 30
+# Short enough that new peers and draining flags are seen quickly; the drain
+# decision below rides on this list being reasonably fresh.
+PEER_RECHECK_INTERVAL_SEC = 10
+# How long the whole ring must stay empty before a connected node starts
+# draining: stops stealing, finishes in-flight calls, flushes results, and
+# leaves the job instead of idling until the job ends.
+DRAIN_RING_EMPTY_SEC = 10
+# How long a drained growth node keeps serving 404s before deleting its VM,
+# so every client poll cycle observes the clean exit instead of a dead host.
+DRAIN_EXIT_GRACE_SEC = 5
 # How long a node can make no progress before it logs its input accounting.
 STALL_REPORT_INTERVAL_SEC = 10
 # Cadence of the slot_state debug event: a continuous record of this node's
@@ -56,7 +65,7 @@ STALL_REPORT_INTERVAL_SEC = 10
 # every change event.
 SLOT_STATE_LOG_INTERVAL_SEC = 60
 
-SEC_NEIGHBOR_HAD_NO_INPUTS = 0
+SEC_RING_HAD_NO_INPUTS = 0
 
 
 def _lifecycle_canceled(job_view: dict) -> bool:
@@ -68,75 +77,145 @@ def _lifecycle_canceled(job_view: dict) -> bool:
     )
 
 
-async def get_neighbor():
-    """Pick the next RUNNING node after this one in the (name-sorted) ring of
-    nodes assigned to this job. Peer list comes from the head."""
+async def get_ring_donors() -> list[dict]:
+    """RUNNING nodes on this job in ring order starting after this one,
+    draining donors first (they are trying to hand their work away). Peer
+    list comes from the head."""
     response = await head_client.get_peers(SELF["current_job"])
     peers = response["peers"]
-    self_index = [i for i, p in enumerate(peers) if p["instance_name"] == INSTANCE_NAME]
+    names = [p["instance_name"] for p in peers]
+    if INSTANCE_NAME in names:
+        self_index = names.index(INSTANCE_NAME)
+        peers = peers[self_index + 1 :] + peers[:self_index]
+    draining = [p for p in peers if p.get("draining")]
+    steady = [p for p in peers if not p.get("draining")]
+    return draining + steady
 
-    neighbor_id, neighbor_host = None, None
-    if self_index and len(peers) > 1:
-        neighbors = peers[self_index[0] + 1 :] + peers[: self_index[0]]
-        neighbor_id = neighbors[0]["instance_name"]
-        neighbor_host = neighbors[0]["host"]
-    return neighbor_id, neighbor_host
 
+async def _input_steal_loop(session, logger, job_started_at, is_background_job):
+    global SEC_RING_HAD_NO_INPUTS
 
-async def _input_steal_loop(session, logger, job_started_at):
-    global SEC_NEIGHBOR_HAD_NO_INPUTS
+    def hungry() -> bool:
+        alive_workers = sum(not w.retired for w in SELF["workers"])
+        return SELF["inputs_queue"].qsize() < alive_workers
+
+    def maybe_start_draining(donors: list[dict]):
+        """Begin draining once the whole ring provably has nothing for this
+        node: stop acquiring, finish in-flight calls, flush results, leave.
+        Only for connected jobs (a detached job's results live on its nodes).
+
+        Someone must always remain to carry the job to completion, so a node
+        only drains when a steadier peer exists. Growth capacity retires
+        before baseline capacity: a growth node treats any steady baseline
+        peer (or a lower-named steady growth peer) as steadier, while a
+        baseline node defers to lower-named steady baseline peers only. The
+        lowest-named steady node of a class never sees a steadier peer, so
+        concurrent drain decisions can never empty the job."""
+        if SELF["draining"] or is_background_job:
+            return
+        if SEC_RING_HAD_NO_INPUTS <= DRAIN_RING_EMPTY_SEC:
+            return
+        if not SELF["all_inputs_uploaded"]:
+            return
+        queued = SELF["inputs_queue"].qsize() + sum(
+            len(batch) for batch in SELF["pending_transfers"].values()
+        )
+        if queued:
+            return
+        is_growth = RESERVED_FOR_JOB is not None
+        steadier_peer_exists = False
+        for donor in donors:
+            if donor.get("draining"):
+                continue
+            if donor.get("growth"):
+                lower_named = donor["instance_name"] < INSTANCE_NAME
+                steadier_peer_exists = is_growth and lower_named
+            else:
+                steadier_peer_exists = is_growth or (
+                    donor["instance_name"] < INSTANCE_NAME
+                )
+            if steadier_peer_exists:
+                break
+        if not steadier_peer_exists:
+            return
+        SELF["draining"] = True
+        asyncio.create_task(
+            debug_log(
+                "drain_started",
+                ring_empty_sec=round(SEC_RING_HAD_NO_INPUTS, 1),
+                busy_workers=sum(
+                    not w.is_idle and not w.retired for w in SELF["workers"]
+                ),
+                target=SELF["target_parallelism"],
+            )
+        )
 
     # A node traded down to zero slots must stop pulling work in: it has no
     # workers left to run it, and holding inputs would keep it on the job.
+    # Hungry nodes (fewer queued inputs than workers) may steal before
+    # all_inputs_uploaded so late joiners and starved nodes become useful
+    # immediately instead of waiting out the upload phase.
     should_steal = lambda: (
-        SELF["all_inputs_uploaded"]
+        (SELF["all_inputs_uploaded"] or hungry())
         and (time() - job_started_at > 10)
         and SELF["target_parallelism"] > 0
+        and not SELF["draining"]
     )
     # Replacement nodes can join the ring at any point in the job, so the
     # peer list is re-checked on an interval for the whole job instead of
     # only while initially-expected nodes are still booting. last_peer_check
-    # starts at 0 so the first active tick fetches the initial neighbor.
-    neighbor_id, neighbor_host = None, None
-    neighbor_had_no_inputs_at = None
+    # starts at 0 so the first active tick fetches the initial ring.
+    donors: list[dict] = []
+    donor_index = 0
+    empty_streak = 0  # consecutive donors that definitively had nothing
+    ring_empty_since = None  # set once a full rotation found nothing
     last_peer_check = 0.0
 
     while not SELF["job_watcher_stop_event"].is_set():
         await asyncio.sleep(1)
 
         if not should_steal():
-            await asyncio.sleep(1)
             continue
 
         if time() - last_peer_check > PEER_RECHECK_INTERVAL_SEC:
             last_peer_check = time()
             try:
-                neighbor_id, neighbor_host = await get_neighbor()
+                donors = await get_ring_donors()
             except Exception:
-                # Head briefly unreachable: keep the current neighbor and let
+                # Head briefly unreachable: keep the current ring and let
                 # the next interval retry, instead of silently killing
                 # stealing for the rest of the job (this task's exceptions
                 # are never observed).
                 pass
 
-        if not neighbor_id:
+        if not donors:
+            # Nobody else is on the job: nothing exists to steal, but this
+            # node is also the whole job now, so it must never read the
+            # silence as a reason to drain.
+            ring_empty_since = None
+            SEC_RING_HAD_NO_INPUTS = 0
             continue
+
+        donor = donors[donor_index % len(donors)]
+        donor_id, donor_host = donor["instance_name"], donor["host"]
 
         transfer_id = uuid4().hex
         remaining_inputs = SELF["inputs_queue"].qsize()
         # Idle unthrottled workers = genuinely free capacity right now. The
-        # neighbor uses this to decide whether revoking its parked (throttled)
-        # workers' inputs for us is worth the kill. Idle workers refuse the
-        # queue while anything is parked locally, so a node with parked
-        # workers reports 0: its "idle" workers could not actually run a
-        # revoked input, and two pressured nodes must never swap parked work
-        # back and forth via kills.
+        # donor uses this both to size the transfer (an idle worker runs an
+        # input immediately, so holding it behind busy workers wastes it) and
+        # to decide whether revoking its parked (throttled) workers' inputs
+        # for us is worth the kill. Idle workers refuse the queue while
+        # anything is parked locally, so a node with parked workers reports
+        # 0: its "idle" workers could not actually run a revoked input, and
+        # two pressured nodes must never swap parked work back and forth via
+        # kills.
         idle_worker_count = 0
         if not any(w.throttled and not w.retired for w in SELF["workers"]):
             idle_worker_count = sum(
                 worker.is_idle and not worker.retired for worker in SELF["workers"]
             )
-        get_url = f"{neighbor_host}/jobs/{SELF['current_job']}/get_inputs"
+        get_url = f"{donor_host}/jobs/{SELF['current_job']}/get_inputs"
         get_params = {
             "transfer_id": transfer_id,
             "requester_queue_size": remaining_inputs,
@@ -144,20 +223,37 @@ async def _input_steal_loop(session, logger, job_started_at):
         }
 
         items = None
+        donor_left_job = False
+        request_failed = False
         try:
             async with session.get(
                 get_url, params=get_params, headers=SELF["auth_headers"]
             ) as response:
                 if response.status == 404:
-                    continue
-                if response.status == 200:
+                    # Donor already left the job: it verifiably holds nothing
+                    # and never created a transfer, so there is nothing to ack.
+                    donor_left_job = True
+                elif response.status == 200:
                     items = pickle.loads(await response.read())
+                else:
+                    request_failed = True
         except Exception as error:
+            request_failed = True
             error_name = type(error).__name__
             await logger.log(
-                f"GET inputs from {neighbor_id} failed: {error_name}: {error}",
+                f"GET inputs from {donor_id} failed: {error_name}: {error}",
                 "WARNING",
             )
+
+        if donor_left_job:
+            # No transfer was created, so there is nothing to ack.
+            donor_index += 1
+            empty_streak += 1
+            if empty_streak >= len(donors):
+                ring_empty_since = ring_empty_since or time()
+                SEC_RING_HAD_NO_INPUTS = time() - ring_empty_since
+                maybe_start_draining(donors)
+            continue
 
         if items:
             for input_index, input_pkl in items:
@@ -167,7 +263,7 @@ async def _input_steal_loop(session, logger, job_started_at):
 
         received = bool(items)
 
-        ack_url = f"{neighbor_host}/jobs/{SELF['current_job']}/ack_transfer"
+        ack_url = f"{donor_host}/jobs/{SELF['current_job']}/ack_transfer"
         ack_params = {
             "transfer_id": transfer_id,
             "received": "true" if received else "false",
@@ -189,7 +285,7 @@ async def _input_steal_loop(session, logger, job_started_at):
 
         if not ack_ok:
             reason = (
-                f"Could not ACK transfer {transfer_id} to {neighbor_id} after "
+                f"Could not ACK transfer {transfer_id} to {donor_id} after "
                 f"{ACK_RETRY_TIMEOUT_SEC}s. Failing job to preserve exactly-once semantics."
             )
             await logger.log(reason, "ERROR")
@@ -202,13 +298,31 @@ async def _input_steal_loop(session, logger, job_started_at):
             return
 
         if received:
-            neighbor_had_no_inputs_at = None
-            SEC_NEIGHBOR_HAD_NO_INPUTS = 0
-            # await logger.log(f"Got {len(items)} more inputs from {neighbor_id}")
+            empty_streak = 0
+            ring_empty_since = None
+            SEC_RING_HAD_NO_INPUTS = 0
+        elif request_failed:
+            # This donor's queue state is unknown, so it must not count
+            # toward ring emptiness (draining on a network blip would
+            # discard live capacity). The ack above still ran: if the GET
+            # reached the donor before the response was lost, that ack is
+            # what un-parks the selected batch back into its queue.
+            donor_index += 1
+            empty_streak = 0
+            ring_empty_since = None
+            SEC_RING_HAD_NO_INPUTS = 0
         else:
-            neighbor_had_no_inputs_at = neighbor_had_no_inputs_at or time()
-            SEC_NEIGHBOR_HAD_NO_INPUTS = time() - neighbor_had_no_inputs_at
-            await asyncio.sleep(1)
+            # Empty 200: the donor definitively had nothing to give. Rotate
+            # to the next donor immediately instead of re-polling this one;
+            # the ring only counts as empty once every donor came back empty
+            # in a single sweep.
+            donor_index += 1
+            empty_streak += 1
+            if empty_streak >= len(donors):
+                ring_empty_since = ring_empty_since or time()
+                SEC_RING_HAD_NO_INPUTS = time() - ring_empty_since
+                maybe_start_draining(donors)
+                await asyncio.sleep(1)
 
 
 async def _slot_trade_loop(session, logger):
@@ -244,6 +358,8 @@ async def _slot_trade_loop(session, logger):
 
         if SELF["target_parallelism"] <= 0:
             return  # traded out; this node is on its way off the job
+        if SELF["draining"]:
+            return  # shedding capacity; acquiring more would undo the drain
         if not SELF["all_inputs_uploaded"]:
             continue
         # A node that just shed workers under pressure has no business
@@ -282,11 +398,15 @@ async def _slot_trade_loop(session, logger):
                 continue
 
         try:
-            neighbor_id, neighbor_host = await get_neighbor()
+            donors = await get_ring_donors()
         except Exception:
             continue
-        if not neighbor_id:
+        if not donors:
             continue
+        # Draining donors come first: they give up their slots without the
+        # idle-grace wait, so a hungry node empties them fastest.
+        neighbor_id = donors[0]["instance_name"]
+        neighbor_host = donors[0]["host"]
 
         want = min(
             queued_inputs - len(alive_workers),
@@ -346,6 +466,44 @@ async def _push_progress() -> dict:
             await asyncio.sleep(1)
 
 
+async def _leave_job_early(logger: Logger, reason: str):
+    """Exit this node's part of a still-running job after its work and
+    results are fully handed off. Baseline nodes return to READY for the next
+    job; growth nodes (booted for this specific job) delete themselves
+    immediately instead of first sitting READY through the grow inactivity
+    window they would never be allowed to use anyway."""
+    # The head must hold this node's final result count before the node stops
+    # reporting, or the job's completion total would lose these results.
+    await _push_progress()
+    if RESERVED_FOR_JOB is None:
+        await reset_workers(logger)
+        return
+
+    await debug_log("growth_node_self_delete", reason=reason)
+    # Leaving the job makes every job endpoint here 404, which the client
+    # reads as this node finishing cleanly (state DONE). The grace window
+    # guarantees the client observes a 404 before the VM vanishes; a poll
+    # hitting a dead host would count toward its node-silence timeout
+    # instead of ending cleanly.
+    SELF["RUNNING"] = False
+    SELF["current_job"] = None
+    SELF["job_watcher_stop_event"].set()
+    await head_client.push_state(current_job=None)
+    await asyncio.sleep(DRAIN_EXIT_GRACE_SEC)
+    SELF["SHUTTING_DOWN"] = True
+    SELF["reported_status"] = "DELETED"
+    await head_client.push_state(status="DELETED", ended_at=time())
+    await logger.log(
+        f"Growth node finished its part of the job ({reason}), deleting self."
+    )
+    if IN_LOCAL_DEV_MODE:
+        # Local-dev nodes are containers with no cloud shutdown path of
+        # their own; the head removes the container.
+        await head_client.request_self_delete()
+    else:
+        await _shutdown_self()
+
+
 async def _job_watcher(
     n_inputs: int,
     is_background_job: bool,
@@ -354,8 +512,8 @@ async def _job_watcher(
     session: aiohttp.ClientSession,
 ):
     # Module-global: reset per-job so prior-job state doesn't leak in.
-    global SEC_NEIGHBOR_HAD_NO_INPUTS
-    SEC_NEIGHBOR_HAD_NO_INPUTS = 0
+    global SEC_RING_HAD_NO_INPUTS
+    SEC_RING_HAD_NO_INPUTS = 0
 
     # First push registers this node's progress with the head (the
     # `assigned_nodes` entry) and returns the job's current signal set.
@@ -366,7 +524,7 @@ async def _job_watcher(
         raise RuntimeError(f"Job {SELF['current_job']} does not exist on the head.")
 
     steal_task = asyncio.create_task(
-        _input_steal_loop(session, logger, job_started_at)
+        _input_steal_loop(session, logger, job_started_at, is_background_job)
     )
     trade_task = asyncio.create_task(_slot_trade_loop(session, logger))
 
@@ -431,11 +589,13 @@ async def _job_watcher(
         # Pressure retirement permanently shrinks this node's worker pool
         # (until un-retiring recovers it). A deficit that persists while
         # queued work exists means this machine cannot run the slots it owes
-        # the job, so hand them to a fresh machine. All policy lives here;
-        # the head only executes the boot. Slots are conserved: on success
-        # this node's target shrinks by exactly what was booted. A connected
-        # client is required because only it can assign the job (it holds
-        # the pickled function).
+        # the job, so hand them to a fresh machine. This node only detects
+        # and reports its own deficit; whether a machine actually boots is
+        # the head reconciler's call (it defers while another node is
+        # booting or while the forecast says the boot would arrive after the
+        # queue drains). Slots are conserved: on success this node's target
+        # shrinks by exactly what was booted. A connected client is required
+        # because only it can assign the job (it holds the pickled function).
         alive_workers = sum(not worker.retired for worker in SELF["workers"])
         deficit = SELF["target_parallelism"] - alive_workers
         unfinished_inputs = remaining_inputs + SELF["current_parallelism"]
@@ -443,6 +603,7 @@ async def _job_watcher(
             deficit > 0
             and job_view.get("grow")
             and not SELF["replacement_refused"]
+            and not SELF["draining"]
             and unfinished_inputs > alive_workers
             and client_contact_last_1s
         )
@@ -471,6 +632,18 @@ async def _job_watcher(
                         SELF["current_job"], deficit, request_id
                     )
                     SELF["replacement_request_id"] = None
+                    if response.get("deferred"):
+                        # Head says "not now" (another boot in flight, or the
+                        # forecast says the queue won't survive a boot). The
+                        # deficit clock keeps running so the next retry
+                        # re-evaluates against fresh state.
+                        await debug_log(
+                            "replacement_deferred",
+                            request_id=request_id,
+                            deficit=deficit,
+                            reason=response.get("reason"),
+                        )
+                        continue
                     SELF["replacement_deficit_since"] = None
                     slots_booted = int(response.get("slots_booted") or 0)
                     SELF["target_parallelism"] -= slots_booted
@@ -583,41 +756,48 @@ async def _job_watcher(
                 )
                 await logger.log("Client disconnected!")
 
-        # Traded down to zero slots and drained? Finish this node's part of
-        # the job immediately instead of waiting out the empty-neighbor
-        # timeout: its slots (and any requeued inputs) live elsewhere now, so
-        # the machine is pure idle cost (this is what "packing into fewer
-        # machines" frees).
-        traded_out = (
-            SELF["target_parallelism"] <= 0
-            and input_queue_empty
+        # This node's part of the job is over early: either it traded every
+        # slot away, or it drained (ring + own queue stayed empty, in-flight
+        # calls finished, and the client acked every result: an empty
+        # results_queue with no pending batch means the final batch's ack
+        # arrived). Leave the job now instead of idling until the job ends.
+        flushed_and_idle = (
+            input_queue_empty
             and all_workers_idle
             and SELF["results_queue"].empty()
             and pending_results_empty
         )
-        if traded_out:
+        traded_out = SELF["target_parallelism"] <= 0 and flushed_and_idle
+        drained = SELF["draining"] and flushed_and_idle
+        if traded_out or drained:
             steal_task.cancel()
             trade_task.cancel()
-            await logger.log("All slots traded away and drained, done working on job!")
-            await reset_workers(logger)
+            reason = "traded_out" if traded_out else "drained"
+            if traded_out:
+                await logger.log(
+                    "All slots traded away and drained, done working on job!"
+                )
+            else:
+                await logger.log(
+                    "Ring and local queue stayed empty, all results "
+                    "acknowledged, leaving the job (drained)."
+                )
+            await _leave_job_early(logger, reason)
             break
 
-        # Neighbor had no inputs for too long?
+        # Detached jobs keep the old, patient exit: no client is watching, so
+        # a node just waits out a long empty-ring window then frees itself.
         if (
-            SEC_NEIGHBOR_HAD_NO_INPUTS
-            and SEC_NEIGHBOR_HAD_NO_INPUTS > EMPTY_NEIGHBOR_TIMEOUT_SEC
+            is_background_job
+            and SEC_RING_HAD_NO_INPUTS > EMPTY_NEIGHBOR_TIMEOUT_SEC
+            and flushed_and_idle
         ):
-            if (
-                SELF["results_queue"].empty()
-                and pending_results_empty
-                and all_workers_idle
-            ):
-                steal_task.cancel()
-                trade_task.cancel()
-                msg = f"Neighbor had no extra inputs for {EMPTY_NEIGHBOR_TIMEOUT_SEC}s"
-                await logger.log(msg + ", done working on job!")
-                await reset_workers(logger)
-                break
+            steal_task.cancel()
+            trade_task.cancel()
+            msg = f"Ring had no extra inputs for {EMPTY_NEIGHBOR_TIMEOUT_SEC}s"
+            await logger.log(msg + ", done working on job!")
+            await reset_workers(logger)
+            break
 
         # Job over?
         job_completed = False

@@ -22,6 +22,7 @@ from node_service import (
     CLUSTER_ID_TOKEN,
     INSTANCE_NAME,
     MAIN_SERVICE_URL,
+    RESERVED_FOR_JOB,
     SELF,
 )
 
@@ -69,10 +70,30 @@ async def push_state(
         if status is not None:
             body["status"] = SELF["reported_status"]
         if include_job_progress and SELF["current_job"]:
+            workers = SELF["workers"]
+            pending_transfer_inputs = sum(
+                len(batch) for batch in SELF["pending_transfers"].values()
+            )
             body["job_progress"] = {
                 "job_id": SELF["current_job"],
                 "current_num_results": SELF["num_results_received"],
                 "client_contact_last_1s": SELF.get("client_contact_last_1s", True),
+                # Live load/lifecycle view: the head's demand reconciler and
+                # the peers endpoint (draining flag) read these.
+                "queued_inputs": SELF["inputs_queue"].qsize()
+                + pending_transfer_inputs,
+                "busy_workers": sum(
+                    not w.is_idle and not w.retired for w in workers
+                ),
+                "alive_workers": sum(not w.retired for w in workers),
+                "throttled_workers": sum(
+                    w.throttled and not w.retired for w in workers
+                ),
+                "target_parallelism": SELF["target_parallelism"],
+                "draining": SELF["draining"],
+                # Growth capacity (booted for this job) drains before baseline
+                # capacity; peers read this through the head's peers endpoint.
+                "growth": RESERVED_FOR_JOB is not None,
             }
         session = _get_session()
         url = f"{MAIN_SERVICE_URL}/v1/nodes/{INSTANCE_NAME}/state"

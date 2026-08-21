@@ -29,7 +29,11 @@ from main_service.endpoints.cluster_lifecycle import (
 from main_service.helpers import Logger
 from main_service.node import Node
 from main_service.providers import get_provider
-from main_service.scaling import plan_grow_nodes, planned_cpu_count
+from main_service.scaling import (
+    plan_grow_nodes,
+    planned_cpu_count,
+    replacement_deferral,
+)
 from main_service.transport_tls import cluster_ca_pem, node_auth_token, sign_node_csr
 
 from main_service import (
@@ -79,6 +83,7 @@ async def push_node_state(instance_name: str, request: Request):
             instance_name,
             current_num_results=progress.get("current_num_results"),
             client_contact_last_1s=progress.get("client_contact_last_1s"),
+            load=progress,
         )
 
     job_id = (progress or {}).get("job_id") or merged.get("current_job")
@@ -193,9 +198,12 @@ async def boot_replacement_nodes(
     logger: Logger = Depends(get_logger),
 ):
     """A job node permanently lost workers to pressure retirement and asks for
-    its missing slots to be booted as fresh machines. Pure execution: all
-    policy (when to ask, how many slots) lives on the node, this endpoint only
-    plans machine types, enforces the job's grow-CPU budget, and boots. Slots
+    its missing slots to be booted as fresh machines. The node only detects
+    and reports its deficit; whether a machine boots now is decided here by
+    the demand reconciler's gates: never while another node for this job is
+    still booting, and never when the throughput forecast says the queue
+    will be gone before the new machine pays for its boot. A gated request
+    returns {"deferred": true, "reason"} and the node retries later. Slots
     are conserved - the caller gives up the slots this boots.
 
     Body: {"requesting_node", "missing_slots", "request_id"}. Replaying the
@@ -224,6 +232,11 @@ async def boot_replacement_nodes(
             "booted": previous["booted"],
             "slots_booted": previous["slots_booted"],
         }
+
+    snapshot = cluster_state.job_scaling_snapshot(job_id)
+    deferral = replacement_deferral(job_id, snapshot, missing_slots)
+    if deferral is not None:
+        return {"deferred": True, "reason": deferral, "booted": [], "slots_booted": 0}
 
     config = config_with_job_overrides(
         _get_cluster_config(), job.get("region"), job.get("disk_gb")

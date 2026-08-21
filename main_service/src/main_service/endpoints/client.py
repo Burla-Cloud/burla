@@ -41,6 +41,7 @@ from main_service.providers.catalog import (
     parallelism_capacity,
 )
 from main_service.scaling import (
+    GROW_CPUS_FIRST_WAVE,
     plan_grow_nodes,
     planned_cpu_count,
     required_cpus_per_call,
@@ -192,8 +193,14 @@ def _plan_grow_if_needed(
 ) -> tuple[list[dict], Optional[int], Optional[dict]]:
     """Returns `(planned_nodes, grow_cpus_remaining, config)`.
 
+    Plans only the job's FIRST wave. max_parallelism is a ceiling, not a
+    provisioning target: this synchronous wave is capped small, and the
+    demand reconciler boots further waves only once this capacity is
+    saturated and forecasted demand justifies each of them.
+
     When `func_gpu` is set, each new node is one of the mapped GPU machine
-    types.
+    types (GPU jobs are provisioned in full: their capacity is
+    slot-priced, not CPU-packed, and boot far too slowly to stage).
     """
     if gpu_machine_type(func_gpu, CLOUD_PROVIDER):
         max_additional_cpus = None
@@ -206,6 +213,10 @@ def _plan_grow_if_needed(
     missing_slots = max(0, requested_parallelism - target_parallelism)
     if missing_slots <= 0:
         return [], max_additional_cpus, None
+    if not gpu_machine_type(func_gpu, CLOUD_PROVIDER):
+        cpus_per_call = required_cpus_per_call(func_cpu, func_ram)
+        first_wave_slots = max(GROW_CPUS_FIRST_WAVE // cpus_per_call, 1)
+        missing_slots = min(missing_slots, first_wave_slots)
 
     config = config_with_job_overrides(_get_cluster_config(), region, disk_gb)
     planned = plan_grow_nodes(

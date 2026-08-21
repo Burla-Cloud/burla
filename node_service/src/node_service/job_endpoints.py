@@ -117,11 +117,32 @@ async def get_inputs(
     if job_id != SELF["current_job"]:
         return Response("job not found", status_code=404)
 
+    if transfer_id in SELF["completed_transfers"]:
+        # This transfer already concluded with an ack; a replayed GET must
+        # return nothing rather than park a fresh batch nobody will ever ack
+        # (those inputs would be lost).
+        return Response(
+            content=pickle.dumps([]), media_type="application/octet-stream"
+        )
+
     if transfer_id in SELF["pending_transfers"]:
         items = SELF["pending_transfers"][transfer_id]
     else:
-        difference = SELF["inputs_queue"].qsize() - requester_queue_size
-        target_num = max(difference, 1) // 2
+        queue_size = SELF["inputs_queue"].qsize()
+        if SELF["draining"]:
+            # A draining node wants its queue evacuated, not balanced.
+            target_num = queue_size
+        else:
+            target_num = (queue_size - requester_queue_size) // 2
+            if requester_queue_size == 0 and requester_idle_workers > 0:
+                # An idle worker there beats a queued input here: always feed
+                # starved capacity, even when halving the difference rounds
+                # to zero. This is what moves a job's final queued inputs
+                # (e.g. a 1-input surplus, which `difference // 2` never
+                # moved, stranding the last item on a busy node).
+                target_num = max(
+                    target_num, min(requester_idle_workers, queue_size)
+                )
         items = []
         total_bytes = 0
         while len(items) < target_num:
@@ -161,6 +182,10 @@ async def ack_transfer(
     if job_id != SELF["current_job"]:
         return Response("job not found", status_code=404)
 
+    # Tombstone first: even an ack for a transfer this node never saw the GET
+    # for (it failed in transit) must stop a late-arriving replay of that GET
+    # from parking a batch nobody will ack.
+    SELF["completed_transfers"].add(transfer_id)
     items = SELF["pending_transfers"].pop(transfer_id, None)
     if items is None:
         return Response(status_code=200)
@@ -209,24 +234,27 @@ async def trade_slots(
         # Unbacked slots: a live neighbor is a faster, cheaper home for them
         # than the replacement VM they would otherwise become. Only donate
         # them while recently pressured, i.e. while this node's own re-add
-        # loop is blocked from filling them; otherwise two unpressured hungry
+        # loop is blocked from filling them (otherwise two unpressured hungry
         # nodes bounce the same slot back and forth faster than either can
-        # boot a worker for it (observed). Never trade them while a
+        # boot a worker for it, observed), or while draining (this node will
+        # never re-add, it is on its way out). Never trade them while a
         # replacement request may be in flight for the same slots (that
         # would duplicate them).
         recently_pressured = (
             time() - SELF["last_pressure_retirement_at"]
             < READD_PRESSURE_COOLDOWN_SECONDS
         )
-        if recently_pressured and SELF["replacement_request_id"] is None:
+        can_shed_unbacked = recently_pressured or SELF["draining"]
+        if can_shed_unbacked and SELF["replacement_request_id"] is None:
             unbacked = max(0, SELF["target_parallelism"] - len(alive_workers))
             granted += min(slots_requested, unbacked)
 
         # A node that just joined looks exactly like a drained one (idle
         # workers, empty queue, all inputs uploaded job-wide) until its first
         # steal lands, so idle-backed grants need a grace period or a fresh
-        # replacement node gets drained at birth.
-        queue_drained = (
+        # replacement node gets drained at birth. A draining node skips the
+        # grace: it is deliberately shedding its capacity.
+        queue_drained = SELF["draining"] or (
             SELF["inputs_queue"].qsize() == 0
             and SELF["all_inputs_uploaded"]
             and time() - SELF["job_assigned_at"] > TRADE_IDLE_GRACE_SEC

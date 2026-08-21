@@ -152,6 +152,15 @@ def update_node(instance_name: str, updates: dict) -> dict:
                 updates = {k: v for k, v in updates.items() if k != "status"}
                 new_status = None
 
+        # Observed boot duration (started_booting_at -> first READY) feeds the
+        # scaling reconciler's queue-at-ready forecasts.
+        if (
+            new_status == "READY"
+            and current_status == "BOOTING"
+            and node.get("became_ready_at") is None
+        ):
+            node["became_ready_at"] = time()
+
         node.update(updates)
         status_changed = new_status is not None and new_status != current_status
         merged = dict(node)
@@ -379,11 +388,26 @@ COUNTS_FLUSH_INTERVAL_SEC = 5
 _counts_flushed_at: dict[str, float] = {}
 
 
+# Live per-node load/lifecycle fields carried on each progress push. The
+# reconciler's demand math and the peers endpoint's draining/growth flags
+# read these.
+_PROGRESS_LOAD_FIELDS = (
+    "queued_inputs",
+    "busy_workers",
+    "alive_workers",
+    "throttled_workers",
+    "target_parallelism",
+    "draining",
+    "growth",
+)
+
+
 def update_job_progress(
     job_id: str,
     instance_name: str,
     current_num_results: int | None = None,
     client_contact_last_1s: bool | None = None,
+    load: dict | None = None,
 ):
     with _lock:
         job = _get_or_load_job(job_id)
@@ -396,6 +420,9 @@ def update_job_progress(
             progress["current_num_results"] = current_num_results
         if client_contact_last_1s is not None:
             progress["client_contact_last_1s"] = client_contact_last_1s
+        for field in _PROGRESS_LOAD_FIELDS:
+            if load is not None and field in load:
+                progress[field] = load[field]
         now = time()
         progress["last_push_at"] = now
         if now - _counts_flushed_at.get(job_id, 0) >= COUNTS_FLUSH_INTERVAL_SEC:
@@ -480,14 +507,136 @@ def record_replacement_request(
         history.upsert_job_and_nodes(job_id, dict(job), [])
 
 
+def record_grow_wave(job_id: str, wave: dict, cpus_booted: int):
+    """Persist a reconciler grow wave and spend its CPU budget, mirroring
+    record_replacement_request."""
+    with _lock:
+        job = _get_or_load_job(job_id)
+        if job is None:
+            return
+        job.setdefault("grow_waves", []).append(wave)
+        if job.get("grow_cpus_remaining") is not None:
+            job["grow_cpus_remaining"] = max(
+                0, job["grow_cpus_remaining"] - cpus_booted
+            )
+        history.upsert_job_and_nodes(job_id, dict(job), [])
+
+
+def grow_job_ids() -> list[str]:
+    with _lock:
+        return [
+            job_id
+            for job_id, job in JOBS.items()
+            if job.get("status") == "RUNNING" and job.get("grow")
+        ]
+
+
+def recent_boot_durations(limit: int = 8) -> list[float]:
+    """Durations (sec) of the most recently completed node boots, newest
+    first. Feeds the reconciler's queue-at-ready forecast."""
+    with _lock:
+        finished = [
+            (node["became_ready_at"], node["became_ready_at"] - node["started_booting_at"])
+            for node in NODES.values()
+            if node.get("became_ready_at") and node.get("started_booting_at")
+        ]
+    finished.sort(reverse=True)
+    return [duration for _, duration in finished[:limit] if duration > 0]
+
+
+def job_scaling_snapshot(job_id: str) -> dict | None:
+    """Everything the demand reconciler needs about one job, read in a single
+    lock acquisition: budget fields, live per-node load from fresh progress
+    pushes, and the job's pending (reserved, not yet working) capacity."""
+    with _lock:
+        job = _get_or_load_job(job_id)
+        if job is None or job.get("status") != "RUNNING" or not job.get("grow"):
+            return None
+        now = time()
+
+        pending_nodes = []
+        running_names = set()
+        for name, node in NODES.items():
+            status = node.get("status")
+            if status in ("DELETED", "FAILED"):
+                continue
+            if node.get("reserved_for_job") == job_id:
+                pending_nodes.append(
+                    {
+                        "instance_name": name,
+                        "status": status,
+                        "target_parallelism": int(
+                            node.get("target_parallelism") or 0
+                        ),
+                    }
+                )
+            elif (
+                node.get("current_job") == job_id
+                and status == "RUNNING"
+                and node_is_fresh(node, now)
+            ):
+                running_names.add(name)
+
+        assigned = job["assigned_nodes"]
+        node_loads = []
+        client_contact = False
+        for name, progress in assigned.items():
+            fresh = now - progress.get("last_push_at", 0) <= NODE_FRESHNESS_SEC
+            if not fresh:
+                continue
+            if progress.get("client_contact_last_1s"):
+                client_contact = True
+            if name not in running_names:
+                continue
+            node_loads.append(
+                {
+                    "instance_name": name,
+                    "queued_inputs": int(progress.get("queued_inputs") or 0),
+                    "busy_workers": int(progress.get("busy_workers") or 0),
+                    "alive_workers": int(progress.get("alive_workers") or 0),
+                    "target_parallelism": int(
+                        progress.get("target_parallelism") or 0
+                    ),
+                    "draining": bool(progress.get("draining")),
+                }
+            )
+
+        return {
+            "n_inputs": int(job.get("n_inputs") or 0),
+            "max_parallelism": int(job.get("max_parallelism") or 0),
+            "grow_cpus_remaining": job.get("grow_cpus_remaining"),
+            "func_cpu": job.get("func_cpu"),
+            "func_ram": job.get("func_ram"),
+            "func_gpu": job.get("func_gpu"),
+            "region": job.get("region"),
+            "disk_gb": job.get("disk_gb"),
+            "image": job.get("image"),
+            "total_num_results": sum(
+                p.get("current_num_results", 0) for p in assigned.values()
+            ),
+            "any_node_client_contact": client_contact,
+            "pending_nodes": pending_nodes,
+            "node_loads": node_loads,
+        }
+
+
 def peers_for_job(job_id: str) -> dict:
     """RUNNING nodes assigned to this job (the input-stealing ring) plus the
     ids of nodes still BOOTING, so a stealer can tell whether expected nodes
-    might still join."""
+    might still join. Each peer carries its draining flag (stealers prioritize
+    donors trying to hand work away) and its growth flag (the drain tie-break
+    retires growth capacity before baseline capacity)."""
     with _lock:
         now = time()
+        job = _get_or_load_job(job_id)
+        assigned = job["assigned_nodes"] if job is not None else {}
         peers = [
-            {"instance_name": name, "host": node.get("host")}
+            {
+                "instance_name": name,
+                "host": node.get("host"),
+                "draining": bool(assigned.get(name, {}).get("draining")),
+                "growth": bool(assigned.get(name, {}).get("growth")),
+            }
             for name, node in sorted(NODES.items())
             if node.get("status") == "RUNNING"
             and node.get("current_job") == job_id

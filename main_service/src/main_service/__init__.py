@@ -429,6 +429,11 @@ async def lifespan(app: FastAPI):
     node_reaper_task = asyncio.create_task(
         cluster_state.node_reaper_loop(logger=Logger())
     )
+    # Lazy import: scaling imports from this package, which is still
+    # mid-initialization at module top-level.
+    from main_service.scaling import demand_reconciler_loop
+
+    reconciler_task = asyncio.create_task(demand_reconciler_loop(logger=Logger()))
     # Client-hosted dashboards are localhost-only; there is no public DNS
     # lease to renew.
     run_lease_loop = not IN_LOCAL_DEV_MODE and not IN_CLIENT_HOSTED_MODE
@@ -460,6 +465,7 @@ async def lifespan(app: FastAPI):
     finally:
         reaper_task.cancel()
         node_reaper_task.cancel()
+        reconciler_task.cancel()
         if dashboard_lease_task is not None:
             dashboard_lease_task.cancel()
         if stopped_instance_reaper_task is not None:

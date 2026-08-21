@@ -829,7 +829,18 @@ async def _job_watcher(
                 await head_client.update_job(SELF["current_job"], {"status": status})
             except Exception:
                 pass
-            await reset_workers(logger)
+            if (
+                status == "COMPLETED"
+                and SELF["draining"]
+                and RESERVED_FOR_JOB is not None
+            ):
+                # This growth node was already draining when its in-flight
+                # calls carried the job to completion: its capacity was
+                # provably surplus, so it deletes itself now instead of
+                # sitting READY through the grow-inactivity window.
+                await _leave_job_early(logger, "drained")
+            else:
+                await reset_workers(logger)
             break
 
     steal_task.cancel()

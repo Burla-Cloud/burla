@@ -14,11 +14,17 @@ and pub/sub events are delivered with call_soon_threadsafe.
 
 import asyncio
 import threading
+from collections import deque
 from time import time
 
 from main_service import history
 
 _lock = threading.RLock()
+
+# (became_ready_at, duration_sec) of completed first boots, kept here because
+# grow nodes self-delete (dropping out of NODES) minutes after booting, and
+# theirs are exactly the durations the reconciler's forecasts need.
+_BOOT_DURATIONS: deque = deque(maxlen=32)
 
 # instance_name -> node dict (same field names the firestore docs used).
 # DELETED entries are kept (not dropped) so a deleted VM whose push loop is
@@ -152,14 +158,32 @@ def update_node(instance_name: str, updates: dict) -> dict:
                 updates = {k: v for k, v in updates.items() if k != "status"}
                 new_status = None
 
-        # Observed boot duration (started_booting_at -> first READY) feeds the
-        # scaling reconciler's queue-at-ready forecasts.
+        # The provisioning clock starts when the head creates the VM record;
+        # the node's own BOOTING pushes (initial boot and later re-inits)
+        # carry a fresh started_booting_at that must not restart it, or the
+        # measured "boot" is just node_service's startup.
+        if updates.get("started_booting_at") and node.get("first_started_booting_at") is None:
+            node["first_started_booting_at"] = node.get("started_booting_at") or updates[
+                "started_booting_at"
+            ]
+
+        # Observed boot duration (VM creation -> first READY) feeds the
+        # scaling reconciler's queue-at-ready forecasts. Only the first boot
+        # counts: a between-jobs re-init reaches READY in seconds because the
+        # VM already exists.
         if (
             new_status == "READY"
             and current_status == "BOOTING"
             and node.get("became_ready_at") is None
         ):
             node["became_ready_at"] = time()
+            provisioned_at = node.get("first_started_booting_at") or node.get(
+                "started_booting_at"
+            )
+            if provisioned_at:
+                duration = node["became_ready_at"] - provisioned_at
+                if duration > 0:
+                    _BOOT_DURATIONS.append((node["became_ready_at"], duration))
 
         node.update(updates)
         status_changed = new_status is not None and new_status != current_status
@@ -532,16 +556,11 @@ def grow_job_ids() -> list[str]:
 
 
 def recent_boot_durations(limit: int = 8) -> list[float]:
-    """Durations (sec) of the most recently completed node boots, newest
-    first. Feeds the reconciler's queue-at-ready forecast."""
+    """Durations (sec) of the most recently completed first boots (VM create
+    to READY), newest first. Feeds the reconciler's queue-at-ready forecast."""
     with _lock:
-        finished = [
-            (node["became_ready_at"], node["became_ready_at"] - node["started_booting_at"])
-            for node in NODES.values()
-            if node.get("became_ready_at") and node.get("started_booting_at")
-        ]
-    finished.sort(reverse=True)
-    return [duration for _, duration in finished[:limit] if duration > 0]
+        finished = sorted(_BOOT_DURATIONS, reverse=True)
+    return [duration for _, duration in finished[:limit]]
 
 
 def job_scaling_snapshot(job_id: str) -> dict | None:
@@ -555,7 +574,7 @@ def job_scaling_snapshot(job_id: str) -> dict | None:
         now = time()
 
         pending_nodes = []
-        running_names = set()
+        running_targets: dict[str, int] = {}
         for name, node in NODES.items():
             status = node.get("status")
             if status in ("DELETED", "FAILED"):
@@ -575,7 +594,7 @@ def job_scaling_snapshot(job_id: str) -> dict | None:
                 and status == "RUNNING"
                 and node_is_fresh(node, now)
             ):
-                running_names.add(name)
+                running_targets[name] = int(node.get("target_parallelism") or 0)
 
         assigned = job["assigned_nodes"]
         node_loads = []
@@ -586,7 +605,7 @@ def job_scaling_snapshot(job_id: str) -> dict | None:
                 continue
             if progress.get("client_contact_last_1s"):
                 client_contact = True
-            if name not in running_names:
+            if name not in running_targets or progress.get("queued_inputs") is None:
                 continue
             node_loads.append(
                 {
@@ -600,6 +619,21 @@ def job_scaling_snapshot(job_id: str) -> dict | None:
                     "draining": bool(progress.get("draining")),
                 }
             )
+
+        # A node can be RUNNING (assigned, reservation cleared) before its
+        # first load report lands. Its capacity is real but unproven, so it
+        # must gate the next wave as pending, not silently drop out of the
+        # budget and saturation math.
+        reported = {load["instance_name"] for load in node_loads}
+        for name, target in running_targets.items():
+            if name not in reported:
+                pending_nodes.append(
+                    {
+                        "instance_name": name,
+                        "status": "RUNNING",
+                        "target_parallelism": target,
+                    }
+                )
 
         return {
             "n_inputs": int(job.get("n_inputs") or 0),

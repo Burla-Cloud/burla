@@ -13,10 +13,10 @@ observed boot durations into staged, forecast-gated scale-out:
 - max_parallelism is a ceiling, not a provisioning target. Capacity is added
   in bounded waves, each justified by the demand that will remain once the
   new machines finish booting.
-- A wave boots only while current capacity is saturated and the forecasted
-  queue would keep the new machines at least WAVE_MIN_BUSY_FRACTION busy for
-  WAVE_PAYBACK_SEC after their observed boot time. Pending (still-booting)
-  capacity counts against demand before anything new boots.
+- A wave boots only after the previous wave proved useful: nothing for the
+  job may still be booting, current capacity must be saturated, and the
+  forecasted queue must keep the new machines at least WAVE_MIN_BUSY_FRACTION
+  busy for WAVE_PAYBACK_SEC after their observed boot time.
 - Pressure-replacement boots run through the same forecast and never start
   while another node for the job is already booting.
 """
@@ -242,8 +242,8 @@ def _plan_wave(
 
     Gate order mirrors the policy: a client must be connected (only it can
     assign the job to new nodes), the parallelism ceiling and CPU budget must
-    have room, current capacity must be saturated, and the payback forecast
-    must justify the wave.
+    have room, no capacity may still be booting, current capacity must be
+    saturated, and the payback forecast must justify the wave.
     """
     if not snapshot["any_node_client_contact"]:
         return [], "client_disconnected", {}
@@ -271,6 +271,12 @@ def _plan_wave(
         # Nothing is running yet (first wave still booting, or nothing ever
         # became ready): there is no evidence to justify more capacity.
         return [], "no_running_capacity", {}
+    if snapshot["pending_nodes"]:
+        # A wave proves useful only once its nodes are RUNNING and saturated;
+        # while any capacity is still booting there is no such proof, and the
+        # forecast has no throughput evidence to overrule it (a fresh job has
+        # zero completions, which reads as long tasks and justifies anything).
+        return [], "previous_wave_still_booting", {}
     saturated = alive == 0 or busy >= SATURATION_BUSY_FRACTION * alive
     if not (saturated and demand > alive):
         return [], "capacity_not_saturated", {}

@@ -4,6 +4,7 @@ import json
 import logging as python_logging
 import os
 import random
+import resource
 import sys
 import traceback
 from collections import deque
@@ -20,6 +21,14 @@ from starlette.datastructures import UploadFile
 from starlette.requests import ClientDisconnect
 
 __version__ = "1.7.11"
+
+# Slot minting can run hundreds of workers per node, and node_service holds
+# sockets, pipes, and log streams for each, so the usual 1024 soft cap
+# starves it: worker re-adds then die with EMFILE and their recovery paths
+# (which also need fds) die too, stranding those workers' in-flight inputs.
+_nofile_soft, _nofile_hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+resource.setrlimit(resource.RLIMIT_NOFILE, (_nofile_hard, _nofile_hard))
+
 PROJECT_ID = os.environ["PROJECT_ID"]
 BURLA_BACKEND_URL = os.environ.get(
     "BURLA_BACKEND_URL", "https://backend.burla.dev"

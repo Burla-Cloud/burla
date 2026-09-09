@@ -48,7 +48,7 @@ from burla import remote_parallel_map
 def build_index(day):
     docs = remote_parallel_map(parse, pdfs(day), func_cpu=64)
     vecs = remote_parallel_map(embed, docs, func_gpu="A100", image="pytorch")
-    return remote_parallel_map(index, [vecs], func_ram=128)
+    return remote_parallel_map(index, [vecs])
  
 remote_parallel_map(build_index, last_30_days, detach=True)
 ```

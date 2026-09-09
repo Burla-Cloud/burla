@@ -70,7 +70,7 @@ Track every function call, inspect logs and tracebacks, spot resource bottleneck
 
 ## Get started
 
-With Python 3.12+ and having [signed into your cloud provider's CLI](https://burla.dev/docs/get-started) (`aws`, `gcloud`, `az`):
+With Python 3.12+ & having [signed into your cloud provider's CLI](https://burla.dev/docs/get-started) (`aws`, `gcloud`, `az`):
 
 ```bash
 pip install burla

@@ -50,7 +50,7 @@ def build_index(day):
     vecs = remote_parallel_map(embed, docs, func_gpu="A100", image="pytorch")
     return remote_parallel_map(index, [vecs], func_ram=128)
  
-remote_parallel_map(build_index, [last_30_days], detach=True)
+remote_parallel_map(build_index, last_30_days, detach=True)
 ```
 With `detach=True` this pipeline will run independently in the cloud.
 

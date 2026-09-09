@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <b>The simplest way to scale Python.</b>
+  <b>The world's simplest distributed computing platform.</b>
 </p>
 
 <p align="center">
@@ -38,6 +38,20 @@ results = remote_parallel_map(double, range(1000), grow=True)
 ```
 This code runs `double` in 1,000 separate containers on your current cloud provider.
 
+#### Build scalable data pipelines / fully distributed applications using plain Python.
+Specify different hardware or a custom image for each function call at runtime:
+
+```python
+from burla import remote_parallel_map
+ 
+def build_index(day):
+    docs = remote_parallel_map(parse, pdfs(day), func_cpu=64)
+    vecs = remote_parallel_map(embed, docs, func_gpu="A100", image="pytorch")
+    return remote_parallel_map(index, vecs)
+ 
+remote_parallel_map(build_index, last_30_days, func_ram=128)
+```
+
 ## Key features
 
 - **Fast iteration.** Scale to 1,000 CPUs or GPUs in under a second on a warm cluster. Prints, exceptions, and results appear locally.
@@ -51,23 +65,6 @@ This code runs `double` in 1,000 separate containers on your current cloud provi
 Track every function call, inspect logs and tracebacks, spot resource bottlenecks, and manage workloads across your entire team.
 
 [![Burla dashboard tour: live job progress, a failed call's logs, and CPU, memory, network, and disk usage](docs/assets/dashboard-demo.gif)](https://burla.dev/#what)
-
-## Build pipelines in plain Python:  
-Specify hardware or a custom image in your code to build pipelines / dynamic distributed applications:
-
-```python
-from burla import remote_parallel_map
- 
-def build_index(day):
-    docs = remote_parallel_map(parse, pdfs(day), func_cpu=64)
-    vecs = remote_parallel_map(embed, docs, func_gpu="A100", image="pytorch")
-    return remote_parallel_map(index, vecs)
- 
-remote_parallel_map(build_index, last_30_days, func_ram=128)
-```
-
-## Burla constructs a DAG live as your program executes:
-<viz here>
 
 ## Get started
 

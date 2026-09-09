@@ -25,42 +25,53 @@
 
 ---
 
-Burla is a distributed computing framework that runs plain Python functions across thousands of CPUs or GPUs in your own cloud. It has exactly one function:
+Burla runs Python functions in parallel across thousands of CPUs or GPUs in your cloud. Scale data processing, ML inference, and multi-stage pipelines with one function:
 
 ```python
 from burla import remote_parallel_map
 
-my_inputs = list(range(1000))
+def double(x):
+    return x * 2
 
-def my_function(x):
-    print(f"[#{x}] running on separate computer")
-
-remote_parallel_map(my_function, my_inputs)
+results = remote_parallel_map(
+    double, range(1000), grow=True
+)
 ```
 
-This example asks Burla to scale the job to 1,000 CPUs and run 1,000 function calls in parallel:
+## Key features
 
-<p align="center">
-  <img src="https://raw.githubusercontent.com/Burla-Cloud/user-docs/main/.gitbook/assets/hell_cut_extended_no-zsh.gif" alt="Burla terminal demo showing remote_parallel_map running 1,000 function calls" width="90%">
-</p>
+- **Fast iteration.** Dispatch to 1,000 CPUs in under a second on a warm cluster. Prints, exceptions, and results appear locally.
+- **Automatic dependencies.** Local Python modules ship with your function; missing packages install automatically. Bring a custom container image when needed.
+- **Efficient compute.** Burla adjusts concurrency around CPU and memory use to keep machines busy. Specify hardware, including GPUs, in code.
+- **Plain-Python pipelines.** Nest `remote_parallel_map` calls; Burla builds a live graph of your running jobs.
+- **Your cloud.** Run in your own AWS, Google Cloud, or Azure account. Share a deployed cluster with your team.
 
-## Highlights
+## See it in action
 
-- **One function.** `results = remote_parallel_map(my_function, my_inputs)` is the entire API. No DAGs, no YAML, no cluster SDK to learn.
-- **Feels local.** Anything your function prints streams back to your terminal. Exceptions are re-raised locally with full tracebacks. Packages missing from the image are installed automatically, and import-time local modules ship with your function.
-- **Fast dispatch.** On a warm cluster, a print-only job across 1,000 CPUs completes in under a second.
-- **Runs in your cloud.** Burla runs your functions on raw VMs in your own cloud account, not shared Burla infrastructure.
-- **Hardware and images in code.** Request CPUs or RAM per function call, add A100 or H100 GPUs on AWS or Google Cloud, and select a compatible `linux/amd64` image.
-- **Adaptive concurrency.** On CPU nodes, the default dynamic CPU and RAM settings start one worker per CPU, then reduce node concurrency under pressure when possible.
-- **Built-in dashboard.** View live logs and node status locally; deploy it for background jobs and access from any device.
+Track every call, inspect logs and tracebacks, and spot resource bottlenecks in the dashboard.
+
+[![Burla dashboard tour: live job progress, a failed call's logs, and CPU, memory, network, and disk usage](docs/assets/dashboard-demo.gif)](https://burla.dev/#what)
+
+## Get started
+
+With Python 3.11+ and [your cloud credentials configured](https://burla.dev/docs/get-started):
+
+```bash
+pip install burla
+burla dashboard
+```
+
+Run the Python example above. `grow=True` starts workers in your cloud and removes them when the job finishes. For a shared cluster and background jobs, run `burla deploy`.
+
+[Setup guide](https://burla.dev/docs/get-started) · [Examples](https://burla.dev/docs/examples) · [API reference](https://burla.dev/docs/api-reference)
 
 ## Contributing
 
-Bug reports and feature requests are welcome in [GitHub issues](https://github.com/Burla-Cloud/burla/issues). If you'd like to contribute code, open an issue first so we can point you in the right direction. To report a security issue, email security@burla.dev.
+Bug reports, feature requests, and contribution proposals are welcome in [GitHub issues](https://github.com/Burla-Cloud/burla/issues). Report security issues to security@burla.dev.
 
 ## License
 
-Burla is licensed under the [Functional Source License, Version 1.1, with Apache 2.0 Future License](LICENSE) (FSL-1.1-Apache-2.0). You can use, copy, modify, and redistribute it for any purpose except a competing commercial offering, and each version becomes available under Apache 2.0 two years after its release.
+Licensed under [FSL-1.1-Apache-2.0](LICENSE). Free to use except for competing commercial offerings; each version becomes Apache 2.0 after two years.
 
 ---
 

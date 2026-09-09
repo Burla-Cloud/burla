@@ -5,7 +5,8 @@
 </p>
 
 <p align="center">
-  <b>The world's simplest distributed computing platform.</b>
+  The world's simplest distributed computing platform.  </br>
+  Easily scale ML‑pipelines, AI-inference, batch processing, or any other program.
 </p>
 
 <p align="center">
@@ -25,8 +26,7 @@
 
 ---
 
-Burla runs Python functions in parallel across thousands of CPUs or GPUs in your cloud.  
-Scale data processing, ML inference, and multi-stage pipelines with one function:
+Burla runs Python functions in parallel across thousands of CPUs or GPUs in your cloud using one function:
 
 ```python
 from burla import remote_parallel_map
@@ -36,10 +36,11 @@ def double(x):
 
 results = remote_parallel_map(double, range(1000), grow=True)
 ```
-This code runs `double` in 1,000 separate containers on your current cloud provider.
+This code runs `double` in 1,000 separate containers (1-CPU each) on your current cloud provider.
 
-#### Build scalable data pipelines / fully distributed applications using plain Python.
-Specify different hardware or a custom image for each function call at runtime:
+#### Build scalable data pipelines / fully distributed applications in plain Python.
+Specify different hardware, or a custom image, for each function call at runtime.  
+`remote_parallel_map` can be nested to create highly composable distributed applications.
 
 ```python
 from burla import remote_parallel_map
@@ -47,10 +48,11 @@ from burla import remote_parallel_map
 def build_index(day):
     docs = remote_parallel_map(parse, pdfs(day), func_cpu=64)
     vecs = remote_parallel_map(embed, docs, func_gpu="A100", image="pytorch")
-    return remote_parallel_map(index, vecs)
+    return remote_parallel_map(index, vecs, func_ram=128)
  
-remote_parallel_map(build_index, last_30_days, func_ram=128)
+remote_parallel_map(build_index, last_30_days, detach=True)
 ```
+By passing `detach=True` this script can be stopped immediately after launching and the pipeline will continue independently in the cloud.
 
 ## Key features
 

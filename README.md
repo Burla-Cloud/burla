@@ -36,11 +36,11 @@ def double(x):
 
 results = remote_parallel_map(double, range(1000), grow=True)
 ```
-This code runs `double` in 1,000 separate containers (1-CPU each) on your current cloud provider.
+This code calls `double` on every item in `range(1000)`, each in a separate container (1-CPU each) in your current cloud provider.
 
-#### Build data pipelines / fully distributed applications in plain Python.
-Specify different hardware, or a custom image, for each function call at runtime.  
-`remote_parallel_map` can be nested to create highly composable distributed applications.
+#### Build fully distributed applications in plain Python.
+Specify different hardware, or a custom Docker image, for each function call at runtime.  
+`remote_parallel_map` can be nested to create highly composable distributed applications:
 
 ```python
 from burla import remote_parallel_map
@@ -52,7 +52,7 @@ def build_index(day):
  
 remote_parallel_map(build_index, last_30_days, detach=True)
 ```
-By passing `detach=True` this script can be stopped immediately after launching and the pipeline will continue independently in the cloud.
+With `detach=True` this pipeline will run independently in the cloud.
 
 ## Key features
 
@@ -77,7 +77,8 @@ pip install burla
 burla dashboard
 ```
 
-Run the Python example above. `grow=True` starts VMs in your cloud and removes them when the job finishes. To share your platform, or use background jobs, run `burla deploy`.
+Run the Python example above. `grow=True` starts VMs in your cloud and removes them when the job finishes.  
+To share dashboard access, or use background jobs, run `burla deploy`.
 
 [Setup guide](https://burla.dev/docs/get-started) · [Examples](https://burla.dev/docs/examples) · [API reference](https://burla.dev/docs/api-reference)
 

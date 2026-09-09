@@ -56,11 +56,11 @@ By passing `detach=True` this script can be stopped immediately after launching 
 
 ## Key features
 
-- **Fast iteration.** Scale to 1,000 CPUs or GPUs in under a second on a warm cluster. Prints, exceptions, and results appear locally.
-- **Automatic env replication.** Your local Python environment is automatically cloned on all remote workers in seconds. Use a custom docker image by passing the `image` arg.
-- **Efficient compute.** Burla continuously adjusts concurrency around real CPU and memory use, keeping every machine saturated so jobs finish faster and cost less.
-- **Plain-Python pipelines.** Nest `remote_parallel_map` calls; Burla builds a live DAG showing how infrastructure changes throughout your distributed application.
-- **Your cloud.** Run in your own AWS, Google Cloud, or Azure account. Share a deployed cluster with your team.
+- **Fast iteration:** Scale to 1,000 CPUs or GPUs in under a second on a warm cluster. Prints, exceptions, and results appear locally.
+- **Automatic env replication:** Your local Python environment is automatically cloned on all remote workers in seconds.
+- **Up to 50% more efficient:** Burla continuously adjusts concurrency keeping every machine saturated so jobs finish faster and cost less.
+- **Pipelines:** Burla builds a live DAG showing how infrastructure changes throughout your distributed application.
+- **Your cloud:** Run in your own AWS, Google Cloud, or Azure account. Share a deployed cluster with your team.
 
 ## Monitor distributed workloads in the dashboard:
 

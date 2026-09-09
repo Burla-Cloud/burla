@@ -40,7 +40,7 @@ This code calls `double` on every item in `range(1000)`, each in a separate cont
 
 #### Build fully distributed applications in plain Python.
 Specify different hardware, or a custom Docker image, for each function call at runtime.  
-`remote_parallel_map` can be nested to create highly composable distributed applications:
+`remote_parallel_map` can be nested to create composable distributed applications:
 
 ```python
 from burla import remote_parallel_map
@@ -50,7 +50,7 @@ def build_index(day):
     vecs = remote_parallel_map(embed, docs, func_gpu="A100", image="pytorch")
     return remote_parallel_map(index, [vecs], func_ram=128)
  
-remote_parallel_map(build_index, last_30_days, detach=True)
+remote_parallel_map(build_index, [last_30_days], detach=True)
 ```
 With `detach=True` this pipeline will run independently in the cloud.
 

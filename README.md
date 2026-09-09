@@ -25,7 +25,8 @@
 
 ---
 
-Burla runs Python functions in parallel across thousands of CPUs or GPUs in your cloud. Scale data processing, ML inference, and multi-stage pipelines with one function:
+Burla runs Python functions in parallel across thousands of CPUs or GPUs in your cloud.  
+Scale data processing, ML inference, and multi-stage pipelines with one function:
 
 ```python
 from burla import remote_parallel_map
@@ -33,35 +34,51 @@ from burla import remote_parallel_map
 def double(x):
     return x * 2
 
-results = remote_parallel_map(
-    double, range(1000), grow=True
-)
+results = remote_parallel_map(double, range(1000), grow=True)
 ```
+This code runs `double` in 1,000 separate containers on your current cloud provider.
 
 ## Key features
 
-- **Fast iteration.** Dispatch to 1,000 CPUs in under a second on a warm cluster. Prints, exceptions, and results appear locally.
-- **Automatic dependencies.** Local Python modules ship with your function; missing packages install automatically. Bring a custom container image when needed.
-- **Efficient compute.** Burla adjusts concurrency around CPU and memory use to keep machines busy. Specify hardware, including GPUs, in code.
-- **Plain-Python pipelines.** Nest `remote_parallel_map` calls; Burla builds a live graph of your running jobs.
+- **Fast iteration.** Scale to 1,000 CPUs or GPUs in under a second on a warm cluster. Prints, exceptions, and results appear locally.
+- **Automatic env replication.** Your local Python environment is automatically cloned on all remote workers in seconds. Use a custom docker image by passing the `image` arg.
+- **Efficient compute.** Burla continuously adjusts concurrency around real CPU and memory use, keeping every machine saturated so jobs finish faster and cost less.
+- **Plain-Python pipelines.** Nest `remote_parallel_map` calls; Burla builds a live DAG showing how infrastructure changes throughout your distributed application.
 - **Your cloud.** Run in your own AWS, Google Cloud, or Azure account. Share a deployed cluster with your team.
 
-## See it in action
+## Monitor distributed workloads in the dashboard:
 
-Track every call, inspect logs and tracebacks, and spot resource bottlenecks in the dashboard.
+Track every function call, inspect logs and tracebacks, spot resource bottlenecks, and manage workloads across your entire team.
 
 [![Burla dashboard tour: live job progress, a failed call's logs, and CPU, memory, network, and disk usage](docs/assets/dashboard-demo.gif)](https://burla.dev/#what)
 
+## Build pipelines in plain Python:  
+Specify hardware or a custom image in your code to build pipelines / dynamic distributed applications:
+
+```python
+from burla import remote_parallel_map
+ 
+def build_index(day):
+    docs = remote_parallel_map(parse, pdfs(day), func_cpu=64)
+    vecs = remote_parallel_map(embed, docs, func_gpu="A100", image="pytorch")
+    return remote_parallel_map(index, vecs)
+ 
+remote_parallel_map(build_index, last_30_days, func_ram=128)
+```
+
+## Burla constructs a DAG live as your program executes:
+<viz here>
+
 ## Get started
 
-With Python 3.11+ and [your cloud credentials configured](https://burla.dev/docs/get-started):
+With Python 3.12+ and having [signed into your cloud provider's CLI](https://burla.dev/docs/get-started) (`aws`, `gcloud`, `az`):
 
 ```bash
 pip install burla
 burla dashboard
 ```
 
-Run the Python example above. `grow=True` starts workers in your cloud and removes them when the job finishes. For a shared cluster and background jobs, run `burla deploy`.
+Run the Python example above. `grow=True` starts VMs in your cloud and removes them when the job finishes. To share your platform, or use background jobs, run `burla deploy`.
 
 [Setup guide](https://burla.dev/docs/get-started) · [Examples](https://burla.dev/docs/examples) · [API reference](https://burla.dev/docs/api-reference)
 

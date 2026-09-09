@@ -38,7 +38,7 @@ results = remote_parallel_map(double, range(1000), grow=True)
 ```
 This code runs `double` in 1,000 separate containers (1-CPU each) on your current cloud provider.
 
-#### Build scalable data pipelines / fully distributed applications in plain Python.
+#### Build data pipelines / fully distributed applications in plain Python.
 Specify different hardware, or a custom image, for each function call at runtime.  
 `remote_parallel_map` can be nested to create highly composable distributed applications.
 

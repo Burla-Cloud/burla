@@ -26,6 +26,7 @@
 
 ---
 
+#### Single Function API.
 Burla runs Python functions in parallel across thousands of CPUs or GPUs in your cloud using one function:
 
 ```python

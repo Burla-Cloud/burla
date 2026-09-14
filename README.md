@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  Burla is the fastest and most efficient distributed computing framework.  </br>
+  Burla is the most efficient distributed computing framework.  </br>
   Easily scale ML‑pipelines, AI-inference, batch processing, or any other program.
 </p>
 

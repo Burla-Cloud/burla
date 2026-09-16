@@ -19,7 +19,7 @@ from fastapi.responses import Response
 from starlette.datastructures import UploadFile
 from starlette.requests import ClientDisconnect
 
-__version__ = "1.8.0"
+__version__ = "1.8.1"
 PROJECT_ID = os.environ["PROJECT_ID"]
 BURLA_BACKEND_URL = os.environ.get(
     "BURLA_BACKEND_URL", "https://backend.burla.dev"
@@ -118,8 +118,11 @@ def REINIT_SELF(SELF):
     SELF["typical_attempt_peak_rss_bytes"] = None
     SELF["dynamic_retire_lock"] = asyncio.Lock()
     SELF["dynamic_ram_monitor_task"] = None
-    SELF["cpu_pressure_monitor_task"] = None
+    SELF["dynamic_cpu_task"] = None
     SELF["worker_readd_task"] = None
+    # Latest one-second CPU utilization (0..1) of the workers slice, written
+    # by dynamic_cpu_loop; gates donating and pulling in-flight work.
+    SELF["cpu_utilization"] = 0.0
     SELF["last_pressure_retirement_at"] = 0.0
     # Last memory-pressure kill or park; the re-add loop slows down after one.
     SELF["last_memory_shed_at"] = 0.0

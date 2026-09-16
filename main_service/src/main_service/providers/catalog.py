@@ -5,9 +5,9 @@ all go through these functions so the rest of main_service never parses
 machine-type strings itself.
 
 GCP CPU nodes are n4-standard-N (4 GB RAM per vCPU).
-AWS CPU nodes are m7i.<size> (also 4 GiB RAM per vCPU), and Azure CPU nodes
-are Standard_DNas_v5 (also 4 GiB RAM per vCPU), so capacity math is identical
-across clouds.
+AWS CPU nodes are m7i.<size> (4 GiB RAM per vCPU) or r7i.16xlarge
+(8 GiB RAM per vCPU), and Azure CPU nodes are Standard_DNas_v5
+(4 GiB RAM per vCPU).
 """
 
 import re
@@ -42,6 +42,7 @@ SETTINGS_MACHINE_TYPES = {
         "m7i.4xlarge",
         "m7i.8xlarge",
         "m7i.16xlarge",
+        "r7i.16xlarge",
         "p4d.24xlarge",
         "p4de.24xlarge",
         "p5.4xlarge",
@@ -255,6 +256,7 @@ ON_DEMAND_HOURLY_USD = {
     "m7i.4xlarge": 0.8064,
     "m7i.8xlarge": 1.6128,
     "m7i.16xlarge": 3.2256,
+    "r7i.16xlarge": 4.2336,
     "Standard_D2as_v5": 0.086,
     "Standard_D4as_v5": 0.172,
     "Standard_D8as_v5": 0.344,
@@ -388,6 +390,9 @@ def machine_spec(machine_type: str) -> dict:
     ):
         cpus = _M7I_SIZE_TO_CPUS[machine_type.split(".")[-1]]
         return {"cpus": cpus, "ram_gb": cpus * 4, "gpus": 0}
+
+    if machine_type == "r7i.16xlarge":
+        return {"cpus": 64, "ram_gb": 512, "gpus": 0}
 
     ds_match = _DS_PATTERN.match(machine_type)
     if ds_match and int(ds_match.group(1)) in _DS_CPU_SIZES:

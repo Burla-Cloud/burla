@@ -22,6 +22,7 @@ from node_service.lifecycle_endpoints import reboot_containers
 from node_service.worker_client import (
     CPU_PRESSURE_FILE,
     CPU_UTILIZATION_ADD_MAX,
+    CPU_UTILIZATION_RECOVER_MAX,
     DYNAMIC_RAM_MAX_WORKER_MEMORY_USED_FRACTION,
     GATE_EWMA_TAU_SECONDS,
     READD_MAX_CPU_STALL_FRACTION,
@@ -212,14 +213,20 @@ async def _input_steal_loop(session, logger, job_started_at):
         SELF["active_input_steal_id"] = transfer_id
         remaining_inputs = SELF["inputs_queue"].qsize()
         # Idle unthrottled workers = genuinely free capacity right now. The
-        # neighbor uses this to decide whether revoking its parked (throttled)
-        # workers' inputs for us is worth the kill. Idle workers refuse the
-        # queue while anything is parked locally, so a node with parked
-        # workers reports 0: its "idle" workers could not actually run a
-        # revoked input, and two pressured nodes must never swap parked work
-        # back and forth via kills.
+        # neighbor uses this to decide whether revoking in-flight inputs
+        # (parked attempts, or running ones while it is saturated) for us is
+        # worth the kill. Idle workers refuse the queue while anything is
+        # parked locally, so a node with parked workers reports 0: its "idle"
+        # workers could not actually run a revoked input, and two pressured
+        # nodes must never swap parked work back and forth via kills. A node
+        # whose cores are already busy reports 0 for the same reason: revoked
+        # work would just queue here instead of there.
         idle_worker_count = 0
-        if not any(w.throttled and not w.retired for w in SELF["workers"]):
+        has_free_capacity = (
+            not any(w.throttled and not w.retired for w in SELF["workers"])
+            and SELF["cpu_utilization"] <= CPU_UTILIZATION_RECOVER_MAX
+        )
+        if has_free_capacity:
             idle_worker_count = sum(
                 worker.is_idle and not worker.retired for worker in SELF["workers"]
             )
@@ -1068,7 +1075,7 @@ async def reset_workers(logger: Logger):
     NODE_AUTH_CREDENTIALS_PATH.unlink(missing_ok=True)
     for task_key in (
         "dynamic_ram_monitor_task",
-        "cpu_pressure_monitor_task",
+        "dynamic_cpu_task",
         "worker_readd_task",
     ):
         monitor_task = SELF[task_key]

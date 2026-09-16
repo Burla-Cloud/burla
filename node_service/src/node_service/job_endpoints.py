@@ -24,10 +24,10 @@ from node_service.helpers import Logger, debug_log
 from node_service.job_watcher import job_watcher_logged
 from node_service.worker_client import (
     SLOT_TRADE_PRESSURE_COOLDOWN_SECONDS,
-    cpu_pressure_monitor_loop,
+    dynamic_cpu_loop,
     dynamic_ram_monitor_loop,
     dynamic_worker_readd_loop,
-    revoke_throttled_inputs,
+    revoke_inputs_for_idle_peer,
 )
 
 _LOGS_OVERFLOW_MESSAGE = (
@@ -142,12 +142,16 @@ async def get_inputs(
                 total_bytes += len(input_pkl)
             items.reverse()
             # Queued inputs always take priority, but once the queue is dry a
-            # peer with genuinely idle workers may take the in-flight inputs of
-            # parked (throttled) workers: they were throttled precisely so their
-            # attempts would stay cheap to move to free capacity elsewhere.
+            # peer with genuinely idle workers may take in-flight inputs:
+            # parked attempts, and while this node is saturated its
+            # least-progressed running attempts, which finish sooner on an
+            # idle machine even after restarting. A requester holding queued
+            # inputs is not idle (its workers are between inputs); moved work
+            # would only wait in its queue.
             queue_is_empty = SELF["inputs_queue"].qsize() == 0
-            if not items and queue_is_empty and requester_idle_workers > 0:
-                items = await revoke_throttled_inputs(requester_idle_workers)
+            requester_is_idle = requester_queue_size == 0 and requester_idle_workers > 0
+            if not items and queue_is_empty and requester_is_idle:
+                items = await revoke_inputs_for_idle_peer(requester_idle_workers)
             SELF["pending_transfers"][transfer_id] = items
 
         return Response(
@@ -477,9 +481,7 @@ async def execute(
             dynamic_ram_monitor_loop()
         )
     if SELF["dynamic_func_cpu"]:
-        SELF["cpu_pressure_monitor_task"] = asyncio.create_task(
-            cpu_pressure_monitor_loop()
-        )
+        SELF["dynamic_cpu_task"] = asyncio.create_task(dynamic_cpu_loop())
     if SELF["dynamic_func_ram"] or SELF["dynamic_func_cpu"]:
         SELF["worker_readd_task"] = asyncio.create_task(dynamic_worker_readd_loop())
     # user specific, assign to self to use for node <-> node requests only during this job.

@@ -1,5 +1,9 @@
 # Adaptive concurrency benchmarks (2026-08-28 to 2026-09-01)
 
+These are historical measured controller runs, not the current landing-page
+values. The current mix of measurements and projections is documented in
+[`examples/adaptive-concurrency-raydask/results/README.md`](../../examples/adaptive-concurrency-raydask/results/README.md).
+
 Provenance record for the controller work on branch `cursor/6ea4fdc5`
 (damping, saturation creep, proportional minting, memory-PSI gating).
 Full artifacts (`results.jsonl`, `summary.json`, derived outputs) for every

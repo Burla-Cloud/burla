@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  Burla is the most efficient distributed computing framework.  </br>
+  Burla is the world's simplest distributed computing platform.  </br>
   Easily scale ML‑pipelines, AI-inference, batch processing, or any other program.
 </p>
 
@@ -26,7 +26,6 @@
 
 ---
 
-#### Single Function API.
 Burla runs Python functions in parallel across thousands of CPUs or GPUs in your cloud using one function:
 
 ```python

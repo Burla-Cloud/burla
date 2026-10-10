@@ -26,7 +26,11 @@ from node_service import (
     head_client,
 )
 from node_service.helpers import debug_log
-from node_service.resource_metrics import record_call_event
+from node_service.resource_metrics import (
+    NESTED_DOCKER_PROCESS_CGROUP,
+    record_call_event,
+    worker_cgroup_dir,
+)
 
 # Sized so node_service's buffering fits inside its own memory reservation
 # (NODE_SERVICE_RESERVED_MEMORY_GB, 4GB on real VMs): workers own the rest of
@@ -757,16 +761,7 @@ async def dynamic_ram_monitor_loop():
 
 
 def _worker_cgroup_dir(worker) -> Path:
-    # cgroup v2: single `0::/path` line. The deepest cgroup containing
-    # worker_server.py is the worker's container cgroup (quota target and
-    # PSI scope for everything in that container, UDF children included).
-    cgroup_path = (
-        Path(f"/proc/{worker.worker_host_pid}/cgroup")
-        .read_text()
-        .splitlines()[0]
-        .split(":", 2)[2]
-    )
-    return Path("/sys/fs/cgroup", cgroup_path.strip("/"))
+    return worker_cgroup_dir(worker.worker_host_pid)
 
 
 def _read_memory_stat_anon(cgroup_dir: Path) -> int:
@@ -1407,6 +1402,7 @@ async def dynamic_worker_readd_loop():
         memory_probe = (
             SELF["dynamic_func_ram"]
             and not IN_LOCAL_DEV_MODE
+            and SELF["mint_slots_allowed"]
             and len(active_workers) < INSTANCE_N_CPUS
         )
         if deficit <= 0 and not memory_probe:
@@ -1914,6 +1910,21 @@ async def revoke_inputs_for_idle_peer(max_inputs: int) -> list[tuple[int, bytes]
         return revoked_inputs
 
 
+# Images that ship a Docker engine get workers that run their own, so user
+# code can `docker run` and those containers die with the worker.
+IMAGES_WITH_DOCKER_ENGINE = set()
+
+
+async def detect_docker_engine(image: str, docker: aiodocker.Docker):
+    probe = await docker.containers.run(
+        config={"Image": image, "Entrypoint": ["sh", "-c", "command -v dockerd"]}
+    )
+    result = await probe.wait()
+    await probe.delete(force=True, v=True)
+    if result["StatusCode"] == 0:
+        IMAGES_WITH_DOCKER_ENGINE.add(image)
+
+
 class WorkerClient:
     def __init__(self, image: str, gpu_index: int | None = None):
         self.gpu_index = gpu_index
@@ -1986,13 +1997,31 @@ class WorkerClient:
 
         host_config["Binds"] = binds
 
+        start_docker_engine = ""
+        volumes = {}
+        if self.image in IMAGES_WITH_DOCKER_ENGINE:
+            host_config["Privileged"] = True
+            # Docker can't keep image layers on the container's own overlay
+            # filesystem; a volume puts them on the node's disk instead.
+            volumes = {"/var/lib/docker": {}}
+            cgroup = f"/sys/fs/cgroup/{NESTED_DOCKER_PROCESS_CGROUP}"
+            start_docker_engine = (
+                f"mkdir {cgroup}; "
+                f"xargs -rn1 < /sys/fs/cgroup/cgroup.procs > {cgroup}/cgroup.procs; "
+                "sed -e 's/ / +/g' -e 's/^/+/' < /sys/fs/cgroup/cgroup.controllers "
+                "> /sys/fs/cgroup/cgroup.subtree_control; "
+                "dockerd > /var/log/dockerd.log 2>&1 & "
+                "until [ -S /var/run/docker.sock ]; do sleep 0.1; done; "
+            )
+
         # Shell loop keeps PID 1 alive so os.killpg against worker_server.py's process group from
         # the host only restarts Python, not the whole container. sleep 0.1 guards a crash loop.
         command = [
             "sh",
             "-lc",
             (
-                "rm -rf /worker_service_python_env /uv_cache; "
+                start_docker_engine
+                + "rm -rf /worker_service_python_env /uv_cache; "
                 "ln -s /worker_service_storage/python_env /worker_service_python_env; "
                 "ln -s /worker_service_storage/uv_cache /uv_cache; "
                 "export PYTHONUNBUFFERED=1; "
@@ -2015,6 +2044,7 @@ class WorkerClient:
             "Cmd": command,
             "WorkingDir": "/workspace",
             "ExposedPorts": {f"{WORKER_INTERNAL_PORT}/tcp": {}},
+            "Volumes": volumes,
             "HostConfig": host_config,
             "Labels": {
                 "burla-cluster": BURLA_CLUSTER_NAME,
@@ -2055,7 +2085,7 @@ class WorkerClient:
             # starting it, so the leftover must be removed or the retry
             # 409s on the name.
             leftover = self.docker.containers.container(error.container_id)
-            await leftover.delete(force=True)
+            await leftover.delete(force=True, v=True)
             self.container = await self.docker.containers.run(
                 config=config, name=self.container_name
             )
@@ -2146,7 +2176,9 @@ class WorkerClient:
         self._activity_anchor = (now, rx_bytes)
 
     async def _get_python_version(self):
-        for _ in range(20):
+        # Python only starts once the worker's own Docker engine is up.
+        attempts = 600 if self.image in IMAGES_WITH_DOCKER_ENGINE else 20
+        for _ in range(attempts):
             logs = await self._get_logs()
             if logs:
                 return logs.splitlines()[0].strip()
@@ -2719,7 +2751,7 @@ class WorkerClient:
         if self.log_writer is not None:
             await self.log_writer.stop()
             self.log_writer = None
-        await self.container.delete(force=True)
+        await self.container.delete(force=True, v=True)
         self.container = None
         self.container_id = None
         self.worker_host_pid = None
@@ -2728,7 +2760,7 @@ class WorkerClient:
         docker = aiodocker.Docker()
         try:
             container = docker.containers.container(container_id)
-            await container.delete(force=True)
+            await container.delete(force=True, v=True)
         except Exception:
             pass
         finally:

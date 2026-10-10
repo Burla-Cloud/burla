@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 import requests
 from platformdirs import user_data_dir
 
-from burla import CONFIG_PATH, _BURLA_APP_NAME
+from burla import CONFIG_PATH, _BURLA_APP_NAME, _is_private_ip
 
 
 ERROR_EXIT_CODES = {
@@ -71,8 +71,10 @@ class ManagementContext:
 
 def _is_local_url(url: str) -> bool:
     hostname = urlparse(url).hostname or ""
-    return hostname in {"localhost", "127.0.0.1", "main_service"} or hostname.startswith(
-        "node_"
+    return (
+        hostname in {"localhost", "127.0.0.1", "main_service"}
+        or hostname.startswith("node_")
+        or _is_private_ip(hostname)
     )
 
 

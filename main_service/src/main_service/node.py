@@ -23,6 +23,7 @@ from main_service import (
     IN_LOCAL_DEV_MODE,
     MAIN_SERVICE_URL_FOR_NODES,
     PROJECT_ID,
+    RELAY_DISABLED,
     SELF_DELETE_GUEST_ATTRIBUTE,
     cluster_state,
     relay_fqdn,
@@ -189,7 +190,10 @@ class Node:
                         needs_cloud_credentials=self._filesystem_enabled(),
                     )
                 )
-                self.host = f"https://{relay_fqdn(self.instance_name)}"
+                if RELAY_DISABLED:
+                    self.host = f"https://{self.private_ip}:{self.port}"
+                else:
+                    self.host = f"https://{relay_fqdn(self.instance_name)}"
 
             # The node polls its state-push responses for `host` and won't mark
             # itself READY until it appears.
@@ -442,6 +446,8 @@ class Node:
         chmod 600 /etc/burla/frpc.toml
         systemd-run --unit=burla-frpc --property=Restart=always \\
             /usr/local/bin/frpc -c /etc/burla/frpc.toml"""
+        if RELAY_DISABLED:
+            relay_tunnel_script = ""
 
         ca_pem_b64 = base64.b64encode(cluster_ca_pem().encode()).decode()
         caddy_config = f""":{self.port} {{

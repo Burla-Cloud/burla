@@ -56,6 +56,10 @@ RELAY_SERVER_ADDR = os.environ.get(
 )
 RELAY_SERVER_PORT = os.environ.get("BURLA_RELAY_SERVER_PORT", "443")
 RELAY_TRANSPORT_PROTOCOL = os.environ.get("BURLA_RELAY_TRANSPORT_PROTOCOL", "wss")
+# For machines on the same private network as the nodes: everything connects
+# directly over private IPs, so this machine and the nodes must accept each
+# other's traffic on any port (e.g. share the VPC's default security group).
+RELAY_DISABLED = os.environ.get("DISABLE_BURLA_RELAY") == "True"
 FRP_VERSION = "0.70.1"
 
 PREFERRED_HEAD_PORT = 5001  # the browser login flow redirects to localhost:5001
@@ -223,6 +227,19 @@ def _free_port(preferred: int | None = None, required: bool = False) -> int:
         return probe.getsockname()[1]
 
 
+def _hostname_label() -> str:
+    hostname = socket.gethostname().split(".")[0].lower()
+    return re.sub(r"[^a-z0-9-]+", "-", hostname).strip("-")
+
+
+def _private_ip() -> str:
+    # A UDP connect sends nothing; it only picks the interface that routes
+    # out, which inside a VPC holds this machine's private IP.
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+        probe.connect((urlparse(_BURLA_BACKEND_URL).hostname, 443))
+        return probe.getsockname()[0]
+
+
 def _pid_alive(pid: int | None) -> bool:
     if pid is None:
         return False
@@ -301,9 +318,12 @@ def running_head_url() -> str | None:
     if (
         url
         and saved_token
-        and _head_matches(url, project_id, saved_token, expected_namespace="default")
+        and head_state.get("relay_disabled", False) == RELAY_DISABLED
+        and _head_matches(
+            url, project_id, saved_token, head_state.get("cluster_name")
+        )
     ):
-        if not _pid_alive(head_state.get("frpc_pid")):
+        if not RELAY_DISABLED and not _pid_alive(head_state.get("frpc_pid")):
             _respawn_frpc(state_dir, head_state)
         return url
     return None
@@ -379,9 +399,10 @@ def prepare_history_migration(project_id: str) -> tuple[Path | None, str | None]
     head_state_path = state_dir / "head.json"
     head_url = None
     if head_state_path.exists() and cluster_token:
-        url = json.loads(head_state_path.read_text()).get("url")
+        head_state = json.loads(head_state_path.read_text())
+        url = head_state.get("url")
         if url and _head_matches(
-            url, project_id, cluster_token, expected_namespace="default"
+            url, project_id, cluster_token, head_state.get("cluster_name")
         ):
             head_url = url
 
@@ -393,7 +414,7 @@ def prepare_history_migration(project_id: str) -> tuple[Path | None, str | None]
         )
         if response.status_code == 409:
             raise LocalHeadError(
-                "A job is currently running on this machine's Burla cluster. "
+                "A job is currently running through this machine's Burla coordinator. "
                 "Wait for it to finish, then re-run `burla deploy`."
             )
         response.raise_for_status()
@@ -570,6 +591,7 @@ def run_local_head_for_dashboard(
             detached=True,
             preferred_port=preferred_port,
             require_preferred_port=port is not None,
+            open_to_network=port is not None,
         )
         with _head_lifecycle_lock(state_dir):
             head_state = json.loads(head_state_path.read_text())
@@ -655,21 +677,30 @@ def _run_local_head(
     namespace: str = "",
     preferred_port: int = PREFERRED_HEAD_PORT,
     require_preferred_port: bool = False,
+    open_to_network: bool = False,
 ) -> str:
     cloud, project_id, aws_region = detect_cloud()
 
     state_dir = _head_state_dir(project_id, namespace)
-    head_namespace = namespace or "default"
     head_state_path = state_dir / "head.json"
     head_state = {}
     if head_state_path.exists():
         head_state = json.loads(head_state_path.read_text())
+    # Tags this head's nodes, so heads sharing a cloud account (deployed ones
+    # are "default") never touch each other's nodes. Stable per machine.
+    head_namespace = (
+        namespace
+        or head_state.get("cluster_name")
+        or f"{_hostname_label()}-{uuid4().hex[:8]}"
+    )
 
     url = head_state.get("url")
     saved_token = read_saved_cluster_token(project_id)
     if (
         url
         and saved_token
+        and head_state.get("relay_disabled", False) == RELAY_DISABLED
+        and (head_state.get("open_to_network", False) or not open_to_network)
         and _head_matches(
             url, project_id, saved_token, expected_namespace=head_namespace
         )
@@ -679,9 +710,10 @@ def _run_local_head(
                 f"Burla dashboard is already running at {url}. "
                 "Stop it before choosing a different port."
             )
-        if not _pid_alive(head_state.get("frpc_pid")):
-            _respawn_frpc(state_dir, head_state)
-        _wait_for_relay_ready(state_dir, head_state, saved_token)
+        if not RELAY_DISABLED:
+            if not _pid_alive(head_state.get("frpc_pid")):
+                _respawn_frpc(state_dir, head_state)
+            _wait_for_relay_ready(state_dir, head_state, saved_token)
         if on_ready:
             on_ready(url, False)
         return url
@@ -701,10 +733,16 @@ def _run_local_head(
         preferred=preferred_port,
         required=require_preferred_port,
     )
-    tls_port = _free_port()
+    # Nodes keep the head URL they booted with, which includes this port when
+    # the relay is disabled.
+    tls_port = _free_port(preferred=head_state.get("tls_port"))
     # Stable per project so node certs / head certs stay valid across restarts.
     subdomain = head_state.get("subdomain") or f"head-{uuid4().hex[:8]}--{project_id}"
     url = f"http://127.0.0.1:{head_port}"
+    if RELAY_DISABLED:
+        url_for_nodes = f"https://{_private_ip()}:{tls_port}"
+    else:
+        url_for_nodes = f"https://{subdomain}.{RELAY_HOST}"
 
     environment = {
         **os.environ,
@@ -719,7 +757,8 @@ def _run_local_head(
         "BURLA_RELAY_SERVER_ADDR": RELAY_SERVER_ADDR,
         "BURLA_RELAY_SERVER_PORT": str(RELAY_SERVER_PORT),
         "BURLA_RELAY_TRANSPORT_PROTOCOL": RELAY_TRANSPORT_PROTOCOL,
-        "MAIN_SERVICE_URL_FOR_NODES": f"https://{subdomain}.{RELAY_HOST}",
+        "MAIN_SERVICE_URL_FOR_NODES": url_for_nodes,
+        "BURLA_OPEN_HEAD": str(open_to_network),
         "PORT": str(head_port),
         "INTERNAL_TLS_PORT": str(tls_port),
         "HISTORY_DB_PATH": str(state_dir / "history.db"),
@@ -755,6 +794,7 @@ def _run_local_head(
         environment=environment,
         detached=detached,
         reload_dir=reload_dir,
+        host="0.0.0.0" if open_to_network else "127.0.0.1",
     )
 
     # Written before the readiness wait so a failed boot never leaks the
@@ -767,6 +807,9 @@ def _run_local_head(
         "project_id": project_id,
         "cloud": cloud,
         "logs_to_file": detached,
+        "relay_disabled": RELAY_DISABLED,
+        "open_to_network": open_to_network,
+        "cluster_name": head_namespace,
     }
     head_state_path.write_text(json.dumps(head_state))
 
@@ -780,8 +823,9 @@ def _run_local_head(
             state_dir,
             detached=True,
         )
-        _respawn_frpc(state_dir, head_state, cluster_token=cluster_token)
-        _wait_for_relay_ready(state_dir, head_state, cluster_token)
+        if not RELAY_DISABLED:
+            _respawn_frpc(state_dir, head_state, cluster_token=cluster_token)
+            _wait_for_relay_ready(state_dir, head_state, cluster_token)
         return url
 
     frpc_process = None
@@ -795,8 +839,11 @@ def _run_local_head(
             state_dir,
             detached=False,
         )
-        frpc_process = _respawn_frpc(state_dir, head_state, cluster_token=cluster_token)
-        _wait_for_relay_ready(state_dir, head_state, cluster_token)
+        if not RELAY_DISABLED:
+            frpc_process = _respawn_frpc(
+                state_dir, head_state, cluster_token=cluster_token
+            )
+            _wait_for_relay_ready(state_dir, head_state, cluster_token)
         if on_ready:
             on_ready(url, True)
         return_code = head_process.wait()
@@ -905,7 +952,7 @@ def run_remote_dev_head() -> None:
 
     def announce(url: str, is_foreground: bool):
         lines = [
-            f"\nBurla remote-dev cluster [{namespace or 'default'}]",
+            f"\nBurla remote-dev cluster [{namespace}]",
             f"  dashboard: {url}",
             f"  node code: this working tree ({stamp})",
         ]
@@ -971,6 +1018,7 @@ def _spawn_head(
     environment: dict[str, str],
     detached: bool,
     reload_dir: str | None = None,
+    host: str = "127.0.0.1",
 ) -> subprocess.Popen:
     command = [
         sys.executable,
@@ -978,7 +1026,7 @@ def _spawn_head(
         "uvicorn",
         "main_service:app",
         "--host",
-        "127.0.0.1",
+        host,
         "--port",
         str(head_port),
         "--timeout-keep-alive",

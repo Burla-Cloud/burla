@@ -431,7 +431,7 @@ async def execute(
     NODE_AUTH_CREDENTIALS_PATH.write_text(
         json.dumps(
             {
-                "email": request.headers["X-User-Email"],
+                "email": request.headers.get("X-User-Email", ""),
                 "auth_token": auth_token,
                 "project_id": PROJECT_ID,
                 "cluster_dashboard_url": cluster_dashboard_url,

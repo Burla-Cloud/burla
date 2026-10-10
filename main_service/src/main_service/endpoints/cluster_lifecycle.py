@@ -164,7 +164,7 @@ def verify_nodes_can_reach_head():
         raise HTTPException(
             status_code=503,
             detail=(
-                f"Nodes cannot reach the head through the Burla relay "
+                f"Nodes cannot reach the head "
                 f"(GET {url} failed: {error}). Refusing to boot VMs that "
                 "could never connect."
             ),

@@ -141,11 +141,26 @@ def _node_sample(
     }
 
 
-def _worker_counters(worker_pid: int) -> dict:
+# Workers running their own Docker engine move their processes into this child
+# of the container's cgroup: cgroup v2 only lets a cgroup with no processes of
+# its own give resource controllers to the containers nested under it.
+NESTED_DOCKER_PROCESS_CGROUP = "burla-worker"
+
+
+def worker_cgroup_dir(worker_pid: int) -> Path:
+    """The worker container's cgroup: quota target and PSI scope for
+    everything in that container, UDF children and nested containers included."""
     cgroup_path = (
-        Path(f"/proc/{worker_pid}/cgroup").read_text().strip().split(":", 2)[2]
+        Path(f"/proc/{worker_pid}/cgroup").read_text().splitlines()[0].split(":", 2)[2]
     )
-    cgroup_dir = Path("/sys/fs/cgroup", cgroup_path.lstrip("/"))
+    cgroup_dir = Path("/sys/fs/cgroup", cgroup_path.strip("/"))
+    if cgroup_dir.name == NESTED_DOCKER_PROCESS_CGROUP:
+        return cgroup_dir.parent
+    return cgroup_dir
+
+
+def _worker_counters(worker_pid: int) -> dict:
+    cgroup_dir = worker_cgroup_dir(worker_pid)
     cpu = dict(
         line.split() for line in (cgroup_dir / "cpu.stat").read_text().splitlines()
     )

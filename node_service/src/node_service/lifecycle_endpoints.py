@@ -23,6 +23,7 @@ from node_service.helpers import Logger
 from node_service.worker_client import (
     WorkerClient,
     calibrate_swap_rate,
+    detect_docker_engine,
     verify_worker_cgroup_isolation,
 )
 
@@ -203,7 +204,7 @@ async def _remove_container(container_id: str, logger: Logger):
     docker = aiodocker.Docker()
     try:
         container = docker.containers.container(container_id)
-        await container.delete(force=True)
+        await container.delete(force=True, v=True)
     except Exception as e:
         if not (SELF["SHUTTING_DOWN"] or SELF["FAILED"]):
             msg = f"Failed to remove container {container_id}: {e}"
@@ -323,6 +324,7 @@ async def reboot_containers(
             workers = []
             for image in SELF["current_container_config"]:
                 await _pull_image_if_missing(image, logger, docker)
+                await detect_docker_engine(image, docker)
                 num_workers = INSTANCE_N_CPUS if NUM_GPUS == 0 else NUM_GPUS
 
                 msg = f"Image {image} pulled successfully.\nWaiting for {num_workers} workers to start ..."

@@ -1,3 +1,4 @@
+import ipaddress
 import json
 import os
 from dataclasses import dataclass
@@ -7,7 +8,7 @@ from urllib.parse import urlparse
 from platformdirs import user_config_dir
 
 # needed so main_service can associate a client version with a request
-__version__ = "1.8.1"
+__version__ = "1.8.2"
 
 # In a checkout this file is <root>/client/src/burla/__init__.py. Installed
 # flat (e.g. /worker_service_python_env/burla/ on nodes) there is no parents[3],
@@ -95,10 +96,17 @@ def get_config(key: str = None):
     return config[key]
 
 
+def _is_private_ip(hostname: str) -> bool:
+    try:
+        return ipaddress.ip_address(hostname).is_private
+    except ValueError:
+        return False
+
+
 def _local_dashboard_url(url: str) -> bool:
     hostname = urlparse(url).hostname
     return hostname in {"localhost", "127.0.0.1", "main_service"} or bool(
-        hostname and hostname.startswith("node_")
+        hostname and (hostname.startswith("node_") or _is_private_ip(hostname))
     )
 
 
@@ -233,8 +241,13 @@ from burla._remote_parallel_map import remote_parallel_map
 worker_cache = {}
 
 
-def dashboard(port: int | None = None):
-    """Open the dashboard. Local dashboards use port 5001 unless overridden."""
+def dashboard(port: int | None = None, local: bool = False):
+    """Open the dashboard. Local dashboards use port 5001 unless overridden.
+
+    `local`, or passing `port`, runs a coordinator and dashboard on this
+    machine even when the account has a deployed one. With `port` it accepts unauthenticated
+    connections from other machines, so clients elsewhere can use it through
+    BURLA_CLUSTER_DASHBOARD_URL."""
     import webbrowser
 
     from burla._reporting import log_dashboard_start_telemetry
@@ -246,12 +259,8 @@ def dashboard(port: int | None = None):
         webbrowser.open(url)
         log_dashboard_start_telemetry(__version__, is_local=is_foreground)
 
-    remote_head = _remote_head_handle()
+    remote_head = None if port is not None or local else _remote_head_handle()
     if remote_head:
-        from burla._auth import LocalHeadError
-
-        if port is not None:
-            raise LocalHeadError("--port can only be used with a local dashboard.")
         open_dashboard(remote_head.url, False)
         return
 

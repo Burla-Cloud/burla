@@ -548,7 +548,24 @@ def _get_auth_info() -> tuple[str, str]:
     return auth_info["email"], auth_info["auth_token"]
 
 
+@cache
+def _open_head_cluster_token(url: str) -> str | None:
+    response = requests.get(f"{url}/v1/cluster/open_token", timeout=10)
+    if response.status_code == 404:
+        return None
+    response.raise_for_status()
+    return response.json()["cluster_token"]
+
+
 def get_auth_headers() -> dict[str, str]:
+    # Heads started by `burla dashboard --port` take anyone who can reach them
+    # and hand out the cluster token, which nodes accept from any client.
+    # They serve plain HTTP; deployed heads are always HTTPS.
+    env_url = os.environ.get("BURLA_CLUSTER_DASHBOARD_URL", "").rstrip("/")
+    if env_url.startswith("http://"):
+        cluster_token = _open_head_cluster_token(env_url)
+        if cluster_token:
+            return {"Authorization": f"Bearer {cluster_token}"}
     try:
         email, auth_token = _get_auth_info()
     except Exception:

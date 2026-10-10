@@ -214,8 +214,8 @@ def _legacy_parser(root):
         allow_abbrev=False,
         description=(
             "Open the cluster dashboard in a web browser.\n\n"
-            "If no cluster is running, one is started on this machine first and\n"
-            "runs until Ctrl-C. The dashboard shows nodes, jobs, logs, metrics,\n"
+            "If no coordinator is running, one is started on this machine first\n"
+            "and runs until Ctrl-C. The dashboard shows nodes, jobs, logs, metrics,\n"
             "settings, and users."
         ),
     )
@@ -228,7 +228,19 @@ def _legacy_parser(root):
         dest="flag_port",
         type=int,
         metavar="N",
-        help="Port for the locally hosted dashboard (default: 5001).",
+        help=(
+            "Serve the coordinator and dashboard on this port, open to any "
+            "machine that can reach it with no login. Implies --local."
+        ),
+    )
+    dashboard.add_argument(
+        "--local",
+        dest="flag_local",
+        action="store_true",
+        help=(
+            "Run a coordinator and dashboard on this machine even if this cloud "
+            "account has a deployed one."
+        ),
     )
     dashboard.set_defaults(handler=_legacy_dashboard)
 
@@ -239,8 +251,8 @@ def _legacy_parser(root):
             "Deploy (or update) a shared, always-on Burla cluster in your cloud\n"
             "account.\n\n"
             "Burla needs no deployment to work: `remote_parallel_map` and\n"
-            "`burla dashboard` run the cluster from this machine. Deploy when the\n"
-            "cluster should stay up and be shared by a team."
+            "`burla dashboard` run the cluster's coordinator on this machine.\n"
+            "Deploy when the cluster should stay up and be shared by a team."
         ),
     )
     deploy.add_argument("positional_cloud", nargs="?", help=argparse.SUPPRESS)
@@ -963,7 +975,7 @@ def _legacy_dashboard(args):
     from burla import dashboard
 
     port = _legacy_value(args.positional_port, args.flag_port, "port")
-    return dashboard(port=port)
+    return dashboard(port=port, local=args.flag_local)
 
 
 def _legacy_deploy(args):

@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  Burla is the world's simplest distributed computing framework.  </br>
+  Burla is the world's simplest distributed computing platform.  </br>
   Easily scale ML‑pipelines, AI-inference, batch processing, or any other program.
 </p>
 

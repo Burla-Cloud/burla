@@ -28,7 +28,7 @@ from jinja2 import Environment, FileSystemLoader
 from starlette.datastructures import UploadFile
 from starlette.middleware.sessions import SessionMiddleware
 
-CURRENT_BURLA_VERSION = "1.8.1"
+CURRENT_BURLA_VERSION = "1.8.2"
 MIN_COMPATIBLE_CLIENT_VERSION = "1.7.11"
 
 # In this mode EVERYTHING runs locally in docker containers.
@@ -49,7 +49,7 @@ SELF_DELETE_GUEST_ATTRIBUTE = "burla/self-delete-requested"
 # the docker network, container labels, and published node ports; in remote-dev
 # the EC2 tag that marks a node as belonging to this cluster. Also reported at
 # /version so the client can tell two dev heads on one cloud account apart.
-# "default" for deployed and account-wide ad hoc client heads.
+# "default" for deployed heads; ad hoc client heads get a per-machine name.
 CLUSTER_NAME = os.environ.get("BURLA_CLUSTER_NAME", "default")
 LOCAL_DEV_NETWORK = os.environ.get("LOCAL_DEV_NETWORK", "local-burla-cluster")
 # The head runs on the docker host in local-dev, so node containers reach it at
@@ -64,6 +64,10 @@ LOCAL_DEV_NODE_PORT_BASE = int(os.environ.get("LOCAL_DEV_NODE_PORT_BASE", 8080))
 # short-lived deletion token because guest poweroff keeps billing there.
 # No head VM, service accounts, or buckets: see client/src/burla/_local_head.py.
 IN_CLIENT_HOSTED_MODE = os.environ.get("IN_CLIENT_HOSTED_MODE") == "True"
+# Set by `burla dashboard --port`: the head listens on every interface and
+# anyone who can reach that port is treated as the machine's owner, including
+# being handed the cluster token so clients elsewhere can talk to nodes.
+OPEN_HEAD = IN_CLIENT_HOSTED_MODE and os.environ.get("BURLA_OPEN_HEAD") == "True"
 
 # The owner's real backend credentials (from burla_credentials.json). Local
 # dashboard/browser requests to a client-hosted head are stamped with these
@@ -92,6 +96,9 @@ BURLA_RELAY_TRANSPORT_PROTOCOL = os.environ.get(
     "BURLA_RELAY_TRANSPORT_PROTOCOL", "tcp"
 )
 FRP_VERSION = "0.70.1"
+# Set by a client-hosted head on the nodes' private network: nodes, peers, and
+# the client all connect to each other directly over private IPs instead.
+RELAY_DISABLED = os.environ.get("DISABLE_BURLA_RELAY") == "True"
 print(f"Using Burla backend: {BURLA_BACKEND_URL}")
 
 
@@ -594,6 +601,13 @@ def version():
     }
 
 
+@app.get("/v1/cluster/open_token")
+def open_token():
+    if not OPEN_HEAD:
+        return Response(status_code=404)
+    return {"cluster_token": CLUSTER_ID_TOKEN}
+
+
 # don't move this! must be declared before static files are mounted to the same path below.
 @app.get("/")
 @app.get("/jobs")
@@ -739,10 +753,10 @@ async def validate_requests(request: Request, call_next):
                 request.session["profile_pic"] = ""
         return await call_next(request)
 
-    # Client-hosted bypass: this head only listens on 127.0.0.1, so a local
-    # request is the machine's owner - their own dashboard needs no login.
-    # Two kinds of traffic also arrive from 127.0.0.1 and must still log in:
-    # relay-tunnel connections (they come through the in-process TLS proxy,
+    # Client-hosted bypass: this head listens on 127.0.0.1 (or on every
+    # interface for an open head), so a direct request is the machine's owner -
+    # their own dashboard needs no login. Two kinds of traffic must still log
+    # in: relay-tunnel connections (they come through the in-process TLS proxy,
     # recognized by their socket address) and cross-site browser requests
     # (a foreign Origin header means some other webpage sent it).
     if IN_CLIENT_HOSTED_MODE:
@@ -750,14 +764,13 @@ async def validate_requests(request: Request, call_next):
 
         client_address = (request.client.host, request.client.port)
         origin = request.headers.get("origin")
-        origin_is_local = origin is None or urlparse(origin).hostname in (
-            "127.0.0.1",
-            "localhost",
+        origin_is_same_site = (
+            origin is None or urlparse(origin).netloc == request.headers.get("host")
         )
         is_machine_owner = (
-            request.client.host == "127.0.0.1"
+            (OPEN_HEAD or request.client.host == "127.0.0.1")
             and client_address not in RELAY_CLIENT_ADDRESSES
-            and origin_is_local
+            and origin_is_same_site
         )
         if is_machine_owner:
             if not request.session.get("X-User-Email"):

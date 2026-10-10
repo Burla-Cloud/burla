@@ -48,12 +48,18 @@ def test_node_lost_mid_job_surfaces_NodeDisconnected(
 
         def _busy_node():
             for node in main_http_client.get("/v1/cluster/nodes").json()["nodes"]:
-                if node.get("current_job"):
+                job_id = node.get("current_job")
+                if (
+                    job_id
+                    and main_http_client.get(f"/v1/jobs/{job_id}")
+                    .json()
+                    .get("all_inputs_uploaded")
+                ):
                     return node
             return None
 
         node = wait_for_fixture(
-            _busy_node, timeout=60, message="no node ever claimed the job"
+            _busy_node, timeout=60, message="no node started processing the job"
         )
         # By exact container name: never by `node_*` prefix, which would take
         # out other checkouts' clusters.

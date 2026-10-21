@@ -19,7 +19,7 @@ from fastapi.responses import Response
 from starlette.datastructures import UploadFile
 from starlette.requests import ClientDisconnect
 
-__version__ = "1.8.3"
+__version__ = "1.8.4"
 PROJECT_ID = os.environ["PROJECT_ID"]
 # Private clusters never contact Burla's servers: the head minted
 # CLUSTER_ID_TOKEN locally and the backend has no user list for this cluster,

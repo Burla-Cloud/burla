@@ -573,7 +573,7 @@ def get_auth_headers() -> dict[str, str]:
         if cluster_token:
             return {"Authorization": f"Bearer {cluster_token}"}
     if not _USE_SAVED_LOGIN:
-        return {"Authorization": f"Bearer {_saved_cluster_token()}"}
+        return {"Authorization": f"Bearer {_private_cluster_token()}"}
     try:
         email, auth_token = _get_auth_info()
     except Exception:
@@ -589,6 +589,20 @@ def get_auth_headers() -> dict[str, str]:
         "X-User-Email": email,
         "Authorization": f"Bearer {auth_token}",
     }
+
+
+# Cached: called for every request, and finding the project runs the cloud CLI.
+@cache
+def _private_cluster_token() -> str:
+    _, project_id, _ = detect_cloud()
+    cluster_token = read_saved_cluster_token(project_id)
+    if not cluster_token:
+        raise LocalHeadError(
+            "No Burla coordinator has run on this machine as this user, so there is "
+            "no cluster token. Run jobs as the same user as `burla dashboard`, or "
+            "set BURLA_CLUSTER_DASHBOARD_URL to a coordinator started with --port."
+        )
+    return cluster_token
 
 
 def _saved_cluster_token() -> str | None:

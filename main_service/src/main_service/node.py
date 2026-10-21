@@ -1,5 +1,6 @@
 import base64
 import json
+import os
 import sys
 import textwrap
 import traceback
@@ -13,6 +14,7 @@ from requests.exceptions import ConnectionError, ConnectTimeout, HTTPError, Time
 
 from main_service import (
     BURLA_BACKEND_URL,
+    BURLA_PRIVATE,
     BURLA_RELAY_SERVER_ADDR,
     BURLA_RELAY_SERVER_PORT,
     BURLA_RELAY_TRANSPORT_PROTOCOL,
@@ -23,7 +25,6 @@ from main_service import (
     IN_LOCAL_DEV_MODE,
     MAIN_SERVICE_URL_FOR_NODES,
     PROJECT_ID,
-    RELAY_DISABLED,
     SELF_DELETE_GUEST_ATTRIBUTE,
     cluster_state,
     relay_fqdn,
@@ -190,7 +191,7 @@ class Node:
                         needs_cloud_credentials=self._filesystem_enabled(),
                     )
                 )
-                if RELAY_DISABLED:
+                if BURLA_PRIVATE:
                     self.host = f"https://{self.private_ip}:{self.port}"
                 else:
                     self.host = f"https://{relay_fqdn(self.instance_name)}"
@@ -446,7 +447,7 @@ class Node:
         chmod 600 /etc/burla/frpc.toml
         systemd-run --unit=burla-frpc --property=Restart=always \\
             /usr/local/bin/frpc -c /etc/burla/frpc.toml"""
-        if RELAY_DISABLED:
+        if BURLA_PRIVATE:
             relay_tunnel_script = ""
 
         ca_pem_b64 = base64.b64encode(cluster_ca_pem().encode()).decode()
@@ -546,6 +547,8 @@ class Node:
         export MAIN_SERVICE_URL="$HEAD_URL"
         export CLUSTER_ID_TOKEN="{CLUSTER_ID_TOKEN}"
         export BURLA_BACKEND_URL="{BURLA_BACKEND_URL}"
+        export BURLA_PRIVATE="{os.environ.get('BURLA_PRIVATE', '')}"
+        export DISABLE_BURLA_TELEMETRY="{os.environ.get('DISABLE_BURLA_TELEMETRY', '')}"
 
         cd /opt/burla
         # This node's code always comes from its head, so it runs exactly what
@@ -691,6 +694,8 @@ class Node:
             --setenv=CLUSTER_ID_TOKEN="$CLUSTER_ID_TOKEN" \\
             --setenv=BURLA_NODE_AUTH_TOKEN="$NODE_AUTH_TOKEN" \\
             --setenv=BURLA_BACKEND_URL="$BURLA_BACKEND_URL" \\
+            --setenv=BURLA_PRIVATE="$BURLA_PRIVATE" \\
+            --setenv=DISABLE_BURLA_TELEMETRY="$DISABLE_BURLA_TELEMETRY" \\
             --setenv=CLUSTER_CA_PATH="$TLS_DIR/ca.pem" \\
             --setenv=NODE_TLS_KEY_PATH="$TLS_DIR/node.key" \\
             --setenv=NODE_TLS_CERT_PATH="$TLS_DIR/node.pem" \\

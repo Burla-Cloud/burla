@@ -14,7 +14,7 @@ import requests
 from platformdirs import user_data_dir
 from yaspin import yaspin
 
-from burla import _BURLA_APP_NAME, _BURLA_BACKEND_URL, CONFIG_PATH
+from burla import _BURLA_APP_NAME, _BURLA_BACKEND_URL, _BURLA_PRIVATE, CONFIG_PATH
 from burla._helpers import CREATE_NO_WINDOW, run_command
 
 AUTH_TIMEOUT_SECONDS = 180
@@ -25,6 +25,10 @@ CLUSTER_TOKEN_SECRET = os.environ.get(
 STATE_ROOT = (
     Path(user_data_dir(appname=_BURLA_APP_NAME, appauthor="burla")) / "clusters"
 )
+# A saved `burla login` points at Burla's servers (deployed clusters behind the
+# relay, backend users), so private clients ignore it. Inside a worker the node
+# writes that file instead, pointing nested jobs at this cluster's own head.
+_USE_SAVED_LOGIN = not _BURLA_PRIVATE or os.environ.get("BURLA_IN_WORKER") == "1"
 
 
 class LocalHeadError(Exception):
@@ -424,6 +428,8 @@ def ensure_user_authorized(
 
 
 def deployed_dashboard_url() -> str | None:
+    if not _USE_SAVED_LOGIN:
+        return None
     config = json.loads(CONFIG_PATH.read_text()) if CONFIG_PATH.exists() else {}
     configured_url = (config.get("cluster_dashboard_url") or "").rstrip("/")
     if configured_url:
@@ -566,6 +572,8 @@ def get_auth_headers() -> dict[str, str]:
         cluster_token = _open_head_cluster_token(env_url)
         if cluster_token:
             return {"Authorization": f"Bearer {cluster_token}"}
+    if not _USE_SAVED_LOGIN:
+        return {"Authorization": f"Bearer {_saved_cluster_token()}"}
     try:
         email, auth_token = _get_auth_info()
     except Exception:
@@ -643,6 +651,8 @@ def _get_login_response(client_id, spinner, attempt=0):
 
 
 def login(no_browser: bool = False):
+    if _BURLA_PRIVATE:
+        raise LocalHeadError("`burla login` uses Burla's servers, so BURLA_PRIVATE=True disables it.")
     # for dev: if main service is running locally, redirect to it instead of the backend
     cmd = "docker container list --filter name=main_service-"
     result = run_command(cmd, raise_error=False)

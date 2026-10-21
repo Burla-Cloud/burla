@@ -19,9 +19,15 @@ from fastapi.responses import Response
 from starlette.datastructures import UploadFile
 from starlette.requests import ClientDisconnect
 
-__version__ = "1.8.2"
+__version__ = "1.8.3"
 PROJECT_ID = os.environ["PROJECT_ID"]
-BURLA_BACKEND_URL = os.environ.get(
+# Private clusters never contact Burla's servers: the head minted
+# CLUSTER_ID_TOKEN locally and the backend has no user list for this cluster,
+# so the token is the only accepted credential.
+BURLA_PRIVATE = os.environ.get("BURLA_PRIVATE") == "True"
+# No address at all, so a backend call that slips through fails instead of
+# sending anything.
+BURLA_BACKEND_URL = "" if BURLA_PRIVATE else os.environ.get(
     "BURLA_BACKEND_URL", "https://backend.burla.dev"
 ).rstrip("/")
 
@@ -185,6 +191,8 @@ python_logging.getLogger("uvicorn.access").addFilter(ResultsEndpointFilter())
 
 async def refresh_authorized_users(*, allow_cached_on_error: bool) -> bool:
     """Refresh node auth without discarding a last-known-good user list."""
+    if BURLA_PRIVATE:
+        return True
     async with SELF["authorized_users_refresh_lock"]:
         headers = {"Authorization": f"Bearer {CLUSTER_ID_TOKEN}"}
         url = f"{BURLA_BACKEND_URL}/v1/clusters/{PROJECT_ID}/users"

@@ -28,7 +28,7 @@ from jinja2 import Environment, FileSystemLoader
 from starlette.datastructures import UploadFile
 from starlette.middleware.sessions import SessionMiddleware
 
-CURRENT_BURLA_VERSION = "1.8.2"
+CURRENT_BURLA_VERSION = "1.8.3"
 MIN_COMPATIBLE_CLIENT_VERSION = "1.7.11"
 
 # In this mode EVERYTHING runs locally in docker containers.
@@ -80,7 +80,13 @@ LOCAL_USER_TOKEN = os.environ.get("BURLA_LOCAL_USER_TOKEN", "")
 # "gcp", "aws", or "azure" - which cloud this cluster boots node VMs in.
 CLOUD_PROVIDER = os.environ.get("CLOUD_PROVIDER", "gcp")
 
-BURLA_BACKEND_URL = os.environ.get(
+# A private head never contacts Burla's servers. Nodes, peers, and the client
+# connect directly over private IPs, and the cluster token was minted locally,
+# never registered with the backend.
+BURLA_PRIVATE = os.environ.get("BURLA_PRIVATE") == "True"
+# No address at all, so a backend call that slips through fails instead of
+# sending anything.
+BURLA_BACKEND_URL = "" if BURLA_PRIVATE else os.environ.get(
     "BURLA_BACKEND_URL", "https://backend.burla.dev"
 ).rstrip("/")
 
@@ -96,9 +102,6 @@ BURLA_RELAY_TRANSPORT_PROTOCOL = os.environ.get(
     "BURLA_RELAY_TRANSPORT_PROTOCOL", "tcp"
 )
 FRP_VERSION = "0.70.1"
-# Set by a client-hosted head on the nodes' private network: nodes, peers, and
-# the client all connect to each other directly over private IPs instead.
-RELAY_DISABLED = os.environ.get("DISABLE_BURLA_RELAY") == "True"
 print(f"Using Burla backend: {BURLA_BACKEND_URL}")
 
 
@@ -430,7 +433,9 @@ async def _stopped_instance_reaper_loop():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await _load_syncfusion_license_key()
+    # Only the Filesystem page needs the license, and private dashboards hide it.
+    if not BURLA_PRIVATE:
+        await _load_syncfusion_license_key()
 
     # The marker only exists once `make build-frontend` has run; without it
     # (fresh worktree) the head serves the committed static assets and there
@@ -616,12 +621,13 @@ def open_token():
 @app.get("/filesystem")
 def dashboard():
     html = (STATIC_DIR / "index.html").read_text()
-    filesystem_enabled = bool(
+    filesystem_enabled = not BURLA_PRIVATE and bool(
         (history.get_cluster_config() or {}).get("gcs_bucket_name")
     )
     license_key = json.dumps(SYNCFUSION_LICENSE_KEY)
     inject = f"<script>window.__SYNCFUSION_LICENSE_KEY__ = {license_key};"
     inject += f"window.__BURLA_FILESYSTEM_ENABLED__ = {json.dumps(filesystem_enabled)};"
+    inject += f"window.__BURLA_PRIVATE__ = {json.dumps(BURLA_PRIVATE)};"
     inject += (
         f"window.__BURLA_CLIENT_HOSTED_MODE__ = "
         f"{json.dumps(IN_CLIENT_HOSTED_MODE)};</script>"

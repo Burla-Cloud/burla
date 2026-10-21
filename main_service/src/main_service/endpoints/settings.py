@@ -11,6 +11,7 @@ from main_service import (
     IN_LOCAL_DEV_MODE,
     LOCAL_DEV_CONFIG,
     BURLA_BACKEND_URL,
+    BURLA_PRIVATE,
     resource_caps,
 )
 from main_service import history
@@ -28,10 +29,13 @@ def get_settings(request: Request):
     node = config_dict.get("Nodes", [{}])[0]
     container = node.get("containers", [{}])[0]
 
-    url = f"{BURLA_BACKEND_URL}/v1/clusters/{PROJECT_ID}/users"
-    response = requests.get(url, headers={"Authorization": f"Bearer {CLUSTER_ID_TOKEN}"})
-    response.raise_for_status()
-    user_emails = [user["email"] for user in response.json()["authorized_users"]]
+    # Users live in the backend, and private clusters have none.
+    user_emails = []
+    if not BURLA_PRIVATE:
+        url = f"{BURLA_BACKEND_URL}/v1/clusters/{PROJECT_ID}/users"
+        response = requests.get(url, headers={"Authorization": f"Bearer {CLUSTER_ID_TOKEN}"})
+        response.raise_for_status()
+        user_emails = [user["email"] for user in response.json()["authorized_users"]]
     max_vcpus, max_gpus = resource_caps(config_dict)
     return {
         "containerImage": container.get("image", ""),
@@ -99,6 +103,9 @@ async def update_settings(request: Request):
         LOCAL_DEV_CONFIG["Nodes"][0]["quantity"] = 1
         LOCAL_DEV_CONFIG["max_vcpus"] = config_dict["max_vcpus"]
         LOCAL_DEV_CONFIG["max_gpus"] = config_dict["max_gpus"]
+
+    if BURLA_PRIVATE:
+        return
 
     email = request.session.get("X-User-Email")
     authorization = request.session.get("Authorization")

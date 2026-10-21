@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 from platformdirs import user_config_dir
 
 # needed so main_service can associate a client version with a request
-__version__ = "1.8.2"
+__version__ = "1.8.3"
 
 # In a checkout this file is <root>/client/src/burla/__init__.py. Installed
 # flat (e.g. /worker_service_python_env/burla/ on nodes) there is no parents[3],
@@ -43,16 +43,28 @@ _DEFAULT_RELAY_HOST = (
     if _BURLA_ENVIRONMENT == "test"
     else "relay.burla.dev"
 )
-_BURLA_BACKEND_URL = os.environ.get(
-    "BURLA_BACKEND_URL", _DEFAULT_BACKEND_URL
-).rstrip("/")
-if _BURLA_BACKEND_URL != "https://backend.burla.dev" and not (
-    _IN_SOURCE_CHECKOUT or _IN_HEAD_RUNTIME
-):
-    raise RuntimeError(
-        "Non-production Burla backends are only available from an editable "
-        "source checkout."
-    )
+# Private clusters never contact Burla's servers: no backend, no telemetry, and
+# no relay. Without the relay everything connects directly over private IPs, so
+# the head's machine and the nodes must accept each other's traffic on any port
+# (e.g. share the VPC's default security group). The head, nodes, and workers
+# inherit this from the env.
+_BURLA_PRIVATE = os.environ.get("BURLA_PRIVATE") == "True"
+if _BURLA_PRIVATE:
+    # No address at all, so a backend call that slips through fails instead
+    # of sending anything.
+    _BURLA_BACKEND_URL = ""
+    os.environ["DISABLE_BURLA_TELEMETRY"] = "True"
+else:
+    _BURLA_BACKEND_URL = os.environ.get(
+        "BURLA_BACKEND_URL", _DEFAULT_BACKEND_URL
+    ).rstrip("/")
+    if _BURLA_BACKEND_URL != "https://backend.burla.dev" and not (
+        _IN_SOURCE_CHECKOUT or _IN_HEAD_RUNTIME
+    ):
+        raise RuntimeError(
+            "Non-production Burla backends are only available from an editable "
+            "source checkout."
+        )
 _BURLA_RELAY_HOST = os.environ.get("BURLA_RELAY_HOST", _DEFAULT_RELAY_HOST)
 
 _appdata_dir = Path(user_config_dir(appname=_BURLA_APP_NAME, appauthor="burla"))

@@ -31,9 +31,17 @@ if (originalNotExist && !Reflect.has(observerPrototype, "__burlaPatchedNotExist"
 
 // Register Syncfusion license key before any Syncfusion components are used
 
+// Injected by main_service's dashboard endpoint; private clusters never send the
+// browser to Burla's servers.
+declare global {
+    interface Window {
+        __BURLA_PRIVATE__?: boolean;
+    }
+}
+
 let authRedirectInProgress = false;
 const redirectToLogin = () => {
-    if (authRedirectInProgress) {
+    if (authRedirectInProgress || window.__BURLA_PRIVATE__) {
         return;
     }
     authRedirectInProgress = true;

@@ -15,6 +15,7 @@ from yaspin import yaspin
 from burla import (
     _BURLA_BACKEND_URL,
     _BURLA_ENVIRONMENT,
+    _BURLA_PRIVATE,
     _BURLA_RELAY_HOST,
     __version__,
 )
@@ -292,6 +293,8 @@ def deploy(cloud: str = None):
     """
     from burla import get_cloud
 
+    if _BURLA_PRIVATE:
+        raise RuntimeError("`burla deploy` uses Burla's servers, so BURLA_PRIVATE=True disables it.")
     cloud = (cloud or get_cloud()).lower()
     try:
         with yaspin() as spinner:
